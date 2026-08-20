@@ -24,7 +24,7 @@ func TestKubeAgentSandboxPodLogsReportsScheduledNeverCreated(t *testing.T) {
 		t.Fatal(err)
 	}
 	api := testPodLogAPI(t, http.StatusBadRequest, body, func(context.Context, string, string) string { return describePodLogLifecycle(pod.Object) })
-	_, err = api.PodLogs(context.Background(), "fix-eval", "fix-1", 4096)
+	_, err = api.PodLogs(context.Background(), "fix-eval", "fix-1", agentSandboxContainerName, 4096)
 	if err == nil {
 		t.Fatal("expected Pod log error")
 	}
@@ -92,7 +92,7 @@ func TestDescribePodLogLifecycleReportsStagerState(t *testing.T) {
 func TestKubeAgentSandboxPodLogsReportsNotFound(t *testing.T) {
 	body, _ := json.Marshal(metav1.Status{Reason: metav1.StatusReasonNotFound, Message: "pod not found"})
 	api := testPodLogAPI(t, http.StatusNotFound, body, func(context.Context, string, string) string { return "Pod not found" })
-	_, err := api.PodLogs(context.Background(), "fix-eval", "missing", 4096)
+	_, err := api.PodLogs(context.Background(), "fix-eval", "missing", agentSandboxContainerName, 4096)
 	if err == nil || !strings.Contains(err.Error(), "Pod not found") || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestKubeAgentSandboxPodLogsBoundsStatusErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := testPodLogAPI(t, http.StatusInternalServerError, tc.body, func(context.Context, string, string) string { return describePodLogLifecycle(pod.Object) })
-			_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", 4096)
+			_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", agentSandboxContainerName, 4096)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
@@ -127,8 +127,18 @@ func TestKubeAgentSandboxPodLogsBoundsSuccessfulBody(t *testing.T) {
 			t.Fatalf("limitBytes = %q, want 11", got)
 		}
 	})
-	_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", 10)
+	_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", agentSandboxContainerName, 10)
 	if err == nil || !strings.Contains(err.Error(), "exceeds 10 bytes") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubeAgentSandboxPodLogsReportsEmptySuccessfulBody(t *testing.T) {
+	api := testPodLogAPI(t, http.StatusOK, nil, func(context.Context, string, string) string {
+		return "stager container failed with exit code 2"
+	})
+	_, err := api.PodLogs(context.Background(), "analysis", "analysis-1", agentSandboxContainerName, 4096)
+	if err == nil || !strings.Contains(err.Error(), "logs for analysis/analysis-1 container executor are empty") || !strings.Contains(err.Error(), "stager container failed") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -140,7 +150,7 @@ func TestKubeAgentSandboxPodLogsBoundsSuccessfulReadError(t *testing.T) {
 		})},
 		host: "https://kubernetes.invalid",
 	}
-	_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", 4096)
+	_, err := api.PodLogs(context.Background(), "fix-eval", "fix-1", agentSandboxContainerName, 4096)
 	if err == nil || !strings.Contains(err.Error(), "read pod logs") {
 		t.Fatalf("error = %v", err)
 	}
@@ -181,4 +191,65 @@ func testExecutorPod(namespace, name string, status map[string]any) *unstructure
 
 func containerStatus(state map[string]any) map[string]any {
 	return map[string]any{"name": agentSandboxContainerName, "state": state}
+}
+
+func TestStagerFailureStateClassifiesTerminalFailures(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		state      map[string]any
+		wantCode   string
+		wantExit   int64
+		wantReason string
+	}{
+		{name: "nonzero", state: map[string]any{"terminated": map[string]any{"reason": "Error", "exitCode": int64(1)}}, wantCode: "stager_exit_nonzero", wantExit: 1, wantReason: "Error"},
+		{name: "image pull", state: map[string]any{"waiting": map[string]any{"reason": "ImagePullBackOff"}}, wantCode: "stager_image_pull", wantExit: -1, wantReason: "ImagePullBackOff"},
+		{name: "configuration", state: map[string]any{"waiting": map[string]any{"reason": "CreateContainerConfigError"}}, wantCode: "stager_start_failure", wantExit: -1, wantReason: "CreateContainerConfigError"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pod := testExecutorPod("analysis", "analysis-1", map[string]any{
+				"initContainerStatuses": []any{map[string]any{"name": agentSandboxStagerName, "state": test.state}},
+			})
+			code, exitCode, reason := stagerFailureState(pod.Object)
+			if code != test.wantCode || exitCode != test.wantExit || reason != test.wantReason {
+				t.Fatalf("failure=(%q,%d,%q), want=(%q,%d,%q)", code, exitCode, reason, test.wantCode, test.wantExit, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestStagerDiagnosticCategoryRetainsOnlyAllowlistedCategory(t *testing.T) {
+	logs := "analysis staging failed: verify staged source: source_untracked_files Authorization: Bearer secret-token https://secret.example/request"
+	if got := stagerDiagnosticCategory(logs); got != "source_untracked_files" {
+		t.Fatalf("category=%q", got)
+	}
+	for _, logs := range []string{
+		"unexpected raw output token=secret-value",
+		"analysis staging failed: private path /secret/source failed",
+	} {
+		if got := stagerDiagnosticCategory(logs); got != "unclassified" {
+			t.Fatalf("category=%q for %q", got, logs)
+		}
+	}
+}
+
+func TestKubeAgentSandboxPodLogsSelectsStagerContainer(t *testing.T) {
+	api := testPodLogAPI(t, http.StatusOK, []byte("analysis staging failed: source_untracked_files\n"), nil, func(request *http.Request) {
+		if got := request.URL.Query().Get("container"); got != agentSandboxStagerName {
+			t.Fatalf("container=%q", got)
+		}
+		if got := request.URL.Query().Get("limitBytes"); got != "4097" {
+			t.Fatalf("limitBytes=%q", got)
+		}
+	})
+	logs, err := api.PodLogs(context.Background(), "analysis", "analysis-1", agentSandboxStagerName, 4096)
+	if err != nil || !strings.Contains(logs, "source_untracked_files") {
+		t.Fatalf("logs=%q err=%v", logs, err)
+	}
+}
+
+func TestKubeAgentSandboxPodLogsRejectsUnknownContainer(t *testing.T) {
+	api := &kubeAgentSandboxAPI{}
+	if _, err := api.PodLogs(context.Background(), "analysis", "analysis-1", "other", 4096); err == nil {
+		t.Fatal("unknown container was accepted")
+	}
 }

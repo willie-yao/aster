@@ -20,8 +20,29 @@ features. It does not replace the fetcher or worker as the owner of scheduled
 failure analysis.
 
 Optional Agent Sandbox analysis shadows run after an authoritative refresh and
-write private comparison ledgers. They use the OpenCode analyzer boundary but do
-not replace the published result or participate in normal cache acceptance.
+write private comparison ledgers. They do not replace the published result or
+participate in normal analysis cache acceptance.
+
+Safe structured output has a separate publication disposition:
+
+- `preliminary` is displayable with bounded warnings but remains eligible for
+  reanalysis and cannot feed patterns, corrections, remediation, actions, or Fix;
+- `grounded` has verified artifact citations and no unresolved grounding or
+  quality warnings;
+- rejected output has no usable `AIAnalysis` and follows the existing unavailable
+  path.
+
+Action eligibility is never stored as analysis state. It is derived later from a
+grounded result plus the existing critique version, source verification,
+authentication, confirmation, deduplication, and Sandbox controls. Cache
+acceptance remains independent from safe publication.
+
+The disabled-by-default Agent Sandbox OpenCode analyzer is the implementation
+used by scheduled shadowing and explicit evaluation tests. The benchmark uses a
+pre-populated private input claim; scheduled shadowing uses a tokenless
+namespace-local publisher Job. Both paths share the same staged workspace,
+executor, result validation, and cleanup contract. Neither has public output or
+normal cache authority.
 
 ## End-to-end flow
 
@@ -52,10 +73,10 @@ flowchart TD
 ```
 
 The scheduling pass and `ai.Service.analyze` both revalidate an analysis already
-attached to a cached build. If it is stale, the service checks a private
-policy-unavailable cooldown when applicable, then the private agentic cache.
-Artifact-tree scanning, evidence-plan construction, and provider calls occur
-only after those reuse paths miss.
+attached to a cached build. Preliminary results remain reanalysis-eligible. The
+service checks the private agentic cache before artifact-tree scanning,
+evidence-plan construction, and provider calls. Normal cache policy is stricter
+than safe publication and can reject a preliminary result without hiding it.
 
 ## Prompt composition and skills
 
@@ -144,9 +165,12 @@ remaining ineligible for cache persistence.
 
 Model output is never accepted directly. The current lifecycle is:
 
-1. A tools-free response is parsed into the `analysisResponse` JSON shape. If
-   the loop exhausts iterations or the response does not parse, a no-tools
-   finalize round requests JSON only.
+1. A tools-free response is parsed into the `analysisResponse` JSON shape.
+   Parseable JSON attached to a tool-bearing turn is retained only as a fallback
+   candidate while the requested tools still run. If the loop exhausts
+   iterations or the response does not parse, one finalization request forces
+   the exact `submit_analysis` function schema with ordinary investigation tools
+   absent.
 2. Deterministic critique checks citation integrity, unread paths, unsafe or
    unverified source paths, unsupported line claims, persistent-failure versus
    transient conflicts, remediation punts, and recipe-required evidence.
@@ -169,9 +193,12 @@ configured cache policy determines which classifications block reuse:
 records findings without making critique itself a cache barrier. Semantic review
 is separate; an unresolved semantic objection prevents cache acceptance.
 
-If finalization fails, the loop prefers an earlier parseable draft. Only when no
-parseable draft exists does it synthesize a bounded fallback, which is not
-cached. Non-advisory citation policy can instead make the result unavailable.
+If finalization fails, the loop prefers an earlier parseable draft, including a
+strict structured candidate attached to a tool-bearing turn. The selected draft
+still passes normal publication sanitization, critique classification, and
+analysis disposition. When no parseable draft exists, the result remains
+unavailable. Finalization recovery does not change pattern, correction,
+remediation, action, or Fix eligibility.
 
 ## Cache and current-floor revalidation
 
@@ -269,14 +296,26 @@ data-serving path.
   Pattern actions keep their separate `PatternAllowsActions` gate. The coding
   agent, review, validation, and PR state are independent of failure-analysis
   tools and cache acceptance.
-- **Agent Sandbox OpenCode analysis shadow** uses `agentanalysis.Runtime` and
-  `backend/internal/fetcher/shadow_analysis.go`, the workspace contracts under
-  `backend/internal/agentanalysis`, the read-only stager in
-  `backend/internal/analysisstager`, and the executor in
-  `backend/internal/analysisexecutor`. After authoritative publication, the
-  writer may freeze bounded evidence, schedule sampled Sandboxes, compare the
-  result privately, and append content-free lifecycle telemetry. The shadow
-  cannot publish a replacement or seed the normal cache.
+- **Scheduled analysis shadows** use the same file-backed OpenCode contract as
+  the analyzer benchmark. After authoritative publication, the fetcher freezes
+  a local verification copy, computes the prompt, skill-plan, source, artifact,
+  and request identities, then asks `analysispublisher` to run a tokenless
+  namespace-local Job. That Job publishes the identical snapshot to private
+  input storage and is deleted before the Agent Sandbox starts. The Sandbox
+  stager reconstructs the sealed request from bounded fixed chunks into a
+  dedicated request volume, validates it against the stage identity, and copies
+  the input into a fresh read-only workspace. The executor mounts the request and
+  workspace read-only, returns one bounded result, and the dashboard independently validates it against the
+  retained local copy. A second tokenless Job removes the leased remote input.
+  Only the private ledger is updated; public output and the authoritative cache
+  cannot change.
+- **Agent Sandbox OpenCode analyzer** uses workspace contracts under
+  `backend/internal/agentanalysis`, namespace-local input lifecycle under
+  `backend/internal/analysispublisher`, the stager under
+  `backend/internal/analysisstager`, and the executor under
+  `backend/internal/analysisexecutor`. The benchmark and scheduled shadow share
+  this exact runtime and differ only in how the already frozen input is
+  published to the private claim.
 
 ## Contributor map
 
@@ -297,4 +336,5 @@ data-serving path.
 | Analysis chat and actions | `backend/internal/analysischat/`, `backend/internal/actions/` |
 | Remediation investigation authority | `backend/internal/remediationinvestigation/`, `backend/internal/remediationpolicy/`, `backend/internal/actionverify/`, `backend/internal/sourceinvestigation/` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
-| Agent Sandbox analysis shadow | `backend/internal/agentanalysis/workspace_analysis.go`, `backend/internal/agentanalysis/workspace_evidence_handles.go`, `backend/internal/agentanalysis/workspace_result_validation.go`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
+| Scheduled analysis shadows | `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/agentanalysis/workspace*.go`, `backend/internal/analysispublisher/`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
+| Agent Sandbox analyzer benchmark | `backend/benchmarks/agent_sandbox_analyzer_benchmark_test.go`, `hack/compare-agent-sandbox-analyzer-benchmark.py` |

@@ -151,7 +151,13 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 	if c.reasoningEffortErr != nil {
 		return nil, c.reasoningEffortErr
 	}
+	if c.maxOutputTokensErr != nil {
+		return nil, c.maxOutputTokensErr
+	}
 	request.ReasoningEffort = c.reasoningEffort
+	if request.MaxOutputTokens == 0 {
+		request.MaxOutputTokens = c.maxOutputTokens
+	}
 	start := time.Now()
 	resp, err := c.transport.Complete(ctx, request)
 	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages), ReasoningEffort: string(request.ReasoningEffort)}
@@ -199,6 +205,7 @@ type modelRequest struct {
 	ResponseFormat    *ResponseFormat
 	ToolChoice        *ToolChoice
 	MaxResponseBytes  int64
+	MaxOutputTokens   int
 	OmitReasoning     bool
 	ReasoningEffort   ReasoningEffort
 }

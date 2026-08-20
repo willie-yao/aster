@@ -715,6 +715,29 @@
                 "limits"
               ],
               "additionalProperties": false
+            },
+            "stagerImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -722,6 +745,7 @@
             "namespace",
             "runtimeClassName",
             "executorImage",
+            "stagerImage",
             "input",
             "clientServiceAccount",
             "workloadServiceAccount",
@@ -1034,9 +1058,6 @@
               ],
               "additionalProperties": false
             },
-            "agentVersion": {
-              "type": "string"
-            },
             "modelProvider": {
               "type": "object",
               "properties": {
@@ -1050,7 +1071,8 @@
                 "api": {
                   "type": "string",
                   "enum": [
-                    "chat_completions"
+                    "chat_completions",
+                    "responses"
                   ]
                 },
                 "endpoint": {
@@ -1058,23 +1080,59 @@
                 },
                 "model": {
                   "type": "string"
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "",
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh"
+                  ]
+                },
+                "auth": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "bearer"
+                      ]
+                    },
+                    "existingSecret": {
+                      "type": "string"
+                    },
+                    "tokenKey": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "existingSecret",
+                    "tokenKey"
+                  ],
+                  "additionalProperties": false
+                },
+                "publicCAPrivateDNS": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "credentialMode",
                 "api",
                 "endpoint",
-                "model"
+                "model",
+                "reasoningEffort",
+                "auth",
+                "publicCAPrivateDNS"
               ],
               "additionalProperties": false
             },
             "timeout": {
               "type": "string"
-            },
-            "retries": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 2
             },
             "outputLimitBytes": {
               "type": "integer",
@@ -1085,11 +1143,6 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 10
-            },
-            "maxTurns": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 1000
             },
             "pollInterval": {
               "type": "string"
@@ -1140,6 +1193,14 @@
                   "minimum": 1,
                   "maximum": 65535
                 },
+                "gatewayTargetPort": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1,
+                  "maximum": 65535
+                },
                 "dnsNamespaceSelector": {
                   "type": "object",
                   "additionalProperties": {
@@ -1151,6 +1212,13 @@
                   "additionalProperties": {
                     "type": "string"
                   }
+                },
+                "stagingFQDNs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "uniqueItems": true
                 }
               },
               "required": [
@@ -1159,6 +1227,7 @@
                 "gatewayNamespaceSelector",
                 "gatewayPodSelector",
                 "gatewayPort",
+                "stagingFQDNs",
                 "dnsNamespaceSelector",
                 "dnsPodSelector"
               ],
@@ -1213,6 +1282,102 @@
                 "limits"
               ],
               "additionalProperties": false
+            },
+            "stagerImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "digest",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "dashboardImage": {
+              "type": "object",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "IfNotPresent"
+                  ]
+                }
+              },
+              "required": [
+                "repository",
+                "tag",
+                "pullPolicy"
+              ],
+              "additionalProperties": false
+            },
+            "input": {
+              "type": "object",
+              "properties": {
+                "existingClaim": {
+                  "type": "string"
+                },
+                "localRoot": {
+                  "type": "string"
+                },
+                "localSizeLimit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "existingClaim",
+                "localRoot",
+                "localSizeLimit"
+              ],
+              "additionalProperties": false
+            },
+            "quota": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "additionalProperties": false
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 100
+            },
+            "modelContextTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2000000
+            },
+            "modelOutputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 131072
+            },
+            "requireSourceEvidence": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -1220,17 +1385,22 @@
             "namespace",
             "runtimeClassName",
             "image",
+            "stagerImage",
+            "dashboardImage",
+            "input",
             "workloadServiceAccount",
-            "agentVersion",
             "modelProvider",
             "timeout",
-            "retries",
             "outputLimitBytes",
             "maxPerRun",
-            "maxTurns",
+            "maxSteps",
+            "modelContextTokens",
+            "modelOutputTokens",
+            "requireSourceEvidence",
             "pollInterval",
             "ledger",
             "networkPolicy",
+            "quota",
             "resources"
           ],
           "additionalProperties": false
@@ -1443,6 +1613,12 @@
         "githubReadTokenSecretKey": {
           "type": "string",
           "description": "Secret key containing the GitHub read token."
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 131072,
+          "description": "Optional authoritative analysis output-token cap. Zero uses the provider default."
         }
       },
       "additionalProperties": false,
@@ -1453,6 +1629,7 @@
         "model",
         "reasoningEffort",
         "contextWindowTokens",
+        "maxOutputTokens",
         "token",
         "existingSecret",
         "tokenSecretKey",

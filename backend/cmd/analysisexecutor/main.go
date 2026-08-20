@@ -1,24 +1,29 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"strings"
+	"runtime"
 
 	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/analysisexecutor"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
-const requestEnv = "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64"
+var (
+	version  = "dev"
+	commit   = "dev"
+	imageTag = "dev"
+)
 
 func main() {
-	request, err := readRequest()
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Printf("analysisexecutor version=%s commit=%s image=%s go=%s\n", version, commit, imageTag, runtime.Version())
+		return
+	}
+	request, err := readRequest(agentanalysis.WorkspaceExecutionRequestRoot)
 	if err != nil {
 		emit(agentanalysis.WorkspaceExecutionResult{
 			Version: agentanalysis.WorkspaceResultVersion, ContractVersion: agentanalysis.WorkspaceContractVersion,
@@ -33,34 +38,14 @@ func main() {
 	}
 }
 
-func readRequest() (agentanalysis.WorkspaceExecutionRequest, error) {
-	encoded := strings.TrimSpace(os.Getenv(requestEnv))
-	if encoded == "" {
-		return agentanalysis.WorkspaceExecutionRequest{}, fmt.Errorf("%s is required", requestEnv)
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return agentanalysis.WorkspaceExecutionRequest{}, fmt.Errorf("decode analysis request: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var request agentanalysis.WorkspaceExecutionRequest
-	if err := decoder.Decode(&request); err != nil {
-		return request, fmt.Errorf("parse analysis request: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return request, fmt.Errorf("analysis request contains trailing data")
-	}
-	if err := agentanalysis.ValidateWorkspaceExecutionRequest(request); err != nil {
-		return request, err
-	}
-	return request, nil
+func readRequest(root string) (agentanalysis.WorkspaceExecutionRequest, error) {
+	return agentanalysis.ReadWorkspaceExecutionRequestFile(root)
 }
 
 func emit(result agentanalysis.WorkspaceExecutionResult) {
 	data, err := json.Marshal(result)
 	if err != nil {
-		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v7","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
+		fmt.Println(`{"version":1,"contract_version":"agent-analysis-workspace-v8","terminal_state":"failed","failure_reason":"encode execution result","usage":{"available":false}}`)
 		return
 	}
 	fmt.Println(string(data))

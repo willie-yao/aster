@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -678,8 +677,8 @@ func TestService_MissingCitationReanalysisReplacesStaleAnalysis(t *testing.T) {
 	}
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
-	if tc.AISummary == nil || !isUnavailableSummary(tc.AISummary) || tc.AIAnalysis != nil {
-		t.Fatalf("policy-rejected reanalysis retained stale result: summary=%+v analysis=%+v", tc.AISummary, tc.AIAnalysis)
+	if tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Disposition != models.AnalysisDispositionPreliminary || tc.AIAnalysis.RootCause == "stale uncited cause" {
+		t.Fatalf("preliminary reanalysis did not replace stale result: summary=%+v analysis=%+v", tc.AISummary, tc.AIAnalysis)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 2 {
 		t.Fatalf("model calls = %d, want read plus final", got)
@@ -692,7 +691,7 @@ type serviceFixedBrowserFactory struct {
 
 func (f *serviceFixedBrowserFactory) ForBuild(_, _ string) artifacts.Browser { return f.browser }
 
-func TestServiceHardPolicyStoresAndReusesGroundedUnavailableCooldown(t *testing.T) {
+func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
@@ -710,18 +709,20 @@ func TestServiceHardPolicyStoresAndReusesGroundedUnavailableCooldown(t *testing.
 		TestCase: *newFailedTC("Test A", "failure"), ConsecutiveFailures: 1,
 	}
 	first, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
-	if !errors.Is(err, ErrMissingArtifactCitation) || first.Summary == nil || first.Analysis != nil {
+	if err != nil || first.Summary == nil || first.Analysis == nil || first.Analysis.Disposition != models.AnalysisDispositionPreliminary {
 		t.Fatalf("first result = %+v, error = %v", first, err)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 2 {
 		t.Fatalf("first provider calls = %d, want 2", got)
 	}
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	second, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
-	if !errors.Is(err, ErrMissingArtifactCitation) || second.Summary == nil || second.Analysis != nil {
+	if err != nil || second.Summary == nil || second.Analysis == nil || second.Analysis.Disposition != models.AnalysisDispositionPreliminary || second.Analysis.CacheHit {
 		t.Fatalf("second result = %+v, error = %v", second, err)
 	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("provider calls after cooldown hit = %d, want 2", got)
+	if got := atomic.LoadInt32(&srv.calls); got != 4 {
+		t.Fatalf("provider calls after preliminary reanalysis = %d, want 4", got)
 	}
 }
 
@@ -735,5 +736,43 @@ func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
 	one := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 1)
 	if zero.ConsecutiveFailures != 1 || zero != one {
 		t.Fatalf("zero policy = %+v, one policy = %+v", zero, one)
+	}
+}
+
+func TestSourceCatalogForBuildUsesStablePrimaryID(t *testing.T) {
+	service := &Service{sourceRepoOwner: "example", sourceRepoName: "project"}
+	revision := strings.Repeat("a", 40)
+	run := &models.BuildResult{BuildInfo: models.BuildInfo{
+		RepoRefs: map[string]string{"example/project": revision},
+	}}
+	catalog, err := service.sourceCatalogForBuild(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if catalog == nil || catalog.PrimaryID() != tools.PrimarySourceID {
+		t.Fatalf("catalog=%+v primary=%q", catalog, catalog.PrimaryID())
+	}
+	primary, ok := catalog.Primary()
+	if !ok || primary.ID != tools.PrimarySourceID || primary.Owner != "example" || primary.Name != "project" || primary.Revision != revision {
+		t.Fatalf("primary=%+v ok=%t", primary, ok)
+	}
+}
+
+func TestSourceCatalogForBuildUsesConfiguredMultiSourceCatalog(t *testing.T) {
+	catalog, err := tools.NewSourceCatalog("project", []tools.RepoSource{
+		{ID: "project", Owner: "example", Name: "project", Revision: strings.Repeat("a", 40), Reader: &fakeSourceRepo{}},
+		{ID: "upstream", Owner: "upstream", Name: "dependency", Revision: strings.Repeat("b", 40), Reader: &fakeSourceRepo{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{}
+	service.SetAnalysisSourceCatalog(catalog)
+	got, err := service.sourceCatalogForBuild(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != catalog || len(got.Sources()) != 2 || got.PrimaryID() != "project" {
+		t.Fatalf("catalog=%+v", got)
 	}
 }

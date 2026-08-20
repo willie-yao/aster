@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -65,7 +67,7 @@ func TestExecuteRunsOneNativeSessionAndReturnsAnalysis(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsRequiredSourceFloorMissingFromRunner(t *testing.T) {
+func TestExecutePublishesPreliminaryWhenRequiredSourceIsMissing(t *testing.T) {
 	root, base := executorTestFixture(t)
 	request, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(base.Manifest, base.SourceModePolicy, true, base.ModelProvider, 5*time.Minute, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
 	if err != nil {
@@ -81,7 +83,7 @@ func TestExecuteRejectsRequiredSourceFloorMissingFromRunner(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.OpenCodeTelemetry.FailureCode != "source_evidence_missing" {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Contains(result.ResultValidation.Codes, agentanalysis.WorkspaceInvalidSourcePath) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -130,7 +132,7 @@ func TestExecutePublishesCanonicalAnalysisWithValidationWarnings(t *testing.T) {
 	}
 }
 
-func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
+func TestExecuteDropsUnknownEvidenceIDWithPrivacySafeWarning(t *testing.T) {
 	root, request := executorTestFixture(t)
 	const modelEvidenceID = "artifact-999"
 	result := Execute(t.Context(), request, Options{
@@ -141,7 +143,8 @@ func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.Analysis != nil || result.FailureReason != agentanalysis.WorkspaceResultRejectedReason || result.OpenCodeTelemetry.FailureCode != "analysis_result_invalid" || result.ResultValidation.Status != agentanalysis.WorkspaceResultRejected || !slices.Equal(result.ResultValidation.Codes, []string{agentanalysis.WorkspaceInvalidArtifactPath}) {
+	wantCodes := []string{agentanalysis.WorkspaceInvalidArtifactCount, agentanalysis.WorkspaceInvalidArtifactPath}
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.EvidenceCitations) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Equal(result.ResultValidation.Codes, wantCodes) {
 		t.Fatalf("result=%+v", result)
 	}
 	data, err := json.Marshal(result)
@@ -149,7 +152,7 @@ func TestExecuteRejectsUnsafeAnalysisWithPrivacySafeCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if bytes.Contains(data, []byte(modelEvidenceID)) || bytes.Contains(data, []byte("artifact-only-marker")) {
-		t.Fatalf("rejected result retained model or evidence content: %s", data)
+		t.Fatalf("canonical result retained model or dropped evidence content: %s", data)
 	}
 }
 
@@ -170,7 +173,7 @@ func TestExecuteRejectsInvalidEngineEvidenceHandlesSeparately(t *testing.T) {
 
 func TestExecuteVerifiesReadOnlyPreparedSource(t *testing.T) {
 	root, request := executorTestFixture(t)
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary")
 	restore := makeExecutorTreeReadOnly(t, sourceRoot)
 	defer restore()
 	result := Execute(t.Context(), request, Options{
@@ -205,13 +208,13 @@ func TestExecuteRejectsSourceMutation(t *testing.T) {
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
-			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary", "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeContentChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: verify workspace source primary: "+agentanalysis.SourceWorktreeContentChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -221,13 +224,13 @@ func TestExecuteRejectsSourceModeMutation(t *testing.T) {
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
 		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
-			if err := os.Chmod(filepath.Join(root, agentanalysis.WorkspaceSourceDir, "pkg", "controller.go"), 0o700); err != nil {
+			if err := os.Chmod(filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary", "pkg", "controller.go"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			return testOpenCodeResult(), nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: "+agentanalysis.SourceWorktreeModeChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeModeChanged {
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureReason != "workspace changed during analysis: verify workspace source primary: "+agentanalysis.SourceWorktreeModeChanged || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeModeChanged {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -410,7 +413,7 @@ func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testi
 		t.Fatalf("evidence permissions=%v", evidencePermissions)
 	}
 	read := evidencePermissions["read"].(map[string]any)
-	if read["*"] != "deny" || read["artifacts/*"] != "allow" || read["source/*"] != "allow" || read["*/artifacts/*"] != "allow" || read["*/source/*"] != "allow" || len(read) != 5 {
+	if read["*"] != "deny" || read["artifacts/*"] != "allow" || read["sources/*"] != "allow" || read["*/artifacts/*"] != "allow" || read["*/sources/*"] != "allow" || len(read) != 5 {
 		t.Fatalf("read permissions=%v", read)
 	}
 	bash := evidencePermissions["bash"].(map[string]any)
@@ -431,6 +434,43 @@ func TestWriteOpenCodeConfigSeparatesEvidenceAndFinalizationPermissions(t *testi
 	}
 }
 
+func TestWriteOpenCodeConfigAddsCopilotIntegrationHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		want     bool
+	}{
+		{name: "copilot", endpoint: "https://api.githubcopilot.com/chat/completions", want: true},
+		{name: "copilot port", endpoint: "https://api.githubcopilot.com:443/chat/completions", want: true},
+		{name: "other provider", endpoint: "https://provider.example/v1/chat/completions"},
+		{name: "copilot subdomain", endpoint: "https://notapi.githubcopilot.com/chat/completions", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			provider := testDirectBearerProvider(tc.endpoint, "fixture-model")
+			if err := writeOpenCodeConfig(home, provider, 20, 200000, 8192, false); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config map[string]any
+			if err := json.Unmarshal(data, &config); err != nil {
+				t.Fatal(err)
+			}
+			options := config["provider"].(map[string]any)["engine"].(map[string]any)["options"].(map[string]any)
+			headers, present := options["headers"].(map[string]any)
+			if present != tc.want {
+				t.Fatalf("headers present = %t, want %t: %v", present, tc.want, options)
+			}
+			if tc.want && (len(headers) != 1 || headers["Copilot-Integration-Id"] != "copilot-developer-cli") {
+				t.Fatalf("headers = %v", headers)
+			}
+		})
+	}
+}
+
 func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 	home := t.TempDir()
 	provider := testGatewayProvider("https://model-gateway.prow-ai.svc.cluster.local:8443/v1/chat/completions", "test-model")
@@ -445,6 +485,9 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
+	if _, ok := config["instructions"]; ok {
+		t.Fatalf("OpenCode configuration contains instructions: %v", config["instructions"])
+	}
 	agents := config["agent"].(map[string]any)
 	if len(agents) != 3 {
 		t.Fatalf("agents=%v", agents)
@@ -457,7 +500,7 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 	}
 	permissions := source["permission"].(map[string]any)
 	read := permissions["read"].(map[string]any)
-	if permissions["*"] != "deny" || permissions["grep"] != "allow" || permissions["StructuredOutput"] != "deny" || permissions["glob"] != "deny" || read["*"] != "deny" || read["source/*"] != "allow" || read["*/source/*"] != "allow" || len(read) != 3 {
+	if permissions["*"] != "deny" || permissions["grep"] != "allow" || permissions["StructuredOutput"] != "deny" || permissions["glob"] != "deny" || read["*"] != "deny" || read["sources/*"] != "allow" || read["*/sources/*"] != "allow" || len(read) != 3 {
 		t.Fatalf("source permissions=%v", permissions)
 	}
 	for _, denied := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill", "external_directory"} {
@@ -470,7 +513,7 @@ func TestWriteOpenCodeConfigReservesSourceCorrectionAgent(t *testing.T) {
 func executorTestFixture(t *testing.T) (string, agentanalysis.WorkspaceExecutionRequest) {
 	t.Helper()
 	root := t.TempDir()
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
+	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary")
 	artifactRoot := filepath.Join(root, agentanalysis.WorkspaceArtifactsDir)
 	if err := os.MkdirAll(filepath.Join(sourceRoot, "pkg"), 0o700); err != nil {
 		t.Fatal(err)
@@ -519,9 +562,9 @@ func testOpenCodeResult() OpenCodeRunResult {
 			{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 1, LineEnd: 1},
 			{ID: "artifact-002", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 2, LineEnd: 2},
 			{ID: "artifact-003", Root: agentanalysis.WorkspaceArtifactsDir, Path: "logs/build.log", LineStart: 3, LineEnd: 3},
-			{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
-			{ID: "source-002", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 2, LineEnd: 2},
-			{ID: "source-003", Root: agentanalysis.WorkspaceSourceDir, Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
+			{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 1, LineEnd: 1},
+			{ID: "source-002", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 2, LineEnd: 2},
+			{ID: "source-003", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "pkg/controller.go", LineStart: 3, LineEnd: 3},
 		},
 		Usage: agentanalysis.WorkspaceUsage{Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable, ModelRequests: 2, InputTokens: 10, OutputTokens: 5, CostAvailable: true, CostUSD: "0.01000000"},
 		Telemetry: agentanalysis.WorkspaceOpenCodeTelemetry{
@@ -535,7 +578,7 @@ func testOpenCodeResult() OpenCodeRunResult {
 func executorAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v7",
+  "contract_version": "agent-analysis-workspace-v9",
   "summary": "The controller rejected the request.",
   "is_transient": false,
   "root_cause": "The specific failure occurred before cleanup.",
@@ -562,8 +605,14 @@ func TestSourceVerificationTimeoutCoversBoundedNetworkStorage(t *testing.T) {
 	if agentanalysis.WorkspaceSourceVerificationTimeout != 30*time.Second {
 		t.Fatalf("source verification timeout = %s", agentanalysis.WorkspaceSourceVerificationTimeout)
 	}
-	if agentanalysis.WorkspacePostModelGrace < 2*agentanalysis.WorkspaceSourceVerificationTimeout {
-		t.Fatalf("post-model grace = %s", agentanalysis.WorkspacePostModelGrace)
+	if got := agentanalysis.WorkspaceSourceVerificationTimeoutForSources(2); got != time.Minute {
+		t.Fatalf("two-source verification timeout = %s", got)
+	}
+	if got := agentanalysis.WorkspacePostModelGraceForSources(2); got != 2*time.Minute {
+		t.Fatalf("two-source post-model grace = %s", got)
+	}
+	if got := agentanalysis.WorkspacePostModelGraceForSources(agentanalysis.WorkspaceMaxSources); got != agentanalysis.WorkspacePostModelGraceMax {
+		t.Fatalf("maximum post-model grace = %s", got)
 	}
 }
 
@@ -616,12 +665,12 @@ func TestOpenCodeFailureCodePrefersContextLimit(t *testing.T) {
 
 func TestVerifyPreparedMountInfoRequiresExactReadOnlyManifestPaths(t *testing.T) {
 	hash := strings.Repeat("a", 64)
-	valid := "36 25 0:32 /" + hash + "/source /workspace/source ro,relatime - ext4 /dev/sda ro\n" +
+	valid := "36 25 0:32 /" + hash + "/sources /workspace/sources ro,relatime - ext4 /dev/sda ro\n" +
 		"37 25 0:32 /" + hash + "/artifacts /workspace/artifacts ro,relatime - ext4 /dev/sda ro\n"
 	if err := verifyPreparedMountInfo(valid, "/workspace", hash); err != nil {
 		t.Fatal(err)
 	}
-	kata := "129 120 0:40 / /workspace/source ro,relatime - virtiofs none rw\n" +
+	kata := "129 120 0:40 / /workspace/sources ro,relatime - virtiofs none rw\n" +
 		"131 120 0:41 / /workspace/artifacts ro,relatime - virtiofs none rw\n"
 	if err := verifyPreparedMountInfo(kata, "/workspace", hash); err != nil {
 		t.Fatal(err)
@@ -653,6 +702,43 @@ func pinnedOpenCodePermission(permission string, rules ...pinnedPermissionRule) 
 	return "ask"
 }
 
+func TestVerifyStagedMountInfoRequiresReadOnlyWorkspace(t *testing.T) {
+	valid := "127 120 0:32 /local/workspace /workspace ro,relatime master:52 - virtiofs none rw\n"
+	if err := verifyStagedMountInfo(valid, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{
+		"writable":    strings.Replace(valid, "ro,relatime", "rw,relatime", 1),
+		"nested only": "128 120 0:32 /local/workspace/sources /workspace/sources ro,relatime - virtiofs none rw\n",
+		"wrong mount": strings.Replace(valid, "/workspace ro", "/other ro", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := verifyStagedMountInfo(raw, "/workspace"); err == nil {
+				t.Fatal("unsafe mountinfo was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifyWorkspaceMountInfoUsesInputMode(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	prepared := "36 25 0:32 /" + hash + "/sources /workspace/sources ro,relatime - ext4 /dev/sda ro\n" +
+		"37 25 0:32 /" + hash + "/artifacts /workspace/artifacts ro,relatime - ext4 /dev/sda ro\n"
+	staged := "127 120 0:32 /local/workspace /workspace ro,relatime master:52 - virtiofs none rw\n"
+	if err := verifyPreparedMountInfo(prepared, "/workspace", hash); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyStagedMountInfo(staged, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPreparedMountInfo(staged, "/workspace", hash); err == nil {
+		t.Fatal("staged workspace passed prepared mount verification")
+	}
+	if err := verifyStagedMountInfo(prepared, "/workspace"); err == nil {
+		t.Fatal("prepared workspace passed staged mount verification")
+	}
+}
+
 func TestPinnedOpenCodeSessionPermissionPrecedence(t *testing.T) {
 	agent := []pinnedPermissionRule{{permission: "*", action: "deny"}, {permission: "read", action: "allow"}, {permission: "bash", action: "deny"}}
 	denySession := []pinnedPermissionRule{{permission: "read", action: "deny"}}
@@ -668,23 +754,20 @@ func TestPinnedOpenCodeSessionPermissionPrecedence(t *testing.T) {
 	}
 }
 
-func TestVerifyReadSafeWorkspaceRejectsInstructionFiles(t *testing.T) {
-	root, _ := executorTestFixture(t)
-	sourceRoot := filepath.Join(root, agentanalysis.WorkspaceSourceDir)
-	for _, name := range []string{"AGENTS.md", "nested/CLAUDE.md", "logs/CONTEXT.md"} {
-		if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: name}}); err == nil {
-			t.Fatalf("artifact instruction file was accepted: %s", name)
-		}
-	}
-	if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: "nested/instructions.md"}}); err != nil {
-		t.Fatalf("benign similarly named file was rejected: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceRoot, "AGENTS.md"), []byte("untrusted\n"), 0o600); err != nil {
+func TestOpenCodeEnvironmentDisablesProjectInstructions(t *testing.T) {
+	env, err := openCodeEnvironment(t.TempDir(), t.TempDir(), testGatewayProvider("https://provider.example/v1/chat/completions", "fixture-model"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	runExecutorGit(t, sourceRoot, "add", "AGENTS.md")
-	if err := verifyReadSafeWorkspace(t.Context(), sourceRoot, []agentanalysis.WorkspaceFile{{Path: "logs/build.log"}}); err == nil {
-		t.Fatal("tracked source instruction file was accepted")
+	for _, required := range []string{
+		"OPENCODE_DISABLE_PROJECT_CONFIG=true",
+		"OPENCODE_DISABLE_CLAUDE_CODE_PROMPT=true",
+		"OPENCODE_DISABLE_AUTOUPDATE=true",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
+	} {
+		if !slices.Contains(env, required) {
+			t.Fatalf("OpenCode environment lacks %q: %v", required, env)
+		}
 	}
 }
 
@@ -795,7 +878,7 @@ func TestExecuteGenericFailureLowerBoundSatisfiesResultContract(t *testing.T) {
 	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != "http_error" || result.OpenCodeTelemetry.Error.Available || result.OpenCodeTelemetry.ProviderRequestsKnown {
 		t.Fatalf("result=%+v", result)
 	}
-	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), filepath.Join(root, agentanalysis.WorkspaceSourceDir))
+	validated, err := agentanalysis.ValidateWorkspaceExecutionResult(result, request, filepath.Join(root, agentanalysis.WorkspaceArtifactsDir), filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "primary"))
 	if err != nil {
 		t.Fatalf("generic lower-bound result failed validation: %v", err)
 	}
@@ -871,15 +954,148 @@ func makeExecutorTreeReadOnly(t *testing.T, root string) func() {
 	}
 }
 
-func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
+func TestRecoverableOpenCodeEvidenceExhaustion(t *testing.T) {
+	baseError := agentanalysis.WorkspaceOpenCodeErrorTelemetry{
+		Available: true, Name: "APIError", HTTPStatusCode: http.StatusBadRequest,
+		RetryableKnown: true, Retryable: false, Classification: "api_bad_request",
+	}
+	baseTelemetry := agentanalysis.WorkspaceOpenCodeTelemetry{
+		Available: true, Status: agentanalysis.WorkspaceTelemetryAvailable,
+		ProviderRequests: 16, ProviderRequestsKnown: true, StepsUsed: 15,
+	}
+	baseFacts := openCodeEvidenceFacts{
+		ArtifactToolCalls: 1,
+		EvidenceDiagnostics: agentanalysis.WorkspaceEvidenceHandleDiagnostics{
+			Status: agentanalysis.WorkspaceEvidenceHandlesAccepted, AcceptedArtifactHandleCount: 1,
+		},
+	}
+	baseSpec := OpenCodeSpec{MaxSteps: 20, RequireSourceEvidence: true}
+	makeError := func(value agentanalysis.WorkspaceOpenCodeErrorTelemetry) error {
+		return &openCodePromptError{name: value.Name, telemetry: value}
+	}
+	if !recoverableOpenCodeEvidenceExhaustion(makeError(baseError), baseTelemetry, baseFacts, baseSpec) {
+		t.Fatal("exact bounded exhaustion was not recoverable")
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*agentanalysis.WorkspaceOpenCodeErrorTelemetry, *agentanalysis.WorkspaceOpenCodeTelemetry, *openCodeEvidenceFacts, *OpenCodeSpec)
+	}{
+		{name: "before bound", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, telemetry *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			telemetry.ProviderRequests--
+		}},
+		{name: "missing handle", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, facts *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			facts.EvidenceDiagnostics.AcceptedArtifactHandleCount = 0
+		}},
+		{name: "denied tool", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, telemetry *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			telemetry.DeniedToolCount = 1
+		}},
+		{name: "retryable", edit: func(providerError *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			providerError.Retryable = true
+		}},
+		{name: "context overflow", edit: func(providerError *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, _ *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			providerError.ContextOverflow = true
+		}},
+		{name: "structured output", edit: func(_ *agentanalysis.WorkspaceOpenCodeErrorTelemetry, _ *agentanalysis.WorkspaceOpenCodeTelemetry, facts *openCodeEvidenceFacts, _ *OpenCodeSpec) {
+			facts.StructuredOutputCalls = 1
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providerError, telemetry, facts, spec := baseError, baseTelemetry, baseFacts, baseSpec
+			test.edit(&providerError, &telemetry, &facts, &spec)
+			if recoverableOpenCodeEvidenceExhaustion(makeError(providerError), telemetry, facts, spec) {
+				t.Fatal("unsafe evidence failure was recoverable")
+			}
+		})
+	}
+}
+
+func TestRunOpenCodePhasesFinalizesAfterBoundedEvidenceExhaustion(t *testing.T) {
 	workDir := t.TempDir()
-	for _, dir := range []string{agentanalysis.WorkspaceSourceDir, agentanalysis.WorkspaceArtifactsDir} {
-		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir, "failure.log")
-	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir, "main.go")
+	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary", "main.go")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var evidence strings.Builder
+	evidence.WriteByte('[')
+	for step := 0; step < 15; step++ {
+		if step > 0 {
+			evidence.WriteByte(',')
+		}
+		parts := `[{"type":"step-start"}`
+		if step == 0 {
+			parts += fmt.Sprintf(`,{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}}`, artifactPath)
+		}
+		parts += `,{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]`
+		fmt.Fprintf(&evidence, `{"info":{"role":"assistant"},"parts":%s}`, parts)
+	}
+	evidenceError := `{"name":"APIError","data":{"message":"bounded synthetic request","statusCode":400,"isRetryable":false,"responseBody":"synthetic"}}`
+	fmt.Fprintf(&evidence, `,{"info":{"role":"assistant","error":%s},"parts":[]}]`, evidenceError)
+	evidenceTelemetry := evidence.String()
+	correctedTelemetry := strings.TrimSuffix(evidenceTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, sourcePath)
+	finalTelemetry := strings.TrimSuffix(correctedTelemetry, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			switch posts {
+			case 1:
+				fmt.Fprintf(w, `{"info":{"role":"assistant","error":%s},"parts":[]}`, evidenceError)
+			case 2:
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+			case 3:
+				fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+			default:
+				t.Fatalf("unexpected post %d", posts)
+			}
+		case http.MethodGet:
+			gets++
+			switch gets {
+			case 1:
+				fmt.Fprint(w, evidenceTelemetry)
+			case 2:
+				fmt.Fprint(w, correctedTelemetry)
+			case 3:
+				fmt.Fprint(w, finalTelemetry)
+			default:
+				t.Fatalf("unexpected get %d", gets)
+			}
+		default:
+			t.Fatalf("method=%s", r.Method)
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := result.Telemetry
+	if posts != 3 || gets != 3 || len(result.Structured) == 0 || !telemetry.EvidencePhaseCompleted || !telemetry.EvidenceExhausted || telemetry.EvidenceStepBudget != 16 || telemetry.EvidenceExhaustedSteps != 15 || telemetry.EvidenceExhaustedRequests != 16 || telemetry.EvidenceExhaustionClass != "api_bad_request" || telemetry.EvidencePhaseSteps != 16 || telemetry.EvidencePhaseRequests != 17 || telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !telemetry.SourceEvidenceCorrectiveTurn || !telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 1 || telemetry.FinalizationPhaseRequests != 1 || telemetry.ProviderRequests != 18 || telemetry.StepsUsed != 17 || telemetry.StructuredOutputToolCalls != 1 {
+		t.Fatalf("posts=%d gets=%d result=%+v", posts, gets, result)
+	}
+}
+
+func TestRunOpenCodePhasesUsesOneSessionAndGatesFinalization(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir, "failure.log")
+	sourcePath := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary", "main.go")
 	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +1171,7 @@ func TestRunOpenCodePhasesArtifactOnlySkipsSourceCorrection(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1004,7 +1220,7 @@ func TestRunOpenCodePhasesArtifactOnlySkipsSourceCorrection(t *testing.T) {
 func TestRunOpenCodePhasesInterceptsArtifactOnlyFinalizationForSourceEvidence(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	for _, dir := range []string{artifactDir, sourceDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -1104,7 +1320,7 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			workDir := t.TempDir()
 			artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-			sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+			sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 			for _, dir := range []string{artifactDir, sourceDir} {
 				if err := os.MkdirAll(dir, 0o700); err != nil {
 					t.Fatal(err)
@@ -1120,28 +1336,33 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 			}
 			initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
 			corrected := strings.TrimSuffix(initial, "]") + fmt.Sprintf(`,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},%s,{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, test.tool(sourcePath, sourceDir))
+			final := strings.TrimSuffix(corrected, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
 			posts, gets := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodPost:
 					posts++
-					if posts > 2 {
-						t.Fatalf("finalization ran after unusable source evidence")
+					if posts == 3 {
+						fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+					} else {
+						fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 					}
-					fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 				case http.MethodGet:
 					gets++
-					if gets == 1 {
+					switch gets {
+					case 1:
 						fmt.Fprint(w, initial)
-					} else {
+					case 2:
 						fmt.Fprint(w, corrected)
+					case 3:
+						fmt.Fprint(w, final)
 					}
 				}
 			}))
 			defer server.Close()
 			spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
 			result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
-			if err == nil || posts != 2 || gets != 2 || result.Telemetry.FailureCode != "source_evidence_missing" || result.Telemetry.SourceEvidenceStatus != test.wantStatus || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+			if err != nil || posts != 3 || gets != 3 || result.Telemetry.FailureCode != "" || result.Telemetry.SourceEvidenceStatus != test.wantStatus || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 1 {
 				t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
 			}
 		})
@@ -1151,7 +1372,7 @@ func TestRunOpenCodePhasesRejectsUnusableCorrectiveSourceEvidence(t *testing.T) 
 func TestRunOpenCodePhasesRejectsArtifactAccessDuringSourceCorrection(t *testing.T) {
 	workDir := t.TempDir()
 	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	for _, dir := range []string{artifactDir, sourceDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -1208,7 +1429,7 @@ func TestRunOpenCodePhasesPreservesCorrectionTelemetryWhenTranscriptUnavailable(
 			if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+			if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1247,7 +1468,7 @@ func TestRunOpenCodePhasesBoundsSourceCorrectionToOneTurn(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourceDir), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(artifactDir, "failure.log")
@@ -1256,28 +1477,33 @@ func TestRunOpenCodePhasesBoundsSourceCorrectionToOneTurn(t *testing.T) {
 	}
 	initial := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
 	corrected := strings.TrimSuffix(initial, "]") + `,{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`
+	final := strings.TrimSuffix(corrected, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
 	posts, gets := 0, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
 			posts++
-			if posts > 2 {
-				t.Fatalf("more than one source correction was attempted")
+			if posts == 3 {
+				fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+			} else {
+				fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 			}
-			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
 		case http.MethodGet:
 			gets++
-			if gets == 1 {
+			switch gets {
+			case 1:
 				fmt.Fprint(w, initial)
-			} else {
+			case 2:
 				fmt.Fprint(w, corrected)
+			case 3:
+				fmt.Fprint(w, final)
 			}
 		}
 	}))
 	defer server.Close()
 	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true}
 	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
-	if err == nil || posts != 2 || gets != 2 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "source_evidence_missing" || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 0 {
+	if err != nil || posts != 3 || gets != 3 || result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.FailureCode != "" || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.StructuredOutputToolCalls != 1 {
 		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
 	}
 }
@@ -1362,7 +1588,7 @@ func TestRunOpenCodePhasesPreservesPromptErrorWhenFinalTranscriptMalformed(t *te
 
 func TestRunOpenCodePhasesStopsBeforeFinalizationWithoutArtifactEvidence(t *testing.T) {
 	workDir := t.TempDir()
-	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourceDir)
+	sourceDir := filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir, "primary")
 	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1421,7 +1647,7 @@ func TestPrimaryWorkspaceEvidenceFailureCodePrioritizesHardRejections(t *testing
 	}
 }
 
-func TestExecuteRequiresSourceEvidenceForSourceClaims(t *testing.T) {
+func TestExecuteDropsSourceClaimsWithoutSourceEvidence(t *testing.T) {
 	root, request := executorTestFixture(t)
 	result := Execute(t.Context(), request, Options{
 		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
@@ -1431,7 +1657,7 @@ func TestExecuteRequiresSourceEvidenceForSourceClaims(t *testing.T) {
 			return value, nil
 		},
 	})
-	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != "source_evidence_unavailable" || !strings.Contains(result.FailureReason, "without successful source evidence") {
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.Analysis == nil || len(result.Analysis.SourceCitations) != 0 || len(result.Analysis.RelevantFiles) != 0 || result.ResultValidation.Status != agentanalysis.WorkspaceResultAcceptedWithWarnings || !slices.Contains(result.ResultValidation.Codes, agentanalysis.WorkspaceInvalidSourcePath) {
 		t.Fatalf("result=%+v", result)
 	}
 }
@@ -1548,7 +1774,7 @@ func TestDefaultRunOpenCodeRejectsCredentialBearingProcessStream(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s' \"$"+modelprovider.TokenEnv+"\"\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	_, err := defaultRunOpenCode(ctx, OpenCodeSpec{
 		Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
@@ -1569,7 +1795,7 @@ func TestNonCredentialSubprocessEnvironmentExcludesProviderCredential(t *testing
 	}
 }
 
-func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
+func TestStopTrackedOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
 	credential := strings.Repeat("fixture-provider-credential-", 2)
 	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
 	guard, err := modelprovider.NewCredentialGuard(provider, func(string) (string, bool) { return credential, true })
@@ -1578,15 +1804,17 @@ func TestStopOpenCodeProcessWaitsBeforeCredentialCheck(t *testing.T) {
 	}
 	detector := guard.NewDetector()
 	terminated := make(chan struct{})
-	done := make(chan error, 1)
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
 	go func() {
 		<-terminated
 		mid := len(credential) / 2
 		_, _ = detector.Write([]byte(credential[:mid]))
 		_, _ = detector.Write([]byte(credential[mid:]))
-		done <- nil
+		close(tracker.done)
 	}()
-	stopOpenCodeProcess(func() { close(terminated) }, done)
+	if !stopTrackedOpenCodeProcess(func() { close(terminated) }, tracker) {
+		t.Fatal("tracked process did not finish draining")
+	}
 	if !detector.Detected() {
 		t.Fatal("credential emitted during shutdown was checked before process completion")
 	}
@@ -1621,9 +1849,258 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	}
 }
 
-// OpenCode reaches the provider directly, so it must send the same GitHub
-// Copilot integration header the in-process transport sends. Without it Copilot
-// rejects the request with an unexplained 403.
+func TestRunOpenCodePhasesRecoversPersistedEvidenceAfterLocalEOF(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	final := strings.TrimSuffix(evidence, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts == 1 {
+				panic(http.ErrAbortHandler)
+			}
+			fmt.Fprintf(w, `{"info":{"role":"assistant","structured":%s},"parts":[]}`, executorAnalysisJSON())
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, evidence)
+			} else {
+				fmt.Fprint(w, final)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil || posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.LocalTransportRecovered || result.Telemetry.LocalTransportFailure != "local_connection_closed" || result.Telemetry.LocalTransportPhase != "evidence" || result.Telemetry.ProviderRequests != 2 || !result.Telemetry.ProviderRequestsKnown {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestRunOpenCodePhasesRecoversPersistedFinalizationAfterLocalEOF(t *testing.T) {
+	workDir := t.TempDir()
+	artifactDir := filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir)
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(artifactDir, "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evidence := fmt.Sprintf(`[{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":%[1]q},"metadata":{"display":{"type":"file","path":%[1]q,"lineStart":1,"lineEnd":1}}}},{"type":"step-finish","cost":0.1,"tokens":{"input":10,"output":2,"cache":{"read":1}}}]}]`, artifactPath)
+	final := strings.TrimSuffix(evidence, "]") + fmt.Sprintf(`,{"info":{"role":"assistant","structured":%s},"parts":[{"type":"step-start"},{"type":"tool","tool":"StructuredOutput","state":{"status":"completed","input":{}}},{"type":"step-finish","cost":0.2,"tokens":{"input":20,"output":4,"cache":{"read":2}}}]}]`, executorAnalysisJSON())
+	posts, gets := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			if posts == 2 {
+				panic(http.ErrAbortHandler)
+			}
+			fmt.Fprint(w, `{"info":{"role":"assistant"},"parts":[]}`)
+		case http.MethodGet:
+			gets++
+			if gets == 1 {
+				fmt.Fprint(w, evidence)
+			} else {
+				fmt.Fprint(w, final)
+			}
+		}
+	}))
+	defer server.Close()
+	spec := OpenCodeSpec{WorkDir: workDir, Provider: testOpenCodeProvider("", "test-model"), Prompt: "investigate", MaxSteps: 20, ModelContextTokens: 200000, ModelOutputTokens: 8192}
+	result, err := runOpenCodePhases(t.Context(), server.Client(), server.URL, "session-1", spec, "1.18.2", newOpenCodeEvidenceRequestShape(spec, "1.18.2"))
+	if err != nil || posts != 2 || gets != 2 || len(result.Structured) == 0 || !result.Telemetry.LocalTransportRecovered || result.Telemetry.LocalTransportFailure != "local_connection_closed" || result.Telemetry.LocalTransportPhase != "finalization" || result.Telemetry.StructuredOutputToolCalls != 1 || !result.Telemetry.FinalizationPhaseCompleted {
+		t.Fatalf("posts=%d gets=%d result=%+v err=%v", posts, gets, result, err)
+	}
+}
+
+func TestOpenCodeResponseClassifiesLocalEOFWithoutEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	defer server.Close()
+	var response map[string]any
+	err := openCodeJSON(t.Context(), server.Client(), http.MethodPost, server.URL+"/session/private/message", []byte(`{}`), &response)
+	var local *openCodeLocalAPIError
+	if !errors.As(err, &local) || local.Class != "local_connection_closed" || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "private") {
+		t.Fatalf("error=%v local=%+v", err, local)
+	}
+}
+
+func TestStopTrackedOpenCodeProcessReportsIncompleteDrain(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
+	started := time.Now()
+	if stopTrackedOpenCodeProcess(nil, tracker) {
+		t.Fatal("incomplete drain was reported complete")
+	}
+	if time.Since(started) < 900*time.Millisecond {
+		t.Fatal("incomplete drain returned before the bound")
+	}
+}
+
+func TestOpenCodeInheritedStreamHelper(t *testing.T) {
+	switch os.Getenv("ASTER_OPENCODE_STREAM_HELPER") {
+	case "parent":
+		stream := os.NewFile(3, "inherited-stream")
+		child := exec.Command(os.Args[0], "-test.run=TestOpenCodeInheritedStreamHelper")
+		child.Env = append(os.Environ(), "ASTER_OPENCODE_STREAM_HELPER=child", "ASTER_OPENCODE_STREAM_ESCAPE="+os.Getenv("ASTER_OPENCODE_STREAM_ESCAPE"))
+		child.ExtraFiles = []*os.File{stream}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		_ = stream.Close()
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "child":
+		if os.Getenv("ASTER_OPENCODE_STREAM_ESCAPE") == "1" {
+			if err := escapeOpenCodeProcessGroupForTest(); err != nil {
+				os.Exit(3)
+			}
+		}
+		stream := os.NewFile(3, "inherited-stream")
+		time.Sleep(2 * time.Second)
+		_, _ = stream.Write([]byte("late-output"))
+		_ = stream.Close()
+		os.Exit(0)
+	}
+}
+
+func startOpenCodeInheritedStreamHelper(t *testing.T, escape bool) (*exec.Cmd, *openCodeProcessTracker, *openCodeStreamTracker) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestOpenCodeInheritedStreamHelper")
+	value := "0"
+	if escape {
+		value = "1"
+	}
+	cmd.Env = append(os.Environ(), "ASTER_OPENCODE_STREAM_HELPER=parent", "ASTER_OPENCODE_STREAM_ESCAPE="+value)
+	configureOpenCodeProcessGroup(cmd)
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.ExtraFiles = []*os.File{writer}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	stream := trackOpenCodeStream(reader, io.Discard)
+	tracker := trackOpenCodeProcess(cmd, cgroupMemoryEvents{}, false)
+	time.Sleep(200 * time.Millisecond)
+	return cmd, tracker, stream
+}
+
+func TestStopTrackedOpenCodeProcessGroupKillDrainsInheritedStreams(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups and ExtraFiles are unavailable")
+	}
+	cmd, tracker, stream := startOpenCodeInheritedStreamHelper(t, false)
+	if !stopTrackedOpenCodeProcess(func() { terminateOpenCodeProcess(cmd.Process) }, tracker, stream) {
+		t.Fatal("process-group termination did not drain inherited streams")
+	}
+}
+
+func TestStopTrackedOpenCodeProcessEscapedGroupFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process groups and ExtraFiles are unavailable")
+	}
+	cmd, tracker, stream := startOpenCodeInheritedStreamHelper(t, true)
+	if stopTrackedOpenCodeProcess(func() { terminateOpenCodeProcess(cmd.Process) }, tracker, stream) {
+		t.Fatal("escaped process group was reported as a complete drain")
+	}
+}
+
+func TestReadCgroupMemoryEvents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.events")
+	if err := os.WriteFile(path, []byte("oom 3\noom_kill 4\noom_group_kill 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := readCgroupMemoryEvents(path)
+	if !ok || got.OOM != 3 || got.OOMKill != 4 || got.OOMGroupKill != 5 {
+		t.Fatalf("events=%+v ok=%t", got, ok)
+	}
+}
+
+func TestReadCgroupMemoryEventsRejectsUnknownContent(t *testing.T) {
+	for _, content := range []string{"", "low 0\nhigh 0\n", "oom nope\noom_kill 0\n"} {
+		path := filepath.Join(t.TempDir(), "memory.events")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := readCgroupMemoryEvents(path); ok {
+			t.Fatalf("accepted %q", content)
+		}
+	}
+}
+
+func TestWaitForOpenCodeClassifiesStartupProcessExit(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{}), err: errors.New("fixture exit")}
+	close(tracker.done)
+	_, err := waitForOpenCode(t.Context(), &http.Client{}, "http://127.0.0.1:1", tracker)
+	var local *openCodeLocalAPIError
+	if !errors.As(err, &local) || local.Class != "local_server_exited" || local.Phase != "startup" {
+		t.Fatalf("error=%v local=%+v", err, local)
+	}
+}
+
+func TestDiagnoseOpenCodeRecoveredTransportRecordsProcessAndOOMAvailability(t *testing.T) {
+	tracker := &openCodeProcessTracker{done: make(chan struct{})}
+	telemetry := agentanalysis.WorkspaceOpenCodeTelemetry{LocalTransportFailure: "local_connection_closed", LocalTransportPhase: "finalization", LocalTransportRecovered: true}
+	diagnoseOpenCodeLocalFailure(tracker, &telemetry)
+	if telemetry.ServerProcessState != "running" || telemetry.CgroupOOMStatus != agentanalysis.WorkspaceCgroupOOMUnavailable || telemetry.FailureCode != "" {
+		t.Fatalf("telemetry=%+v", telemetry)
+	}
+}
+
+func TestOpenCodeProcessTrackerMemoryDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.events")
+	tracker := &openCodeProcessTracker{
+		done: make(chan struct{}), memoryBaselineAvailable: true,
+		memoryBaseline: cgroupMemoryEvents{OOM: 2, OOMKill: 3, OOMGroupKill: 4},
+	}
+	if err := os.WriteFile(path, []byte("oom 7\noom_kill 8\noom_group_kill 10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := tracker.memoryDelta(path)
+	if !ok || got.OOM != 5 || got.OOMKill != 5 || got.OOMGroupKill != 6 {
+		t.Fatalf("delta=%+v ok=%t", got, ok)
+	}
+	if err := os.WriteFile(path, []byte("oom 1\noom_kill 8\noom_group_kill 10\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tracker.memoryDelta(path); ok {
+		t.Fatal("counter regression was accepted")
+	}
+}
+
+func TestOpenCodeProcessTrackerRecordsSignal(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "kill -KILL $$")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tracker := trackOpenCodeProcess(cmd, cgroupMemoryEvents{}, false)
+	select {
+	case <-tracker.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("process did not exit")
+	}
+	state, _, known, signal := tracker.snapshot()
+	if state != "signaled" || known || signal != "sigkill" {
+		t.Fatalf("state=%s known=%t signal=%s", state, known, signal)
+	}
+
+}
+
 func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -1664,9 +2141,58 @@ func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	options, ok := config["provider"].(map[string]any)["engine"].(map[string]any)["options"].(map[string]any)
+	provider, ok := config["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider missing: %s", data)
+	}
+	entry, ok := provider["engine"].(map[string]any)
+	if !ok {
+		t.Fatalf("engine provider missing: %s", data)
+	}
+	options, ok := entry["options"].(map[string]any)
 	if !ok {
 		t.Fatalf("provider options missing: %s", data)
 	}
 	return options
+}
+
+func TestExecuteRejectsSecondarySourceMutation(t *testing.T) {
+	root, base := executorTestFixture(t)
+	dependencyRoot := filepath.Join(root, agentanalysis.WorkspaceSourcesDir, "dependency")
+	if err := os.MkdirAll(filepath.Join(dependencyRoot, "pkg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package dependency\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runExecutorGit(t, dependencyRoot, "init", "-q")
+	runExecutorGit(t, dependencyRoot, "config", "user.name", "Test")
+	runExecutorGit(t, dependencyRoot, "config", "user.email", "test@example.com")
+	runExecutorGit(t, dependencyRoot, "config", "commit.gpgsign", "false")
+	runExecutorGit(t, dependencyRoot, "add", ".")
+	runExecutorGit(t, dependencyRoot, "commit", "-qm", "dependency fixture")
+	dependencyRevision := strings.TrimSpace(runExecutorGit(t, dependencyRoot, "rev-parse", "HEAD"))
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSources(base.Manifest.Request, []agentanalysis.WorkspaceSourceRef{
+		{ID: "dependency", Repository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: dependencyRevision}},
+		{ID: "primary", Repository: base.Manifest.Sources[0].Repository},
+	}, base.Manifest.ConsumerPrompt, base.Manifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := agentanalysis.NewWorkspaceExecutionRequest(manifest, base.ModelProvider, time.Duration(base.TimeoutSeconds)*time.Second, base.MaxSteps, base.ModelContextTokens, base.ModelOutputTokens, base.OutputLimitBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: root, TempRoot: t.TempDir(), MountVerifier: func(string, string) error { return nil },
+		RunOpenCode: func(context.Context, OpenCodeSpec) (OpenCodeRunResult, error) {
+			if err := os.WriteFile(filepath.Join(dependencyRoot, "pkg", "controller.go"), []byte("package changed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return testOpenCodeResult(), nil
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalFailed || result.OpenCodeTelemetry.FailureCode != agentanalysis.SourceWorktreeContentChanged || !strings.Contains(result.FailureReason, "verify workspace source dependency") {
+		t.Fatalf("result=%+v", result)
+	}
 }

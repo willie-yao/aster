@@ -8,15 +8,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -24,26 +27,36 @@ import (
 )
 
 const (
-	WorkspaceManifestVersion = 1
-	WorkspaceRequestVersion  = 4
+	WorkspaceManifestVersion = 3
+	WorkspaceRequestVersion  = 6
 	WorkspaceResultVersion   = 1
-	WorkspaceStageVersion    = 2
-	WorkspaceContractVersion = "agent-analysis-workspace-v7"
-	WorkspaceStageContract   = "agent-analysis-stage-v2"
-	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v7"
+	WorkspaceStageVersion    = 4
+	WorkspaceContractVersion = "agent-analysis-workspace-v9"
+	WorkspaceStageContract   = "agent-analysis-stage-v4"
+	WorkspacePromptVersion   = "agent-analysis-workspace-prompt-v9"
 
-	WorkspaceSourceDir    = "source"
-	WorkspaceArtifactsDir = "artifacts"
-	WorkspaceResultDir    = "result"
-	WorkspaceResultFile   = "analysis.json"
+	WorkspaceSourceDir            = "source"
+	WorkspaceSourcesDir           = "sources"
+	WorkspaceArtifactsDir         = "artifacts"
+	WorkspaceResultDir            = "result"
+	WorkspaceResultFile           = "analysis.json"
+	WorkspaceArtifactManifestFile = ".analysis-artifacts.json"
+	WorkspaceInputStaged          = "staged"
+	WorkspaceInputPrepared        = "prepared"
+	WorkspaceStageInputPVC        = "pvc"
+	WorkspaceStageInputRemote     = "remote"
 
-	maxWorkspaceFiles        = 512
-	maxWorkspaceFileBytes    = int64(8 << 20)
-	maxWorkspaceTotalBytes   = int64(32 << 20)
+	maxWorkspaceFiles        = 5000
+	maxWorkspaceFileBytes    = int64(64 << 20)
+	maxWorkspaceTotalBytes   = int64(512 << 20)
 	maxWorkspacePromptBytes  = 32 << 10
-	maxWorkspaceRequestBytes = 88 << 10
-	maxWorkspaceStageBytes   = 95 << 10
+	maxWorkspaceSkillBytes   = 24 << 10
+	maxWorkspaceRequestBytes = 768 << 10
+	maxWorkspaceStageBytes   = 32 << 10
+	WorkspaceMaxSources      = 8
 )
+
+var workspaceSourceID = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // WorkspaceFile identifies one immutable artifact file exposed to OpenCode.
 type WorkspaceFile struct {
@@ -52,28 +65,53 @@ type WorkspaceFile struct {
 	SHA256 string `json:"sha256"`
 }
 
-// WorkspaceManifest seals one failure to a pinned source and artifact snapshot.
-type WorkspaceManifest struct {
-	Version         int                            `json:"version"`
-	ContractVersion string                         `json:"contract_version"`
-	Hash            string                         `json:"hash"`
-	Request         ai.FailureAnalysisRequest      `json:"request"`
-	Source          sourceinvestigation.Repository `json:"source"`
-	ConsumerPrompt  string                         `json:"consumer_prompt"`
-	Artifacts       []WorkspaceFile                `json:"artifacts"`
+// WorkspaceSourceRef identifies one immutable source checkout.
+type WorkspaceSourceRef struct {
+	ID         string                         `json:"id"`
+	Repository sourceinvestigation.Repository `json:"repository"`
 }
 
-// WorkspaceStageRequest binds staging to the sealed source and artifact snapshot.
+// WorkspaceSourceMode binds one source to its prepared filesystem policy.
+type WorkspaceSourceMode struct {
+	SourceID string                    `json:"source_id"`
+	Policy   WorkspaceSourceModePolicy `json:"policy"`
+}
+
+// WorkspaceManifest seals one failure to pinned source and artifact snapshots.
+type WorkspaceManifest struct {
+	Version               int                            `json:"version"`
+	ContractVersion       string                         `json:"contract_version"`
+	Hash                  string                         `json:"hash"`
+	Request               ai.FailureAnalysisRequest      `json:"request"`
+	Sources               []WorkspaceSourceRef           `json:"sources"`
+	PrimarySourceID       string                         `json:"primary_source_id"`
+	Source                sourceinvestigation.Repository `json:"-"`
+	ConsumerPrompt        string                         `json:"consumer_prompt"`
+	EffectivePromptSHA256 string                         `json:"effective_prompt_sha256"`
+	SkillSetHash          string                         `json:"skill_set_hash"`
+	SkillPlan             []skills.PlannedSkill          `json:"skill_plan,omitempty"`
+	Artifacts             []WorkspaceFile                `json:"artifacts"`
+}
+
+// WorkspaceStageRequest binds staging to sealed source and artifact snapshots.
 type WorkspaceStageRequest struct {
-	Version                int                            `json:"version"`
-	ContractVersion        string                         `json:"contract_version"`
-	Hash                   string                         `json:"hash"`
-	ManifestHash           string                         `json:"manifest_hash"`
-	BuildPrefix            string                         `json:"build_prefix"`
-	Source                 sourceinvestigation.Repository `json:"source"`
-	InputSourceModePolicy  WorkspaceSourceModePolicy      `json:"input_source_mode_policy"`
-	OutputSourceModePolicy WorkspaceSourceModePolicy      `json:"output_source_mode_policy"`
-	Artifacts              []WorkspaceFile                `json:"artifacts"`
+	Version                  int                            `json:"version"`
+	ContractVersion          string                         `json:"contract_version"`
+	Hash                     string                         `json:"hash"`
+	ManifestHash             string                         `json:"manifest_hash"`
+	BuildPrefix              string                         `json:"build_prefix"`
+	Sources                  []WorkspaceSourceRef           `json:"sources"`
+	PrimarySourceID          string                         `json:"primary_source_id"`
+	InputMode                string                         `json:"input_mode"`
+	ArtifactBaseURL          string                         `json:"artifact_base_url,omitempty"`
+	InputSourceModePolicies  []WorkspaceSourceMode          `json:"input_source_mode_policies"`
+	OutputSourceModePolicies []WorkspaceSourceMode          `json:"output_source_mode_policies"`
+	ArtifactManifestSHA256   string                         `json:"artifact_manifest_sha256"`
+	ArtifactFiles            int                            `json:"artifact_files"`
+	ArtifactBytes            int64                          `json:"artifact_bytes"`
+	Source                   sourceinvestigation.Repository `json:"-"`
+	InputSourceModePolicy    WorkspaceSourceModePolicy      `json:"-"`
+	OutputSourceModePolicy   WorkspaceSourceModePolicy      `json:"-"`
 }
 
 // WorkspaceExecutionRequest is the non-secret request passed to one analyzer Sandbox.
@@ -85,7 +123,9 @@ type WorkspaceExecutionRequest struct {
 	PromptHash            string                    `json:"prompt_hash"`
 	ResultSchemaHash      string                    `json:"result_schema_hash"`
 	Manifest              WorkspaceManifest         `json:"manifest"`
-	SourceModePolicy      WorkspaceSourceModePolicy `json:"source_mode_policy"`
+	InputMode             string                    `json:"input_mode"`
+	SourceModePolicies    []WorkspaceSourceMode     `json:"source_mode_policies"`
+	SourceModePolicy      WorkspaceSourceModePolicy `json:"-"`
 	RequireSourceEvidence bool                      `json:"require_source_evidence"`
 	ModelProvider         modelprovider.Config      `json:"model_provider"`
 	TimeoutSeconds        int64                     `json:"timeout_seconds"`
@@ -95,16 +135,111 @@ type WorkspaceExecutionRequest struct {
 	OutputLimitBytes      int64                     `json:"output_limit_bytes"`
 }
 
+// UnmarshalJSON restores derived compatibility fields without accepting legacy wire keys.
+func (manifest *WorkspaceManifest) UnmarshalJSON(data []byte) error {
+	type wire WorkspaceManifest
+	var decoded wire
+	if err := decodeWorkspaceJSON(data, &decoded); err != nil {
+		return err
+	}
+	*manifest = WorkspaceManifest(decoded)
+	if source, ok := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID); ok {
+		manifest.Source = source.Repository
+	}
+	return nil
+}
+
+// UnmarshalJSON restores derived compatibility fields without accepting legacy wire keys.
+func (stage *WorkspaceStageRequest) UnmarshalJSON(data []byte) error {
+	type wire WorkspaceStageRequest
+	var decoded wire
+	if err := decodeWorkspaceJSON(data, &decoded); err != nil {
+		return err
+	}
+	*stage = WorkspaceStageRequest(decoded)
+	if source, ok := WorkspaceSource(stage.Sources, stage.PrimarySourceID); ok {
+		stage.Source = source.Repository
+	}
+	if len(stage.InputSourceModePolicies) > 0 {
+		stage.InputSourceModePolicy = stage.InputSourceModePolicies[0].Policy
+	}
+	if len(stage.OutputSourceModePolicies) > 0 {
+		stage.OutputSourceModePolicy = stage.OutputSourceModePolicies[0].Policy
+	}
+	return nil
+}
+
+// UnmarshalJSON restores the derived primary mode policy.
+func (request *WorkspaceExecutionRequest) UnmarshalJSON(data []byte) error {
+	type wire WorkspaceExecutionRequest
+	var decoded wire
+	if err := decodeWorkspaceJSON(data, &decoded); err != nil {
+		return err
+	}
+	*request = WorkspaceExecutionRequest(decoded)
+	if len(request.SourceModePolicies) > 0 {
+		request.SourceModePolicy = request.SourceModePolicies[0].Policy
+	}
+	return nil
+}
+
+func decodeWorkspaceJSON(data []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("workspace JSON has trailing data")
+	}
+	return nil
+}
+
 // NewWorkspaceManifest creates one deterministic file-backed analyzer input.
 func NewWorkspaceManifest(request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
-	source.Owner = strings.TrimSpace(source.Owner)
-	source.Name = strings.TrimSpace(source.Name)
-	source.Revision = strings.TrimSpace(source.Revision)
+	return NewWorkspaceManifestWithSourceCatalog(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, "primary", consumerPrompt, files)
+}
+
+// NewWorkspaceManifestWithSources creates one deterministic multi-source analyzer input.
+func NewWorkspaceManifestWithSources(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
+	primary := "primary"
+	if _, ok := WorkspaceSource(sources, primary); !ok && len(sources) > 0 {
+		canonical, err := canonicalWorkspaceSources(sources)
+		if err != nil {
+			return WorkspaceManifest{}, err
+		}
+		primary = canonical[0].ID
+	}
+	return NewWorkspaceManifestWithSourceCatalog(request, sources, primary, consumerPrompt, files)
+}
+
+// NewWorkspaceManifestWithSourceCatalog seals an explicit primary source identity.
+func NewWorkspaceManifestWithSourceCatalog(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, primarySourceID, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
+	return newWorkspaceManifest(request, sources, primarySourceID, consumerPrompt, hashString("workspace-skill-input-empty-v1"), nil, files)
+}
+
+// EffectivePromptSHA256 returns the canonical in-process prompt identity.
+func EffectivePromptSHA256(consumerPrompt string) string {
+	consumerPrompt = strings.TrimSpace(strings.ReplaceAll(consumerPrompt, "\r\n", "\n"))
+	return hashString(ai.ComposeSystemPrompt(consumerPrompt))
+}
+
+func newWorkspaceManifest(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, primarySourceID, consumerPrompt, skillSetHash string, plan []skills.PlannedSkill, files []WorkspaceFile) (WorkspaceManifest, error) {
+	canonicalSources, err := canonicalWorkspaceSources(sources)
+	if err != nil {
+		return WorkspaceManifest{}, err
+	}
+	primarySourceID = strings.TrimSpace(primarySourceID)
+	primary, ok := WorkspaceSource(canonicalSources, primarySourceID)
+	if !ok {
+		return WorkspaceManifest{}, fmt.Errorf("primary source_id is not configured")
+	}
+	consumerPrompt = strings.TrimSpace(strings.ReplaceAll(consumerPrompt, "\r\n", "\n"))
 	manifest := WorkspaceManifest{
 		Version: WorkspaceManifestVersion, ContractVersion: WorkspaceContractVersion,
-		Request: canonicalRequest(request), Source: source,
-		ConsumerPrompt: strings.TrimSpace(strings.ReplaceAll(consumerPrompt, "\r\n", "\n")),
-		Artifacts:      slices.Clone(files),
+		Request: canonicalRequest(request), Sources: canonicalSources, PrimarySourceID: primarySourceID, Source: primary.Repository,
+		ConsumerPrompt: consumerPrompt, EffectivePromptSHA256: EffectivePromptSHA256(consumerPrompt),
+		SkillSetHash: strings.TrimSpace(skillSetHash), SkillPlan: clonePlan(plan), Artifacts: slices.Clone(files),
 	}
 	sort.Slice(manifest.Artifacts, func(i, j int) bool { return manifest.Artifacts[i].Path < manifest.Artifacts[j].Path })
 	hash, err := workspaceManifestDigest(manifest)
@@ -123,8 +258,15 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	if manifest.Version != WorkspaceManifestVersion || manifest.ContractVersion != WorkspaceContractVersion {
 		return fmt.Errorf("%w: unsupported workspace manifest version", ErrInvalidBundle)
 	}
-	if err := sourceinvestigation.ValidateRepository(manifest.Source); err != nil || !immutableSourceRevision.MatchString(manifest.Source.Revision) {
-		return fmt.Errorf("%w: source revision is invalid", ErrInvalidBundle)
+	if err := validateCanonicalWorkspaceSources(manifest.Sources); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidBundle, err)
+	}
+	primary, ok := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID)
+	if !ok {
+		return fmt.Errorf("%w: primary source_id is not configured", ErrInvalidBundle)
+	}
+	if manifest.Source != (sourceinvestigation.Repository{}) && manifest.Source != primary.Repository {
+		return fmt.Errorf("%w: primary source compatibility identity changed", ErrInvalidBundle)
 	}
 	if manifest.Request.JobID == "" || manifest.Request.BuildPrefix == "" || manifest.Request.Build.BuildID == "" || manifest.Request.TestCase.Name == "" || !requestStringsValid(manifest.Request) {
 		return fmt.Errorf("%w: failure request is invalid", ErrInvalidBundle)
@@ -132,11 +274,18 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	if canonical := canonicalRequest(manifest.Request); !requestsEqual(canonical, manifest.Request) {
 		return fmt.Errorf("%w: failure request is not canonical", ErrInvalidBundle)
 	}
-	if manifest.Source.Owner != strings.TrimSpace(manifest.Source.Owner) || manifest.Source.Name != strings.TrimSpace(manifest.Source.Name) || manifest.Source.Revision != strings.TrimSpace(manifest.Source.Revision) {
-		return fmt.Errorf("%w: source identity is not canonical", ErrInvalidBundle)
-	}
 	if manifest.ConsumerPrompt == "" || manifest.ConsumerPrompt != strings.TrimSpace(manifest.ConsumerPrompt) || !utf8StringWithin(manifest.ConsumerPrompt, maxWorkspacePromptBytes) {
 		return fmt.Errorf("%w: consumer prompt is empty, invalid, or oversized", ErrInvalidBundle)
+	}
+	if !validSHA256(manifest.EffectivePromptSHA256) || manifest.EffectivePromptSHA256 != EffectivePromptSHA256(manifest.ConsumerPrompt) {
+		return fmt.Errorf("%w: effective prompt identity is invalid", ErrInvalidBundle)
+	}
+	if !validSHA256(manifest.SkillSetHash) {
+		return fmt.Errorf("%w: skill set identity is invalid", ErrInvalidBundle)
+	}
+	planData, err := json.Marshal(manifest.SkillPlan)
+	if err != nil || len(planData) > maxWorkspaceSkillBytes {
+		return fmt.Errorf("%w: workspace skill plan is invalid or oversized", ErrInvalidBundle)
 	}
 	if err := validateWorkspaceFiles(manifest.Artifacts); err != nil {
 		return err
@@ -156,15 +305,45 @@ func NewWorkspaceStageRequest(manifest WorkspaceManifest) (WorkspaceStageRequest
 	return NewWorkspaceStageRequestWithSourceModePolicies(manifest, WorkspaceSourceModePreserve, WorkspaceSourceModePreserve)
 }
 
-// NewWorkspaceStageRequestWithSourceModePolicies seals the input and execution filesystem mode policies.
+// NewWorkspaceStageRequestWithSourceModePolicies seals one policy for every source.
 func NewWorkspaceStageRequestWithSourceModePolicies(manifest WorkspaceManifest, inputPolicy, outputPolicy WorkspaceSourceModePolicy) (WorkspaceStageRequest, error) {
+	return newWorkspaceStageRequest(manifest, WorkspaceStageInputPVC, "", workspaceSourceModes(manifest.Sources, inputPolicy), workspaceSourceModes(manifest.Sources, outputPolicy))
+}
+
+// NewWorkspaceStageRequestWithPolicies seals exact per-source filesystem mode policies.
+func NewWorkspaceStageRequestWithPolicies(manifest WorkspaceManifest, inputPolicies, outputPolicies []WorkspaceSourceMode) (WorkspaceStageRequest, error) {
+	return newWorkspaceStageRequest(manifest, WorkspaceStageInputPVC, "", inputPolicies, outputPolicies)
+}
+
+// NewWorkspaceRemoteStageRequest creates a credential-free HTTPS staging request.
+func NewWorkspaceRemoteStageRequest(manifest WorkspaceManifest, artifactBaseURL string, localInputPolicy WorkspaceSourceModePolicy) (WorkspaceStageRequest, error) {
+	return newWorkspaceStageRequest(manifest, WorkspaceStageInputRemote, strings.TrimRight(strings.TrimSpace(artifactBaseURL), "/"), workspaceSourceModes(manifest.Sources, localInputPolicy), workspaceSourceModes(manifest.Sources, WorkspaceSourceModePreserve))
+}
+
+func newWorkspaceStageRequest(manifest WorkspaceManifest, inputMode, artifactBaseURL string, inputPolicies, outputPolicies []WorkspaceSourceMode) (WorkspaceStageRequest, error) {
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return WorkspaceStageRequest{}, err
 	}
 	stage := WorkspaceStageRequest{
 		Version: WorkspaceStageVersion, ContractVersion: WorkspaceStageContract,
 		ManifestHash: manifest.Hash, BuildPrefix: manifest.Request.BuildPrefix,
-		Source: manifest.Source, InputSourceModePolicy: inputPolicy, OutputSourceModePolicy: outputPolicy, Artifacts: slices.Clone(manifest.Artifacts),
+		Sources: slices.Clone(manifest.Sources), PrimarySourceID: manifest.PrimarySourceID, Source: func() sourceinvestigation.Repository {
+			value, _ := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID)
+			return value.Repository
+		}(),
+		InputMode: inputMode, ArtifactBaseURL: artifactBaseURL,
+		InputSourceModePolicies: slices.Clone(inputPolicies), OutputSourceModePolicies: slices.Clone(outputPolicies),
+	}
+	if len(stage.InputSourceModePolicies) > 0 {
+		stage.InputSourceModePolicy = stage.InputSourceModePolicies[0].Policy
+	}
+	if len(stage.OutputSourceModePolicies) > 0 {
+		stage.OutputSourceModePolicy = stage.OutputSourceModePolicies[0].Policy
+	}
+	var err error
+	stage.ArtifactManifestSHA256, stage.ArtifactFiles, stage.ArtifactBytes, err = WorkspaceArtifactIdentity(manifest.Artifacts)
+	if err != nil {
+		return WorkspaceStageRequest{}, err
 	}
 	hash, err := workspaceStageDigest(stage)
 	if err != nil {
@@ -182,14 +361,42 @@ func ValidateWorkspaceStageRequestIdentity(stage WorkspaceStageRequest) error {
 	if stage.Version != WorkspaceStageVersion || stage.ContractVersion != WorkspaceStageContract || !validSHA256(stage.ManifestHash) || strings.TrimSpace(stage.BuildPrefix) == "" || stage.BuildPrefix != strings.TrimSpace(stage.BuildPrefix) || strings.IndexByte(stage.BuildPrefix, 0) >= 0 || len(stage.BuildPrefix) > maxFailureStringBytes {
 		return fmt.Errorf("workspace stage request identity is invalid")
 	}
-	if err := sourceinvestigation.ValidateRepository(stage.Source); err != nil || !immutableSourceRevision.MatchString(stage.Source.Revision) {
-		return fmt.Errorf("workspace stage source identity is invalid")
+	if err := validateCanonicalWorkspaceSources(stage.Sources); err != nil {
+		return fmt.Errorf("workspace stage source identity is invalid: %w", err)
 	}
-	if !validWorkspaceSourceModePolicy(stage.InputSourceModePolicy) || !validWorkspaceSourceModePolicy(stage.OutputSourceModePolicy) {
-		return fmt.Errorf("workspace stage source mode policy is invalid")
+	primary, ok := WorkspaceSource(stage.Sources, stage.PrimarySourceID)
+	if !ok {
+		return fmt.Errorf("workspace stage primary source_id is not configured")
 	}
-	if err := validateWorkspaceFiles(stage.Artifacts); err != nil {
-		return err
+	if stage.Source != (sourceinvestigation.Repository{}) && stage.Source != primary.Repository {
+		return fmt.Errorf("workspace stage primary source compatibility identity changed")
+	}
+	switch stage.InputMode {
+	case WorkspaceStageInputPVC:
+		if stage.ArtifactBaseURL != "" {
+			return fmt.Errorf("workspace PVC stage must not set an artifact URL")
+		}
+	case WorkspaceStageInputRemote:
+		if err := validateWorkspaceArtifactBaseURL(stage.ArtifactBaseURL); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("workspace stage input mode is invalid")
+	}
+	if err := validateWorkspaceSourceModes(stage.Sources, stage.InputSourceModePolicies); err != nil {
+		return fmt.Errorf("workspace stage input source mode policies are invalid: %w", err)
+	}
+	if err := validateWorkspaceSourceModes(stage.Sources, stage.OutputSourceModePolicies); err != nil {
+		return fmt.Errorf("workspace stage output source mode policies are invalid: %w", err)
+	}
+	if stage.InputSourceModePolicy != "" && stage.InputSourceModePolicy != stage.InputSourceModePolicies[0].Policy {
+		return fmt.Errorf("workspace stage primary input source mode compatibility policy changed")
+	}
+	if stage.OutputSourceModePolicy != "" && stage.OutputSourceModePolicy != stage.OutputSourceModePolicies[0].Policy {
+		return fmt.Errorf("workspace stage primary output source mode compatibility policy changed")
+	}
+	if !validSHA256(stage.ArtifactManifestSHA256) || stage.ArtifactFiles < 1 || stage.ArtifactFiles > maxWorkspaceFiles || stage.ArtifactBytes < 0 || stage.ArtifactBytes > maxWorkspaceTotalBytes {
+		return fmt.Errorf("workspace stage artifact identity is invalid")
 	}
 	if !validSHA256(stage.Hash) {
 		return fmt.Errorf("workspace stage request hash is invalid")
@@ -213,8 +420,100 @@ func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest Workspa
 	if err := ValidateWorkspaceManifest(manifest); err != nil {
 		return err
 	}
-	if stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.Source != manifest.Source || !slices.Equal(stage.Artifacts, manifest.Artifacts) {
+	artifactHash, artifactFiles, artifactBytes, err := WorkspaceArtifactIdentity(manifest.Artifacts)
+	if err != nil {
+		return err
+	}
+	if stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.PrimarySourceID != manifest.PrimarySourceID || !slices.Equal(stage.Sources, manifest.Sources) || stage.ArtifactManifestSHA256 != artifactHash || stage.ArtifactFiles != artifactFiles || stage.ArtifactBytes != artifactBytes {
 		return fmt.Errorf("workspace stage request does not match the sealed manifest")
+	}
+	return nil
+}
+
+// WorkspaceSource returns one source by stable ID.
+func WorkspaceSource(sources []WorkspaceSourceRef, id string) (WorkspaceSourceRef, bool) {
+	index, found := slices.BinarySearchFunc(sources, strings.TrimSpace(id), func(source WorkspaceSourceRef, target string) int {
+		return strings.Compare(source.ID, target)
+	})
+	if !found {
+		return WorkspaceSourceRef{}, false
+	}
+	return sources[index], true
+}
+
+// WorkspaceSourceModeFor returns one source policy by stable ID.
+func WorkspaceSourceModeFor(policies []WorkspaceSourceMode, id string) (WorkspaceSourceModePolicy, bool) {
+	index, found := slices.BinarySearchFunc(policies, strings.TrimSpace(id), func(mode WorkspaceSourceMode, target string) int {
+		return strings.Compare(mode.SourceID, target)
+	})
+	if !found {
+		return "", false
+	}
+	return policies[index].Policy, true
+}
+
+func canonicalWorkspaceSources(sources []WorkspaceSourceRef) ([]WorkspaceSourceRef, error) {
+	canonical := slices.Clone(sources)
+	for index := range canonical {
+		canonical[index].ID = strings.TrimSpace(canonical[index].ID)
+		canonical[index].Repository.Owner = strings.TrimSpace(canonical[index].Repository.Owner)
+		canonical[index].Repository.Name = strings.TrimSpace(canonical[index].Repository.Name)
+		canonical[index].Repository.Revision = strings.TrimSpace(canonical[index].Repository.Revision)
+	}
+	sort.Slice(canonical, func(i, j int) bool { return canonical[i].ID < canonical[j].ID })
+	if err := validateCanonicalWorkspaceSources(canonical); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidBundle, err)
+	}
+	return canonical, nil
+}
+
+func validateCanonicalWorkspaceSources(sources []WorkspaceSourceRef) error {
+	if len(sources) < 1 || len(sources) > WorkspaceMaxSources {
+		return fmt.Errorf("workspace sources must contain between 1 and %d entries", WorkspaceMaxSources)
+	}
+	ids := make(map[string]struct{}, len(sources))
+	identities := make(map[string]struct{}, len(sources))
+	previous := ""
+	for _, source := range sources {
+		if !workspaceSourceID.MatchString(source.ID) || source.ID <= previous {
+			return fmt.Errorf("workspace source IDs are invalid or not canonical")
+		}
+		if err := sourceinvestigation.ValidateRepository(source.Repository); err != nil || !immutableSourceRevision.MatchString(source.Repository.Revision) {
+			return fmt.Errorf("workspace source repository is invalid")
+		}
+		if source.Repository.Owner != strings.TrimSpace(source.Repository.Owner) || source.Repository.Name != strings.TrimSpace(source.Repository.Name) || source.Repository.Revision != strings.TrimSpace(source.Repository.Revision) {
+			return fmt.Errorf("workspace source repository is not canonical")
+		}
+		identity := source.Repository.Owner + "/" + source.Repository.Name + "@" + source.Repository.Revision
+		if _, ok := ids[source.ID]; ok {
+			return fmt.Errorf("workspace source ID is duplicated")
+		}
+		if _, ok := identities[identity]; ok {
+			return fmt.Errorf("workspace source identity is duplicated")
+		}
+		ids[source.ID] = struct{}{}
+		identities[identity] = struct{}{}
+		previous = source.ID
+	}
+	return nil
+}
+
+func workspaceSourceModes(sources []WorkspaceSourceRef, policy WorkspaceSourceModePolicy) []WorkspaceSourceMode {
+	modes := make([]WorkspaceSourceMode, 0, len(sources))
+	for _, source := range sources {
+		modes = append(modes, WorkspaceSourceMode{SourceID: source.ID, Policy: policy})
+	}
+	return modes
+}
+
+func validateWorkspaceSourceModes(sources []WorkspaceSourceRef, policies []WorkspaceSourceMode) error {
+	if len(policies) != len(sources) {
+		return fmt.Errorf("source policy count does not match source count")
+	}
+	for index, policy := range policies {
+		if policy.SourceID != sources[index].ID || !validWorkspaceSourceModePolicy(policy.Policy) {
+			return fmt.Errorf("source policies are invalid or not canonical")
+		}
 	}
 	return nil
 }
@@ -484,10 +783,18 @@ func NewWorkspaceExecutionRequestWithSourceModePolicy(manifest WorkspaceManifest
 
 // NewWorkspaceExecutionRequestWithSourceEvidence seals an optional source-evidence floor.
 func NewWorkspaceExecutionRequestWithSourceEvidence(manifest WorkspaceManifest, modePolicy WorkspaceSourceModePolicy, requireSourceEvidence bool, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
+	return NewWorkspaceExecutionRequestWithSourcePolicies(manifest, workspaceSourceModes(manifest.Sources, modePolicy), requireSourceEvidence, provider, timeout, maxSteps, modelContextTokens, modelOutputTokens, outputLimit)
+}
+
+// NewWorkspaceExecutionRequestWithSourcePolicies seals exact per-source policies.
+func NewWorkspaceExecutionRequestWithSourcePolicies(manifest WorkspaceManifest, policies []WorkspaceSourceMode, requireSourceEvidence bool, provider modelprovider.Config, timeout time.Duration, maxSteps, modelContextTokens, modelOutputTokens int, outputLimit int64) (WorkspaceExecutionRequest, error) {
 	request := WorkspaceExecutionRequest{
 		Version: WorkspaceRequestVersion, ContractVersion: WorkspaceContractVersion, PromptVersion: WorkspacePromptVersion,
-		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, SourceModePolicy: modePolicy, RequireSourceEvidence: requireSourceEvidence, ModelProvider: provider, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
+		PromptHash: WorkspaceSkillHash(), ResultSchemaHash: WorkspaceResultSchemaHash(), Manifest: manifest, InputMode: WorkspaceInputStaged, SourceModePolicies: slices.Clone(policies), RequireSourceEvidence: requireSourceEvidence, ModelProvider: provider, TimeoutSeconds: int64(timeout.Round(time.Second) / time.Second),
 		MaxSteps: maxSteps, ModelContextTokens: modelContextTokens, ModelOutputTokens: modelOutputTokens, OutputLimitBytes: outputLimit,
+	}
+	if len(request.SourceModePolicies) > 0 {
+		request.SourceModePolicy = request.SourceModePolicies[0].Policy
 	}
 	hash, err := workspaceRequestDigest(request)
 	if err != nil {
@@ -508,8 +815,14 @@ func ValidateWorkspaceExecutionRequest(request WorkspaceExecutionRequest) error 
 	if err := ValidateWorkspaceManifest(request.Manifest); err != nil {
 		return err
 	}
-	if !validWorkspaceSourceModePolicy(request.SourceModePolicy) {
-		return fmt.Errorf("workspace analysis source mode policy is invalid")
+	if request.InputMode != WorkspaceInputStaged && request.InputMode != WorkspaceInputPrepared {
+		return fmt.Errorf("workspace analysis input mode is invalid")
+	}
+	if err := validateWorkspaceSourceModes(request.Manifest.Sources, request.SourceModePolicies); err != nil {
+		return fmt.Errorf("workspace analysis source mode policies are invalid: %w", err)
+	}
+	if request.SourceModePolicy != "" && request.SourceModePolicy != request.SourceModePolicies[0].Policy {
+		return fmt.Errorf("workspace analysis primary source mode compatibility policy changed")
 	}
 	if err := modelprovider.ValidateDeploymentEndpoint(request.ModelProvider); err != nil {
 		return fmt.Errorf("workspace analysis model provider: %w", err)
@@ -742,6 +1055,69 @@ func workspaceRequestDigest(request WorkspaceExecutionRequest) (string, error) {
 		return "", err
 	}
 	return hashString(string(data)), nil
+}
+
+type workspaceArtifactManifest struct {
+	Version   int             `json:"version"`
+	Artifacts []WorkspaceFile `json:"artifacts"`
+}
+
+// WorkspaceArtifactIdentity returns the canonical artifact-index identity.
+func WorkspaceArtifactIdentity(files []WorkspaceFile) (string, int, int64, error) {
+	if err := validateWorkspaceFiles(files); err != nil {
+		return "", 0, 0, err
+	}
+	data, err := json.Marshal(workspaceArtifactManifest{Version: 1, Artifacts: files})
+	if err != nil {
+		return "", 0, 0, err
+	}
+	var total int64
+	for _, file := range files {
+		total += file.Size
+	}
+	return hashString(string(data)), len(files), total, nil
+}
+
+// WriteWorkspaceArtifactManifest writes the canonical private artifact index.
+func WriteWorkspaceArtifactManifest(snapshotRoot string, files []WorkspaceFile) error {
+	if _, _, _, err := WorkspaceArtifactIdentity(files); err != nil {
+		return err
+	}
+	data, err := json.Marshal(workspaceArtifactManifest{Version: 1, Artifacts: files})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(filepath.Clean(snapshotRoot), WorkspaceArtifactManifestFile), append(data, '\n'), 0o600)
+}
+
+// ReadWorkspaceArtifactManifest verifies and returns one staged artifact index.
+func ReadWorkspaceArtifactManifest(snapshotRoot string, stage WorkspaceStageRequest) ([]WorkspaceFile, error) {
+	data, err := os.ReadFile(filepath.Join(filepath.Clean(snapshotRoot), WorkspaceArtifactManifestFile))
+	if err != nil || len(data) > 1<<20 {
+		return nil, fmt.Errorf("workspace artifact manifest is unavailable")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var manifest workspaceArtifactManifest
+	if err := decoder.Decode(&manifest); err != nil || manifest.Version != 1 {
+		return nil, fmt.Errorf("workspace artifact manifest is invalid")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("workspace artifact manifest has trailing data")
+	}
+	hash, count, total, err := WorkspaceArtifactIdentity(manifest.Artifacts)
+	if err != nil || hash != stage.ArtifactManifestSHA256 || count != stage.ArtifactFiles || total != stage.ArtifactBytes {
+		return nil, fmt.Errorf("workspace artifact manifest identity changed")
+	}
+	return manifest.Artifacts, nil
+}
+
+func validateWorkspaceArtifactBaseURL(value string) error {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.HasSuffix(parsed.Path, "/") {
+		return fmt.Errorf("workspace artifact base URL is invalid")
+	}
+	return nil
 }
 
 func hashWorkspaceFile(path string) (string, int64, error) {

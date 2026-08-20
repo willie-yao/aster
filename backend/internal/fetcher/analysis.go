@@ -112,7 +112,7 @@ func classifyAIWork(ctx context.Context, httpClient *http.Client, item aiWork, c
 }
 
 func analysisNeedsWork(tc *models.TestCase) bool {
-	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !tc.AIAnalysis.CritiquePassed
+	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !ai.IsGroundedAnalysis(tc.AIAnalysis)
 }
 
 func (p *pipeline) cacheGenerationFingerprint() string {
@@ -367,6 +367,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
 		Token: p.aiToken, DataDir: p.opts.OutDir, Project: p.aiProject,
 		UsageRecorder: p.usageRecorder, UsageOrigin: aiusage.OriginFetcher,
+		MaxOutputTokens: p.opts.AIMaxOutputTokens,
 	})
 	if err != nil {
 		return nil, err

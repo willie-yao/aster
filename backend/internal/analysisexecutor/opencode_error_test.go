@@ -216,7 +216,7 @@ func TestParseOpenCodeUnknownErrorAfterObservedEvidenceKeepsRequestCountInexact(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryUnavailable || telemetry.ProviderRequests != 1 || telemetry.ProviderRequestsKnown || telemetry.Error.Classification != "dns" {
+	if !usage.Available || usage.Status != agentanalysis.WorkspaceTelemetryPartial || usage.ModelRequests != 1 || telemetry.ProviderRequests != 1 || telemetry.ProviderRequestsKnown || telemetry.Error.Classification != "dns" {
 		t.Fatalf("usage=%+v telemetry=%+v", usage, telemetry)
 	}
 	if telemetry.Error.BeforeProviderRequest == nil || *telemetry.Error.BeforeProviderRequest || telemetry.Error.BeforeFirstTool == nil || *telemetry.Error.BeforeFirstTool || telemetry.Error.DuringStreamProcessing != nil || telemetry.Error.DuringToolExecution != nil || telemetry.Error.DuringSessionPersistence != nil {

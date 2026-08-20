@@ -40,7 +40,46 @@ func CausalGroupSignature(detail models.JobDetail, group models.PatternCausalGro
 	if dominant == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(subject + "\x00" + dominant))
+	return signatureOf("", subject, dominant)
+}
+
+// BuildRecurrenceSignature derives the identity a failure is counted under when
+// measuring how long it has been recurring. It keys on the same test provenance
+// and failure location as CausalGroupSignature, but normalizes the message with
+// aggregator.NormalizeErrorRecurrence, which collapses every run of digits.
+//
+// The two identities differ on purpose. A verdict is a conclusion about a cause,
+// so its identity keeps numbers: answering "status 401" must never answer
+// "status 503". Counting recurrence is a question about history, and a message
+// like "Timed out after 3600.001s" carries a number that changes every run, so a
+// number-preserving identity would mint a new cause each time and report every
+// long-lived flake as brand new. Recall is what matters here, and the cost of
+// over-grouping is a count that is too generous rather than a wrong answer
+// applied to the wrong failure.
+//
+// It returns "" when the run has no analyzed failure, when that failure is a
+// build-level stand-in whose message is a constant, or when it carries no
+// message to key on.
+func BuildRecurrenceSignature(detail models.JobDetail, run *models.BuildResult) string {
+	subject := signatureSubject(detail)
+	if subject == "" {
+		return ""
+	}
+	key := failureKey(RepresentativeAnalyzedFailure(run), aggregator.NormalizeErrorRecurrence)
+	if key == "" {
+		return ""
+	}
+	return signatureOf(recurrenceDomain, subject, key)
+}
+
+// recurrenceDomain keeps recurrence identities out of the verdict key space. A
+// message with no digits normalizes identically under both rules, so without a
+// domain the two would hash to one ledger entry and a group's builds would
+// inflate the count published for the recurrence identity.
+const recurrenceDomain = "recurrence"
+
+func signatureOf(domain, subject, key string) string {
+	sum := sha256.Sum256([]byte(domain + "\x00" + subject + "\x00" + key))
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -132,28 +171,9 @@ func dominantFailureKey(detail models.JobDetail, group models.PatternCausalGroup
 		if !ok {
 			continue
 		}
-		failure := RepresentativeAnalyzedFailure(run)
-		if failure == nil || failure.Source == models.TestCaseSourceBuild {
-			// A build-level stand-in carries a constant synthesized name and
-			// message (see models.NewProwJobExecutionFailure), so every such
-			// failure in a job would key to one signature regardless of cause.
-			continue
+		if key := failureKey(RepresentativeAnalyzedFailure(run), aggregator.NormalizeErrorSignature); key != "" {
+			counts[key]++
 		}
-		name := strings.TrimSpace(failure.Name)
-		normalized := strings.TrimSpace(aggregator.NormalizeErrorSignature(failure.FailureMessage))
-		if name == "" || normalized == "" {
-			continue
-		}
-		// Suite, class, and failure location are stable per test and separate
-		// same-named tests in different suites or shards, so they cost no recall
-		// and narrow what one identity can cover.
-		counts[strings.Join([]string{
-			strings.TrimSpace(failure.SuiteName),
-			strings.TrimSpace(failure.ClassName),
-			name,
-			FailureLocationFile(failure.FailureLocation),
-			normalized,
-		}, "\x00")]++
 	}
 	keys := make([]string, 0, len(counts))
 	for key := range counts {
@@ -169,4 +189,32 @@ func dominantFailureKey(detail models.JobDetail, group models.PatternCausalGroup
 		return ""
 	}
 	return keys[0]
+}
+
+// failureKey is the discriminating preimage of one analyzed failure. normalize
+// decides how much of the message survives, which is what separates the
+// verdict-bearing identity from the recurrence-counting one. It returns "" for a
+// failure with no evidence worth keying on.
+func failureKey(failure *models.TestCase, normalize func(string) string) string {
+	if failure == nil || failure.Source == models.TestCaseSourceBuild {
+		// A build-level stand-in carries a constant synthesized name and
+		// message (see models.NewProwJobExecutionFailure), so every such
+		// failure in a job would key to one signature regardless of cause.
+		return ""
+	}
+	name := strings.TrimSpace(failure.Name)
+	normalized := strings.TrimSpace(normalize(failure.FailureMessage))
+	if name == "" || normalized == "" {
+		return ""
+	}
+	// Suite, class, and failure location are stable per test and separate
+	// same-named tests in different suites or shards, so they cost no recall
+	// and narrow what one identity can cover.
+	return strings.Join([]string{
+		strings.TrimSpace(failure.SuiteName),
+		strings.TrimSpace(failure.ClassName),
+		name,
+		FailureLocationFile(failure.FailureLocation),
+		normalized,
+	}, "\x00")
 }

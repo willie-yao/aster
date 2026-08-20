@@ -1,0 +1,127 @@
+{
+  "version": 5,
+  "cases": [
+    {
+      "id": "kubectl-skew-stable2-latest-kubeproxy-version",
+      "stable_id": "e10315da572a70c3d54f",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_sha256": "61a43d685296e95c7d9953451ff8c194530568b94bb884ca334d79e2318d4e53",
+      "job_type": "periodic",
+      "job_name": "ci-kubernetes-e2e-gce-stable2-latest-gci-kubectl-skew",
+      "build_id": "2090131815695126528",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-kubernetes-e2e-gce-stable2-latest-gci-kubectl-skew/2090131815695126528/",
+      "commit": "7fad80f1cca5e0aabde84497b7f068e8d576afa3",
+      "repo_version": "7fad80f1cca5e0aabde84497b7f068e8d576afa3",
+      "repo_refs": {
+        "kubernetes/kubernetes": "2220c3853a2402ffc0502995c49b383f84ae8ceb"
+      },
+      "source_refs": [
+        {
+          "id": "latest-client",
+          "repository": "kubernetes/kubernetes",
+          "revision": "2220c3853a2402ffc0502995c49b383f84ae8ceb"
+        },
+        {
+          "id": "stable-tests",
+          "repository": "kubernetes/kubernetes",
+          "revision": "7fad80f1cca5e0aabde84497b7f068e8d576afa3"
+        }
+      ],
+      "primary_source_id": "latest-client",
+      "test_name": "[It] [sig-cli] Kubectl client Kubectl describe should check if kubectl describe prints relevant information for rc and pods [Conformance]",
+      "junit_file": "junit_01.xml",
+      "failure_message": "[FAILED] failed to find Kube-Proxy Version: in Name: bootstrap-e2e-master",
+      "evidence_mode": "artifact_and_source",
+      "consecutive_failures": 4,
+      "reference_diagnosis": "This is a deterministic kubectl client and e2e-test version-skew mismatch, not a kube-proxy or node-health failure. The release-1.35 e2e test still requires kubectl describe node output to contain Kube-Proxy Version, while the latest kubectl client and its updated test no longer print or require that field after the deprecated status.nodeInfo.kubeProxyVersion field was retired. The stable test binary is therefore asserting an output contract removed by the newer client.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "opposite_diagnosis": "The kube-proxy daemon or node readiness is broken, so kubectl describe cannot report the Kube-Proxy Version field.",
+      "opposite_is_transient": false,
+      "consumer_commit": "6f2b74d673079c1ea9835b1dccd415291ff53a2b",
+      "project_sha256": "dfe5e21afbf38e1de3064ec51b57dfb957100374a013a623a4ecd2f1a9fc8724",
+      "prompt_sha256": "7983e2e8f3e6ee844b361f04b7bde26ce83edfb2b61c54b5e0d173a7452f0482",
+      "signals": [
+        {
+          "name": "identifies kubectl client test skew",
+          "pattern": "(?is)(?:kubectl|client).{0,160}(?:version.?skew|mismatch|newer|latest).{0,240}(?:release.?1[.]35|stable2|test)",
+          "must": true
+        },
+        {
+          "name": "identifies removed Kube-Proxy Version output contract",
+          "pattern": "(?is)Kube-Proxy Version.{0,260}(?:removed|retired|deprecated|no longer|stopped|omit)|(?:removed|retired|deprecated|no longer|stopped|omit).{0,260}Kube-Proxy Version",
+          "must": true
+        },
+        {
+          "name": "rejects kube-proxy health as initiating cause",
+          "pattern": "(?is)(?:not|isn.t|wasn.t).{0,100}(?:kube-proxy|node).{0,100}(?:health|readiness|failure|broken)|(?:kube-proxy|node).{0,100}(?:healthy|ready).{0,100}(?:despite|not the cause)"
+        },
+        {
+          "name": "recognizes persistent failure",
+          "pattern": "(?i)deterministic|persistent|not\\s+(?:a\\s+)?(?:transient|flake)|version.?skew"
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "kube-proxy health treated as root cause",
+          "pattern": "(?is)(?:kube-proxy.{0,80}(?:unhealthy|failed|down|broken)|node(?: readiness| health|-health).{0,80}(?:failure|broken|root cause))",
+          "negated": "(?is)(?:not|isn.t|wasn.t).{0,100}(?:kube-proxy|node(?: readiness| health|-health)).{0,100}(?:failure|cause|broken)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "missing-output",
+          "paths": [
+            "(?i)(?:^|/)junit_01[.]xml$",
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "failed to find Kube-Proxy Version"
+          ]
+        },
+        {
+          "id": "version-skew",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "--extract=ci/latest",
+            "--extract=ci/k8s-stable2"
+          ]
+        }
+      ],
+      "source_signals": [
+        {
+          "name": "stable test requires Kube-Proxy Version",
+          "pattern": "(?is)(?:release.?1[.]35|stable2).{0,220}(?:requiredStrings|requires|expects|asserts).{0,180}Kube-Proxy Version",
+          "must": true
+        },
+        {
+          "name": "latest test and client omit Kube-Proxy Version",
+          "pattern": "(?is)(?:latest|master|newer).{0,220}(?:test|kubectl|describe).{0,220}(?:omit|remove|no longer|stopped).{0,180}Kube-Proxy Version|Kube-Proxy Version.{0,180}(?:omit|remove|no longer|stopped).{0,220}(?:latest|master|newer)",
+          "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "source_id": "stable-tests",
+          "path": "test/e2e/kubectl/kubectl.go",
+          "line_start": 1495,
+          "line_end": 1509
+        },
+        {
+          "source_id": "latest-client",
+          "path": "test/e2e/kubectl/kubectl.go",
+          "line_start": 1358,
+          "line_end": 1372
+        },
+        {
+          "source_id": "latest-client",
+          "path": "staging/src/k8s.io/kubectl/pkg/describe/describe.go",
+          "line_start": 3563,
+          "line_end": 3573
+        }
+      ]
+    }
+  ]
+}

@@ -135,6 +135,22 @@ func (l *AnalysisCauseLocation) Clone() *AnalysisCauseLocation {
 	return &out
 }
 
+const (
+	// AnalysisDispositionPreliminary identifies a safe structured analysis that
+	// still has unresolved grounding or quality warnings.
+	AnalysisDispositionPreliminary = "preliminary"
+	// AnalysisDispositionGrounded identifies an analysis with verified artifact
+	// grounding and no unresolved grounding defect.
+	AnalysisDispositionGrounded = "grounded"
+
+	AnalysisWarningArtifactGrounding = "artifact_grounding_incomplete"
+	AnalysisWarningSourceGrounding   = "source_grounding_incomplete"
+	AnalysisWarningInvestigation     = "investigation_incomplete"
+	AnalysisWarningRemediation       = "remediation_incomplete"
+	AnalysisWarningClassification    = "classification_conflict"
+	AnalysisWarningSemanticReview    = "semantic_review_unresolved"
+)
+
 // AIAnalysis is a deep AI-generated root cause analysis.
 type AIAnalysis struct {
 	GeneratedAt string `json:"generated_at"`
@@ -149,9 +165,17 @@ type AIAnalysis struct {
 	RelevantFiles     []string           `json:"relevant_files,omitempty"`
 	SearchSuggestions []string           `json:"search_suggestions,omitempty"`
 	EvidenceCitations []EvidenceCitation `json:"evidence_citations,omitempty"`
+
 	// CauseLocation records which repository owns the diagnosed cause. Absent
 	// when the analysis did not establish ownership.
 	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
+
+	// Disposition separates safe displayability from grounding and action policy.
+	// Action eligibility is derived separately and is never stored here.
+	Disposition string `json:"disposition,omitempty"`
+	// DispositionWarnings contains bounded, non-sensitive warning codes.
+	DispositionWarnings []string `json:"disposition_warnings,omitempty"`
+
 	// Mode records the analysis pipeline. Cache gates reject non-agentic entries.
 	Mode string `json:"mode,omitempty"`
 	// ToolCalls is the number of agent tool invocations made during this
@@ -342,6 +366,24 @@ type JobDetail struct {
 	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`
 	PatternRefresh  *PatternRefreshStatus `json:"pattern_refresh,omitempty"`
+	// FailureRecurrence projects durable recurrence memory for the failure
+	// signatures observed in this window. Correlation is window-local and needs
+	// several failures in one window, so a rare flake never forms a pattern;
+	// this carries the history it does have regardless.
+	FailureRecurrence []FailureRecurrence `json:"failure_recurrence,omitempty"`
+}
+
+// FailureRecurrence is the durable history of one failure signature, spanning
+// build windows. Occurrences counts distinct failing builds attributed to the
+// signature over its lifetime, so it exceeds Builds whenever the cause has been
+// failing for longer than the current window reaches.
+type FailureRecurrence struct {
+	Signature   string `json:"signature"`
+	Occurrences int    `json:"occurrences"`
+	FirstSeen   string `json:"first_seen"`
+	LastSeen    string `json:"last_seen"`
+	// Builds are the builds in the current window carrying this signature.
+	Builds []string `json:"builds,omitempty"`
 }
 
 // PatternRefreshState describes the current job-level correlation result.

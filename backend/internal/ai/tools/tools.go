@@ -79,15 +79,151 @@ type Tool interface {
 	Dispatch(ctx context.Context, env *Env, args json.RawMessage) Result
 }
 
-// RepoReader is the per-repo source-tree view used by source tools. Like
-// Browser it is bound to one owner/repo/ref at construction so tool schemas
-// stay identifier-free. Nil for an artifact-only loop.
+// RepoReader is a source-tree view bound to one immutable repository revision.
 type RepoReader interface {
 	// ListTree returns the repo's blob (file) paths at the bound ref.
 	ListTree(ctx context.Context) ([]string, error)
 	// ReadFile returns the file at path. found is false (no error) when the
 	// file does not exist.
 	ReadFile(ctx context.Context, path string) (content string, found bool, err error)
+}
+
+const (
+	// PrimarySourceID is the stable source selector used by production analysis.
+	PrimarySourceID = "primary"
+	maxRepoSources  = 8
+)
+
+// RepoSource binds one stable selector to an immutable source-tree reader.
+type RepoSource struct {
+	ID       string
+	Owner    string
+	Name     string
+	Revision string
+	Reader   RepoReader
+}
+
+// SourceCatalog is a bounded source set in canonical source ID order.
+type SourceCatalog struct {
+	ordered   []RepoSource
+	byID      map[string]RepoSource
+	primaryID string
+}
+
+// NewSourceCatalog validates and canonicalizes a source catalog.
+func NewSourceCatalog(primaryID string, sources []RepoSource) (*SourceCatalog, error) {
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	if len(sources) > maxRepoSources {
+		return nil, fmt.Errorf("source catalog has %d entries, maximum is %d", len(sources), maxRepoSources)
+	}
+	primaryID = strings.TrimSpace(primaryID)
+	if !validSourceID(primaryID) {
+		return nil, fmt.Errorf("invalid primary source_id %q", primaryID)
+	}
+	ordered := append([]RepoSource(nil), sources...)
+	for i := range ordered {
+		ordered[i].ID = strings.TrimSpace(ordered[i].ID)
+		ordered[i].Owner = strings.TrimSpace(ordered[i].Owner)
+		ordered[i].Name = strings.TrimSpace(ordered[i].Name)
+		ordered[i].Revision = strings.TrimSpace(ordered[i].Revision)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	byID := make(map[string]RepoSource, len(ordered))
+	identities := make(map[string]string, len(ordered))
+	for _, source := range ordered {
+		if !validSourceID(source.ID) {
+			return nil, fmt.Errorf("invalid source_id %q", source.ID)
+		}
+		if source.Owner == "" || source.Name == "" || source.Reader == nil {
+			return nil, fmt.Errorf("source %q requires owner, name, revision, and reader", source.ID)
+		}
+		if !validImmutableRevision(source.Revision) {
+			return nil, fmt.Errorf("source %q revision must be a 40-character lowercase commit SHA", source.ID)
+		}
+		if _, exists := byID[source.ID]; exists {
+			return nil, fmt.Errorf("duplicate source_id %q", source.ID)
+		}
+		identity := strings.ToLower(source.Owner + "/" + source.Name + "@" + source.Revision)
+		if prior, exists := identities[identity]; exists {
+			return nil, fmt.Errorf("sources %q and %q identify the same repository revision", prior, source.ID)
+		}
+		identities[identity] = source.ID
+		byID[source.ID] = source
+	}
+	if _, ok := byID[primaryID]; !ok {
+		return nil, fmt.Errorf("primary source_id %q is not present", primaryID)
+	}
+	return &SourceCatalog{ordered: ordered, byID: byID, primaryID: primaryID}, nil
+}
+
+// NewPrimarySourceCatalog returns the single-source production catalog.
+func NewPrimarySourceCatalog(owner, name, revision string, reader RepoReader) (*SourceCatalog, error) {
+	return NewSourceCatalog(PrimarySourceID, []RepoSource{{
+		ID: PrimarySourceID, Owner: owner, Name: name, Revision: revision, Reader: reader,
+	}})
+}
+
+// Sources returns a copy of the catalog in canonical order.
+func (c *SourceCatalog) Sources() []RepoSource {
+	if c == nil {
+		return nil
+	}
+	return append([]RepoSource(nil), c.ordered...)
+}
+
+// Source resolves one source selector.
+func (c *SourceCatalog) Source(id string) (RepoSource, bool) {
+	if c == nil {
+		return RepoSource{}, false
+	}
+	source, ok := c.byID[id]
+	return source, ok
+}
+
+// Primary returns the source used for project-owned paths and file links.
+func (c *SourceCatalog) Primary() (RepoSource, bool) {
+	if c == nil {
+		return RepoSource{}, false
+	}
+	return c.Source(c.primaryID)
+}
+
+// PrimaryID returns the stable project source selector.
+func (c *SourceCatalog) PrimaryID() string {
+	if c == nil {
+		return ""
+	}
+	return c.primaryID
+}
+
+func validImmutableRevision(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for i := range len(value) {
+		ch := value[i]
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validSourceID(value string) bool {
+	if value == "" || len(value) > 63 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		ch := value[i]
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return value[len(value)-1] != '-'
 }
 
 // Env is the per-analysis context passed to every Tool. It deliberately
@@ -98,8 +234,11 @@ type Env struct {
 	// for a repo-only loop that enables only source tools.
 	Browser artifacts.Browser
 
-	// Repo is the per-repo source-tree view. Non-nil for source tools; nil for
-	// an artifact-only analysis loop.
+	// Sources is the bounded source catalog. Nil for an artifact-only loop.
+	Sources *SourceCatalog
+
+	// Repo is the primary source reader for internal single-source tool loops.
+	// Agentic failure analysis uses Sources.
 	Repo RepoReader
 
 	// Cache is a per-build memoization layer. Tools should use it to cache

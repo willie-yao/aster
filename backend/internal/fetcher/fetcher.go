@@ -50,15 +50,17 @@ const AnalysisRuntimeInProcess = "inprocess"
 // path. It runs on Agent Sandbox after authoritative in-process publication and
 // never changes public output.
 type ShadowAnalysisOptions struct {
-	Enabled          bool
-	AgentVersion     string
-	LedgerPath       string
-	MaxPerRun        int
-	MaxTurns         int
-	Timeout          time.Duration
-	Retries          int
-	OutputLimitBytes int64
-	ModelProvider    modelprovider.Config
+	Enabled               bool
+	LedgerPath            string
+	InputRoot             string
+	MaxPerRun             int
+	MaxSteps              int
+	Timeout               time.Duration
+	OutputLimitBytes      int64
+	ModelContextTokens    int
+	ModelOutputTokens     int
+	RequireSourceEvidence bool
+	ModelProvider         modelprovider.Config
 }
 
 // CausalCriticOptions configure the private sampled Agent Sandbox review path.
@@ -90,6 +92,7 @@ type Options struct {
 	// enable presubmits.
 	IncludePresubmits bool
 	EnableAI          bool
+	AIMaxOutputTokens int
 	// SkipSideEffects writes dashboard data without notifications or GitHub writes.
 	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
@@ -117,7 +120,9 @@ type pipeline struct {
 	aiRefreshTransaction *aiRefreshStateTransaction
 	lastPatternOutcomes  map[string]patterns.JobOutcome
 	shadowRunner         shadowAnalysisRunner
-	shadowFreeze         shadowEvidenceFreezer
+	shadowPublisher      shadowWorkspacePublisher
+	shadowPrepare        shadowWorkspacePreparer
+	shadowCleanup        shadowWorkspaceCleaner
 	shadowAppend         shadowLedgerAppender
 	shadowClaim          shadowLedgerClaimer
 	shadowNow            func() time.Time
@@ -208,6 +213,14 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
 			return nil, err
+		}
+		if opts.ShadowAnalysis.Enabled {
+			if err := validateShadowProviderParity(aiProject.Provider, opts.ShadowAnalysis.ModelProvider); err != nil {
+				return nil, err
+			}
+			if err := validateShadowContextParity(opts.ShadowAnalysis.ModelContextTokens); err != nil {
+				return nil, err
+			}
 		}
 		log.Printf("Loaded AI skills (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			aiProject.ProfileSelection.String(), aiProject.SkillSet.EngineCount(), aiProject.SkillSet.ConsumerCount(),
@@ -524,10 +537,12 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
 	err = patternstate.WithLock(opts.OutDir, func() error {
+		// Recurrence is observed before publication so each job is written with
+		// the durable history behind the failures it currently shows.
+		observeRecurrence(opts.OutDir, details, now)
 		if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
-		recordRecurrence(opts.OutDir, causalGroupSightings(details), now)
 		if len(stagedReopened) > 0 {
 			if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
 				log.Printf("Warning: failed to save resolved state after publication: %v", err)
@@ -553,40 +568,144 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 // a verdict too old to trust. A failure to record never fails the pass: the next
 // one re-observes the same causes and the watermark keeps the counts correct, and
 // the server independently refuses expired memory on read.
-func recordRecurrence(outDir string, sightings []recurrenceledger.Sighting, now time.Time) {
+//
+// It returns the observed ledger so the pass can publish recurrence from the same
+// state it just recorded, or nil when the ledger could not be opened.
+func recordRecurrence(outDir string, sightings []recurrenceledger.Sighting, now time.Time) *recurrenceledger.Ledger {
+	var observed *recurrenceledger.Ledger
 	err := recurrenceledger.Update(outDir, func(ledger *recurrenceledger.Ledger) bool {
 		pruned := ledger.Prune(now)
-		observed := ledger.Observe(sightings, now)
-		return pruned || observed
+		changed := ledger.Observe(sightings, now)
+		observed = ledger
+		return pruned || changed
 	})
 	if err != nil {
 		log.Printf("Warning: failed to record recurrence history: %v", err)
 	}
+	return observed
 }
 
-// causalGroupSightings gathers every systemic cause observed this pass. Inactive
-// lifecycle states are included so a recovered cause keeps its history and is
-// still recognized if it comes back.
-func causalGroupSightings(details []models.JobDetail) []recurrenceledger.Sighting {
-	var out []recurrenceledger.Sighting
+// observeRecurrence records what this pass saw and annotates the details with the
+// durable history behind it, so each job is published together with the
+// recurrence its current window belongs to.
+//
+// Two identities are recorded. Causal groups keep their verdict-bearing
+// signature, which preserves numbers so a stored conclusion cannot answer a
+// materially different failure. Every failed build separately advances a
+// recurrence signature, which collapses numbers so a flake whose message carries
+// a varying duration or count still accumulates history. Only the recurrence
+// identities are published, so a build resolves to exactly one history.
+func observeRecurrence(outDir string, details []models.JobDetail, now time.Time) {
+	recurrence := make([][]recurrenceledger.Sighting, len(details))
+	var all []recurrenceledger.Sighting
 	for i := range details {
-		detail := &details[i]
-		for _, pattern := range detail.PatternAnalyses {
-			if !pattern.Systemic {
+		recurrence[i] = mergeSightings(failureRecurrenceSightings(&details[i]))
+		all = append(all, recurrence[i]...)
+		all = append(all, mergeSightings(causalGroupSightings(&details[i]))...)
+	}
+	applyFailureRecurrence(details, recurrence, recordRecurrence(outDir, all, now))
+}
+
+// causalGroupSightings returns one sighting per signed systemic causal group.
+// Inactive lifecycle states are included so a recovered cause keeps its history
+// and is still recognized if it comes back.
+func causalGroupSightings(detail *models.JobDetail) []recurrenceledger.Sighting {
+	var out []recurrenceledger.Sighting
+	for _, pattern := range detail.PatternAnalyses {
+		if !pattern.Systemic {
+			continue
+		}
+		for _, group := range pattern.CausalGroups {
+			if group.Signature == "" {
 				continue
 			}
-			for _, group := range pattern.CausalGroups {
-				if group.Signature == "" {
-					continue
-				}
-				out = append(out, recurrenceledger.Sighting{
-					Signature: group.Signature, JobID: detail.JobID,
-					Subject: detail.Name, Builds: group.Builds,
-				})
-			}
+			out = append(out, recurrenceledger.Sighting{
+				Signature: group.Signature, JobID: detail.JobID,
+				Subject: detail.Name, Builds: group.Builds,
+			})
 		}
 	}
 	return out
+}
+
+// failureRecurrenceSightings records every failed build under its recurrence
+// signature, whether or not it correlated into a causal group. Correlation needs
+// patterns.MinFailedBuilds failures inside a single window, which an infrequent
+// flake never reaches, so a build-by-build path is the only way such a failure
+// builds any history at all.
+func failureRecurrenceSightings(detail *models.JobDetail) []recurrenceledger.Sighting {
+	var out []recurrenceledger.Sighting
+	for i := range detail.Runs {
+		run := &detail.Runs[i]
+		if run.Passed || run.Result == "PENDING" {
+			continue
+		}
+		signature := patterns.BuildRecurrenceSignature(*detail, run)
+		if signature == "" {
+			continue
+		}
+		out = append(out, recurrenceledger.Sighting{
+			Signature: signature, JobID: detail.JobID,
+			Subject: detail.Name, Builds: []string{run.BuildID},
+		})
+	}
+	return out
+}
+
+// mergeSightings collapses sightings sharing a signature and drops repeated
+// builds, so one pass advances a cause's watermark exactly once across every
+// build that showed it. Observing a signature twice would otherwise count only
+// the first sighting, because the second's builds no longer sit past the
+// watermark the first just advanced.
+func mergeSightings(sightings []recurrenceledger.Sighting) []recurrenceledger.Sighting {
+	out := make([]recurrenceledger.Sighting, 0, len(sightings))
+	index := make(map[string]int, len(sightings))
+	seen := map[string]bool{}
+	for _, sighting := range sightings {
+		at, ok := index[sighting.Signature]
+		if !ok {
+			at = len(out)
+			index[sighting.Signature] = at
+			out = append(out, recurrenceledger.Sighting{
+				Signature: sighting.Signature, JobID: sighting.JobID, Subject: sighting.Subject,
+			})
+		}
+		for _, build := range sighting.Builds {
+			build = strings.TrimSpace(build)
+			if build == "" || seen[sighting.Signature+"\x00"+build] {
+				continue
+			}
+			seen[sighting.Signature+"\x00"+build] = true
+			out[at].Builds = append(out[at].Builds, build)
+		}
+	}
+	return out
+}
+
+// applyFailureRecurrence publishes the history behind the failures each job
+// currently shows, so a rare flake reveals how long it has been recurring even
+// though correlation only ever sees one window.
+func applyFailureRecurrence(details []models.JobDetail, recurrence [][]recurrenceledger.Sighting, ledger *recurrenceledger.Ledger) {
+	if ledger == nil {
+		return
+	}
+	for i := range details {
+		detail := &details[i]
+		detail.FailureRecurrence = nil
+		for _, sighting := range recurrence[i] {
+			entry, ok := ledger.Entries[sighting.Signature]
+			if !ok {
+				continue
+			}
+			detail.FailureRecurrence = append(detail.FailureRecurrence, models.FailureRecurrence{
+				Signature:   sighting.Signature,
+				Occurrences: entry.Occurrences,
+				FirstSeen:   entry.FirstSeen,
+				LastSeen:    entry.LastSeen,
+				Builds:      sighting.Builds,
+			})
+		}
+	}
 }
 
 // baseBranchFlakiness recomputes the flakiness report over base-branch jobs// only. The published report ranks and truncates across every published job, so

@@ -98,6 +98,9 @@ type GenerateTelemetry struct {
 	PublicationMs           int64
 	PublicationAvailable    bool
 	PhaseTimingStatus       string
+	FailurePhase            string
+	FailureCode             string
+	ExecutorStarted         bool
 	FinalizationChecked     bool
 	FinalizationValid       bool
 	CleanupCompleted        bool

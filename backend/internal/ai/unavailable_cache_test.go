@@ -90,7 +90,7 @@ func TestPolicyUnavailableCacheHardPolicyOnly(t *testing.T) {
 	}
 }
 
-func TestServiceReusesPersistedPolicyUnavailableCooldown(t *testing.T) {
+func TestServiceIgnoresPersistedLegacyPolicyUnavailableCooldown(t *testing.T) {
 	cacheDir := t.TempDir()
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model", CacheDir: cacheDir})
 	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
@@ -114,10 +114,10 @@ func TestServiceReusesPersistedPolicyUnavailableCooldown(t *testing.T) {
 	result, err := reloadedService.AnalyzeFailure(context.Background(), &http.Client{}, FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1/", Build: run.BuildInfo, TestCase: *tc, ConsecutiveFailures: 3,
 	})
-	if !errors.Is(err, ErrMissingArtifactCitation) {
-		t.Fatalf("error = %v, want missing citation cooldown", err)
+	if err == nil || !strings.Contains(err.Error(), "browser factory") {
+		t.Fatalf("error = %v, want normal analysis path", err)
 	}
-	if result.Analysis != nil || result.Summary == nil || !strings.Contains(result.Summary.Summary, "no validated artifact citation") {
+	if result.Analysis != nil || result.Summary == nil || !strings.Contains(result.Summary.Summary, "browser factory") {
 		t.Fatalf("result = %+v", result)
 	}
 }

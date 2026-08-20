@@ -944,6 +944,101 @@ func TestNewAnalysisChatAgentRequiresContentReader(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
+	evidence := &analysisChatEvidence{Segments: []string{
+		"line one alpha\nline two middle\nline three omega",
+		"echo safe \\ \nrm file",
+		"if authorized:\n    grant()\ndeny()",
+		"authorized=\x1b[2Afalse",
+	}}
+	rejected := map[string]string{
+		"skips content":    "line one alpha\nline three omega",
+		"reorders content": "line three omega\nline one alpha",
+		"invents content":  "line one alpha and then nothing happened",
+		// Collapsing newlines would let two separate lines read as one.
+		"joins separate lines": "line one alpha line two middle",
+		// Trailing whitespace can change what a line means.
+		"drops trailing whitespace": "echo safe \\\nrm file",
+		// Leading indentation is semantic in the YAML and source that appear
+		// in artifacts, so a requoted block must not move a statement.
+		"reindents a block":  "if authorized:\n    grant()\n    deny()",
+		"strips indentation": "if authorized:\ngrant()\ndeny()",
+		// Cursor movement changes where text renders, so it is not display
+		// noise and a quote that drops it must fail closed.
+		"drops cursor movement": "authorized=false",
+	}
+	for name, quote := range rejected {
+		if analysisChatEvidenceContains(evidence, quote) {
+			t.Fatalf("%s: quote was accepted", name)
+		}
+	}
+	accepted := map[string]string{
+		"contiguous span":  "line one alpha\nline two middle",
+		"whole segment":    "line one alpha\nline two middle\nline three omega",
+		"single line":      "line two middle",
+		"indentation kept": "if authorized:\n    grant()\ndeny()",
+	}
+	for name, quote := range accepted {
+		if !analysisChatEvidenceContains(evidence, quote) {
+			t.Fatalf("%s: quote was rejected", name)
+		}
+	}
+}
+
+func TestAnalysisChatEvidenceToleratesDisplayNoise(t *testing.T) {
+	// The real CAPZ build log carries CSI escapes on otherwise plain lines.
+	raw := "  \x1b[38;5;9m[FAILED] Timed out after 1200.001s.\n" +
+		"  The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/" +
+		"cluster-api-provider-azure/test/e2e/azure_securitygroups.go:128 with:\n"
+	evidence := &analysisChatEvidence{Segments: []string{raw}}
+
+	// Dropping the escape is presentation only, so the quote still verifies.
+	verbatim := "  [FAILED] Timed out after 1200.001s.\n" +
+		"  The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/" +
+		"cluster-api-provider-azure/test/e2e/azure_securitygroups.go:128 with:"
+	if !analysisChatEvidenceContains(evidence, verbatim) {
+		t.Fatal("quote differing only by an escape sequence was rejected")
+	}
+	// The observed live failure also shortened the path, which drops content.
+	shortened := "  [FAILED] Timed out after 1200.001s.\n" +
+		"  The function passed to Eventually failed at azure_securitygroups.go:128 with:"
+	if analysisChatEvidenceContains(evidence, shortened) {
+		t.Fatal("quote that elided part of the path was accepted")
+	}
+}
+
+func TestAnalysisChatEvidenceDistinguishesEditedFromJoinedQuotes(t *testing.T) {
+	evidence := &analysisChatEvidence{Segments: []string{"first snippet", "second snippet"}}
+	if analysisChatEvidenceSpansSegments(evidence, "invented text") {
+		t.Fatal("fabricated quote reported as joining passages")
+	}
+	if !analysisChatEvidenceSpansSegments(evidence, "first snippet\nsecond snippet") {
+		t.Fatal("quote joined from two passages was not detected")
+	}
+
+	one := map[string]*analysisChatEvidence{"build-log.txt": evidence}
+	_, joinedStats, err := parseAnalysisChatReplyCandidates(
+		`{"answer":"x","citations":[{"path":"build-log.txt","quote":"first snippet\nsecond snippet"}],"assessment":null,"proposed_revision":null}`,
+		one,
+	)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !strings.Contains(joinedStats.EvidenceDetail, "joins separate passages") {
+		t.Fatalf("joined quote detail = %q", joinedStats.EvidenceDetail)
+	}
+	_, editedStats, err := parseAnalysisChatReplyCandidates(
+		`{"answer":"x","citations":[{"path":"build-log.txt","quote":"invented text"}],"assessment":null,"proposed_revision":null}`,
+		one,
+	)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !strings.Contains(editedStats.EvidenceDetail, "copy the text verbatim") {
+		t.Fatalf("edited quote detail = %q", editedStats.EvidenceDetail)
+	}
+}
+
 func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
 	evidence := &analysisChatEvidence{
 		Segments: []string{"first snippet", "second snippet"},

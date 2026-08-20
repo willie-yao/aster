@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/k8s"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -72,6 +73,12 @@ type benchSignal struct {
 
 // benchCase pins one historical failure and the signals a correct root cause
 // should contain.
+type benchmarkSourceRef struct {
+	ID         string `json:"id"`
+	Repository string `json:"repository"`
+	Revision   string `json:"revision"`
+}
+
 type benchCase struct {
 	name         string
 	stableID     string
@@ -82,22 +89,24 @@ type benchCase struct {
 	// run extracts it and reads through the local storage provider, so the
 	// benchmark survives Prow garbage-collecting the original GCS artifacts. Set
 	// BENCH_USE_GCS=1 to read live GCS instead (only works before GC).
-	fixtureAsset  string
-	fixtureSHA256 string
-	jobType       string
-	repo          string // org/repo, required for presubmits
-	jobName       string
-	buildID       string
-	pullNumber    string
-	webURL        string
-	commit        string
-	repoVersion   string
-	repoRefs      map[string]string
-	sourceRepo    [2]string // owner, name for repo-relative file-link resolution
-	testName      string
-	testSource    string
-	junitFile     string
-	failureMsg    string
+	fixtureAsset    string
+	fixtureSHA256   string
+	jobType         string
+	repo            string // org/repo, required for presubmits
+	jobName         string
+	buildID         string
+	pullNumber      string
+	webURL          string
+	commit          string
+	repoVersion     string
+	repoRefs        map[string]string
+	sourceRefs      []benchmarkSourceRef
+	primarySourceID string
+	sourceRepo      [2]string // primary owner and name for analyzer configuration
+	testName        string
+	testSource      string
+	junitFile       string
+	failureMsg      string
 	// consecutiveFailures is how many consecutive builds this test had failed at
 	// the time of the snapshot. The live engine derives this from the flakiness
 	// report; the benchmark feeds it so the analysis (and the critique gate's
@@ -114,16 +123,17 @@ type benchCase struct {
 	projectSHA256       string
 	promptSHA256        string
 	signals             []benchSignal
-	sourcePaths         []string
+	sourceRanges        []benchmarkSourceRange
 	sourceSignals       []benchSignal
 	// causeRepository is the "owner/repo" a correct analysis must hold
 	// responsible, and causeExternal whether that repository is a dependency
 	// rather than the project under test. Set both to score how reliably the
 	// model distinguishes an own-repo cause from an upstream one. causeFiles are
 	// paths the reported location must contain.
-	causeRepository      string
-	causeExternal        bool
-	causeFiles           []string
+	causeRepository string
+	causeExternal   bool
+	causeFiles      []string
+
 	evidenceGroups       []benchmarkEvidenceGroup
 	oracleEvidenceSHA256 string
 }
@@ -138,18 +148,29 @@ func validBenchmarkEvidenceMode(value string) bool {
 }
 
 func benchmarkSourceExpectationSHA256(bc benchCase) string {
+	if len(bc.sourceRefs) == 0 && len(bc.sourceRanges) == 0 && len(bc.sourceSignals) == 0 {
+		return strings.Repeat("0", 64)
+	}
 	var input strings.Builder
-	for _, path := range bc.sourcePaths {
-		fmt.Fprintf(&input, "path\x00%s\n", path)
+	fmt.Fprintf(&input, "primary\x00%s\n", bc.primarySourceID)
+	sourceRefs := append([]benchmarkSourceRef(nil), bc.sourceRefs...)
+	sort.Slice(sourceRefs, func(i, j int) bool { return sourceRefs[i].ID < sourceRefs[j].ID })
+	for _, value := range sourceRefs {
+		fmt.Fprintf(&input, "source\x00%s\x00%s\x00%s\n", value.ID, value.Repository, value.Revision)
+	}
+	for _, value := range bc.sourceRanges {
+		fmt.Fprintf(&input, "range\x00%s\x00%s\x00%s\x00%d\x00%d\n", value.Repository, value.Revision, value.Path, value.LineStart, value.LineEnd)
 	}
 	for _, signal := range bc.sourceSignals {
-		negative := ""
-		if signal.negated != nil {
-			negative = signal.negated.String()
-		}
-		fmt.Fprintf(&input, "signal\x00%s\x00%s\x00%s\x00%t\n", signal.name, signal.re.String(), negative, signal.must)
+		fmt.Fprintf(&input, "signal\x00%s\x00%s\x00%s\n", signal.name, signal.re.String(), func() string {
+			if signal.negated == nil {
+				return ""
+			}
+			return signal.negated.String()
+		}())
 	}
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(input.String())))
+	sum := sha256.Sum256([]byte(input.String()))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 type benchmarkOutcome string
@@ -161,7 +182,7 @@ const (
 )
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
-const fixtureReleaseBase = "https://github.com/willie-yao/aster/releases/download/benchmark-fixtures/"
+const fixtureReleaseBase = "https://github.com/willie-yao/prow-ai-dashboard/releases/download/benchmark-fixtures/"
 
 func mustRE(s string) *regexp.Regexp { return regexp.MustCompile(s) }
 
@@ -439,6 +460,53 @@ func TestFlatcarBenchmarkSignalsMatchReferenceDiagnosis(t *testing.T) {
 	}
 }
 
+func newBenchmarkToolRegistry() *tools.Registry {
+	registry := tools.NewRegistry()
+	filesystem.Register(registry)
+	k8s.Register(registry)
+	repotree.Register(registry)
+	return registry
+}
+
+func TestBenchmarkToolRegistryIncludesSourceTools(t *testing.T) {
+	registry := newBenchmarkToolRegistry()
+	for _, name := range []string{"grep_repo", "list_repo_tree", "read_repo_file"} {
+		schemas := registry.Schemas([]string{name})
+		if len(schemas) != 1 || schemas[0].Function.Name != name {
+			t.Fatalf("benchmark registry missing %s", name)
+		}
+	}
+}
+
+func validateScoredBenchmarkTraceEnvironment(resultsPath string, getenv func(string) string) error {
+	if strings.TrimSpace(resultsPath) != "" {
+		if strings.TrimSpace(getenv("AGENTIC_TRACE_TOOLS")) != "" {
+			return fmt.Errorf("AGENTIC_TRACE_TOOLS must be unset for scored benchmark execution")
+		}
+		if strings.TrimSpace(getenv("BENCH_USE_GCS")) != "" {
+			return fmt.Errorf("BENCH_USE_GCS is unscored and cannot be used with BENCH_RESULTS_JSONL")
+		}
+	}
+	return nil
+}
+
+func TestValidateScoredBenchmarkTraceEnvironment(t *testing.T) {
+	if err := validateScoredBenchmarkTraceEnvironment("results.jsonl", func(string) string { return "1" }); err == nil {
+		t.Fatal("scored benchmark accepted raw tool tracing")
+	}
+	if err := validateScoredBenchmarkTraceEnvironment("results.jsonl", func(key string) string {
+		if key == "BENCH_USE_GCS" {
+			return "1"
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("scored benchmark accepted live GCS")
+	}
+	if err := validateScoredBenchmarkTraceEnvironment("", func(string) string { return "1" }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAIBenchmark(t *testing.T) {
 	if os.Getenv("RUN_AI_BENCHMARK") == "" {
 		t.Skip("set RUN_AI_BENCHMARK=1 (plus AI_ENDPOINT/AI_MODEL) to run the AI quality benchmark")
@@ -470,7 +538,7 @@ func TestAIBenchmark(t *testing.T) {
 		}
 	}
 
-	inputs := loadBenchmarkInputs(t, cases, apiMode, model)
+	inputs := loadBenchmarkInputs(t, cases, apiMode, endpoint, model)
 
 	repetitions := 1
 	if raw := strings.TrimSpace(os.Getenv("BENCH_REPETITIONS")); raw != "" {
@@ -486,6 +554,9 @@ func TestAIBenchmark(t *testing.T) {
 	}
 	repetitionStart := benchmarkRepetitionStart(t)
 	resultsPath := strings.TrimSpace(os.Getenv("BENCH_RESULTS_JSONL"))
+	if err := validateScoredBenchmarkTraceEnvironment(resultsPath, os.Getenv); err != nil {
+		t.Fatal(err)
+	}
 	for _, bc := range cases {
 		bc := bc
 		for index := 0; index < repetitions; index++ {
@@ -690,12 +761,14 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	identity.EvidenceStageSHA256 = benchmarkEvidenceStageSHA256(bc.evidenceGroups)
 	identity.EffectivePromptSHA256 = sha256Hex([]byte(effectivePrompt))
 	identity.EffectiveInputSHA256 = benchmarkEffectiveInputSHA256(identity, agentic, cacheGeneration)
+	identity.ComparisonInputSHA256 = benchmarkComparisonInputSHA256(bc, identity)
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatal(err)
 	}
 	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
 		Token: token, API: apiMode, Endpoint: endpoint, Model: model, ReasoningEffort: identity.ReasoningEffort, CacheDir: cacheDir,
+		MaxOutputTokens: identity.ModelOutputTokens,
 	}
 	client := ai.NewClientWithOptions(clientOptions)
 
@@ -704,9 +777,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		factory = benchmarkEvidenceFactory{inner: factory, recorder: evidenceRecorder}
 	}
 
-	registry := tools.NewRegistry()
-	filesystem.Register(registry)
-	k8s.Register(registry)
+	registry := newBenchmarkToolRegistry()
 	toolNames := agentic.Tools
 	if len(toolNames) == 0 {
 		toolNames = []string{"filesystem", "k8s"}
@@ -728,6 +799,21 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	service.SetCacheGeneration(cacheGeneration)
 	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
+	if len(bc.sourceRefs) > 0 {
+		sources := make([]tools.RepoSource, 0, len(bc.sourceRefs))
+		for _, ref := range bc.sourceRefs {
+			owner, name, ok := strings.Cut(ref.Repository, "/")
+			if !ok {
+				t.Fatalf("invalid source repository %q", ref.Repository)
+			}
+			sources = append(sources, tools.RepoSource{ID: ref.ID, Owner: owner, Name: name, Revision: ref.Revision, Reader: benchmarkRepoReader(t, ref)})
+		}
+		catalog, err := tools.NewSourceCatalog(bc.primarySourceID, sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SetAnalysisSourceCatalog(catalog)
+	}
 	traceStore := ai.NewTraceStore()
 	service.SetTraceStore(traceStore)
 	var draftObservations []benchmarkDraftObservation
@@ -739,10 +825,14 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		})
 	})
 	service.SetDraftSelectionObserver(func(attempt int) { selectedAttempt = attempt })
+	var sourceObservations []ai.SourceEvidenceObservation
+	service.SetSourceEvidenceObserver(func(observation ai.SourceEvidenceObservation) {
+		sourceObservations = append(sourceObservations, observation)
+	})
 
-	// Size the model/context budgets from the endpoint's window, matching the
-	// fetcher. Fall back to a static budget with compaction off when absent.
-	budgets := benchBudgets(t, client)
+	// Scored comparisons use the exact frozen model window. Unscored local runs
+	// retain endpoint detection and the bounded fallback.
+	budgets := benchBudgets(t, client, identity.ModelContextTokens)
 	service.EnableAgentic(ai.AgenticOptions{
 		MaxIters:            agentic.MaxIters,
 		ModelByteBudget:     budgets.ModelByteBudget,
@@ -776,6 +866,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 
 	snapshot := traceStore.Snapshot()
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
+	toolUsage.sourceObservations = append([]ai.SourceEvidenceObservation(nil), sourceObservations...)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
 	requestCap := deriveBenchmarkRequestCap(agentic, true)
 	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d semantic_revision_reviews=%d per_operation=%d",
@@ -800,7 +891,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		selectedAttempt = selectedBenchmarkDraftAttempt(draftObservations, tc)
 	}
 	trialStatus := benchmarkTrialStatus(outcome, analysisErr, tc, snapshot)
-	if len(draftObservations) > 0 && selectedAttempt == 0 {
+	if len(draftObservations) > 0 && selectedAttempt == 0 && (tc == nil || tc.AIAnalysis == nil) {
 		trialStatus = "contract_violation"
 	}
 	stageReport := buildBenchmarkEvidenceStageReport(bc, preparation, evidenceCoverage, tc, draftObservations, selectedAttempt, traceSummary.modelRequests > 0, trialStatus)
@@ -950,8 +1041,9 @@ type benchmarkDraftScore struct {
 }
 
 type benchmarkToolUsage struct {
-	names  []string
-	counts []string
+	names              []string
+	counts             []string
+	sourceObservations []ai.SourceEvidenceObservation
 }
 
 type benchmarkTraceSummary struct {
@@ -972,7 +1064,11 @@ type benchmarkTraceSummary struct {
 	modelFailures            int
 	toolFailures             int
 	inputTokens              int
+	cachedInputTokens        int
 	outputTokens             int
+	reasoningTokens          int
+	reportedRequests         int
+	providerAttemptsKnown    bool
 }
 
 const benchmarkHashPrefixLen = 12
@@ -1006,7 +1102,7 @@ func successfulBenchmarkToolUsage(snapshot ai.AnalysisTraceFile) benchmarkToolUs
 }
 
 func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummary {
-	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run"}
+	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run", providerAttemptsKnown: true}
 	for _, trace := range snapshot.Traces {
 		if trace.Truncated {
 			summary.truncated = true
@@ -1043,12 +1139,22 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				}
 			case "model_request":
 				summary.modelRequests++
-				summary.providerAttempts += max(event.Attempts, 1)
+				if event.Attempts > 0 {
+					summary.providerAttempts += event.Attempts
+				} else {
+					summary.providerAttempts++
+					summary.providerAttemptsKnown = false
+				}
 				if event.Outcome == "error" {
 					summary.modelFailures++
 				}
+				if event.UsageReported {
+					summary.reportedRequests++
+				}
 				summary.inputTokens += event.InputTokens
+				summary.cachedInputTokens += event.CachedInputTokens
 				summary.outputTokens += event.OutputTokens
+				summary.reasoningTokens += event.ReasoningTokens
 			case "tool_call":
 				if event.Outcome == "error" {
 					summary.toolFailures++
@@ -1724,21 +1830,64 @@ func TestBenchmarkAllowsUnavailable(t *testing.T) {
 // name used for artifact display, not for fetching.
 func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 	t.Helper()
-	if os.Getenv("BENCH_USE_GCS") != "" || bc.fixtureAsset == "" {
+	if archive := strings.TrimSpace(os.Getenv("BENCH_FIXTURE_ARCHIVE")); archive != "" {
+		root := ensureLocalFixture(t, archive, bc.fixtureSHA256)
+		backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+		if err != nil {
+			t.Fatalf("local backend: %v", err)
+		}
+		return backend, bc.bucket
+	}
+	if os.Getenv("BENCH_USE_GCS") != "" {
 		backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bc.bucket}, &http.Client{Timeout: 60 * time.Second})
 		if err != nil {
 			t.Fatalf("gcs backend: %v", err)
 		}
-		t.Logf("reading artifacts from live GCS bucket %q", bc.bucket)
 		return backend, bc.bucket
+	}
+	if bc.fixtureAsset == "" {
+		t.Fatal("BENCH_FIXTURE_ARCHIVE is required when the case has no published fixture asset; BENCH_USE_GCS is unscored only")
 	}
 	root := ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
 	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
 	if err != nil {
 		t.Fatalf("local backend: %v", err)
 	}
-	t.Logf("reading artifacts from fixture %s (extracted at %s)", bc.fixtureAsset, root)
 	return backend, bc.bucket
+}
+
+// ensureLocalFixture verifies and extracts one locally retained fixture archive.
+func ensureLocalFixture(t *testing.T, path, wantSHA256 string) string {
+	t.Helper()
+	archive, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("read local fixture: %v", err)
+	}
+	if err := verifyFixtureDigest(archive, wantSHA256); err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		cacheRoot = os.TempDir()
+	}
+	dir := filepath.Join(cacheRoot, "aster-benchmark", filepath.Base(path)+"-"+wantSHA256[:12])
+	marker := filepath.Join(dir, ".sha256")
+	if digest, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(digest)) == wantSHA256 {
+		return dir
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarGz(bytes.NewReader(archive), dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(wantSHA256+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // ensureFixture downloads and extracts a benchmark-fixtures release asset into a
@@ -1860,11 +2009,19 @@ func extractTarGz(r io.Reader, dest string) error {
 // bounded request headroom as dashboard analysis.
 const benchGCSByteBudget = 1_000_000_000
 
-func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
+func benchBudgets(t *testing.T, client *ai.Client, frozenTokens int) ai.ContextBudgets {
 	t.Helper()
 	overrideTokens, overridden, err := ai.ParseContextWindowTokens(os.Getenv("AI_CONTEXT_WINDOW_TOKENS"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if frozenTokens > 0 {
+		if overridden && overrideTokens != frozenTokens {
+			t.Fatalf("AI_CONTEXT_WINDOW_TOKENS=%d differs from frozen BENCH_MODEL_CONTEXT_TOKENS=%d", overrideTokens, frozenTokens)
+		}
+		budgets := ai.DeriveContextBudgets(frozenTokens)
+		t.Logf("frozen benchmark context window: %d tokens; request_token_budget=%d reserved_tokens=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget, budgets.ContextWindowTokens-budgets.RequestTokenBudget)
+		return budgets
 	}
 	tokens := overrideTokens
 	detected := false
@@ -1881,6 +2038,14 @@ func benchBudgets(t *testing.T, client *ai.Client) ai.ContextBudgets {
 		t.Logf("context window unavailable; bounded fallback=%d tokens request_token_budget=%d", budgets.ContextWindowTokens, budgets.RequestTokenBudget)
 	}
 	return budgets
+}
+
+func TestBenchBudgetsUsesFrozenContextWithoutProviderDetection(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
+	budgets := benchBudgets(t, nil, 200000)
+	if budgets.ContextWindowTokens != 200000 || budgets.RequestTokenBudget <= 0 {
+		t.Fatalf("budgets=%+v", budgets)
+	}
 }
 
 // defaultBenchAgentic mirrors the live CAPZ-Dynamo tuning so a default run
@@ -2075,4 +2240,59 @@ func TestAssessBenchmarkCaseSeparatesDiagnosisAndPolicyChecks(t *testing.T) {
 	if got.hits != 4 || got.total != 5 || got.diagnosisHits != 1 || got.diagnosisTotal != 2 || got.transientCorrect == nil || !*got.transientCorrect || got.forbiddenPassed != 1 || got.forbiddenTotal != 1 || !slices.Equal(got.missingMust, []string{"cause-b"}) {
 		t.Fatalf("assessment = %+v", got)
 	}
+}
+
+type benchmarkLocalRepoReader struct{ root string }
+
+func (r benchmarkLocalRepoReader) ListTree(ctx context.Context) ([]string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", r.root, "ls-files", "-z")
+	data, err := command.Output()
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(data, []byte{0})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) > 0 {
+			out = append(out, filepath.ToSlash(string(part)))
+		}
+	}
+	return out, nil
+}
+
+func (r benchmarkLocalRepoReader) ReadFile(_ context.Context, path string) (string, bool, error) {
+	clean, err := artifacts.SafePath(path)
+	if err != nil {
+		return "", false, err
+	}
+	data, err := os.ReadFile(filepath.Join(r.root, filepath.FromSlash(clean)))
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if len(data) > 4<<20 {
+		return "", false, fmt.Errorf("benchmark source file exceeds bound")
+	}
+	return string(data), true, nil
+}
+
+func benchmarkRepoReader(t *testing.T, ref benchmarkSourceRef) tools.RepoReader {
+	t.Helper()
+	root := strings.TrimSpace(os.Getenv("BENCH_SOURCE_ROOT"))
+	if root == "" {
+		owner, name, _ := strings.Cut(ref.Repository, "/")
+		return ai.NewGitHubRepoReader(owner, name, ref.Revision, "")
+	}
+	root = filepath.Join(filepath.Clean(root), ref.ID)
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(head)) != ref.Revision {
+		t.Fatalf("benchmark source %s revision mismatch", ref.ID)
+	}
+	status, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil || len(status) != 0 {
+		t.Fatalf("benchmark source %s is not clean", ref.ID)
+	}
+	return benchmarkLocalRepoReader{root: root}
 }

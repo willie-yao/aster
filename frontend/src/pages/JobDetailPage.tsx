@@ -33,6 +33,7 @@ import { ErrorState } from "../components/ErrorState";
 import { emptyTestResultsPresentation } from "../lib/testResults";
 import { BuildFailurePanel } from "../components/BuildFailurePanel";
 import { buildFailure as findBuildFailure } from "../lib/buildFailures";
+import { describeRecurrence, recurrenceForBuild } from "../lib/recurrence";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { useManifest } from "../hooks/useManifest";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
@@ -305,8 +306,12 @@ export function JobDetailPage() {
     />
   );
 
-  const runMetadata = selectedRun ? (
-    <RunMetadata
+  const selectedRecurrence = recurrenceForBuild(
+    data.failure_recurrence,
+    selectedRun?.build_id,
+  );
+
+  const runMetadata = selectedRun ? (    <RunMetadata
       status={runResultLabel(selectedRun)}
       statusColor={runResultColor(selectedRun)}
       items={[
@@ -326,6 +331,12 @@ export function JobDetailPage() {
           label: "Commit",
           value: selectedRun.commit ? selectedRun.commit.slice(0, 8) : "Not available",
         },
+        // A failure too isolated to correlate still has a history. Without this
+        // the page can only ever say how this one build went. The identity
+        // groups failures that look alike, so it claims similarity, not cause.
+        ...(selectedRecurrence
+          ? [{ label: "History", value: describeRecurrence(selectedRecurrence) }]
+          : []),
       ]}
       links={[
         ...(selectedRun.prow_url
@@ -424,6 +435,7 @@ export function JobDetailPage() {
       jobID={canonicalJobID}
       runs={runs}
       refreshStatus={data.pattern_refresh}
+      recurrence={data.failure_recurrence}
     />
   ) : null;
 
@@ -528,6 +540,7 @@ export function JobDetailPage() {
               jobID={canonicalJobID}
               runs={runs}
               refreshStatus={data.pattern_refresh}
+              recurrence={data.failure_recurrence}
             />
           )}
           <Box

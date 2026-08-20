@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -52,6 +53,15 @@ def main() -> int:
         dimensions = ["diagnosis", "artifact_evidence", "claim_discipline", "remediation", "source_grounding"]
         if scores.get("rubric_version") != 2 or scores.get("score_max") != 10 or scores.get("dimensions") != dimensions:
             raise ValueError("score rubric identity is invalid")
+        scoring_timestamp = scores.get("scoring_timestamp")
+        if not isinstance(scoring_timestamp, str) or not scoring_timestamp.endswith("Z"):
+            raise ValueError("scores require one UTC scoring_timestamp")
+        try:
+            parsed_timestamp = datetime.fromisoformat(scoring_timestamp[:-1] + "+00:00")
+        except ValueError as exc:
+            raise ValueError("scoring_timestamp is invalid") from exc
+        if parsed_timestamp.tzinfo != timezone.utc:
+            raise ValueError("scoring_timestamp must use UTC")
         score_rows = scores.get("scores")
         if not isinstance(score_rows, list) or not all(isinstance(item, dict) for item in score_rows):
             raise ValueError("scores must contain only score objects")
@@ -73,7 +83,7 @@ def main() -> int:
                 raise ValueError("score causal coverage contains an unknown reference id")
             if values["diagnosis"] == 2 and (assessment["alignment"] != "aligned" or not assessment["initiating_cause_found"] or assessment["downstream_treated_as_primary"] or coverage != required_ids):
                 raise ValueError("full diagnosis credit requires complete reference-aligned causal coverage")
-        freeze = {"version": 1, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "score_set_sha256": canonical_hash(scores)}
+        freeze = {"version": 2, "packet_set_sha256": packet_hash, "reference_set_sha256": reference_hash, "score_set_sha256": canonical_hash(scores), "scoring_timestamp": scoring_timestamp}
         target = Path(args.output)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         target.write_text(json.dumps(freeze, indent=2, sort_keys=True) + "\n")

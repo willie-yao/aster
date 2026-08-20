@@ -12,7 +12,7 @@ func TestValidateSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	staged := valid
-	staged.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"version":1}`)}
+	staged.StagedWorkspace = &StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"version":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)}
 	if err := ValidateSpec(staged); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,8 @@ func TestValidateSpec(t *testing.T) {
 		func(s *Spec) { s.Request = nil },
 		func(s *Spec) { s.Request = []byte{0xff} },
 		func(s *Spec) { s.Timeout = 0 },
+		func(s *Spec) { s.FinalizationGrace = -time.Second },
+		func(s *Spec) { s.FinalizationGrace = 10*time.Minute + time.Second },
 		func(s *Spec) { s.OutputLimitBytes = 1024 },
 		func(s *Spec) { s.ExecutionID = strings.Repeat("x", 129) },
 		func(s *Spec) { s.StagedWorkspace = &StagedWorkspace{RequestEnv: s.RequestEnv, Request: []byte(`{}`)} },

@@ -23,6 +23,7 @@ import "./buildFailurePage.test.js";
 import "./actionRequests.test.js";
 import "./actionEligibility.test.js";
 import "./runtimeTrend.test.js";
+import "./recurrence.test.js";
 
 import "./theme.test.js";
 import "./detailFoundations.test.js";

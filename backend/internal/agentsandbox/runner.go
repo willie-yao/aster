@@ -17,7 +17,7 @@ const (
 
 	StagedWorkspaceRoot          = "/workspace"
 	StagedWorkspaceInputPath     = "/input"
-	StagedWorkspaceSourcePath    = "/workspace/source"
+	StagedWorkspaceSourcesPath   = "/workspace/sources"
 	StagedWorkspaceArtifactsPath = "/workspace/artifacts"
 	StagedWorkspaceResultPath    = "/workspace/result"
 )
@@ -30,8 +30,10 @@ var (
 
 // StagedWorkspace describes one init-populated workspace with fixed mount boundaries.
 type StagedWorkspace struct {
-	RequestEnv string
-	Request    []byte
+	RequestEnv   string
+	Request      []byte
+	ManifestHash string
+	IdentityHash string
 }
 
 // PreparedWorkspace mounts one immutable content-addressed input snapshot directly.
@@ -47,6 +49,7 @@ type Spec struct {
 	RequestEnv        string
 	Request           []byte
 	Timeout           time.Duration
+	FinalizationGrace time.Duration
 	OutputLimitBytes  int64
 	WritableWorkspace bool
 	StagedWorkspace   *StagedWorkspace
@@ -79,14 +82,21 @@ func ValidateSpec(spec Spec) error {
 	if spec.RequestEnv != strings.TrimSpace(spec.RequestEnv) || !envNamePattern.MatchString(spec.RequestEnv) {
 		return fmt.Errorf("agent sandbox request environment name is invalid")
 	}
-	if len(spec.Request) == 0 || len(spec.Request) > 256<<10 {
-		return fmt.Errorf("agent sandbox request must be between 1 and 262144 bytes")
+	maxRequestBytes := 256 << 10
+	if spec.Purpose == "analysis" {
+		maxRequestBytes = 768 << 10
+	}
+	if len(spec.Request) == 0 || len(spec.Request) > maxRequestBytes {
+		return fmt.Errorf("agent sandbox request must be between 1 and %d bytes", maxRequestBytes)
 	}
 	if !utf8.Valid(spec.Request) || strings.IndexByte(string(spec.Request), 0) >= 0 {
 		return fmt.Errorf("agent sandbox request must be valid UTF-8 without NUL bytes")
 	}
 	if spec.Timeout <= 0 || spec.Timeout > 30*time.Minute {
 		return fmt.Errorf("agent sandbox timeout must be greater than zero and at most 30m")
+	}
+	if spec.FinalizationGrace < 0 || spec.FinalizationGrace > 10*time.Minute {
+		return fmt.Errorf("agent sandbox finalization grace must be between zero and 10m")
 	}
 	if spec.OutputLimitBytes < 4<<10 || spec.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("agent sandbox output limit must be between 4096 and 1048576")
@@ -112,6 +122,9 @@ func ValidateSpec(spec Spec) error {
 		}
 		if len(stage.Request) == 0 || len(stage.Request) > 95<<10 || !utf8.Valid(stage.Request) || strings.IndexByte(string(stage.Request), 0) >= 0 {
 			return fmt.Errorf("agent sandbox stage request is invalid or oversized")
+		}
+		if !manifestHashPattern.MatchString(stage.ManifestHash) || !manifestHashPattern.MatchString(stage.IdentityHash) {
+			return fmt.Errorf("agent sandbox staged workspace identity is invalid")
 		}
 	}
 	return nil

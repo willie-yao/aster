@@ -21,11 +21,13 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-const benchmarkManifestVersion = 3
+const benchmarkManifestVersion = 5
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
+var benchmarkSourceIDRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 var benchmarkCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var benchmarkRepoRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var benchmarkSHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type benchmarkManifest struct {
@@ -68,11 +70,11 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			t.Fatalf("case %q evidence mode = %q, want %q", bc.name, bc.evidenceMode, expectedEvidenceModes[bc.name])
 		}
 		if bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource {
-			if !slices.Equal(bc.sourcePaths, []string{"test/k8s-integration/main.go"}) || len(bc.sourceSignals) != 1 || bc.sourceSignals[0].name != "identifies Windows snapshot test selection gap" {
-				t.Fatalf("case %q source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+			if len(bc.sourceRanges) != 1 || bc.sourceRanges[0].Path != "test/k8s-integration/main.go" || bc.sourceRanges[0].LineStart != 638 || bc.sourceRanges[0].LineEnd != 671 || len(bc.sourceSignals) != 1 || bc.sourceSignals[0].name != "identifies Windows snapshot test selection gap" {
+				t.Fatalf("case %q source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 			}
-		} else if len(bc.sourcePaths) != 0 || len(bc.sourceSignals) != 0 {
-			t.Fatalf("case %q artifact-only source expectations = paths %v signals %+v", bc.name, bc.sourcePaths, bc.sourceSignals)
+		} else if len(bc.sourceRanges) != 0 || len(bc.sourceSignals) != 0 {
+			t.Fatalf("case %q artifact-only source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
 		}
 		evidenceModeCounts[bc.evidenceMode]++
 		if bc.fixtureAsset == "" || len(bc.fixtureSHA256) != 64 {
@@ -263,8 +265,8 @@ type benchmarkManifestCase struct {
 	Commit               string                           `json:"commit"`
 	RepoVersion          string                           `json:"repo_version"`
 	RepoRefs             map[string]string                `json:"repo_refs"`
-	SourceOwner          string                           `json:"source_owner"`
-	SourceName           string                           `json:"source_name"`
+	SourceRefs           []benchmarkSourceRef             `json:"source_refs"`
+	PrimarySourceID      string                           `json:"primary_source_id"`
 	TestName             string                           `json:"test_name"`
 	TestSource           string                           `json:"test_source,omitempty"`
 	JUnitFile            string                           `json:"junit_file,omitempty"`
@@ -282,10 +284,17 @@ type benchmarkManifestCase struct {
 	ProjectSHA256        string                           `json:"project_sha256,omitempty"`
 	PromptSHA256         string                           `json:"prompt_sha256,omitempty"`
 	Signals              []benchmarkManifestSignal        `json:"signals"`
-	SourcePaths          []string                         `json:"source_paths,omitempty"`
+	ExpectedSourceRanges []benchmarkManifestSourceRange   `json:"expected_source_ranges,omitempty"`
 	SourceSignals        []benchmarkManifestSignal        `json:"source_signals,omitempty"`
 	EvidenceGroups       []benchmarkManifestEvidenceGroup `json:"evidence_groups,omitempty"`
 	OracleEvidenceSHA256 string                           `json:"oracle_evidence_sha256,omitempty"`
+}
+
+type benchmarkManifestSourceRange struct {
+	SourceID  string `json:"source_id"`
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
 }
 
 type benchmarkManifestSignal struct {
@@ -362,16 +371,23 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		if len(item.RepoRefs) == 0 || len(item.RepoRefs) > 8 {
 			return nil, fmt.Errorf("benchmark manifest case %q repo_refs count must be 1..8", item.ID)
 		}
-		sourceKey := item.SourceOwner + "/" + item.SourceName
-		if _, ok := item.RepoRefs[sourceKey]; !ok {
-			return nil, fmt.Errorf("benchmark manifest case %q repo_refs omit configured source", item.ID)
+		sourceRefs, err := canonicalBenchmarkSourceRefs(item.SourceRefs)
+		if err != nil {
+			return nil, fmt.Errorf("benchmark manifest case %q source refs: %w", item.ID, err)
+		}
+		primarySource, ok := benchmarkSourceRefByID(benchCase{sourceRefs: sourceRefs}, item.PrimarySourceID)
+		if !ok {
+			return nil, fmt.Errorf("benchmark manifest case %q primary_source_id is not configured", item.ID)
+		}
+		if revision, ok := item.RepoRefs[primarySource.Repository]; !ok || revision != primarySource.Revision {
+			return nil, fmt.Errorf("benchmark manifest case %q primary source must match repo_refs", item.ID)
 		}
 		for repo, ref := range item.RepoRefs {
 			if repo == "" || ref == "" || len(repo) > 256 || len(ref) > 256 || strings.ContainsAny(repo+ref, "\r\n\x00") {
 				return nil, fmt.Errorf("benchmark manifest case %q has invalid repo_refs", item.ID)
 			}
 		}
-		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" || item.SourceOwner == "" || item.SourceName == "" {
+		if item.Bucket == "" || item.JobName == "" || item.WebURL == "" || item.TestName == "" || item.FailureMessage == "" {
 			return nil, fmt.Errorf("benchmark manifest case %q is missing required identity", item.ID)
 		}
 		if item.TestSource != "" && item.TestSource != models.TestCaseSourceBuild {
@@ -382,7 +398,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 		}
 		for label, value := range map[string]string{
 			"bucket": item.Bucket, "job_name": item.JobName, "repo": item.Repo, "web_url": item.WebURL,
-			"source_owner": item.SourceOwner, "source_name": item.SourceName, "junit_file": item.JUnitFile,
+			"primary_source_id": item.PrimarySourceID, "junit_file": item.JUnitFile,
 		} {
 			if len(value) > 512 || strings.ContainsAny(value, "\r\n\x00") {
 				return nil, fmt.Errorf("benchmark manifest case %q has invalid %s", item.ID, label)
@@ -421,21 +437,23 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			}
 			signals = append(signals, benchSignal{name: signal.Name, re: positive, negated: negative, must: signal.Must})
 		}
-		if item.EvidenceMode == benchmarkEvidenceModeArtifactOnly && (len(item.SourcePaths) > 0 || len(item.SourceSignals) > 0) {
+		if item.EvidenceMode == benchmarkEvidenceModeArtifactOnly && (len(item.ExpectedSourceRanges) > 0 || len(item.SourceSignals) > 0) {
 			return nil, fmt.Errorf("benchmark manifest artifact-only case %q cannot declare source expectations", item.ID)
 		}
-		if item.EvidenceMode == benchmarkEvidenceModeArtifactAndSource && (len(item.SourcePaths) == 0 || len(item.SourcePaths) > 8 || len(item.SourceSignals) == 0 || len(item.SourceSignals) > 8) {
+		if item.EvidenceMode == benchmarkEvidenceModeArtifactAndSource && (len(item.ExpectedSourceRanges) == 0 || len(item.ExpectedSourceRanges) > 8 || len(item.SourceSignals) == 0 || len(item.SourceSignals) > 8) {
 			return nil, fmt.Errorf("benchmark manifest source-required case %q has incomplete source expectations", item.ID)
 		}
-		sourcePaths := make([]string, 0, len(item.SourcePaths))
-		seenSourcePaths := map[string]bool{}
-		for _, path := range item.SourcePaths {
-			clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
-			if path == "" || clean != path || filepath.IsAbs(path) || path == "." || path == ".." || strings.HasPrefix(path, "../") || len(path) > 512 || seenSourcePaths[path] {
-				return nil, fmt.Errorf("benchmark manifest case %q has invalid source path", item.ID)
+		sourceRanges := make([]benchmarkSourceRange, 0, len(item.ExpectedSourceRanges))
+		for _, value := range item.ExpectedSourceRanges {
+			source, ok := benchmarkSourceRefByID(benchCase{sourceRefs: sourceRefs}, value.SourceID)
+			if !ok {
+				return nil, fmt.Errorf("benchmark manifest case %q source range source_id %q is not configured", item.ID, value.SourceID)
 			}
-			seenSourcePaths[path] = true
-			sourcePaths = append(sourcePaths, path)
+			sourceRanges = append(sourceRanges, benchmarkSourceRange{Repository: source.Repository, Revision: source.Revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd})
+		}
+		sourceRanges, err = canonicalBenchmarkExpectedSourceRanges(sourceRanges)
+		if err != nil {
+			return nil, fmt.Errorf("benchmark manifest case %q source ranges: %w", item.ID, err)
 		}
 		sourceSignals := make([]benchSignal, 0, len(item.SourceSignals))
 		for signalIndex, signal := range item.SourceSignals {
@@ -544,13 +562,14 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			fixtureSHA256: item.FixtureSHA256, jobType: item.JobType, repo: item.Repo, jobName: item.JobName,
 			buildID: item.BuildID, pullNumber: item.PullNumber, webURL: item.WebURL,
 			commit: item.Commit, repoVersion: item.RepoVersion, repoRefs: maps.Clone(item.RepoRefs),
-			sourceRepo: [2]string{item.SourceOwner, item.SourceName}, testName: item.TestName, testSource: item.TestSource,
+			sourceRefs: sourceRefs, primarySourceID: item.PrimarySourceID,
+			sourceRepo: [2]string{strings.SplitN(primarySource.Repository, "/", 2)[0], strings.SplitN(primarySource.Repository, "/", 2)[1]}, testName: item.TestName, testSource: item.TestSource,
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, oppositeTransient: item.OppositeTransient,
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
 			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
-			signals: signals, sourcePaths: sourcePaths, sourceSignals: sourceSignals,
+			signals: signals, sourceRanges: sourceRanges, sourceSignals: sourceSignals,
 			evidenceGroups: evidenceGroups, oracleEvidenceSHA256: item.OracleEvidenceSHA256,
 		})
 	}
@@ -558,101 +577,122 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 }
 
 type benchmarkJSONLResult struct {
-	CaseID                    string                      `json:"case_id"`
-	StableID                  string                      `json:"stable_id"`
-	Repetition                int                         `json:"repetition"`
-	ModelLabel                string                      `json:"model_label"`
-	Arm                       string                      `json:"arm"`
-	EngineCommit              string                      `json:"engine_commit"`
-	FixtureSHA256             string                      `json:"fixture_sha256,omitempty"`
-	BaselineConsumerCommit    string                      `json:"baseline_consumer_commit,omitempty"`
-	BaselinePromptSHA256      string                      `json:"baseline_prompt_sha256,omitempty"`
-	ProjectSHA256             string                      `json:"project_sha256,omitempty"`
-	EffectivePromptSHA256     string                      `json:"effective_prompt_sha256"`
-	SkillSetHash              string                      `json:"skill_set_hash"`
-	EffectiveInputSHA256      string                      `json:"effective_input_sha256"`
-	APIMode                   string                      `json:"api_mode"`
-	ReasoningEffort           string                      `json:"reasoning_effort,omitempty"`
-	ProviderPath              string                      `json:"provider_path,omitempty"`
-	TransportID               string                      `json:"transport_id,omitempty"`
-	EvidenceTelemetryVersion  int                         `json:"evidence_telemetry_version"`
-	EvidenceCondition         string                      `json:"evidence_condition"`
-	EvidenceMode              string                      `json:"evidence_mode"`
-	SourceExpectationSHA256   string                      `json:"source_expectation_sha256"`
-	SourceExpectationPaths    []string                    `json:"source_expectation_paths"`
-	SourceExpectationHits     int                         `json:"source_expectation_hits"`
-	SourceExpectationTotal    int                         `json:"source_expectation_total"`
-	SourceSignalHits          int                         `json:"source_signal_hits"`
-	SourceSignalTotal         int                         `json:"source_signal_total"`
-	SourceEvidenceToolCalls   int                         `json:"source_evidence_tool_calls"`
-	FrozenEvidenceSHA256      string                      `json:"frozen_evidence_sha256,omitempty"`
-	EvidenceStageSHA256       string                      `json:"evidence_stage_sha256"`
-	EvidenceStageIDs          []string                    `json:"evidence_stage_ids"`
-	ModelRequestMade          bool                        `json:"model_request_made"`
-	TrialStatus               string                      `json:"trial_status"`
-	EvidenceStages            []benchmarkEvidenceStage    `json:"evidence_stages"`
-	EvidenceRevisions         []benchmarkEvidenceRevision `json:"evidence_revisions"`
-	EvidenceGroupsSelected    []string                    `json:"evidence_groups_selected,omitempty"`
-	EvidenceGroupsHit         []string                    `json:"evidence_groups_hit,omitempty"`
-	EvidenceGroupsMissed      []string                    `json:"evidence_groups_missed,omitempty"`
-	EvidenceGroupSources      map[string][]string         `json:"evidence_group_sources,omitempty"`
-	JobName                   string                      `json:"job_name"`
-	BuildID                   string                      `json:"build_id"`
-	CheckoutCommit            string                      `json:"checkout_commit"`
-	SourceRevision            string                      `json:"source_revision,omitempty"`
-	SourceUnavailable         bool                        `json:"source_unavailable,omitempty"`
-	TestName                  string                      `json:"test_name"`
-	TestSource                string                      `json:"test_source,omitempty"`
-	ElapsedMS                 int64                       `json:"elapsed_ms"`
-	Outcome                   string                      `json:"outcome"`
-	Usable                    bool                        `json:"usable"`
-	IsTransient               *bool                       `json:"is_transient,omitempty"`
-	Summary                   string                      `json:"summary,omitempty"`
-	RootCause                 string                      `json:"root_cause,omitempty"`
-	SuggestedFix              string                      `json:"suggested_fix,omitempty"`
-	Severity                  string                      `json:"severity,omitempty"`
-	Evidence                  []models.EvidenceCitation   `json:"evidence_citations,omitempty"`
-	RelevantFiles             []string                    `json:"relevant_files,omitempty"`
-	FileLinks                 map[string]string           `json:"file_links,omitempty"`
-	SignalHits                int                         `json:"signal_hits"`
-	SignalTotal               int                         `json:"signal_total"`
-	DiagnosisSignalHits       int                         `json:"diagnosis_signal_hits"`
-	DiagnosisSignalTotal      int                         `json:"diagnosis_signal_total"`
-	TransientCorrect          *bool                       `json:"transient_classification_correct,omitempty"`
-	ForbiddenChecksPassed     int                         `json:"forbidden_checks_passed"`
-	ForbiddenChecksTotal      int                         `json:"forbidden_checks_total"`
-	MissingMust               []string                    `json:"missing_must,omitempty"`
-	SelectedAttempt           int                         `json:"selected_attempt,omitempty"`
-	Drafts                    []benchmarkJSONLDraft       `json:"drafts,omitempty"`
-	DraftDecisions            []ai.DraftDecisionTrace     `json:"draft_decisions,omitempty"`
-	SemanticJudgeOutcomes     []string                    `json:"semantic_judge_outcomes"`
-	SemanticFindingClasses    []string                    `json:"semantic_finding_classes"`
-	SemanticRevisionAttempted bool                        `json:"semantic_revision_attempted"`
-	SemanticRevisionSelected  bool                        `json:"semantic_revision_selected"`
-	SemanticRevisionRejected  bool                        `json:"semantic_revision_rejected"`
-	SupportedFactsRetained    int                         `json:"supported_facts_retained"`
-	SupportedFactsAdded       int                         `json:"supported_facts_added"`
-	SupportedFactsDropped     int                         `json:"supported_facts_dropped"`
-	ToolNames                 []string                    `json:"tool_names,omitempty"`
-	ToolCounts                []string                    `json:"tool_counts,omitempty"`
-	GCSBytes                  int                         `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered       bool                        `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted    bool                        `json:"gcs_floor_retry_exhausted,omitempty"`
-	CritiquePassed            *bool                       `json:"critique_passed,omitempty"`
-	CritiqueCachePolicy       string                      `json:"critique_cache_policy,omitempty"`
-	CritiqueHardFailures      []string                    `json:"critique_hard_failures,omitempty"`
-	CritiqueSoftWarnings      []string                    `json:"critique_soft_warnings,omitempty"`
-	BudgetExhausted           bool                        `json:"budget_exhausted,omitempty"`
-	FloorNudges               int                         `json:"floor_nudges,omitempty"`
-	FloorNudgeReasons         []string                    `json:"floor_nudge_reasons,omitempty"`
-	ProviderRequestCap        int                         `json:"provider_request_cap"`
-	TraceTruncated            bool                        `json:"trace_truncated,omitempty"`
-	CacheGeneration           string                      `json:"cache_generation,omitempty"`
-	CacheVerification         benchmarkCacheVerification  `json:"cache_verification"`
-	Trace                     benchmarkJSONLTrace         `json:"trace"`
-	HumanScoreRubricVersion   int                         `json:"human_score_rubric_version"`
-	HumanScoreMax             int                         `json:"human_score_max"`
-	HumanScoreDimensions      []string                    `json:"human_score_dimensions"`
+	CaseID                    string                         `json:"case_id"`
+	StableID                  string                         `json:"stable_id"`
+	Repetition                int                            `json:"repetition"`
+	ModelLabel                string                         `json:"model_label"`
+	Arm                       string                         `json:"arm"`
+	EngineCommit              string                         `json:"engine_commit"`
+	BenchmarkManifestSHA256   string                         `json:"benchmark_manifest_sha256"`
+	FixtureSHA256             string                         `json:"fixture_sha256,omitempty"`
+	BaselineConsumerCommit    string                         `json:"baseline_consumer_commit,omitempty"`
+	BaselinePromptSHA256      string                         `json:"baseline_prompt_sha256,omitempty"`
+	ProjectSHA256             string                         `json:"project_sha256,omitempty"`
+	EffectivePromptSHA256     string                         `json:"effective_prompt_sha256"`
+	SkillSetHash              string                         `json:"skill_set_hash"`
+	EffectiveInputSHA256      string                         `json:"effective_input_sha256"`
+	ComparisonInputSHA256     string                         `json:"comparison_input_sha256"`
+	APIMode                   string                         `json:"api_mode"`
+	ReasoningEffort           string                         `json:"reasoning_effort,omitempty"`
+	ProviderPath              string                         `json:"provider_path,omitempty"`
+	ProviderConfigSHA256      string                         `json:"provider_config_sha256"`
+	TransportID               string                         `json:"transport_id,omitempty"`
+	ModelContextTokens        int                            `json:"model_context_tokens"`
+	ModelOutputTokens         int                            `json:"model_output_tokens"`
+	Pricing                   benchmarkPricingIdentity       `json:"pricing"`
+	EvidenceTelemetryVersion  int                            `json:"evidence_telemetry_version"`
+	EvidenceCondition         string                         `json:"evidence_condition"`
+	EvidenceMode              string                         `json:"evidence_mode"`
+	SourceExpectationSHA256   string                         `json:"source_expectation_sha256"`
+	ExpectedSourceRanges      []benchmarkSourceRange         `json:"expected_source_ranges"`
+	SourceReadCoverageHits    int                            `json:"source_read_coverage_hits"`
+	SourceReadCoverageTotal   int                            `json:"source_read_coverage_total"`
+	SourceReadCoveredLines    int                            `json:"source_read_covered_lines"`
+	SourceReadExpectedLines   int                            `json:"source_read_expected_lines"`
+	SourceReadPartialRatio    float64                        `json:"source_read_partial_coverage_ratio"`
+	SourceReadRangeCoverage   []benchmarkSourceRangeCoverage `json:"source_read_range_coverage"`
+	SourceSignalHits          int                            `json:"source_signal_hits"`
+	SourceSignalTotal         int                            `json:"source_signal_total"`
+	SourceEvidenceToolCalls   int                            `json:"source_evidence_tool_calls"`
+	SourceReadRanges          []benchmarkSourceRead          `json:"source_read_ranges"`
+	SourceReadCount           int                            `json:"source_read_count"`
+	SourceCitations           []benchmarkSourceCitation      `json:"source_citations"`
+	SourceCitationEmitted     int                            `json:"source_citation_emitted_count"`
+	SourceCitationVerified    int                            `json:"source_citation_verified_count"`
+	FrozenEvidenceSHA256      string                         `json:"frozen_evidence_sha256,omitempty"`
+	EvidenceStageSHA256       string                         `json:"evidence_stage_sha256"`
+	EvidenceStageIDs          []string                       `json:"evidence_stage_ids"`
+	ModelRequestMade          bool                           `json:"model_request_made"`
+	TrialStatus               string                         `json:"trial_status"`
+	ContractViolation         bool                           `json:"contract_violation"`
+	AnalysisDisposition       string                         `json:"analysis_disposition,omitempty"`
+	DispositionWarnings       []string                       `json:"disposition_warnings,omitempty"`
+	StructuredValid           bool                           `json:"structured_valid"`
+	Displayable               bool                           `json:"displayable"`
+	Grounded                  bool                           `json:"grounded"`
+	EvidenceStages            []benchmarkEvidenceStage       `json:"evidence_stages"`
+	EvidenceRevisions         []benchmarkEvidenceRevision    `json:"evidence_revisions"`
+	EvidenceGroupsSelected    []string                       `json:"evidence_groups_selected,omitempty"`
+	EvidenceGroupsHit         []string                       `json:"evidence_groups_hit,omitempty"`
+	EvidenceGroupsMissed      []string                       `json:"evidence_groups_missed,omitempty"`
+	EvidenceGroupSources      map[string][]string            `json:"evidence_group_sources,omitempty"`
+	JobName                   string                         `json:"job_name"`
+	BuildID                   string                         `json:"build_id"`
+	CheckoutCommit            string                         `json:"checkout_commit"`
+	SourceRevision            string                         `json:"source_revision,omitempty"`
+	SourceUnavailable         bool                           `json:"source_unavailable,omitempty"`
+	TestName                  string                         `json:"test_name"`
+	TestSource                string                         `json:"test_source,omitempty"`
+	ElapsedMS                 int64                          `json:"elapsed_ms"`
+	Outcome                   string                         `json:"outcome"`
+	Usable                    bool                           `json:"usable"`
+	IsTransient               *bool                          `json:"is_transient,omitempty"`
+	Summary                   string                         `json:"summary,omitempty"`
+	RootCause                 string                         `json:"root_cause,omitempty"`
+	SuggestedFix              string                         `json:"suggested_fix,omitempty"`
+	Severity                  string                         `json:"severity,omitempty"`
+	Evidence                  []models.EvidenceCitation      `json:"evidence_citations,omitempty"`
+	RelevantFiles             []string                       `json:"relevant_files,omitempty"`
+	FileLinks                 map[string]string              `json:"file_links,omitempty"`
+	SignalHits                int                            `json:"signal_hits"`
+	SignalTotal               int                            `json:"signal_total"`
+	DiagnosisSignalHits       int                            `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal      int                            `json:"diagnosis_signal_total"`
+	TransientCorrect          *bool                          `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed     int                            `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal      int                            `json:"forbidden_checks_total"`
+	MissingMust               []string                       `json:"missing_must,omitempty"`
+	SelectedAttempt           int                            `json:"selected_attempt,omitempty"`
+	Drafts                    []benchmarkJSONLDraft          `json:"drafts,omitempty"`
+	DraftDecisions            []ai.DraftDecisionTrace        `json:"draft_decisions,omitempty"`
+	SemanticJudgeOutcomes     []string                       `json:"semantic_judge_outcomes"`
+	SemanticFindingClasses    []string                       `json:"semantic_finding_classes"`
+	SemanticRevisionAttempted bool                           `json:"semantic_revision_attempted"`
+	SemanticRevisionSelected  bool                           `json:"semantic_revision_selected"`
+	SemanticRevisionRejected  bool                           `json:"semantic_revision_rejected"`
+	SupportedFactsRetained    int                            `json:"supported_facts_retained"`
+	SupportedFactsAdded       int                            `json:"supported_facts_added"`
+	SupportedFactsDropped     int                            `json:"supported_facts_dropped"`
+	ToolNames                 []string                       `json:"tool_names,omitempty"`
+	ToolCounts                []string                       `json:"tool_counts,omitempty"`
+	GCSBytes                  int                            `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered       bool                           `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted    bool                           `json:"gcs_floor_retry_exhausted,omitempty"`
+	CritiquePassed            *bool                          `json:"critique_passed,omitempty"`
+	CritiqueCachePolicy       string                         `json:"critique_cache_policy,omitempty"`
+	CritiqueHardFailures      []string                       `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings      []string                       `json:"critique_soft_warnings,omitempty"`
+	BudgetExhausted           bool                           `json:"budget_exhausted,omitempty"`
+	FloorNudges               int                            `json:"floor_nudges,omitempty"`
+	FloorNudgeReasons         []string                       `json:"floor_nudge_reasons,omitempty"`
+	ProviderRequestCap        int                            `json:"provider_request_cap"`
+	TraceTruncated            bool                           `json:"trace_truncated,omitempty"`
+	CacheGeneration           string                         `json:"cache_generation,omitempty"`
+	CacheVerification         benchmarkCacheVerification     `json:"cache_verification"`
+	Trace                     benchmarkJSONLTrace            `json:"trace"`
+	HumanScoreRubricVersion   int                            `json:"human_score_rubric_version"`
+	HumanScoreMax             int                            `json:"human_score_max"`
+	HumanScoreDimensions      []string                       `json:"human_score_dimensions"`
 }
 
 const (
@@ -722,32 +762,21 @@ func benchmarkSourceEvidenceToolCalls(usage benchmarkToolUsage) int {
 	return calls
 }
 
-func benchmarkSourceExpectationHits(paths, relevantFiles []string, links map[string]string) int {
-	grounded := make(map[string]bool, len(relevantFiles))
-	for _, path := range relevantFiles {
-		grounded[path] = true
-	}
-	hits := 0
-	for _, path := range paths {
-		if grounded[path] && strings.TrimSpace(links[path]) != "" {
-			hits++
-		}
-	}
-	return hits
-}
-
 type benchmarkJSONLTrace struct {
-	ModelRequests     int            `json:"model_requests"`
-	ProviderAttempts  int            `json:"provider_attempts"`
-	ModelFailures     int            `json:"model_failures"`
-	ToolCalls         int            `json:"tool_calls"`
-	ToolFailures      int            `json:"tool_failures"`
-	InputTokens       int            `json:"input_tokens"`
-	CachedInputTokens int            `json:"cached_input_tokens"`
-	OutputTokens      int            `json:"output_tokens"`
-	Finalize          map[string]int `json:"finalize"`
-	FinalizeRecovery  map[string]int `json:"finalize_recovery"`
-	Critique          map[string]int `json:"critique"`
+	ModelRequests         int            `json:"model_requests"`
+	ReportedRequests      int            `json:"reported_requests"`
+	ProviderAttempts      int            `json:"provider_attempts"`
+	ProviderAttemptsKnown bool           `json:"provider_attempts_known"`
+	ModelFailures         int            `json:"model_failures"`
+	ToolCalls             int            `json:"tool_calls"`
+	ToolFailures          int            `json:"tool_failures"`
+	InputTokens           int            `json:"input_tokens"`
+	CachedInputTokens     int            `json:"cached_input_tokens"`
+	OutputTokens          int            `json:"output_tokens"`
+	ReasoningTokens       int            `json:"reasoning_tokens"`
+	Finalize              map[string]int `json:"finalize"`
+	FinalizeRecovery      map[string]int `json:"finalize_recovery"`
+	Critique              map[string]int `json:"critique"`
 }
 
 func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
@@ -760,6 +789,9 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if err := validateBenchmarkRunIdentity(identity); err != nil {
 		t.Fatalf("benchmark run identity: %v", err)
+	}
+	if identity.ModelContextTokens != 0 && (!benchmarkSHA256RE.MatchString(identity.ProviderConfigSHA256) || validateBenchmarkPricingIdentity(identity.Pricing) != nil) {
+		t.Fatal("benchmark provider or pricing identity is incomplete")
 	}
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("benchmark evidence stages: %v", err)
@@ -777,28 +809,33 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	result := benchmarkJSONLResult{
 		CaseID: bc.name, StableID: bc.stableID, Repetition: repetition, ModelLabel: label,
-		Arm: identity.Arm, EngineCommit: identity.EngineCommit, FixtureSHA256: identity.FixtureSHA256,
+		Arm: identity.Arm, EngineCommit: identity.EngineCommit, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, FixtureSHA256: identity.FixtureSHA256,
 		BaselineConsumerCommit: identity.BaselineConsumerCommit, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
-		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256,
-		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, TransportID: identity.TransportID,
+		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256, ComparisonInputSHA256: identity.ComparisonInputSHA256,
+		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens, Pricing: identity.Pricing,
 		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, EvidenceMode: bc.evidenceMode,
-		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), SourceExpectationPaths: append([]string{}, bc.sourcePaths...), SourceExpectationTotal: len(bc.sourcePaths), SourceSignalTotal: len(bc.sourceSignals),
+		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), ExpectedSourceRanges: append([]benchmarkSourceRange{}, bc.sourceRanges...), SourceReadCoverageTotal: len(bc.sourceRanges), SourceSignalTotal: len(bc.sourceSignals),
 		SourceEvidenceToolCalls: benchmarkSourceEvidenceToolCalls(toolUsage), FrozenEvidenceSHA256: stageReport.FrozenSHA256,
 		EvidenceStageSHA256: identity.EvidenceStageSHA256, EvidenceStageIDs: benchmarkEvidenceStageIDs(bc.evidenceGroups), ModelRequestMade: stageReport.ModelRequestMade,
 		TrialStatus: stageReport.TrialStatus, EvidenceStages: append([]benchmarkEvidenceStage{}, stageReport.Stages...),
+		ContractViolation:      benchmarkTraceHasContractViolation(snapshot),
 		EvidenceRevisions:      append([]benchmarkEvidenceRevision{}, stageReport.Revisions...),
 		EvidenceGroupsSelected: append([]string(nil), evidenceCoverage.selected...), EvidenceGroupsHit: append([]string(nil), evidenceCoverage.hit...), EvidenceGroupsMissed: append([]string(nil), evidenceCoverage.missed...),
 		EvidenceGroupSources: cloneBenchmarkEvidenceSources(evidenceCoverage.sources),
 		JobName:              bc.jobName, BuildID: bc.buildID, CheckoutCommit: bc.commit, TestName: bc.testName, TestSource: bc.testSource, ElapsedMS: elapsed.Milliseconds(), Outcome: string(recordedOutcome),
-		FileLinks: map[string]string{}, SelectedAttempt: selectedAttempt,
+		FileLinks: map[string]string{}, SourceReadRanges: []benchmarkSourceRead{}, SourceCitations: []benchmarkSourceCitation{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
 		SemanticJudgeOutcomes:  append([]string{}, traceSummary.semanticJudgeOutcomes...),
 		SemanticFindingClasses: append([]string{}, traceSummary.semanticFindingClasses...),
 		ProviderRequestCap:     providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
-		CritiqueCachePolicy:     string(critiquePolicy),
-		Trace:                   benchmarkJSONLTrace{Finalize: map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{}},
+		CritiqueCachePolicy: string(critiquePolicy),
+		Trace: benchmarkJSONLTrace{
+			ProviderAttemptsKnown: true,
+			Finalize:              map[string]int{}, FinalizeRecovery: map[string]int{}, Critique: map[string]int{},
+		},
 		HumanScoreRubricVersion: benchmarkHumanScoreRubricVersion, HumanScoreMax: benchmarkHumanScoreMax,
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
 	}
@@ -814,12 +851,21 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
 		})
 	}
-	build := models.BuildInfo{Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs)}
-	if source, ok := ai.ResolveBuildSource(build, bc.sourceRepo[0], bc.sourceRepo[1]); ok {
+	if source, ok := benchmarkPrimarySourceRef(bc); ok {
 		result.SourceRevision = source.Revision
 	} else {
 		result.SourceUnavailable = true
 	}
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromInProcess(bc, toolUsage.sourceObservations)
+	if sourceReadErr != nil {
+		t.Fatal(sourceReadErr)
+	}
+	result.SourceReadRanges = sourceReads
+	result.SourceReadCount = len(sourceReads)
+	coverage := benchmarkExpectedSourceReadCoverage(bc.sourceRanges, sourceReads)
+	result.SourceReadCoverageHits, result.SourceReadCoverageTotal = coverage.Hits, coverage.Total
+	result.SourceReadCoveredLines, result.SourceReadExpectedLines = coverage.CoveredLines, coverage.ExpectedLines
+	result.SourceReadPartialRatio, result.SourceReadRangeCoverage = coverage.CoverageRatio, coverage.Ranges
 	if tc != nil && tc.AISummary != nil {
 		result.Summary = tc.AISummary.Summary
 		result.IsTransient = new(bool)
@@ -827,6 +873,11 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	}
 	if tc != nil && tc.AIAnalysis != nil && tc.AISummary != nil {
 		result.Usable = true
+		result.AnalysisDisposition = tc.AIAnalysis.Disposition
+		result.DispositionWarnings = append([]string(nil), tc.AIAnalysis.DispositionWarnings...)
+		result.StructuredValid = result.AnalysisDisposition != ""
+		result.Displayable = result.StructuredValid
+		result.Grounded = result.AnalysisDisposition == models.AnalysisDispositionGrounded
 		result.RootCause, result.SuggestedFix, result.Severity = tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix, tc.AIAnalysis.Severity
 		result.GCSBytes = tc.AIAnalysis.GCSBytes
 		result.EvidencePlanCovered = tc.AIAnalysis.EvidencePlanCovered
@@ -845,7 +896,6 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.SignalHits, result.SignalTotal = assessment.hits, assessment.total
 		result.DiagnosisSignalHits, result.DiagnosisSignalTotal = assessment.diagnosisHits, assessment.diagnosisTotal
 		result.SourceSignalHits, result.SourceSignalTotal = assessment.sourceHits, assessment.sourceTotal
-		result.SourceExpectationHits = benchmarkSourceExpectationHits(bc.sourcePaths, result.RelevantFiles, result.FileLinks)
 		result.TransientCorrect = assessment.transientCorrect
 		result.ForbiddenChecksPassed, result.ForbiddenChecksTotal = assessment.forbiddenPassed, assessment.forbiddenTotal
 		result.MissingMust = append(result.MissingMust, assessment.missingMust...)
@@ -862,13 +912,22 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			switch event.Kind {
 			case "model_request":
 				result.Trace.ModelRequests++
-				result.Trace.ProviderAttempts += max(event.Attempts, 1)
+				if event.Attempts > 0 {
+					result.Trace.ProviderAttempts += event.Attempts
+				} else {
+					result.Trace.ProviderAttempts++
+					result.Trace.ProviderAttemptsKnown = false
+				}
 				if event.Outcome == "error" {
 					result.Trace.ModelFailures++
+				}
+				if event.UsageReported {
+					result.Trace.ReportedRequests++
 				}
 				result.Trace.InputTokens += event.InputTokens
 				result.Trace.CachedInputTokens += event.CachedInputTokens
 				result.Trace.OutputTokens += event.OutputTokens
+				result.Trace.ReasoningTokens += event.ReasoningTokens
 			case "tool_call":
 				result.Trace.ToolCalls++
 				if event.Outcome == "error" {
@@ -928,7 +987,7 @@ func recordBenchmarkSemanticRevision(result *benchmarkJSONLResult, event ai.Trac
 
 func TestLoadBenchmarkManifest(t *testing.T) {
 	valid := `{
-  "version": 3,
+  "version": 5,
   "cases": [{
     "id": "case-one",
     "stable_id": "0123456789abcdef0123",
@@ -939,9 +998,9 @@ func TestLoadBenchmarkManifest(t *testing.T) {
     "web_url": "https://example.invalid/build/123456789/",
     "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "repo_version": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "repo_refs": {"example/project":"main"},
-    "source_owner": "example",
-    "source_name": "project",
+    "repo_refs": {"example/project":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+    "primary_source_id": "primary",
     "test_name": "Example test",
     "junit_file": "junit.xml",
     "failure_message": "failed",
@@ -976,16 +1035,41 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		t.Fatalf("build cases = %+v", buildCases)
 	}
 
+	multiRef := strings.Replace(valid,
+		`"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`,
+		`"source_refs": [{"id":"server","repository":"example/project","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`, 1)
+	multiRef = strings.Replace(multiRef, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source", "expected_source_ranges": [{"source_id":"server","path":"source.go","line_start":10,"line_end":20}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+	multiRefPath := filepath.Join(t.TempDir(), "multi-ref-manifest.json")
+	if err := os.WriteFile(multiRefPath, []byte(multiRef), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	multiRefCases, err := loadBenchmarkManifest(multiRefPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(multiRefCases) != 1 || len(multiRefCases[0].sourceRefs) != 2 || multiRefCases[0].sourceRefs[0].ID != "primary" || multiRefCases[0].sourceRefs[1].ID != "server" || multiRefCases[0].sourceRanges[0].Revision != strings.Repeat("b", 40) {
+		t.Fatalf("multi-ref cases = %+v", multiRefCases)
+	}
+
 	for name, mutate := range map[string]func(string) string{
 		"unknown field": func(value string) string {
-			return strings.Replace(value, `"version": 3`, `"version": 3, "extra": true`, 1)
+			return strings.Replace(value, `"version": 5`, `"version": 5, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
+		"unknown primary source": func(value string) string {
+			return strings.Replace(value, `"primary_source_id": "primary"`, `"primary_source_id": "missing"`, 1)
+		},
+		"duplicate source id": func(value string) string {
+			return strings.Replace(value, `"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]`, `"source_refs": [{"id":"primary","repository":"example/project","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"id":"primary","repository":"example/project","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]`, 1)
+		},
+		"unknown range source": func(value string) string {
+			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source", "expected_source_ranges": [{"source_id":"missing","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+		},
 		"bad evidence mode": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "all"`, 1)
 		},
 		"artifact only source expectations": func(value string) string {
-			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "source_paths": ["source.go"], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
+			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_only", "expected_source_ranges": [{"source_id":"primary","path":"source.go","line_start":1,"line_end":1}], "source_signals": [{"name":"source","pattern":"source","must":true}]`, 1)
 		},
 		"source required without expectations": func(value string) string {
 			return strings.Replace(value, `"evidence_mode": "artifact_only"`, `"evidence_mode": "artifact_and_source"`, 1)
@@ -1034,10 +1118,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
 		name: "case-one", stableID: "0123456789abcdef0123", evidenceMode: benchmarkEvidenceModeArtifactAndSource, jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
-		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": "main"},
+		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo:    [2]string{"example", "project"},
 		signals:       []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
-		sourcePaths:   []string{"file.go"},
+		sourceRanges:  []benchmarkSourceRange{{Repository: "example/project", Revision: strings.Repeat("a", 40), Path: "file.go", LineStart: 1, LineEnd: 2}},
 		sourceSignals: []benchSignal{{name: "source cause", re: regexp.MustCompile(`root cause`), must: true}},
 	}
 	tc := &models.TestCase{
@@ -1075,7 +1160,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
-		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}},
+		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}, sourceObservations: []ai.SourceEvidenceObservation{{SourceID: "primary", Tool: "read_repo_file", Path: "file.go", LineStart: 1, LineEnd: 2}}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}, semanticJudgeOutcomes: []string{"draft:objected", "revision:passed", "revision:revised"}, semanticFindingClasses: []string{"specific_error_ignored"}}, 18, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
 		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
@@ -1094,7 +1179,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
 		result.FloorNudges != 1 || !slices.Equal(result.FloorNudgeReasons, []string{"gcs_bytes"}) ||
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||
-		result.SourceEvidenceToolCalls != 1 || result.SourceExpectationHits != 1 || result.SourceExpectationTotal != 1 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
+		result.SourceEvidenceToolCalls != 1 || result.SourceReadCoverageHits != 1 || result.SourceReadCoverageTotal != 1 || len(result.SourceReadRanges) != 1 || result.SourceReadRanges[0].Path != "file.go" || len(result.SourceCitations) != 0 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
 		result.ProviderRequestCap != 18 || result.Trace.ProviderAttempts != 2 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != benchmarkHumanScoreRubricVersion || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
@@ -1121,6 +1206,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	bc := benchCase{
 		name: "case-unavailable", stableID: "abcdef0123456789abcd", evidenceMode: benchmarkEvidenceModeArtifactOnly, jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
@@ -1146,6 +1232,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 	bc := benchCase{
 		name: "case-failed", stableID: "abcdef0123456789abcd", jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
+		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
 		sourceRepo: [2]string{"example", "project"}, evidenceGroups: []benchmarkEvidenceGroup{group},
 		fixtureSHA256: strings.Repeat("f", 64), consumerCommit: strings.Repeat("1", 40), promptSHA256: strings.Repeat("2", 64), projectSHA256: strings.Repeat("3", 64),
 		signals: []benchSignal{{name: "cause", re: regexp.MustCompile(`cause`)}},
@@ -1212,15 +1299,20 @@ func TestRecordBenchmarkSemanticRevisionCountsUnparseableAndDeniedAsRejected(t *
 }
 
 func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
+	revision := strings.Repeat("a", 40)
 	base := benchCase{
-		sourcePaths:   []string{"pkg/file.go"},
-		sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}},
+		primarySourceID: "primary",
+		sourceRefs:      []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: revision}},
+		sourceRanges:    []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}},
+		sourceSignals:   []benchSignal{{name: "source", re: regexp.MustCompile(`source claim`), must: true}},
 	}
 	want := benchmarkSourceExpectationSHA256(base)
 	for _, changed := range []benchCase{
-		{sourcePaths: []string{"pkg/other.go"}, sourceSignals: base.sourceSignals},
-		{sourcePaths: base.sourcePaths, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
-		{sourcePaths: base.sourcePaths, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/other.go", LineStart: 1, LineEnd: 2}}, sourceSignals: base.sourceSignals},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "other", re: regexp.MustCompile(`source claim`), must: true}}},
+		{primarySourceID: base.primarySourceID, sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: []benchSignal{{name: "source", re: regexp.MustCompile(`other claim`), must: true}}},
+		{primarySourceID: "other", sourceRefs: base.sourceRefs, sourceRanges: base.sourceRanges, sourceSignals: base.sourceSignals},
+		{primarySourceID: base.primarySourceID, sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: strings.Repeat("b", 40)}}, sourceRanges: base.sourceRanges, sourceSignals: base.sourceSignals},
 	} {
 		if got := benchmarkSourceExpectationSHA256(changed); got == want {
 			t.Fatalf("source expectation hash did not change: %s", got)
@@ -1228,5 +1320,108 @@ func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
 	}
 	if !benchmarkSHA256RE.MatchString(want) {
 		t.Fatalf("source expectation hash = %q", want)
+	}
+	reordered := base
+	reordered.sourceRefs = []benchmarkSourceRef{
+		{ID: "secondary", Repository: "other/repo", Revision: strings.Repeat("c", 40)},
+		base.sourceRefs[0],
+	}
+	ordered := reordered
+	ordered.sourceRefs = []benchmarkSourceRef{base.sourceRefs[0], reordered.sourceRefs[0]}
+	if benchmarkSourceExpectationSHA256(reordered) != benchmarkSourceExpectationSHA256(ordered) {
+		t.Fatal("source expectation hash depends on source ref order")
+	}
+}
+
+func TestKubectlSkewEvaluationManifest(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/kubectl-skew-eval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 1 {
+		t.Fatalf("cases=%d", len(cases))
+	}
+	bc := cases[0]
+	if bc.name != "kubectl-skew-stable2-latest-kubeproxy-version" || len(bc.sourceRefs) != 2 || len(bc.sourceRanges) != 3 || bc.primarySourceID != "latest-client" || bc.evidenceMode != benchmarkEvidenceModeArtifactAndSource {
+		t.Fatalf("case=%+v", bc)
+	}
+	if bc.sourceRefs[0].Repository != "kubernetes/kubernetes" || bc.sourceRefs[1].Repository != "kubernetes/kubernetes" || bc.sourceRefs[0].Revision == bc.sourceRefs[1].Revision {
+		t.Fatalf("source refs=%+v", bc.sourceRefs)
+	}
+	reference := &models.TestCase{AISummary: &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: false}, AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis}}
+	if assessment := assessBenchmarkCase(bc, reference); len(assessment.missingMust) > 0 {
+		t.Fatalf("reference rejected: %v", assessment.missingMust)
+	}
+	opposite := &models.TestCase{AISummary: &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: false}, AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis}}
+	if assessment := assessBenchmarkCase(bc, opposite); assessment.forbiddenPassed == assessment.forbiddenTotal {
+		t.Fatalf("opposite diagnosis passed: %+v", assessment)
+	}
+	data, err := os.ReadFile("testdata/benchmarks/agent-sandbox-causal-references.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var references struct {
+		Cases map[string]struct {
+			ReferenceDiagnosis string `json:"reference_diagnosis"`
+			RequiredChain      []struct {
+				ID string `json:"id"`
+			} `json:"required_chain"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &references); err != nil {
+		t.Fatal(err)
+	}
+	causal, ok := references.Cases[bc.name]
+	if !ok || strings.TrimSpace(causal.ReferenceDiagnosis) == "" {
+		t.Fatal("kubectl skew causal reference is missing")
+	}
+	wantChain := []string{"mixed-version-job", "stable-test-requires-field", "latest-client-omits-field", "version-skew-assertion", "health-not-primary", "persistent-not-flake"}
+	gotChain := make([]string, 0, len(causal.RequiredChain))
+	for _, link := range causal.RequiredChain {
+		gotChain = append(gotChain, link.ID)
+	}
+	if !slices.Equal(gotChain, wantChain) {
+		t.Fatalf("causal chain=%v", gotChain)
+	}
+}
+
+func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/capz-agent-sandbox-eval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCommits := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      "1cefef491698494b19d2fac9895e37c94cab5d4e",
+		"flatcar-worker-dns-providerid":               "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+		"apiversion-upgrade-clusterctl-aso-ratelimit": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+	}
+	wantSources := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      "c4a02ed36c22af00a2b228e6a9f02d1f2b2a42e0",
+		"flatcar-worker-dns-providerid":               "d8eb84399896fc136eb7aa703bfdeb3686d1bad1",
+		"apiversion-upgrade-clusterctl-aso-ratelimit": "7d3a0e1020ad88b7bd095fdf2c3802984af08002",
+	}
+	wantEvidenceModes := map[string]string{
+		"ccm-dualstack-control-plane-routetable":      benchmarkEvidenceModeArtifactAndSource,
+		"flatcar-worker-dns-providerid":               benchmarkEvidenceModeArtifactOnly,
+		"apiversion-upgrade-clusterctl-aso-ratelimit": benchmarkEvidenceModeArtifactOnly,
+	}
+	if len(cases) != len(wantCommits) {
+		t.Fatalf("cases = %d", len(cases))
+	}
+	for _, bc := range cases {
+		if bc.consumerCommit != "cabcef8e03b510467dac52682fa7e9b0f3e6692f" || bc.projectSHA256 != "1fc01fa1d2590c26b66a98faadb9daff567a4d325b6af3a14c765ed9f72d2e24" || bc.promptSHA256 != "817cea07bd6b4621ac99b362af20f899caeeb336e86c355fd6870792c6afa9b5" {
+			t.Fatalf("case %s consumer identity is invalid", bc.name)
+		}
+		source, ok := benchmarkPrimarySourceRef(bc)
+		if bc.commit != wantCommits[bc.name] || bc.repoVersion != bc.commit || !ok || source.Revision != wantSources[bc.name] || bc.evidenceMode != wantEvidenceModes[bc.name] || bc.referenceDiagnosis == "" || bc.expectedTransient == nil {
+			t.Fatalf("case %s identity = %+v source=%+v", bc.name, bc, source)
+		}
+		if bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource {
+			if len(bc.sourceRanges) != 2 || bc.sourceRanges[0].Path != "api/v1beta1/azurecluster_default.go" || bc.sourceRanges[0].LineStart != 197 || bc.sourceRanges[1].Path != "azure/scope/cluster.go" || bc.sourceRanges[1].LineStart != 378 || len(bc.sourceSignals) != 2 {
+				t.Fatalf("case %s source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
+			}
+		} else if len(bc.sourceRanges) != 0 || len(bc.sourceSignals) != 0 {
+			t.Fatalf("case %s artifact-only source expectations = ranges %v signals %+v", bc.name, bc.sourceRanges, bc.sourceSignals)
+		}
 	}
 }

@@ -344,6 +344,60 @@ func providerMessageTextBytes(raw json.RawMessage) (int, error) {
 	return total, nil
 }
 
+func TestOpenCode1182BoundedEvidenceExhaustionCompatibility(t *testing.T) {
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	workDir := t.TempDir()
+	for _, dir := range []string{"source", "artifacts", "result"} {
+		if err := os.Mkdir(filepath.Join(workDir, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifactPath := filepath.Join(workDir, "artifacts", "failure.log")
+	if err := os.WriteFile(artifactPath, []byte("synthetic failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			writeSyntheticOpenAIStream(t, w, "read", map[string]any{"filePath": "artifacts/failure.log"})
+		case 2:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"synthetic bounded exhaustion"}}`)
+		case 3:
+			var structured any
+			if err := json.Unmarshal(compatibilityAnalysisJSON(), &structured); err != nil {
+				t.Fatal(err)
+			}
+			writeSyntheticOpenAIStream(t, w, "StructuredOutput", structured)
+		default:
+			t.Fatalf("unexpected provider request %d", calls)
+		}
+	}))
+	defer gateway.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	spec := OpenCodeSpec{
+		Bin: bin, WorkDir: workDir, HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testGatewayProvider(gateway.URL+"/v1/chat/completions", "synthetic-model"),
+		Prompt:   "Read artifacts/failure.log and investigate the failure.", MaxSteps: 4,
+		ModelContextTokens: 200000, ModelOutputTokens: 8192,
+	}
+	result, err := defaultRunOpenCode(ctx, spec)
+	if err != nil {
+		t.Fatalf("err=%v result=%+v", err, result)
+	}
+	telemetry := result.Telemetry
+	if calls != 3 || len(result.Structured) == 0 || !telemetry.EvidencePhaseCompleted || !telemetry.EvidenceExhausted || telemetry.EvidenceStepBudget != 2 || telemetry.EvidenceExhaustionClass != "api_bad_request" || telemetry.EvidencePhaseSteps != 1 || telemetry.EvidencePhaseRequests != 2 || !telemetry.FinalizationPhaseCompleted || telemetry.FinalizationPhaseSteps != 1 || telemetry.FinalizationPhaseRequests != 1 || telemetry.ProviderRequests != 3 || telemetry.StepsUsed != 2 || telemetry.StructuredOutputToolCalls != 1 {
+		t.Fatalf("calls=%d result=%+v", calls, result)
+	}
+}
+
 func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	bin := os.Getenv("OPENCODE_1_18_2_BIN")
 	if bin == "" {
@@ -444,12 +498,12 @@ func TestOpenCode1182TwoPhaseCompatibility(t *testing.T) {
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(result.EvidenceHandles, wantHandles) {
 		t.Fatalf("evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 func TestOpenCode1182RequiredSourceCorrectionCompatibility(t *testing.T) {
@@ -534,7 +588,7 @@ func TestOpenCode1182RequiredSourceCorrectionCompatibility(t *testing.T) {
 	if result.Telemetry.SourceEvidenceStatus != agentanalysis.WorkspaceSourceEvidenceAccepted || !result.Telemetry.SourceEvidenceCorrectiveTurn || result.Telemetry.SourceEvidenceCorrectionReason != agentanalysis.WorkspaceSourceToolSkipped || result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Telemetry.EvidencePhaseSteps != 4 || result.Telemetry.FinalizationPhaseSteps != 1 || result.Telemetry.StepsUsed != 5 || result.Usage.ModelRequests != 5 {
 		t.Fatalf("result=%+v", result)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 type syntheticOpenAIToolCall struct {
@@ -691,17 +745,17 @@ func TestOpenCode1182ResponsesTwoPhaseCompatibility(t *testing.T) {
 	if role := responseLastMessageRole(requests[2]); role != "user" {
 		t.Fatalf("final Responses message role = %q sequence=%v", role, responseInputRoleSequence(requests[2]))
 	}
-	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 24 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
+	if result.Telemetry.ArtifactEvidenceToolCalls != 1 || result.Telemetry.SourceEvidenceToolCalls != 1 || result.Telemetry.StructuredOutputToolCalls != 1 || result.Usage.ModelRequests != 3 || !result.Usage.Available || result.Usage.InputTokens != 30 || result.Usage.CachedInputTokens != 6 || result.Usage.OutputTokens != 6 || !result.Telemetry.EvidencePhaseCompleted || !result.Telemetry.FinalizationPhaseCompleted || len(result.Structured) == 0 {
 		t.Fatalf("Responses result=%+v", result)
 	}
 	wantHandles := []agentanalysis.WorkspaceEvidenceHandle{
 		{ID: "artifact-001", Root: agentanalysis.WorkspaceArtifactsDir, Path: "failure.log", LineStart: 1, LineEnd: 1},
-		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, Path: "main.go", LineStart: 1, LineEnd: 1},
+		{ID: "source-001", Root: agentanalysis.WorkspaceSourceDir, SourceID: "primary", Path: "main.go", LineStart: 1, LineEnd: 1},
 	}
 	if !slices.Equal(result.EvidenceHandles, wantHandles) {
 		t.Fatalf("Responses evidence handles=%+v want=%+v", result.EvidenceHandles, wantHandles)
 	}
-	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourceDir))
+	assertCompatibilityAnalysis(t, result, filepath.Join(workDir, agentanalysis.WorkspaceArtifactsDir), filepath.Join(workDir, agentanalysis.WorkspaceSourcesDir))
 }
 
 type syntheticResponsesToolCall struct {
@@ -859,7 +913,7 @@ func TestOpenCode1182ResponsesFailureModesAreSanitized(t *testing.T) {
 func compatibilityAnalysisJSON() []byte {
 	return []byte(`{
   "version": 1,
-  "contract_version": "agent-analysis-workspace-v7",
+  "contract_version": "agent-analysis-workspace-v8",
   "summary": "The synthetic failure is grounded.",
   "is_transient": false,
   "root_cause": "The artifact and source contain the same synthetic marker.",
@@ -872,7 +926,7 @@ func compatibilityAnalysisJSON() []byte {
 }`)
 }
 
-func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifactRoot, sourceRoot string) {
+func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifactRoot, sourcesRoot string) {
 	t.Helper()
 	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
@@ -886,7 +940,7 @@ func assertCompatibilityAnalysis(t *testing.T, result OpenCodeRunResult, artifac
 	if err != nil {
 		t.Fatal(err)
 	}
-	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourceRoot)
+	analysis, validation, err := agentanalysis.ParseWorkspaceAnalysis(string(result.Structured), result.EvidenceHandles, manifest, artifactRoot, sourcesRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

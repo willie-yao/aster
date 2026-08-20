@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,10 +24,21 @@ const (
 type WorkspaceSandboxSpec struct {
 	Request      WorkspaceExecutionRequest
 	StageRequest WorkspaceStageRequest
+	SourcesRoot  string
 	SourceRoot   string
 	ArtifactRoot string
 	ExecutionID  string
 	WorkObserver engineruntime.WorkObserver
+}
+
+func workspaceSandboxSourcesRoot(spec WorkspaceSandboxSpec) (string, error) {
+	if root := strings.TrimSpace(spec.SourcesRoot); root != "" {
+		return filepath.Clean(root), nil
+	}
+	if root := strings.TrimSpace(spec.SourceRoot); root != "" && len(spec.Request.Manifest.Sources) == 1 {
+		return filepath.Dir(filepath.Clean(root)), nil
+	}
+	return "", fmt.Errorf("workspace Sandbox sources root is required")
 }
 
 // WorkspaceSandboxResult combines one validated analysis with lifecycle facts.
@@ -77,8 +90,10 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceExecutionRequest(spec.Request); err != nil {
 		return result, err
 	}
-	if spec.Request.SourceModePolicy != r.sourceModePolicy() {
-		return result, fmt.Errorf("workspace analysis request does not match configured source mode policy")
+	for _, policy := range spec.Request.SourceModePolicies {
+		if policy.Policy != r.sourceModePolicy() {
+			return result, fmt.Errorf("workspace analysis request does not match configured source mode policy")
+		}
 	}
 	if spec.Request.ModelProvider != r.Provider || time.Duration(spec.Request.TimeoutSeconds)*time.Second != r.Timeout || spec.Request.OutputLimitBytes != r.OutputLimitBytes {
 		return result, fmt.Errorf("workspace analysis request does not match configured provider, timeout, or output limit")
@@ -86,10 +101,17 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err := ValidateWorkspaceStageRequest(spec.StageRequest, spec.Request.Manifest); err != nil {
 		return result, err
 	}
-	if spec.StageRequest.InputSourceModePolicy != spec.Request.SourceModePolicy || spec.StageRequest.OutputSourceModePolicy != spec.Request.SourceModePolicy {
-		return result, fmt.Errorf("workspace stage and execution source mode policies differ")
+	if !slices.Equal(spec.StageRequest.OutputSourceModePolicies, spec.Request.SourceModePolicies) {
+		return result, fmt.Errorf("workspace stage output and execution source mode policies differ")
 	}
-	if err := VerifyPreparedSourceWorkspace(ctx, spec.SourceRoot, spec.Request.Manifest.Source.Revision, spec.Request.SourceModePolicy); err != nil {
+	if spec.Request.InputMode == WorkspaceInputStaged && spec.StageRequest.InputMode != WorkspaceStageInputPVC {
+		return result, fmt.Errorf("workspace Sandbox staging requires PVC input")
+	}
+	sourcesRoot, err := workspaceSandboxSourcesRoot(spec)
+	if err != nil {
+		return result, err
+	}
+	if err := VerifyWorkspaceSources(ctx, sourcesRoot, spec.Request.Manifest.Sources, spec.StageRequest.InputSourceModePolicies); err != nil {
 		return result, err
 	}
 	if err := VerifyArtifactWorkspace(spec.ArtifactRoot, spec.Request.Manifest); err != nil {
@@ -102,8 +124,23 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	sandboxSpec := agentsandbox.Spec{
 		Purpose: "analysis", ExecutionID: spec.ExecutionID,
 		RequestEnv: WorkspaceExecutionRequestEnv, Request: requestJSON,
-		Timeout: r.Timeout, OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash},
+		Timeout: r.Timeout, FinalizationGrace: WorkspacePostModelGraceForSources(len(spec.Request.Manifest.Sources)),
+		OutputLimitBytes: r.OutputLimitBytes, WorkObserver: spec.WorkObserver,
+	}
+	switch spec.Request.InputMode {
+	case WorkspaceInputStaged:
+		stageJSON, err := json.Marshal(spec.StageRequest)
+		if err != nil {
+			return result, fmt.Errorf("encode workspace stage request: %w", err)
+		}
+		sandboxSpec.StagedWorkspace = &agentsandbox.StagedWorkspace{
+			RequestEnv: WorkspaceStageRequestEnv, Request: stageJSON,
+			ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash,
+		}
+	case WorkspaceInputPrepared:
+		sandboxSpec.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: spec.Request.Manifest.Hash, IdentityHash: spec.StageRequest.Hash}
+	default:
+		return result, fmt.Errorf("workspace analysis input mode is invalid")
 	}
 	if err := agentsandbox.ValidateSpec(sandboxSpec); err != nil {
 		return result, err
@@ -126,7 +163,7 @@ func (r *WorkspaceSandboxRuntime) Analyze(ctx context.Context, spec WorkspaceSan
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: workspace analysis result: %v", engineruntime.ErrMalformedResult, err), runErr)
 	}
-	parsed, err = ValidateWorkspaceExecutionResult(parsed, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	parsed, err = ValidateWorkspaceExecutionResult(parsed, spec.Request, spec.ArtifactRoot, sourcesRoot)
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: workspace analysis result: %v", engineruntime.ErrResultContract, err), runErr)
 	}

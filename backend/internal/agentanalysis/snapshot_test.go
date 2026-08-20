@@ -174,13 +174,6 @@ func TestFreezeEvidenceFitsJSONEncodedBundle(t *testing.T) {
 	if len(encoded) > maxBundleBytes || len(bundle.Excerpts) != 1 || !bundle.Excerpts[0].Truncated {
 		t.Fatalf("encoded bytes=%d excerpts=%+v", len(encoded), bundle.Excerpts)
 	}
-	instruction, err := buildInstruction(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(instruction)+len(failureAnalysisSkill) > maxAgentPromptBytes {
-		t.Fatalf("composed prompt bytes=%d", len(instruction)+len(failureAnalysisSkill))
-	}
 }
 
 func TestFitEvidenceBundleHandlesWhitespaceTails(t *testing.T) {
@@ -223,13 +216,6 @@ func TestFreezeEvidenceCapsUniqueExcerptContent(t *testing.T) {
 	}
 	if total > maxExcerptTotalBytes || len(bundle.Excerpts) != 3 {
 		t.Fatalf("excerpt count=%d bytes=%d", len(bundle.Excerpts), total)
-	}
-	instruction, err := buildInstruction(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(instruction)+len(failureAnalysisSkill) > maxAgentPromptBytes {
-		t.Fatalf("composed prompt bytes=%d", len(instruction)+len(failureAnalysisSkill))
 	}
 }
 

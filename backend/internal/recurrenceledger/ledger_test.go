@@ -338,6 +338,42 @@ func TestPruneEvictsLeastRecentlySeenAboveTheEntryCap(t *testing.T) {
 	}
 }
 
+// Counting recurrence gives every distinct failure shape an entry, so the cap is
+// now reachable. Eviction must not trade an investigated conclusion for a
+// counting-only entry that happens to have been seen more recently.
+func TestPruneEvictsCountingEntriesBeforeVerdicts(t *testing.T) {
+	ledger := &Ledger{Version: Version, Entries: map[string]Entry{}}
+	// The verdict is the oldest entry, so least-recently-seen order alone would
+	// evict it first.
+	ledger.Entries["answered"] = Entry{
+		Signature: "answered", Occurrences: 1,
+		FirstSeen: at(0).Format(time.RFC3339),
+		LastSeen:  at(0).Format(time.RFC3339),
+		Verdict: &Verdict{
+			State:      models.PatternRemediationEnvironmentOrInfrastructure,
+			RecordedAt: at(0).Format(time.RFC3339),
+		},
+	}
+	for i := range MaxEntries + 10 {
+		signature := "counting-" + strconv.Itoa(i)
+		ledger.Entries[signature] = Entry{
+			Signature: signature, Occurrences: 1,
+			FirstSeen: at(0).Format(time.RFC3339),
+			LastSeen:  at(0).Add(time.Duration(i+1) * time.Minute).Format(time.RFC3339),
+		}
+	}
+
+	if !ledger.Prune(at(0)) {
+		t.Fatal("eviction reported no change above the cap")
+	}
+	if len(ledger.Entries) != MaxEntries {
+		t.Fatalf("entries=%d, want %d", len(ledger.Entries), MaxEntries)
+	}
+	if _, ok := ledger.Entries["answered"]; !ok {
+		t.Fatal("an investigated verdict was evicted to keep counting-only entries")
+	}
+}
+
 func TestPruneDropsEntriesWhoseAgeCannotBeEstablished(t *testing.T) {
 	ledger := &Ledger{Version: Version, Entries: map[string]Entry{
 		"sig-a": {
@@ -459,5 +495,25 @@ func writeLedgerFile(t *testing.T, dir, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Recurrence gives every distinct failure shape an entry, so a pass can add more
+// than pruning removed. Enforcing the cap only in Prune would let the file settle
+// permanently above it.
+func TestObserveEnforcesTheEntryCap(t *testing.T) {
+	ledger := &Ledger{Version: Version, Entries: map[string]Entry{}}
+	sightings := make([]Sighting, 0, MaxEntries+50)
+	for i := range MaxEntries + 50 {
+		sightings = append(sightings, Sighting{
+			Signature: "sig-" + strconv.Itoa(i), JobID: "job-1",
+			Builds: []string{strconv.Itoa(1000 + i)},
+		})
+	}
+	if !ledger.Observe(sightings, at(0)) {
+		t.Fatal("observing new causes reported no change")
+	}
+	if len(ledger.Entries) != MaxEntries {
+		t.Fatalf("entries=%d, want the cap enforced at %d", len(ledger.Entries), MaxEntries)
 	}
 }

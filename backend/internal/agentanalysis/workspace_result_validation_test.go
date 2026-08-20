@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/models"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -86,14 +87,15 @@ func TestParseWorkspaceAnalysisOrdersCitationsWithoutWarning(t *testing.T) {
 	}
 }
 
-func TestParseWorkspaceAnalysisRejectsRelevantFileWithoutSourceEvidence(t *testing.T) {
+func TestParseWorkspaceAnalysisWarnsOnRelevantFileWithoutSourceEvidence(t *testing.T) {
 	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
 	raw := workspaceValidationJSON(t, handles, func(value map[string]any) {
 		value["source_evidence_ids"] = []any{}
 		value["relevant_file_ids"] = []any{workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)}
 	})
-	_, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
-	if err == nil || validation.Status != WorkspaceResultRejected || !slices.Equal(validation.Codes, []string{WorkspaceInvalidSourcePath}) {
+	analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+	wantCodes := []string{WorkspaceInvalidRelevantFile, WorkspaceInvalidSourcePath}
+	if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, wantCodes) || len(analysis.RelevantFiles) != 0 {
 		t.Fatalf("err=%v validation=%+v", err, validation)
 	}
 }
@@ -140,7 +142,6 @@ func TestParseWorkspaceAnalysisInspectsUnknownIDsBeyondRetainedBounds(t *testing
 
 func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
-	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
 	tests := []struct {
 		name string
 		code string
@@ -152,15 +153,6 @@ func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 		}},
 		{name: "analysis text", code: WorkspaceInvalidAnalysisText, raw: func() string {
 			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["summary"] = "" })
-		}},
-		{name: "artifact count", code: WorkspaceInvalidArtifactCount, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{} })
-		}},
-		{name: "unknown artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{"artifact-999"} })
-		}},
-		{name: "wrong-root artifact only", code: WorkspaceInvalidArtifactPath, raw: func() string {
-			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = []any{sourceID} })
 		}},
 		{name: "classification", code: WorkspaceInvalidClassification, raw: func() string {
 			return workspaceValidationJSON(t, handles, func(value map[string]any) { value["severity"] = "Unknown" })
@@ -176,6 +168,52 @@ func TestParseWorkspaceAnalysisRejectsHardFailuresWithCodes(t *testing.T) {
 				t.Fatalf("validator error retained model evidence ID: %q", err)
 			}
 		})
+	}
+}
+
+func TestParseWorkspaceAnalysisWarnsOnMissingArtifactGrounding(t *testing.T) {
+	sourceRoot, artifactRoot, manifest, handles := workspaceValidationFixture(t)
+	sourceID := workspaceHandleID(t, handles, WorkspaceSourceDir, "pkg/controller.go", 3)
+	for _, test := range []struct {
+		name  string
+		value []any
+		codes []string
+	}{
+		{name: "empty", value: []any{}, codes: []string{WorkspaceInvalidArtifactCount}},
+		{name: "unknown", value: []any{"artifact-999"}, codes: []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}},
+		{name: "wrong root", value: []any{sourceID}, codes: []string{WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := workspaceValidationJSON(t, handles, func(value map[string]any) { value["artifact_evidence_ids"] = test.value })
+			analysis, validation, err := ParseWorkspaceAnalysis(raw, handles, manifest, artifactRoot, sourceRoot)
+			if err != nil || validation.Status != WorkspaceResultAcceptedWithWarnings || !slices.Equal(validation.Codes, test.codes) || len(analysis.EvidenceCitations) != 0 {
+				t.Fatalf("analysis=%+v validation=%+v err=%v", analysis, validation, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceAnalysisDispositionSeparatesWarningsFromRejection(t *testing.T) {
+	analysis := WorkspaceAnalysis{
+		Summary: "summary", RootCause: "cause", Severity: "High",
+		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}},
+	}
+	disposition, warnings := WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
+	if disposition != models.AnalysisDispositionGrounded || len(warnings) != 0 {
+		t.Fatalf("grounded disposition=%q warnings=%v", disposition, warnings)
+	}
+	analysis.UnresolvedDetails = []string{"remediation pin was not verified"}
+	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
+	if disposition != models.AnalysisDispositionGrounded || !slices.Equal(warnings, []string{models.AnalysisWarningInvestigation}) {
+		t.Fatalf("advisory disposition=%q warnings=%v", disposition, warnings)
+	}
+	analysis.UnresolvedDetails = nil
+	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAcceptedWithWarnings, Codes: []string{WorkspaceInvalidRelevantFile}}, true)
+	if disposition != models.AnalysisDispositionPreliminary || !slices.Equal(warnings, []string{models.AnalysisWarningSourceGrounding}) {
+		t.Fatalf("preliminary disposition=%q warnings=%v", disposition, warnings)
+	}
+	if disposition, _ := WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultRejected, Codes: []string{WorkspaceInvalidResultJSON}}, false); disposition != "" {
+		t.Fatalf("rejected disposition=%q", disposition)
 	}
 }
 
@@ -203,7 +241,7 @@ func workspaceValidationFixture(t *testing.T) (string, string, WorkspaceManifest
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sourceRoot, artifactRoot, manifest, workspaceDefaultHandles(t, sourceRoot, artifactRoot)
+	return workspaceTestSourcesRoot(t, sourceRoot), artifactRoot, manifest, workspaceDefaultHandles(t, sourceRoot, artifactRoot)
 }
 
 func workspaceValidationJSON(t *testing.T, handles []WorkspaceEvidenceHandle, mutate func(map[string]any)) string {
@@ -232,7 +270,7 @@ func TestValidateWorkspaceExecutionResultRequiresSourceEvidenceFloor(t *testing.
 	result.OpenCodeTelemetry.EvidenceHandles = WorkspaceEvidenceHandleDiagnostics{
 		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
 	}
-	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourcesRoot); err != nil {
 		t.Fatalf("valid source floor was rejected: %v", err)
 	}
 	for _, mutate := range []func(*WorkspaceExecutionResult){
@@ -246,7 +284,7 @@ func TestValidateWorkspaceExecutionResultRequiresSourceEvidenceFloor(t *testing.
 	} {
 		changed := result
 		mutate(&changed)
-		if _, err := ValidateWorkspaceExecutionResult(changed, request, base.ArtifactRoot, base.SourceRoot); err == nil {
+		if _, err := ValidateWorkspaceExecutionResult(changed, request, base.ArtifactRoot, base.SourcesRoot); err == nil {
 			t.Fatalf("missing source floor was accepted: %+v", changed.OpenCodeTelemetry)
 		}
 	}
@@ -277,7 +315,7 @@ func TestValidateWorkspaceExecutionResultAcceptsRejectedCorrectiveSourceHandle(t
 		Status: WorkspaceEvidenceHandlesAccepted, ObservedRangeCount: 2, AcceptedArtifactHandleCount: 1, AcceptedSourceHandleCount: 1,
 	}
 	result.OpenCodeTelemetry.FailureCode = "source_evidence_missing"
-	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourceRoot); err != nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, request, base.ArtifactRoot, base.SourcesRoot); err != nil {
 		t.Fatalf("failed corrective result was rejected: %v", err)
 	}
 }
@@ -288,12 +326,12 @@ func TestValidateWorkspaceExecutionResultAllowsPostModelGrace(t *testing.T) {
 	result.TerminalState = engineruntime.TerminalFailed
 	result.FailureReason = "source verification completed"
 	result.Analysis = nil
-	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGrace.Milliseconds()
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err != nil {
+	result.DurationMs = spec.Request.TimeoutSeconds*1000 + WorkspacePostModelGraceForSources(len(spec.Request.Manifest.Sources)).Milliseconds()
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err != nil {
 		t.Fatalf("duration at post-model grace was rejected: %v", err)
 	}
 	result.DurationMs++
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err == nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err == nil {
 		t.Fatal("duration beyond post-model grace was accepted")
 	}
 }
@@ -304,7 +342,7 @@ func TestValidateWorkspaceExecutionResultPreservesPostModelValidation(t *testing
 	result.TerminalState = engineruntime.TerminalFailed
 	result.FailureReason = "source evidence unavailable"
 	result.Analysis = nil
-	validated, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	validated, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,12 +352,12 @@ func TestValidateWorkspaceExecutionResultPreservesPostModelValidation(t *testing
 
 	result.ResultValidation = WorkspaceResultValidation{Status: WorkspaceResultRejected, Codes: []string{WorkspaceInvalidArtifactPath}}
 	result.FailureReason = WorkspaceResultRejectedReason
-	validated, err = ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot)
+	validated, err = ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot)
 	if err != nil || validated.ResultValidation.Status != WorkspaceResultRejected {
 		t.Fatalf("validated=%+v err=%v", validated, err)
 	}
 	result.FailureReason = "private/model/path.log"
-	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourceRoot); err == nil {
+	if _, err := ValidateWorkspaceExecutionResult(result, spec.Request, spec.ArtifactRoot, spec.SourcesRoot); err == nil {
 		t.Fatal("rejected result with non-generic failure reason was accepted")
 	}
 }
