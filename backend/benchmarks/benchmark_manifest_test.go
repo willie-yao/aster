@@ -1326,6 +1326,31 @@ func TestBenchmarkSourceExpectationSHA256(t *testing.T) {
 	}
 }
 
+func TestKubectlSkewEvaluationManifest(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/kubectl-skew-eval.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 1 {
+		t.Fatalf("cases=%d", len(cases))
+	}
+	bc := cases[0]
+	if bc.name != "kubectl-skew-stable2-latest-kubeproxy-version" || len(bc.sourceRefs) != 2 || len(bc.sourceRanges) != 3 || bc.primarySourceID != "latest-client" || bc.evidenceMode != benchmarkEvidenceModeArtifactAndSource {
+		t.Fatalf("case=%+v", bc)
+	}
+	if bc.sourceRefs[0].Repository != "kubernetes/kubernetes" || bc.sourceRefs[1].Repository != "kubernetes/kubernetes" || bc.sourceRefs[0].Revision == bc.sourceRefs[1].Revision {
+		t.Fatalf("source refs=%+v", bc.sourceRefs)
+	}
+	reference := &models.TestCase{AISummary: &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: false}, AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis}}
+	if assessment := assessBenchmarkCase(bc, reference); len(assessment.missingMust) > 0 {
+		t.Fatalf("reference rejected: %v", assessment.missingMust)
+	}
+	opposite := &models.TestCase{AISummary: &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: false}, AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis}}
+	if assessment := assessBenchmarkCase(bc, opposite); assessment.forbiddenPassed == assessment.forbiddenTotal {
+		t.Fatalf("opposite diagnosis passed: %+v", assessment)
+	}
+}
+
 func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
 	cases, err := loadBenchmarkManifest("testdata/benchmarks/capz-agent-sandbox-eval.json")
 	if err != nil {

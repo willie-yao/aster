@@ -42,6 +42,7 @@ var benchmarkImmutableImageRE = regexp.MustCompile(`^[^[:space:]@]+@sha256:[0-9a
 type agentSandboxAnalyzerBenchmarkConfig struct {
 	KubeContext        string
 	SourceRoot         string
+	FixtureArchive     string
 	ProjectDir         string
 	ResultsPath        string
 	PreparedPath       string
@@ -97,41 +98,45 @@ type agentSandboxAnalyzerImageContract struct {
 }
 
 type agentSandboxAnalyzerPrepared struct {
-	Version                 int                      `json:"version"`
-	CaseID                  string                   `json:"case_id"`
-	StableID                string                   `json:"stable_id"`
-	EvidenceMode            string                   `json:"evidence_mode"`
-	SourceExpectationSHA256 string                   `json:"source_expectation_sha256"`
-	EngineCommit            string                   `json:"engine_commit"`
-	BenchmarkManifestSHA256 string                   `json:"benchmark_manifest_sha256"`
-	FixtureSHA256           string                   `json:"fixture_sha256"`
-	BaselineConsumerCommit  string                   `json:"baseline_consumer_commit"`
-	BaselinePromptSHA256    string                   `json:"baseline_prompt_sha256"`
-	ProjectSHA256           string                   `json:"project_sha256"`
-	EffectivePromptSHA256   string                   `json:"effective_prompt_sha256"`
-	SkillSetHash            string                   `json:"skill_set_hash"`
-	EffectiveInputSHA256    string                   `json:"effective_input_sha256"`
-	ComparisonInputSHA256   string                   `json:"comparison_input_sha256"`
-	ProviderConfigSHA256    string                   `json:"provider_config_sha256"`
-	ImageContractSHA256     string                   `json:"image_contract_sha256,omitempty"`
-	Pricing                 benchmarkPricingIdentity `json:"pricing"`
-	SourceRevision          string                   `json:"source_revision"`
-	LocalSourceModePolicy   string                   `json:"local_source_mode_policy"`
-	SourceModePolicy        string                   `json:"source_mode_policy"`
-	SourceRoot              string                   `json:"source_root"`
-	ArtifactRoot            string                   `json:"artifact_root"`
-	ManifestHash            string                   `json:"manifest_hash"`
-	RequestHash             string                   `json:"request_hash"`
-	StageHash               string                   `json:"stage_hash"`
-	ArtifactFiles           int                      `json:"artifact_files"`
-	ArtifactBytes           int64                    `json:"artifact_bytes"`
-	ArtifactPaths           []string                 `json:"artifact_paths"`
-	WorkspacePromptHash     string                   `json:"workspace_prompt_hash"`
-	ModelContextTokens      int                      `json:"model_context_tokens"`
-	ModelOutputTokens       int                      `json:"model_output_tokens"`
-	MaxSteps                int                      `json:"max_steps"`
-	ModelLabel              string                   `json:"model_label"`
-	ArmLabel                string                   `json:"arm_label"`
+	Version                 int                                 `json:"version"`
+	CaseID                  string                              `json:"case_id"`
+	StableID                string                              `json:"stable_id"`
+	EvidenceMode            string                              `json:"evidence_mode"`
+	SourceExpectationSHA256 string                              `json:"source_expectation_sha256"`
+	EngineCommit            string                              `json:"engine_commit"`
+	BenchmarkManifestSHA256 string                              `json:"benchmark_manifest_sha256"`
+	FixtureSHA256           string                              `json:"fixture_sha256"`
+	BaselineConsumerCommit  string                              `json:"baseline_consumer_commit"`
+	BaselinePromptSHA256    string                              `json:"baseline_prompt_sha256"`
+	ProjectSHA256           string                              `json:"project_sha256"`
+	EffectivePromptSHA256   string                              `json:"effective_prompt_sha256"`
+	SkillSetHash            string                              `json:"skill_set_hash"`
+	EffectiveInputSHA256    string                              `json:"effective_input_sha256"`
+	ComparisonInputSHA256   string                              `json:"comparison_input_sha256"`
+	ProviderConfigSHA256    string                              `json:"provider_config_sha256"`
+	ImageContractSHA256     string                              `json:"image_contract_sha256,omitempty"`
+	Pricing                 benchmarkPricingIdentity            `json:"pricing"`
+	SourceRevision          string                              `json:"source_revision"`
+	LocalSourceModePolicy   string                              `json:"local_source_mode_policy"`
+	SourceModePolicy        string                              `json:"source_mode_policy"`
+	SourceRoot              string                              `json:"source_root"`
+	SourceRefs              []benchmarkSourceRef                `json:"source_refs"`
+	SourcesRoot             string                              `json:"sources_root"`
+	LocalSourceModePolicies []agentanalysis.WorkspaceSourceMode `json:"local_source_mode_policies"`
+	SourceModePolicies      []agentanalysis.WorkspaceSourceMode `json:"source_mode_policies"`
+	ArtifactRoot            string                              `json:"artifact_root"`
+	ManifestHash            string                              `json:"manifest_hash"`
+	RequestHash             string                              `json:"request_hash"`
+	StageHash               string                              `json:"stage_hash"`
+	ArtifactFiles           int                                 `json:"artifact_files"`
+	ArtifactBytes           int64                               `json:"artifact_bytes"`
+	ArtifactPaths           []string                            `json:"artifact_paths"`
+	WorkspacePromptHash     string                              `json:"workspace_prompt_hash"`
+	ModelContextTokens      int                                 `json:"model_context_tokens"`
+	ModelOutputTokens       int                                 `json:"model_output_tokens"`
+	MaxSteps                int                                 `json:"max_steps"`
+	ModelLabel              string                              `json:"model_label"`
+	ArmLabel                string                              `json:"arm_label"`
 }
 
 type agentSandboxAnalyzerCitation struct {
@@ -431,7 +436,7 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		t.Fatal("BENCH_TRANSPORT_ID must be stable and contain no whitespace")
 	}
 	cfg := agentSandboxAnalyzerBenchmarkConfig{
-		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), ProjectDir: require("BENCH_PROJECT_DIR"),
+		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), FixtureArchive: strings.TrimSpace(os.Getenv("ANALYZER_BENCH_FIXTURE_ARCHIVE")), ProjectDir: require("BENCH_PROJECT_DIR"),
 		PreparedPath: require("ANALYZER_BENCH_PREPARED_JSON"),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Provider: provider, Timeout: timeout, OutputLimit: outputLimit,
@@ -599,26 +604,48 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 	if !ok {
 		t.Fatal("benchmark case does not resolve a primary source")
 	}
-	sourceOwner, sourceName, ok := strings.Cut(source.Repository, "/")
-	if !ok {
-		t.Fatal("benchmark primary source repository is invalid")
+	workspaceSources := make([]agentanalysis.WorkspaceSourceRef, 0, len(bc.sourceRefs))
+	preparedSources := make([]agentanalysis.WorkspacePreparedSource, 0, len(bc.sourceRefs))
+	localPolicies := make([]agentanalysis.WorkspaceSourceMode, 0, len(bc.sourceRefs))
+	sourceRoots := map[string]string{}
+	for _, ref := range bc.sourceRefs {
+		owner, name, ok := strings.Cut(ref.Repository, "/")
+		if !ok {
+			t.Fatal("benchmark source repository is invalid")
+		}
+		repository := sourceinvestigation.Repository{Owner: owner, Name: name, Revision: ref.Revision}
+		root := filepath.Clean(cfg.SourceRoot)
+		if len(bc.sourceRefs) > 1 {
+			root = filepath.Join(root, ref.ID)
+		}
+		policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, ref.Revision, nil)
+		if err != nil {
+			t.Fatalf("verify benchmark source %s=%s: %v", ref.ID, root, err)
+		}
+		workspaceSources = append(workspaceSources, agentanalysis.WorkspaceSourceRef{ID: ref.ID, Repository: repository})
+		preparedSources = append(preparedSources, agentanalysis.WorkspacePreparedSource{ID: ref.ID, Root: root, ModePolicy: policy})
+		localPolicies = append(localPolicies, agentanalysis.WorkspaceSourceMode{SourceID: ref.ID, Policy: policy})
+		sourceRoots[ref.ID] = root
+	}
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(sourceRoots, bc); err != nil {
+		t.Fatalf("verify benchmark source expectations: %v", err)
 	}
 	build := models.BuildInfo{
 		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
 		Commit: bc.commit, RepoVersion: bc.repoVersion, RepoRefs: maps.Clone(bc.repoRefs),
 	}
-	localSourceModePolicy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), cfg.SourceRoot, source.Revision, sealed)
-	if err != nil {
-		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT=%s: %v", cfg.SourceRoot, err)
-	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(cfg.SourceRoot, bc); err != nil {
-		t.Fatalf("verify ANALYZER_BENCH_SOURCE_ROOT source expectations: %v", err)
-	}
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: bc.jobType, Repo: bc.repo},
 		JobName:     bc.jobName, BuildID: bc.buildID, PullNumber: bc.pullNumber,
 	}
-	fixtureRoot := ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
+	fixtureRoot := ""
+	if cfg.FixtureArchive != "" {
+		fixtureRoot = ensureLocalFixture(t, cfg.FixtureArchive, bc.fixtureSHA256)
+	} else if bc.fixtureAsset != "" {
+		fixtureRoot = ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
+	} else {
+		t.Fatal("ANALYZER_BENCH_FIXTURE_ARCHIVE is required when the case has no published fixture asset")
+	}
 	artifactRoot := filepath.Join(fixtureRoot, filepath.FromSlash(loc.BuildPath()))
 	files, err := agentanalysis.SnapshotArtifactWorkspace(artifactRoot)
 	if err != nil {
@@ -628,26 +655,28 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		JobID: models.JobIDFor(bc.jobType, bc.repo, bc.jobName), BuildPrefix: loc.BuildPath(), Build: build,
 		TestCase: *benchTestCase(bc), ConsecutiveFailures: bc.consecutiveFailures,
 	}
-	manifest, err := agentanalysis.NewWorkspaceManifestWithSkills(request, sourceinvestigation.Repository{
-		Owner: sourceOwner, Name: sourceName, Revision: source.Revision,
-	}, consumerPrompt, projectSkills, files)
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSourcesAndSkills(request, workspaceSources, consumerPrompt, projectSkills, files)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputSourceModePolicy := localSourceModePolicy
+	inputPolicies := append([]agentanalysis.WorkspaceSourceMode(nil), localPolicies...)
 	if cfg.PrepareOnly {
-		inputSourceModePolicy, err = analysisstager.PublishPreparedSnapshot(t.Context(), cfg.InputRoot, manifest, cfg.SourceRoot, artifactRoot, localSourceModePolicy)
+		inputPolicies, err = analysisstager.PublishPreparedSourcesSnapshot(t.Context(), cfg.InputRoot, manifest, preparedSources, artifactRoot)
 		if err != nil {
 			t.Fatal(err)
 		}
 	} else if sealed != nil {
-		inputSourceModePolicy = agentanalysis.WorkspaceSourceModePolicy(sealed.SourceModePolicy)
+		inputPolicies = append([]agentanalysis.WorkspaceSourceMode(nil), sealed.SourceModePolicies...)
 	}
-	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourceEvidence(manifest, agentanalysis.WorkspaceSourceModePreserve, bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
+	outputPolicies := make([]agentanalysis.WorkspaceSourceMode, 0, len(manifest.Sources))
+	for _, ref := range manifest.Sources {
+		outputPolicies = append(outputPolicies, agentanalysis.WorkspaceSourceMode{SourceID: ref.ID, Policy: agentanalysis.WorkspaceSourceModePreserve})
+	}
+	execution, err := agentanalysis.NewWorkspaceExecutionRequestWithSourcePolicies(manifest, outputPolicies, bc.evidenceMode == benchmarkEvidenceModeArtifactAndSource, cfg.Provider, cfg.Timeout, cfg.MaxSteps, cfg.ModelContextTokens, cfg.ModelOutputTokens, cfg.OutputLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, err := agentanalysis.NewWorkspaceStageRequestWithSourceModePolicies(manifest, inputSourceModePolicy, agentanalysis.WorkspaceSourceModePreserve)
+	stage, err := agentanalysis.NewWorkspaceStageRequestWithPolicies(manifest, inputPolicies, outputPolicies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +697,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		ProviderConfigSHA256: benchmarkProviderConfigSHA256(cfg.Provider.API, cfg.Provider.Endpoint, cfg.Provider.Model, ai.ReasoningEffort(cfg.Provider.ReasoningEffort)), TransportID: cfg.TransportID,
 		ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens,
 	}
-	identity.Pricing, err = newBenchmarkPricingIdentity(projectConfig.AI.EffectiveUsage().Pricing)
+	identity.Pricing, err = benchmarkPricingIdentityFromEnv(projectConfig.AI.EffectiveUsage().Pricing, os.Getenv)
 	if err != nil || identity.Pricing.SHA256 == "" {
 		t.Fatalf("benchmark pricing identity: %v", err)
 	}
@@ -689,7 +718,8 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		BaselinePromptSHA256: bc.promptSHA256, ProjectSHA256: identity.ProjectSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256, ComparisonInputSHA256: identity.ComparisonInputSHA256,
 		ProviderConfigSHA256: identity.ProviderConfigSHA256, ImageContractSHA256: cfg.ImageContract.ContractSHA256, Pricing: identity.Pricing,
-		SourceRevision: source.Revision, LocalSourceModePolicy: string(localSourceModePolicy), SourceModePolicy: string(inputSourceModePolicy), SourceRoot: filepath.Clean(cfg.SourceRoot), ArtifactRoot: artifactRoot,
+		SourceRevision: source.Revision, SourceRefs: append([]benchmarkSourceRef(nil), bc.sourceRefs...), SourcesRoot: filepath.Clean(cfg.SourceRoot), SourceRoot: sourceRoots[bc.primarySourceID],
+		LocalSourceModePolicies: append([]agentanalysis.WorkspaceSourceMode(nil), localPolicies...), SourceModePolicies: append([]agentanalysis.WorkspaceSourceMode(nil), inputPolicies...), ArtifactRoot: artifactRoot,
 		ManifestHash: manifest.Hash, RequestHash: execution.Hash, StageHash: stage.Hash,
 		ArtifactFiles: len(files), ArtifactBytes: artifactBytes, ArtifactPaths: artifactPaths,
 		WorkspacePromptHash: agentanalysis.WorkspaceSkillHash(), ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens, MaxSteps: cfg.MaxSteps, ModelLabel: cfg.ModelLabel, ArmLabel: cfg.ArmLabel,
@@ -713,7 +743,7 @@ func runAgentSandboxAnalyzerBenchmarkTrial(
 	started := time.Now()
 	result, runErr := runtime.Analyze(t.Context(), agentanalysis.WorkspaceSandboxSpec{
 		Request: prepared.request, StageRequest: prepared.stage,
-		SourceRoot: prepared.prepared.SourceRoot, ArtifactRoot: prepared.prepared.ArtifactRoot,
+		SourcesRoot: prepared.prepared.SourcesRoot, SourceRoot: prepared.prepared.SourceRoot, ArtifactRoot: prepared.prepared.ArtifactRoot,
 		ExecutionID: executionID,
 	})
 	if result.CleanupWork != nil {
@@ -1054,13 +1084,17 @@ func workspaceAnalysisTestCase(analysis agentanalysis.WorkspaceAnalysis, disposi
 	}
 }
 
-func verifyAgentSandboxAnalyzerSourceExpectations(root string, bc benchCase) error {
-	repository, revision, err := benchmarkSourceIdentity(bc, bc.primarySourceID)
-	if err != nil {
-		return err
-	}
+func verifyAgentSandboxAnalyzerSourceExpectations(roots map[string]string, bc benchCase) error {
 	for _, expected := range bc.sourceRanges {
-		if expected.Repository != repository || expected.Revision != revision {
+		sourceID := ""
+		for _, ref := range bc.sourceRefs {
+			if ref.Repository == expected.Repository && ref.Revision == expected.Revision {
+				sourceID = ref.ID
+				break
+			}
+		}
+		root := roots[sourceID]
+		if sourceID == "" || root == "" {
 			return fmt.Errorf("expected source range identity is not staged")
 		}
 		data, err := os.ReadFile(filepath.Join(filepath.Clean(root), filepath.FromSlash(expected.Path)))
@@ -1423,15 +1457,15 @@ func TestVerifyAgentSandboxAnalyzerSourceExpectations(t *testing.T) {
 		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "owner/repo", Revision: revision}}, primarySourceID: "primary",
 		sourceRanges: []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 1, LineEnd: 2}},
 	}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err != nil {
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(map[string]string{"primary": root}, base); err != nil {
 		t.Fatal(err)
 	}
 	base.sourceRanges[0].LineEnd = 3
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err == nil {
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(map[string]string{"primary": root}, base); err == nil {
 		t.Fatal("out-of-range source expectation was accepted")
 	}
 	base.sourceRanges[0] = benchmarkSourceRange{Repository: "owner/repo", Revision: revision, Path: "missing.go", LineStart: 1, LineEnd: 1}
-	if err := verifyAgentSandboxAnalyzerSourceExpectations(root, base); err == nil {
+	if err := verifyAgentSandboxAnalyzerSourceExpectations(map[string]string{"primary": root}, base); err == nil {
 		t.Fatal("missing source expectation was accepted")
 	}
 }

@@ -139,7 +139,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, mod
 		}
 		out.systemPrompt = ai.ComposeSystemPrompt(prompt)
 		out.agentic = cfg.AI.EffectiveAgentic()
-		out.identity.Pricing, err = newBenchmarkPricingIdentity(cfg.AI.EffectiveUsage().Pricing)
+		out.identity.Pricing, err = benchmarkPricingIdentityFromEnv(cfg.AI.EffectiveUsage().Pricing, os.Getenv)
 		if err != nil {
 			t.Fatalf("load benchmark pricing identity: %v", err)
 		}
@@ -340,6 +340,17 @@ func benchmarkProviderConfigSHA256(apiMode, endpoint, model string, reasoningEff
 		panic(fmt.Sprintf("marshal benchmark provider identity: %v", err))
 	}
 	return sha256Hex(data)
+}
+
+func benchmarkPricingIdentityFromEnv(pricing project.AIUsagePricing, getenv func(string) string) (benchmarkPricingIdentity, error) {
+	identity, err := newBenchmarkPricingIdentity(pricing)
+	if err != nil || identity.SHA256 != "" {
+		return identity, err
+	}
+	return newBenchmarkPricingIdentity(project.AIUsagePricing{
+		Currency: getenv("BENCH_PRICING_CURRENCY"), InputPerMillion: getenv("BENCH_PRICING_INPUT_PER_MILLION"),
+		CachedInputPerMillion: getenv("BENCH_PRICING_CACHED_INPUT_PER_MILLION"), OutputPerMillion: getenv("BENCH_PRICING_OUTPUT_PER_MILLION"),
+	})
 }
 
 func newBenchmarkPricingIdentity(pricing project.AIUsagePricing) (benchmarkPricingIdentity, error) {

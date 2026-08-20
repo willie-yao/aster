@@ -1819,6 +1819,40 @@ func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 	return backend, bc.bucket
 }
 
+// ensureLocalFixture verifies and extracts one locally retained fixture archive.
+func ensureLocalFixture(t *testing.T, path, wantSHA256 string) string {
+	t.Helper()
+	archive, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		t.Fatalf("read local fixture: %v", err)
+	}
+	if err := verifyFixtureDigest(archive, wantSHA256); err != nil {
+		t.Fatal(err)
+	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		cacheRoot = os.TempDir()
+	}
+	dir := filepath.Join(cacheRoot, "aster-benchmark", filepath.Base(path)+"-"+wantSHA256[:12])
+	marker := filepath.Join(dir, ".sha256")
+	if digest, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(digest)) == wantSHA256 {
+		return dir
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractTarGz(bytes.NewReader(archive), dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(wantSHA256+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // ensureFixture downloads and extracts a benchmark-fixtures release asset into a
 // digest-scoped cache dir, returning the extract root. Cached fixtures are
 // reused only when their verified digest marker matches.
