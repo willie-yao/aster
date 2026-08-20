@@ -270,7 +270,7 @@ function AssistantMessage({
       sx={{
         border: unverified ? "2px dashed" : "1px solid",
         borderColor: (theme) => soft(theme, accent, unverified ? 0.55 : 0.24),
-        borderRadius: "12px",
+        borderRadius: "4px",
         bgcolor: (theme) => soft(theme, accent, unverified ? 0.09 : 0.045),
         overflow: "hidden",
       }}
@@ -375,7 +375,7 @@ function AssistantMessage({
         {message.proposed_revision && (
           <Box
             sx={{
-              borderRadius: "10px",
+              borderRadius: "4px",
               border: "1px solid",
               borderColor: (theme) => soft(theme, "warning", 0.35),
               bgcolor: (theme) => soft(theme, "warning", 0.07),
@@ -469,7 +469,7 @@ function ThinkingState({
   const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
   return (
     <Stack role="status" aria-live="polite" direction="row" spacing={1.25} sx={{
-      alignItems: "center", borderRadius: "10px", px: 1.5, py: 1.25,
+      alignItems: "center", borderRadius: "4px", px: 1.5, py: 1.25,
       bgcolor: (theme) => soft(theme, "primary", 0.055),
     }}>
       <Stack direction="row" spacing={0.4} aria-hidden="true">
@@ -1181,48 +1181,62 @@ export function AnalysisChat({
             borderColor: "divider",
           }}
         >
-          <ButtonBase
-            disableRipple
-            onClick={toggleChat}
-            disabled={authStatus === "loading" || authStatus === "unavailable"}
-            aria-expanded={expanded}
-            aria-controls="analysis-chat-content"
+          {/* The heading wraps the toggle rather than sitting inside it: a
+              heading is not valid phrasing content within a button, and
+              assistive technology exposes that nesting inconsistently. */}
+          <Box
+            component={detailAppearance ? "h3" : "div"}
             sx={{
+              m: 0,
               minWidth: 0,
               flex: 1,
-              justifyContent: "flex-start",
-              gap: 1,
-              borderRadius: detailAppearance ? "4px" : "10px",
-              minHeight: 44,
-              px: 0.5,
-              py: 0.75,
-              textAlign: "left",
-              "&.Mui-disabled": { opacity: 0.5 },
+              display: "flex",
+              ...(detailAppearance ? overviewTypography.categoryHeading : {}),
             }}
           >
-            <Box
+            <ButtonBase
+              disableRipple
+              onClick={toggleChat}
+              disabled={authStatus === "loading" || authStatus === "unavailable"}
+              aria-expanded={expanded}
+              aria-controls="analysis-chat-content"
               sx={{
-                width: detailAppearance ? 20 : 30,
-                height: detailAppearance ? 20 : 30,
-                display: "grid",
-                placeItems: "center",
-                borderRadius: detailAppearance ? "4px" : "9px",
-                bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.14),
-                color: "primary.main",
-                flexShrink: 0,
+                minWidth: 0,
+                flex: 1,
+                justifyContent: "flex-start",
+                gap: 1,
+                borderRadius: detailAppearance ? "4px" : "10px",
+                minHeight: 44,
+                px: 0.5,
+                py: 0.75,
+                textAlign: "left",
+                font: "inherit",
+                color: "inherit",
+                "&.Mui-disabled": { opacity: 0.5 },
               }}
             >
-              <PsychologyAltOutlined sx={{ fontSize: detailAppearance ? 18 : 19 }} />
-            </Box>
-            <Typography
-              component={detailAppearance ? "h3" : "span"}
-              sx={detailAppearance
-                ? { ...overviewTypography.categoryHeading, m: 0 }
-                : { fontSize: "0.875rem", fontWeight: 750 }}
-            >
-              Chat with agent
-            </Typography>
-          </ButtonBase>
+              <Box
+                sx={{
+                  width: detailAppearance ? 20 : 30,
+                  height: detailAppearance ? 20 : 30,
+                  display: "grid",
+                  placeItems: "center",
+                  borderRadius: detailAppearance ? "4px" : "9px",
+                  bgcolor: detailAppearance ? "transparent" : (theme) => soft(theme, "primary", 0.14),
+                  color: "primary.main",
+                  flexShrink: 0,
+                }}
+              >
+                <PsychologyAltOutlined sx={{ fontSize: detailAppearance ? 18 : 19 }} />
+              </Box>
+              <Box
+                component="span"
+                sx={detailAppearance ? undefined : { fontSize: "0.875rem", fontWeight: 750 }}
+              >
+                Chat with agent
+              </Box>
+            </ButtonBase>
+          </Box>
           {detailAppearance && turnUsage && (
             <Typography
               component="span"
@@ -1271,16 +1285,14 @@ export function AnalysisChat({
                 : "Start a fresh evidence-backed chat. This does not create a branch or PR."}>
               <span>
                 <Button
-                  fullWidth={!detailAppearance}
                   size="small"
                   variant="outlined"
                   startIcon={<BuildOutlined />}
                   onClick={() => fixIntentMode ? returnToNormalChat() : void startFixInvestigation()}
                   disabled={busy || pendingTurn !== null || (fixSourceUnavailable && !fixIntentMode)}
-                  // Left-aligned and self-sized on a detail page, so it reads as
-                  // a control beside the other actions rather than a banner
-                  // spanning the panel.
-                  sx={detailAppearance ? { textTransform: "none", minHeight: 32 } : undefined}
+                  // Left-aligned and self-sized so it reads as a control beside
+                  // the other actions rather than a banner spanning the panel.
+                  sx={{ textTransform: "none", minHeight: 32 }}
                 >
                   {fixIntentMode ? "Return to normal chat" : "Start fix investigation"}
                 </Button>

@@ -250,6 +250,15 @@ test("the chat wears the page's section band instead of its own chat styling", (
   // the bottom of the panel, and must not appear in both.
   assert.match(header, /detailAppearance && turnUsage/);
   assert.match(chat, /turnUsage && !detailAppearance/);
+
+  // A heading is not valid phrasing content inside a button, so the heading
+  // wraps the toggle rather than sitting within it.
+  assert.match(header, /component=\{detailAppearance \? "h3" : "div"\}[\s\S]*<ButtonBase/);
+
+  // Every container in the conversation squares to the page's single radius.
+  // These are plain Box/Stack elements, so the MUI descendant reset above
+  // cannot reach them and they have to be squared at the source.
+  assert.doesNotMatch(chat, /borderRadius: "1[02]px"/);
 });
 
 test("the severity chip is suppressed exactly where a header already states it", () => {
