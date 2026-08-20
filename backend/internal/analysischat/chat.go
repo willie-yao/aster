@@ -568,6 +568,44 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 	return view, err
 }
 
+// Delete discards an owner-bound session and cancels any turn still in flight.
+// A discarded conversation is unrecoverable, and its per-owner session slot is
+// released immediately.
+func (s *Service) Delete(id, owner string) error {
+	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
+	id = strings.TrimSpace(id)
+	now := s.opts.Now().UTC()
+	activeRequestID := ""
+	ctx, cancel := s.store.context()
+	defer cancel()
+	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[id]
+		if current == nil || current.Owner != owner {
+			return changed, ErrSessionNotFound
+		}
+		if current.Active != nil {
+			activeRequestID = current.Active.RequestID
+		}
+		delete(state.Sessions, id)
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+	// The running turn observes the missing session and stops on its own, but
+	// waking its readers and cancelling the local run context ends it now
+	// instead of at the next lease or poll boundary.
+	if activeRequestID != "" {
+		s.notifyLocal(activeTurnKey(id, activeRequestID))
+		s.cancelLocal(id, activeRequestID)
+	}
+	return nil
+}
+
 // Find returns the latest owner-bound session for the current analysis.
 func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	owner = normalizeOwner(owner)

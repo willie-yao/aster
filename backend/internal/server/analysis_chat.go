@@ -23,6 +23,7 @@ type AnalysisChatRunner interface {
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Find(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
+	Delete(string, string) error
 	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
 	Stream(context.Context, string, string, string, string, func(analysischat.Progress) error) (analysischat.SessionView, error)
 	Cancel(string, string, string) error
@@ -102,6 +103,22 @@ func getAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			return
 		}
 		writeAnalysisChatJSON(w, http.StatusOK, session)
+	})
+}
+
+func deleteAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := run.Delete(r.PathValue("id"), identity.Login); err != nil {
+			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		auth.SetPrivateResponseHeaders(w.Header())
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 

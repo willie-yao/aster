@@ -24,6 +24,7 @@ schema.
 | `POST /api/analysis-chat/sessions` | Start an owner-bound chat for one current published analysis. |
 | `POST /api/analysis-chat/sessions/lookup` | Restore the owner's latest matching non-expired conversation. |
 | `GET /api/analysis-chat/sessions/{id}` | Read the owner's current conversation. |
+| `DELETE /api/analysis-chat/sessions/{id}` | Discard the owner's conversation, cancelling any turn still in flight. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn through SSE progress. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
