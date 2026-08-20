@@ -1349,6 +1349,33 @@ func TestKubectlSkewEvaluationManifest(t *testing.T) {
 	if assessment := assessBenchmarkCase(bc, opposite); assessment.forbiddenPassed == assessment.forbiddenTotal {
 		t.Fatalf("opposite diagnosis passed: %+v", assessment)
 	}
+	data, err := os.ReadFile("testdata/benchmarks/agent-sandbox-causal-references.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var references struct {
+		Cases map[string]struct {
+			ReferenceDiagnosis string `json:"reference_diagnosis"`
+			RequiredChain      []struct {
+				ID string `json:"id"`
+			} `json:"required_chain"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &references); err != nil {
+		t.Fatal(err)
+	}
+	causal, ok := references.Cases[bc.name]
+	if !ok || strings.TrimSpace(causal.ReferenceDiagnosis) == "" {
+		t.Fatal("kubectl skew causal reference is missing")
+	}
+	wantChain := []string{"mixed-version-job", "stable-test-requires-field", "latest-client-omits-field", "version-skew-assertion", "health-not-primary", "persistent-not-flake"}
+	gotChain := make([]string, 0, len(causal.RequiredChain))
+	for _, link := range causal.RequiredChain {
+		gotChain = append(gotChain, link.ID)
+	}
+	if !slices.Equal(gotChain, wantChain) {
+		t.Fatalf("causal chain=%v", gotChain)
+	}
 }
 
 func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {

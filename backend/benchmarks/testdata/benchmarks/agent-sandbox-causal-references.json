@@ -73,6 +73,38 @@
         "Do not assign the failure to the CSI driver after successful publish without evidence that contradicts that success."
       ]
     },
+    "kubectl-skew-stable2-latest-kubeproxy-version": {
+      "reference_diagnosis": "The job pairs a release-1.35 stable e2e test with the latest kubectl client. The stable test still requires kubectl describe node output to contain Kube-Proxy Version, while the latest test and kubectl describe implementation no longer emit or require that field after the deprecated nodeInfo kubeProxyVersion value was retired. The deterministic assertion failure is therefore a client and test version-skew contract mismatch, not evidence of kube-proxy or node-health failure.",
+      "required_chain": [
+        {
+          "id": "mixed-version-job",
+          "text": "Identify that the job runs the stable release-1.35 e2e test against the latest kubectl client."
+        },
+        {
+          "id": "stable-test-requires-field",
+          "text": "Identify that the stable test requires Kube-Proxy Version in kubectl describe node output."
+        },
+        {
+          "id": "latest-client-omits-field",
+          "text": "Identify that the latest test and kubectl describe implementation omit the retired Kube-Proxy Version field."
+        },
+        {
+          "id": "version-skew-assertion",
+          "text": "Connect the removed output field to the stable test assertion failure as a client and test version-skew mismatch."
+        },
+        {
+          "id": "health-not-primary",
+          "text": "Reject kube-proxy or node health as the initiating cause without independent health evidence."
+        },
+        {
+          "id": "persistent-not-flake",
+          "text": "Preserve that the identical repeated failures are deterministic rather than transient."
+        }
+      ],
+      "downstream_noise": [
+        "The missing display field and terminal Ginkgo failure do not establish a kube-proxy daemon or node-readiness failure."
+      ]
+    },
     "ccm-dualstack-control-plane-routetable": {
       "reference_diagnosis": "The dual-stack CAPZ workload is persistently broken because the control-plane subnet has no route table for worker pod CIDRs. Control-plane traffic cannot reach the Calico APIService, and namespace termination and node-resource timeouts are downstream. The corrective ownership is CAPZ AzureCluster subnet routing rather than the cloud-provider-azure test.",
       "required_chain": [
