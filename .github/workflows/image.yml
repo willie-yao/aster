@@ -234,11 +234,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-executor
+          images: ghcr.io/${{ github.repository }}
           labels: |
             org.opencontainers.image.title=Aster Agent Sandbox Analysis Executor
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=agent-sandbox-analysis-executor-sha-
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -276,11 +276,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-stager
+          images: ghcr.io/${{ github.repository }}
           labels: |
             org.opencontainers.image.title=Aster Agent Sandbox Analysis Stager
           tags: |
-            type=sha,prefix=sha-
+            type=sha,prefix=agent-sandbox-analysis-stager-sha-
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
