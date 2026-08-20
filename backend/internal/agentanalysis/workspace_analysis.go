@@ -915,6 +915,9 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 		if (usage.Status != WorkspaceTelemetryAvailable && usage.Status != WorkspaceTelemetryPartial) || usage.ModelRequests < 1 {
 			return fmt.Errorf("available workspace usage is invalid")
 		}
+		if usage.Status == WorkspaceTelemetryPartial && (usage.CostAvailable || usage.CostUSD != "") {
+			return fmt.Errorf("partial workspace usage cannot report complete cost")
+		}
 		if usage.CostAvailable != (usage.CostUSD != "") {
 			return fmt.Errorf("workspace execution cost availability is invalid")
 		}

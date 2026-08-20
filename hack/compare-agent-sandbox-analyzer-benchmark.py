@@ -478,6 +478,20 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
             record["cached_input_tokens"] <= record["input_tokens"]
             and record["reasoning_tokens"] <= record["output_tokens"]
         )
+        has_partial_usage_contract = "token_usage_partial" in record
+        token_usage_partial = record.get("token_usage_partial", False)
+        if not isinstance(token_usage_partial, bool):
+            raise ReportError(f"sandbox line {record['_line']} field token_usage_partial must be boolean")
+        if has_partial_usage_contract:
+            usage_status = record.get("usage_status")
+            if usage_status == "available":
+                if not record["token_usage_available"] or token_usage_partial:
+                    raise ReportError(f"sandbox line {record['_line']} available usage flags are inconsistent")
+            elif usage_status == "partial":
+                if record["token_usage_available"] or not token_usage_partial or record["cost_available"] or record.get("cost_usd"):
+                    raise ReportError(f"sandbox line {record['_line']} partial usage flags are inconsistent")
+            elif record["token_usage_available"] or token_usage_partial:
+                raise ReportError(f"sandbox line {record['_line']} unavailable usage flags are inconsistent")
         if record["provider_requests_known"] and record["provider_requests"] < record["model_requests"]:
             raise ReportError(f"sandbox line {record['_line']} provider request telemetry is inconsistent")
         if record["analysis_valid"] and not record["finalization_valid"]:

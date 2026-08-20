@@ -193,3 +193,14 @@ func TestValidateWorkspaceOpenCodeTelemetryAllowsBoundedEvidenceExhaustion(t *te
 		})
 	}
 }
+
+func TestValidateWorkspaceUsageRejectsPartialCost(t *testing.T) {
+	usage := WorkspaceUsage{Available: true, Status: WorkspaceTelemetryPartial, ModelRequests: 1, InputTokens: 10, OutputTokens: 2, CostAvailable: true, CostUSD: "0.1"}
+	if err := validateWorkspaceUsage(usage); err == nil {
+		t.Fatal("partial usage with complete cost was accepted")
+	}
+	usage.CostAvailable, usage.CostUSD = false, ""
+	if err := validateWorkspaceUsage(usage); err != nil {
+		t.Fatal(err)
+	}
+}

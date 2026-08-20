@@ -123,6 +123,7 @@ type Provenance struct {
 	CleanupCompleted            bool     `json:"cleanup_completed,omitempty"`
 	CleanupDurationMs           int64    `json:"cleanup_duration_ms,omitempty"`
 	TokenUsageAvailable         bool     `json:"token_usage_available"`
+	TokenUsagePartial           bool     `json:"token_usage_partial"`
 	CostAvailable               bool     `json:"cost_available"`
 	UsageStatus                 string   `json:"usage_status,omitempty"`
 	InputTokens                 int      `json:"input_tokens,omitempty"`
@@ -628,6 +629,22 @@ func validShadowProvenance(value Provenance) bool {
 		return false
 	}
 	if value.CostAvailable != (value.CostUSD != "") || value.CostUSD != "" && !ledgerCostPattern.MatchString(value.CostUSD) {
+		return false
+	}
+	switch value.UsageStatus {
+	case WorkspaceTelemetryAvailable:
+		if !value.TokenUsageAvailable || value.TokenUsagePartial {
+			return false
+		}
+	case WorkspaceTelemetryPartial:
+		if value.TokenUsageAvailable || !value.TokenUsagePartial || value.CostAvailable || value.CostUSD != "" {
+			return false
+		}
+	case WorkspaceTelemetryUnavailable, WorkspaceTelemetryMalformed, WorkspaceTelemetryTruncated, "":
+		if value.TokenUsageAvailable || value.TokenUsagePartial {
+			return false
+		}
+	default:
 		return false
 	}
 	for _, phase := range []struct {

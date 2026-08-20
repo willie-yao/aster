@@ -75,7 +75,7 @@ func ProvenanceFromWorkspaceResult(result WorkspaceSandboxResult, request Worksp
 		ResultAvailable: telemetry.ResultAvailable, ResultAvailableMs: telemetry.ResultAvailableMs,
 		FinalizationChecked: telemetry.FinalizationChecked, FinalizationValid: telemetry.FinalizationValid,
 		CleanupCompleted: telemetry.CleanupCompleted, CleanupDurationMs: telemetry.CleanupDurationMs,
-		TokenUsageAvailable: usage.Available, CostAvailable: usage.CostAvailable, UsageStatus: usage.Status,
+		TokenUsageAvailable: usage.Available && usage.Status == WorkspaceTelemetryAvailable, TokenUsagePartial: usage.Available && usage.Status == WorkspaceTelemetryPartial, CostAvailable: usage.CostAvailable, UsageStatus: usage.Status,
 		InputTokens: usage.InputTokens, CachedInputTokens: usage.CachedInputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, CostUSD: usage.CostUSD,
 		ModelIdentityAvailable: identityAvailable, ProviderIdentityAvailable: true, IdentityStatus: identityStatus,
