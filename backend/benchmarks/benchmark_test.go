@@ -786,6 +786,21 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	service.SetCacheGeneration(cacheGeneration)
 	service.SetSkills(projectSkills)
 	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
+	if len(bc.sourceRefs) > 0 {
+		sources := make([]tools.RepoSource, 0, len(bc.sourceRefs))
+		for _, ref := range bc.sourceRefs {
+			owner, name, ok := strings.Cut(ref.Repository, "/")
+			if !ok {
+				t.Fatalf("invalid source repository %q", ref.Repository)
+			}
+			sources = append(sources, tools.RepoSource{ID: ref.ID, Owner: owner, Name: name, Revision: ref.Revision, Reader: ai.NewGitHubRepoReader(owner, name, ref.Revision, "")})
+		}
+		catalog, err := tools.NewSourceCatalog(bc.primarySourceID, sources)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.SetAnalysisSourceCatalog(catalog)
+	}
 	traceStore := ai.NewTraceStore()
 	service.SetTraceStore(traceStore)
 	var draftObservations []benchmarkDraftObservation
@@ -1802,20 +1817,29 @@ func TestBenchmarkAllowsUnavailable(t *testing.T) {
 // name used for artifact display, not for fetching.
 func benchStorage(t *testing.T, bc benchCase) (storage.Backend, string) {
 	t.Helper()
-	if os.Getenv("BENCH_USE_GCS") != "" || bc.fixtureAsset == "" {
+	if archive := strings.TrimSpace(os.Getenv("BENCH_FIXTURE_ARCHIVE")); archive != "" {
+		root := ensureLocalFixture(t, archive, bc.fixtureSHA256)
+		backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+		if err != nil {
+			t.Fatalf("local backend: %v", err)
+		}
+		return backend, bc.bucket
+	}
+	if os.Getenv("BENCH_USE_GCS") != "" {
 		backend, err := storage.New(storage.Config{Provider: storage.ProviderGCS, Bucket: bc.bucket}, &http.Client{Timeout: 60 * time.Second})
 		if err != nil {
 			t.Fatalf("gcs backend: %v", err)
 		}
-		t.Logf("reading artifacts from live GCS bucket %q", bc.bucket)
 		return backend, bc.bucket
+	}
+	if bc.fixtureAsset == "" {
+		t.Fatal("BENCH_FIXTURE_ARCHIVE is required when the case has no published fixture asset; BENCH_USE_GCS is unscored only")
 	}
 	root := ensureFixture(t, bc.fixtureAsset, bc.fixtureSHA256)
 	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
 	if err != nil {
 		t.Fatalf("local backend: %v", err)
 	}
-	t.Logf("reading artifacts from fixture %s (extracted at %s)", bc.fixtureAsset, root)
 	return backend, bc.bucket
 }
 

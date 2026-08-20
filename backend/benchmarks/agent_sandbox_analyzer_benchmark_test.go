@@ -436,7 +436,7 @@ func loadAgentSandboxAnalyzerBenchmarkConfig(t *testing.T) agentSandboxAnalyzerB
 		t.Fatal("BENCH_TRANSPORT_ID must be stable and contain no whitespace")
 	}
 	cfg := agentSandboxAnalyzerBenchmarkConfig{
-		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), FixtureArchive: strings.TrimSpace(os.Getenv("ANALYZER_BENCH_FIXTURE_ARCHIVE")), ProjectDir: require("BENCH_PROJECT_DIR"),
+		SourceRoot: require("ANALYZER_BENCH_SOURCE_ROOT"), FixtureArchive: strings.TrimSpace(os.Getenv("BENCH_FIXTURE_ARCHIVE")), ProjectDir: require("BENCH_PROJECT_DIR"),
 		PreparedPath: require("ANALYZER_BENCH_PREPARED_JSON"),
 		ArmLabel:     arm, ModelLabel: modelLabel, ProviderPath: require("BENCH_PROVIDER_PATH"), TransportID: transportID,
 		EngineCommit: benchmarkEngineCommit(t, !prepareOnly), Provider: provider, Timeout: timeout, OutputLimit: outputLimit,
@@ -655,7 +655,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		JobID: models.JobIDFor(bc.jobType, bc.repo, bc.jobName), BuildPrefix: loc.BuildPath(), Build: build,
 		TestCase: *benchTestCase(bc), ConsecutiveFailures: bc.consecutiveFailures,
 	}
-	manifest, err := agentanalysis.NewWorkspaceManifestWithSourcesAndSkills(request, workspaceSources, consumerPrompt, projectSkills, files)
+	manifest, err := agentanalysis.NewWorkspaceManifestWithSourceCatalogAndSkills(request, workspaceSources, bc.primarySourceID, consumerPrompt, projectSkills, files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -880,7 +880,7 @@ func agentSandboxAnalyzerRecordForResult(
 	record.ExpectedSourceRanges = append([]benchmarkSourceRange{}, prepared.bc.sourceRanges...)
 	record.SourceReadRanges = []benchmarkSourceRead{}
 	record.SourceCitations = []benchmarkSourceCitation{}
-	sourceReads, sourceReadErr := benchmarkSourceReadsFromSandbox(prepared.bc, prepared.bc.primarySourceID, telemetry.SourceReads)
+	sourceReads, sourceReadErr := benchmarkSourceReadsFromSandbox(prepared.bc, telemetry.SourceReads)
 	if sourceReadErr == nil {
 		record.SourceReadRanges = sourceReads
 		record.SourceReadCount = len(sourceReads)

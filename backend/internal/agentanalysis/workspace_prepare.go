@@ -55,11 +55,24 @@ type WorkspacePreparationOptions struct {
 
 // NewWorkspaceManifestWithSkills seals the current skill-set identity and matched plan.
 func NewWorkspaceManifestWithSkills(request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, consumerPrompt string, skillSet *skills.Set, files []WorkspaceFile) (WorkspaceManifest, error) {
-	return NewWorkspaceManifestWithSourcesAndSkills(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, consumerPrompt, skillSet, files)
+	return NewWorkspaceManifestWithSourceCatalogAndSkills(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, "primary", consumerPrompt, skillSet, files)
 }
 
 // NewWorkspaceManifestWithSourcesAndSkills seals a multi-source skill-set input.
 func NewWorkspaceManifestWithSourcesAndSkills(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, consumerPrompt string, skillSet *skills.Set, files []WorkspaceFile) (WorkspaceManifest, error) {
+	primary := "primary"
+	if _, ok := WorkspaceSource(sources, primary); !ok && len(sources) > 0 {
+		canonical, err := canonicalWorkspaceSources(sources)
+		if err != nil {
+			return WorkspaceManifest{}, err
+		}
+		primary = canonical[0].ID
+	}
+	return NewWorkspaceManifestWithSourceCatalogAndSkills(request, sources, primary, consumerPrompt, skillSet, files)
+}
+
+// NewWorkspaceManifestWithSourceCatalogAndSkills seals an explicit primary source and skill set.
+func NewWorkspaceManifestWithSourceCatalogAndSkills(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, primarySourceID, consumerPrompt string, skillSet *skills.Set, files []WorkspaceFile) (WorkspaceManifest, error) {
 	if skillSet == nil || strings.TrimSpace(skillSet.Hash()) == "" {
 		return WorkspaceManifest{}, fmt.Errorf("%w: workspace skill set is required", ErrInvalidBundle)
 	}
@@ -68,7 +81,7 @@ func NewWorkspaceManifestWithSourcesAndSkills(request ai.FailureAnalysisRequest,
 		paths = append(paths, file.Path)
 	}
 	plan := skillSet.Plan(evidenceplan.FailureSignal(request.TestCase), paths, evidenceplan.CandidatePathLimit)
-	return newWorkspaceManifest(request, sources, consumerPrompt, skillSet.Hash(), plan, files)
+	return newWorkspaceManifest(request, sources, primarySourceID, consumerPrompt, skillSet.Hash(), plan, files)
 }
 
 // PrepareWorkspaceInput freezes one exact source and artifact input outside public output.

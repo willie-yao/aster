@@ -36,32 +36,26 @@ type benchmarkSourceCitation struct {
 	Verified bool `json:"verified"`
 }
 
-func benchmarkSourceReadsFromInProcess(bc benchCase, sourceID string, values []ai.SourceEvidenceObservation) ([]benchmarkSourceRead, error) {
-	repository, revision, err := benchmarkSourceIdentity(bc, sourceID)
-	if err != nil {
-		return nil, err
-	}
+func benchmarkSourceReadsFromInProcess(bc benchCase, values []ai.SourceEvidenceObservation) ([]benchmarkSourceRead, error) {
 	out := make([]benchmarkSourceRead, 0, len(values))
 	for _, value := range values {
-		out = append(out, benchmarkSourceRead{
-			benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd},
-			Tool:                 value.Tool, Outcome: "succeeded",
-		})
+		repository, revision, err := benchmarkSourceIdentity(bc, value.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, benchmarkSourceRead{benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd}, Tool: value.Tool, Outcome: "succeeded"})
 	}
 	return canonicalBenchmarkSourceReads(out)
 }
 
-func benchmarkSourceReadsFromSandbox(bc benchCase, sourceID string, values []agentanalysis.WorkspaceSourceReadTelemetry) ([]benchmarkSourceRead, error) {
-	repository, revision, err := benchmarkSourceIdentity(bc, sourceID)
-	if err != nil {
-		return nil, err
-	}
+func benchmarkSourceReadsFromSandbox(bc benchCase, values []agentanalysis.WorkspaceSourceReadTelemetry) ([]benchmarkSourceRead, error) {
 	out := make([]benchmarkSourceRead, 0, len(values))
 	for _, value := range values {
-		out = append(out, benchmarkSourceRead{
-			benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd},
-			Tool:                 value.Tool, Outcome: "succeeded",
-		})
+		repository, revision, err := benchmarkSourceIdentity(bc, value.SourceID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, benchmarkSourceRead{benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd}, Tool: value.Tool, Outcome: "succeeded"})
 	}
 	return canonicalBenchmarkSourceReads(out)
 }
@@ -353,11 +347,11 @@ func TestBenchmarkSourceObservationsNormalizeBySourceID(t *testing.T) {
 			{ID: "server", Repository: "kubernetes/kubernetes", Revision: serverRevision},
 		},
 	}
-	inProcess, err := benchmarkSourceReadsFromInProcess(bc, "server", []ai.SourceEvidenceObservation{{Tool: "read_repo_file", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
+	inProcess, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "server", Tool: "read_repo_file", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox, err := benchmarkSourceReadsFromSandbox(bc, "server", []agentanalysis.WorkspaceSourceReadTelemetry{{Tool: "read", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
+	sandbox, err := benchmarkSourceReadsFromSandbox(bc, []agentanalysis.WorkspaceSourceReadTelemetry{{SourceID: "server", Tool: "read", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +364,7 @@ func TestBenchmarkSourceObservationsNormalizeBySourceID(t *testing.T) {
 			t.Fatalf("%s coverage = %d/%d", name, hits, total)
 		}
 	}
-	if _, err := benchmarkSourceReadsFromInProcess(bc, "unknown", nil); err == nil {
+	if _, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "unknown", Tool: "read_repo_file", Path: "x", LineStart: 1, LineEnd: 1}}); err == nil {
 		t.Fatal("unknown source id was accepted")
 	}
 }

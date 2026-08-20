@@ -84,6 +84,7 @@ type WorkspaceManifest struct {
 	Hash                  string                         `json:"hash"`
 	Request               ai.FailureAnalysisRequest      `json:"request"`
 	Sources               []WorkspaceSourceRef           `json:"sources"`
+	PrimarySourceID       string                         `json:"primary_source_id"`
 	Source                sourceinvestigation.Repository `json:"-"`
 	ConsumerPrompt        string                         `json:"consumer_prompt"`
 	EffectivePromptSHA256 string                         `json:"effective_prompt_sha256"`
@@ -100,6 +101,7 @@ type WorkspaceStageRequest struct {
 	ManifestHash             string                         `json:"manifest_hash"`
 	BuildPrefix              string                         `json:"build_prefix"`
 	Sources                  []WorkspaceSourceRef           `json:"sources"`
+	PrimarySourceID          string                         `json:"primary_source_id"`
 	InputMode                string                         `json:"input_mode"`
 	ArtifactBaseURL          string                         `json:"artifact_base_url,omitempty"`
 	InputSourceModePolicies  []WorkspaceSourceMode          `json:"input_source_mode_policies"`
@@ -141,8 +143,8 @@ func (manifest *WorkspaceManifest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*manifest = WorkspaceManifest(decoded)
-	if len(manifest.Sources) > 0 {
-		manifest.Source = manifest.Sources[0].Repository
+	if source, ok := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID); ok {
+		manifest.Source = source.Repository
 	}
 	return nil
 }
@@ -155,8 +157,8 @@ func (stage *WorkspaceStageRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*stage = WorkspaceStageRequest(decoded)
-	if len(stage.Sources) > 0 {
-		stage.Source = stage.Sources[0].Repository
+	if source, ok := WorkspaceSource(stage.Sources, stage.PrimarySourceID); ok {
+		stage.Source = source.Repository
 	}
 	if len(stage.InputSourceModePolicies) > 0 {
 		stage.InputSourceModePolicy = stage.InputSourceModePolicies[0].Policy
@@ -195,12 +197,25 @@ func decodeWorkspaceJSON(data []byte, destination any) error {
 
 // NewWorkspaceManifest creates one deterministic file-backed analyzer input.
 func NewWorkspaceManifest(request ai.FailureAnalysisRequest, source sourceinvestigation.Repository, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
-	return NewWorkspaceManifestWithSources(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, consumerPrompt, files)
+	return NewWorkspaceManifestWithSourceCatalog(request, []WorkspaceSourceRef{{ID: "primary", Repository: source}}, "primary", consumerPrompt, files)
 }
 
 // NewWorkspaceManifestWithSources creates one deterministic multi-source analyzer input.
 func NewWorkspaceManifestWithSources(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
-	return newWorkspaceManifest(request, sources, consumerPrompt, hashString("workspace-skill-input-empty-v1"), nil, files)
+	primary := "primary"
+	if _, ok := WorkspaceSource(sources, primary); !ok && len(sources) > 0 {
+		canonical, err := canonicalWorkspaceSources(sources)
+		if err != nil {
+			return WorkspaceManifest{}, err
+		}
+		primary = canonical[0].ID
+	}
+	return NewWorkspaceManifestWithSourceCatalog(request, sources, primary, consumerPrompt, files)
+}
+
+// NewWorkspaceManifestWithSourceCatalog seals an explicit primary source identity.
+func NewWorkspaceManifestWithSourceCatalog(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, primarySourceID, consumerPrompt string, files []WorkspaceFile) (WorkspaceManifest, error) {
+	return newWorkspaceManifest(request, sources, primarySourceID, consumerPrompt, hashString("workspace-skill-input-empty-v1"), nil, files)
 }
 
 // EffectivePromptSHA256 returns the canonical in-process prompt identity.
@@ -209,15 +224,20 @@ func EffectivePromptSHA256(consumerPrompt string) string {
 	return hashString(ai.ComposeSystemPrompt(consumerPrompt))
 }
 
-func newWorkspaceManifest(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, consumerPrompt, skillSetHash string, plan []skills.PlannedSkill, files []WorkspaceFile) (WorkspaceManifest, error) {
+func newWorkspaceManifest(request ai.FailureAnalysisRequest, sources []WorkspaceSourceRef, primarySourceID, consumerPrompt, skillSetHash string, plan []skills.PlannedSkill, files []WorkspaceFile) (WorkspaceManifest, error) {
 	canonicalSources, err := canonicalWorkspaceSources(sources)
 	if err != nil {
 		return WorkspaceManifest{}, err
 	}
+	primarySourceID = strings.TrimSpace(primarySourceID)
+	primary, ok := WorkspaceSource(canonicalSources, primarySourceID)
+	if !ok {
+		return WorkspaceManifest{}, fmt.Errorf("primary source_id is not configured")
+	}
 	consumerPrompt = strings.TrimSpace(strings.ReplaceAll(consumerPrompt, "\r\n", "\n"))
 	manifest := WorkspaceManifest{
 		Version: WorkspaceManifestVersion, ContractVersion: WorkspaceContractVersion,
-		Request: canonicalRequest(request), Sources: canonicalSources, Source: canonicalSources[0].Repository,
+		Request: canonicalRequest(request), Sources: canonicalSources, PrimarySourceID: primarySourceID, Source: primary.Repository,
 		ConsumerPrompt: consumerPrompt, EffectivePromptSHA256: EffectivePromptSHA256(consumerPrompt),
 		SkillSetHash: strings.TrimSpace(skillSetHash), SkillPlan: clonePlan(plan), Artifacts: slices.Clone(files),
 	}
@@ -241,7 +261,11 @@ func ValidateWorkspaceManifest(manifest WorkspaceManifest) error {
 	if err := validateCanonicalWorkspaceSources(manifest.Sources); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidBundle, err)
 	}
-	if manifest.Source != (sourceinvestigation.Repository{}) && manifest.Source != manifest.Sources[0].Repository {
+	primary, ok := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID)
+	if !ok {
+		return fmt.Errorf("%w: primary source_id is not configured", ErrInvalidBundle)
+	}
+	if manifest.Source != (sourceinvestigation.Repository{}) && manifest.Source != primary.Repository {
 		return fmt.Errorf("%w: primary source compatibility identity changed", ErrInvalidBundle)
 	}
 	if manifest.Request.JobID == "" || manifest.Request.BuildPrefix == "" || manifest.Request.Build.BuildID == "" || manifest.Request.TestCase.Name == "" || !requestStringsValid(manifest.Request) {
@@ -303,7 +327,10 @@ func newWorkspaceStageRequest(manifest WorkspaceManifest, inputMode, artifactBas
 	stage := WorkspaceStageRequest{
 		Version: WorkspaceStageVersion, ContractVersion: WorkspaceStageContract,
 		ManifestHash: manifest.Hash, BuildPrefix: manifest.Request.BuildPrefix,
-		Sources: slices.Clone(manifest.Sources), Source: manifest.Sources[0].Repository,
+		Sources: slices.Clone(manifest.Sources), PrimarySourceID: manifest.PrimarySourceID, Source: func() sourceinvestigation.Repository {
+			value, _ := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID)
+			return value.Repository
+		}(),
 		InputMode: inputMode, ArtifactBaseURL: artifactBaseURL,
 		InputSourceModePolicies: slices.Clone(inputPolicies), OutputSourceModePolicies: slices.Clone(outputPolicies),
 	}
@@ -337,7 +364,11 @@ func ValidateWorkspaceStageRequestIdentity(stage WorkspaceStageRequest) error {
 	if err := validateCanonicalWorkspaceSources(stage.Sources); err != nil {
 		return fmt.Errorf("workspace stage source identity is invalid: %w", err)
 	}
-	if stage.Source != (sourceinvestigation.Repository{}) && stage.Source != stage.Sources[0].Repository {
+	primary, ok := WorkspaceSource(stage.Sources, stage.PrimarySourceID)
+	if !ok {
+		return fmt.Errorf("workspace stage primary source_id is not configured")
+	}
+	if stage.Source != (sourceinvestigation.Repository{}) && stage.Source != primary.Repository {
 		return fmt.Errorf("workspace stage primary source compatibility identity changed")
 	}
 	switch stage.InputMode {
@@ -393,7 +424,7 @@ func ValidateWorkspaceStageRequest(stage WorkspaceStageRequest, manifest Workspa
 	if err != nil {
 		return err
 	}
-	if stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || !slices.Equal(stage.Sources, manifest.Sources) || stage.ArtifactManifestSHA256 != artifactHash || stage.ArtifactFiles != artifactFiles || stage.ArtifactBytes != artifactBytes {
+	if stage.ManifestHash != manifest.Hash || stage.BuildPrefix != manifest.Request.BuildPrefix || stage.PrimarySourceID != manifest.PrimarySourceID || !slices.Equal(stage.Sources, manifest.Sources) || stage.ArtifactManifestSHA256 != artifactHash || stage.ArtifactFiles != artifactFiles || stage.ArtifactBytes != artifactBytes {
 		return fmt.Errorf("workspace stage request does not match the sealed manifest")
 	}
 	return nil

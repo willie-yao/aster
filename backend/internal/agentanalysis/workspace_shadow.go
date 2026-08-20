@@ -29,7 +29,10 @@ func WorkspaceAttemptIdentity(subject Subject, requestHash, authoritativeHash, s
 
 // WorkspaceComparisonIdentity binds one attempted comparison to its exact workspace request.
 func WorkspaceComparisonIdentity(attemptHash string, manifest WorkspaceManifest, request WorkspaceExecutionRequest, stage WorkspaceStageRequest, publisherHash string) string {
-	return hashString(strings.Join([]string{attemptHash, manifest.Hash, request.Hash, stage.Hash, strings.TrimSpace(publisherHash), manifest.EffectivePromptSHA256, manifest.SkillSetHash, manifest.Source.Revision}, "\x00"))
+	return hashString(strings.Join([]string{attemptHash, manifest.Hash, request.Hash, stage.Hash, strings.TrimSpace(publisherHash), manifest.EffectivePromptSHA256, manifest.SkillSetHash, func() string {
+		source, _ := WorkspaceSource(manifest.Sources, manifest.PrimarySourceID)
+		return source.Repository.Revision
+	}()}, "\x00"))
 }
 
 // WorkspaceEvidenceManifest returns content-free artifact and skill-plan identities.
@@ -62,7 +65,10 @@ func ProvenanceFromWorkspaceResult(result WorkspaceSandboxResult, request Worksp
 	return Provenance{
 		Runtime: "agent-sandbox-opencode", AgentNamespace: result.Resources.Namespace, AgentRef: result.Resources.Name,
 		ContractVersion: WorkspaceContractVersion, ToolPolicyVersion: WorkspacePromptVersion,
-		EvidenceHash: request.Manifest.Hash, SkillHash: request.Manifest.SkillSetHash, SourceSHA: request.Manifest.Source.Revision,
+		EvidenceHash: request.Manifest.Hash, SkillHash: request.Manifest.SkillSetHash, SourceSHA: func() string {
+			source, _ := WorkspaceSource(request.Manifest.Sources, request.Manifest.PrimarySourceID)
+			return source.Repository.Revision
+		}(),
 		IdentityHash: runtimeIdentity, ExecutionID: result.Resources.Name, Timeout: (time.Duration(request.TimeoutSeconds) * time.Second).String(),
 		Attempts: usage.ModelRequests, RuntimeDurationMs: result.Execution.DurationMs,
 		TaskFinalized: telemetry.TaskFinalized, TaskFinalizedMs: telemetry.TaskFinalizedMs,

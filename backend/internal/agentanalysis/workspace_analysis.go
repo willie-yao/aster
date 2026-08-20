@@ -344,7 +344,7 @@ func ParseWorkspaceAnalysis(raw string, handles []WorkspaceEvidenceHandle, manif
 	}
 	for _, id := range parsed.RelevantFileIDs {
 		handle, ok := handlesByID[id]
-		if !ok || handle.Root != WorkspaceSourceDir || handle.SourceID != "primary" {
+		if !ok || handle.Root != WorkspaceSourceDir || handle.SourceID != manifest.PrimarySourceID {
 			warnings[WorkspaceInvalidRelevantFile] = true
 			continue
 		}
@@ -382,7 +382,7 @@ func canonicalizeWorkspaceAnalysisWithWarnings(analysis WorkspaceAnalysis, manif
 	if err != nil {
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
-	analysis.RelevantFiles, err = workspaceRelevantFiles(analysis.RelevantFiles, analysis.SourceCitations, sourcesRoot, warnings)
+	analysis.RelevantFiles, err = workspaceRelevantFiles(analysis.RelevantFiles, analysis.SourceCitations, sourcesRoot, manifest.PrimarySourceID, warnings)
 	if err != nil {
 		return WorkspaceAnalysis{}, rejectedWorkspaceResult(err), err
 	}
@@ -547,7 +547,10 @@ func WorkspaceInstruction(request WorkspaceExecutionRequest, workspaceRoot strin
 	if err != nil {
 		return "", err
 	}
-	sources, err := json.MarshalIndent(request.Manifest.Sources, "", "  ")
+	sources, err := json.MarshalIndent(struct {
+		PrimarySourceID string               `json:"primary_source_id"`
+		Sources         []WorkspaceSourceRef `json:"sources"`
+	}{request.Manifest.PrimarySourceID, request.Manifest.Sources}, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -758,14 +761,14 @@ func overlapsWorkspaceCitation(ranges [][2]int, lineStart, lineEnd int) bool {
 	return false
 }
 
-func workspaceRelevantFiles(files []string, citations []WorkspaceSourceCitation, sourcesRoot string, warnings map[string]bool) ([]string, error) {
+func workspaceRelevantFiles(files []string, citations []WorkspaceSourceCitation, sourcesRoot, primarySourceID string, warnings map[string]bool) ([]string, error) {
 	if len(files) > maxRelevantFiles {
 		warnings[WorkspaceInvalidRelevantFile] = true
 	}
-	primaryRoot := filepath.Join(sourcesRoot, "primary")
+	primaryRoot := filepath.Join(sourcesRoot, primarySourceID)
 	grounded := map[string]bool{}
 	for _, citation := range citations {
-		if citation.SourceID != "primary" {
+		if citation.SourceID != primarySourceID {
 			continue
 		}
 		identity, err := resolvedWorkspaceIdentity(primaryRoot, citation.Path)
