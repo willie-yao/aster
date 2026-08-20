@@ -1869,10 +1869,22 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 	}{
 		{name: "prose", raw: "the node never joined", want: "the node never joined"},
 		{
+			name: "prose quoting a JSON path",
+			raw:  "run kubectl -o jsonpath='{.status.phase}': the pod never went Ready",
+			want: "run kubectl -o jsonpath='{.status.phase}': the pod never went Ready",
+		},
+		{
 			name: "contract failure keeps the answer field",
 			raw:  `{"answer":"the node never joined","citations":[],"confidence":0.9}`,
 			want: "the node never joined",
 		},
+		{
+			name: "metadata wrapper around one answer",
+			raw:  `{"result":{"answer":"the node never joined","citations":[]}}`,
+			want: "the node never joined",
+		},
+		{name: "two different answers", raw: `{"draft":{"answer":"maybe timeout"},"final":{"answer":"actually OOM"}}`},
+		{name: "truncated reply object", raw: `{"answer":"unfinished"`},
 		{name: "rejected json with no answer", raw: `{"conclusion":"unknown"}`},
 		{name: "empty", raw: "  "},
 	}
@@ -1953,19 +1965,40 @@ func TestAnalysisChatQuoteCapFitsDownstreamBudgets(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatQuoteCapClampsAttributedText(t *testing.T) {
+// A citation whose passage does not fit the recording budget is unverified.
+// Storing only its head would show the maintainer text that no longer covers
+// what the citation claimed.
+func TestAnalysisChatQuoteTooLongToRecordIsUnverified(t *testing.T) {
 	line := strings.Repeat("x", 900)
 	evidence := map[string]*analysisChatEvidence{"log.txt": {
 		Segments: []string{line + "\n" + line + "\n" + line},
 	}}
 	raw := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + line + ` ` + line + ` ` + line + `"}],"assessment":null,"proposed_revision":null}`
 	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
-	if err != nil || stats.EvidenceGate != "" {
-		t.Fatalf("an over-cap quote was rejected: gate=%q err=%v", stats.EvidenceGate, err)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
 	}
-	// Whole lines only, so what survives is still text a tool returned.
-	if got := reply.Citations[0].Quote; got != line+"\n"+line {
-		t.Fatalf("clamped quote length = %d, want %d", len(got), len(line)*2+1)
+	if !reply.Unverified || !strings.Contains(stats.EvidenceDetail, "too long to record") {
+		t.Fatalf("reply=%+v detail=%q", reply, stats.EvidenceDetail)
+	}
+}
+
+// A cited line range that does not fit narrows to the lines that do, so the
+// stored text and the cited lines still describe each other.
+func TestAnalysisChatQuoteCapNarrowsTheCitedRange(t *testing.T) {
+	line := strings.Repeat("x", 900)
+	evidence := map[string]*analysisChatEvidence{"log.txt": {
+		Segments: []string{line + "\n" + line + "\n" + line},
+		Lines:    map[int]string{10: line, 11: line, 12: line},
+	}}
+	raw := `{"answer":"a","citations":[{"path":"log.txt","line_start":10,"line_end":12,"quote":"ignored"}],"assessment":null,"proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err != nil || stats.EvidenceGate != "" {
+		t.Fatalf("an over-cap range was rejected: gate=%q err=%v", stats.EvidenceGate, err)
+	}
+	citation := reply.Citations[0]
+	if citation.Quote != line+"\n"+line || citation.LineStart != 10 || citation.LineEnd != 11 {
+		t.Fatalf("clamped citation = %+v", citation)
 	}
 }
 
@@ -1973,12 +2006,17 @@ func TestAnalysisChatQuoteCapClampsAttributedText(t *testing.T) {
 // cut on a rune boundary instead of rejecting the citation.
 func TestAnalysisChatQuoteCapClampsOneLongLine(t *testing.T) {
 	line := strings.Repeat("é", analysisChatMaxQuoteBytes)
-	quote := clampAnalysisChatQuote(line)
-	if len(quote) > analysisChatMaxQuoteBytes || !strings.HasPrefix(line, quote) {
-		t.Fatalf("clamped quote length = %d", len(quote))
+	quote, kept := clampAnalysisChatQuote(line)
+	if len(quote) > analysisChatMaxQuoteBytes || !strings.HasPrefix(line, quote) || kept != 1 {
+		t.Fatalf("clamped quote length = %d kept = %d", len(quote), kept)
 	}
 	if !utf8.ValidString(quote) {
 		t.Fatal("clamped quote is not valid UTF-8")
+	}
+	// Artifact bytes are not guaranteed to be valid UTF-8, and the quote is now
+	// the engine's copy of them rather than decoded model text.
+	if quote, _ := clampAnalysisChatQuote("controller \xff stopped"); !utf8.ValidString(quote) {
+		t.Fatalf("under-cap quote is not valid UTF-8: %q", quote)
 	}
 }
 

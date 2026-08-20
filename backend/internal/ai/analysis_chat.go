@@ -1289,13 +1289,16 @@ func analysisChatQuoteRun(normalized []string, start int, want string) (int, boo
 }
 
 // clampAnalysisChatQuote trims an attributed quote to the downstream budget,
-// dropping whole trailing lines so what remains is still text a tool returned.
-func clampAnalysisChatQuote(quote string) string {
-	if len(quote) <= analysisChatMaxQuoteBytes {
-		return quote
-	}
+// dropping whole trailing lines so what remains is still text a tool returned,
+// and reports how many lines survived. Invalid bytes are replaced first, because
+// the text comes from raw artifact content rather than from a decoded response.
+func clampAnalysisChatQuote(quote string) (string, int) {
+	quote = strings.ToValidUTF8(quote, "")
 	lines := strings.Split(quote, "\n")
-	kept := 0
+	if len(quote) <= analysisChatMaxQuoteBytes {
+		return quote, len(lines)
+	}
+	kept, keptLines := 0, 0
 	for i, line := range lines {
 		next := kept + len(line)
 		if i > 0 {
@@ -1304,12 +1307,12 @@ func clampAnalysisChatQuote(quote string) string {
 		if next > analysisChatMaxQuoteBytes {
 			break
 		}
-		kept = next
+		kept, keptLines = next, i+1
 	}
-	if kept == 0 {
-		return strings.ToValidUTF8(quote[:analysisChatMaxQuoteBytes], "")
+	if keptLines == 0 {
+		return strings.ToValidUTF8(quote[:analysisChatMaxQuoteBytes], ""), 1
 	}
-	return quote[:kept]
+	return quote[:kept], keptLines
 }
 
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {

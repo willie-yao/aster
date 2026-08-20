@@ -224,23 +224,37 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 // reply carries no evidence, so it cannot start a fix or a correction.
 func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 	scan := scanAnalysisChatJSONCandidates(raw)
+	trimmed := strings.TrimSpace(raw)
 	answer := ""
+	rejectedShape := false
 	for _, candidate := range scan.candidates {
+		// A response that is nothing but one JSON object is a failed attempt at
+		// the contract, not prose the maintainer can read.
+		rejectedShape = rejectedShape || candidate.value == trimmed ||
+			analysisChatCandidateLooksLikeReply(candidate.value)
 		var fields struct {
 			Answer string `json:"answer"`
 		}
 		if json.Unmarshal([]byte(candidate.value), &fields) != nil {
 			continue
 		}
-		if answer = strings.TrimSpace(fields.Answer); answer != "" {
-			break
+		// Two different answers in one response mean the model wrapped a draft
+		// around its conclusion, and picking either is a guess.
+		if found := strings.TrimSpace(fields.Answer); found != "" && found != answer {
+			if answer != "" {
+				return analysischat.Reply{}, false
+			}
+			answer = found
 		}
 	}
-	// With no JSON at all the model answered in prose, which is still an answer.
-	// A truncated object is a broken response, not prose, so it keeps failing
-	// rather than showing the maintainer a JSON fragment.
-	if answer == "" && len(scan.candidates) == 0 && len(scan.incomplete) == 0 {
-		answer = strings.TrimSpace(raw)
+	for _, fragment := range scan.incomplete {
+		rejectedShape = rejectedShape || analysisChatCandidateLooksLikeReply(raw[fragment.start:])
+	}
+	// Prose is still an answer, even when it quotes a JSON path or a manifest.
+	// A truncated reply object is a broken response rather than prose, so it
+	// keeps failing instead of showing the maintainer a JSON fragment.
+	if answer == "" && !rejectedShape {
+		answer = trimmed
 	}
 	if answer == "" {
 		return analysischat.Reply{}, false
@@ -442,7 +456,11 @@ func validateAnalysisChatCitations(
 					Detail: fmt.Sprintf("citation %d line range was not returned by the cited artifact read", i+1),
 				}
 			}
-			citation.Quote = clampAnalysisChatQuote(quote)
+			// A range too long to record narrows to the lines that fit, so the
+			// stored text and the cited lines still describe each other.
+			clamped, kept := clampAnalysisChatQuote(quote)
+			citation.Quote = clamped
+			citation.LineEnd = citation.LineStart + kept - 1
 			continue
 		}
 		quote, matches := attributeAnalysisChatQuote(artifactEvidence, citation.Quote)
@@ -462,7 +480,18 @@ func validateAnalysisChatCitations(
 				),
 			}
 		}
-		citation.Quote = clampAnalysisChatQuote(quote)
+		clamped, _ := clampAnalysisChatQuote(quote)
+		// Recording only part of the passage would leave the maintainer reading
+		// text that no longer covers what the citation claimed.
+		if !strings.Contains(normalizeCitationText(clamped), normalizeCitationText(citation.Quote)) {
+			return &analysisChatEvidenceFailure{
+				Gate: analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf(
+					"citation %d quote is too long to record; quote the passage that supports the answer", i+1,
+				),
+			}
+		}
+		citation.Quote = clamped
 		citation.LineStart, citation.LineEnd = 0, 0
 	}
 	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {

@@ -679,6 +679,12 @@ func evidenceCitationIssue(citation models.EvidenceCitation, evidenceByPath map[
 }
 
 func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) bool {
+	want := normalizeCitationText(quote)
+	// A quote of nothing but colour codes normalizes away and would otherwise
+	// match every range.
+	if want == "" {
+		return false
+	}
 	parts := make([]string, 0, end-start+1)
 	for line := start; line <= end; line++ {
 		text, ok := lines[line]
@@ -687,7 +693,7 @@ func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) 
 		}
 		parts = append(parts, text)
 	}
-	return strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), normalizeCitationText(quote))
+	return strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), want)
 }
 
 // citationDisplayNoise matches SGR escape sequences, the colour and style codes
