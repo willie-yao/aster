@@ -46,10 +46,11 @@ others. Assessment is optional and, when present, must be "supports",
 complete root_cause and suggested_fix object only when assessment is
 "challenges". Normal follow-up answers should omit both optional fields.
 Citations must name artifacts read during this conversation and include an exact
-quote. Copy the quote verbatim from the tool output: keep the original path
-names, escape codes, and indentation, and do not shorten, re-wrap, or otherwise
-tidy the text. Use line_start and line_end only when a tool returned source line
-numbers. An answer whose citations cannot be verified is returned to the
+quote. Copy the quote from the tool output without re-wrapping it: keep the
+original text and line breaks, and do not shorten or paraphrase it. Leading
+indentation and colour codes may be dropped. Quote only the passage that
+supports the answer, and use line_start and line_end only when a tool returned
+source line numbers. An answer whose citations cannot be verified is returned to the
 maintainer labelled unverified, so cite only evidence the tools actually
 returned. Output JSON only.`
 
@@ -1144,14 +1145,44 @@ func analysisChatEvidenceContexts(value any) []string {
 // where text renders, so a quote that drops one must fail closed.
 var analysisChatDisplayNoise = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// analysisChatNormalizeQuote strips escape sequences, which are pure display and
-// carry no content, so a quote that drops them still verifies. Whitespace is
-// left untouched: leading indentation is semantic in the YAML and source files
-// that appear in build artifacts, so normalizing it could let a quote
-// misrepresent structure. The prompt asks the model to copy indentation
-// verbatim, and a quote that does not is told to copy the text verbatim.
+// analysisChatNormalizeQuote strips escape sequences and leading indentation.
+// Both are presentation that models routinely drop when quoting a log, and
+// rejecting an otherwise exact quote over them marks a good answer unverified.
+// Trailing and interior whitespace are preserved, because those can change what
+// a line means. A quote proves the text appeared in the artifact; a citation's
+// line range is what recovers the exact bytes.
 func analysisChatNormalizeQuote(text string) string {
-	return analysisChatDisplayNoise.ReplaceAllString(text, "")
+	lines := strings.Split(analysisChatDisplayNoise.ReplaceAllString(text, ""), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimLeft(line, " \t")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// analysisChatReflowQuote collapses every whitespace run. It is used only to
+// explain why a quote failed, never to accept one, so that a mismatch can be
+// reported as a reformatting problem rather than as invented text.
+func analysisChatReflowQuote(text string) string {
+	return strings.Join(strings.Fields(analysisChatDisplayNoise.ReplaceAllString(text, "")), " ")
+}
+
+// analysisChatQuoteMismatch names why a quote did not verify, using a closed set
+// so the repair text can be specific without echoing model output.
+func analysisChatQuoteMismatch(evidence *analysisChatEvidence, quote string) string {
+	if analysisChatEvidenceSpansSegments(evidence, quote) {
+		return "joined"
+	}
+	if evidence != nil {
+		reflowed := analysisChatReflowQuote(quote)
+		if reflowed != "" {
+			for _, segment := range evidence.Segments {
+				if strings.Contains(analysisChatReflowQuote(segment), reflowed) {
+					return "reflowed"
+				}
+			}
+		}
+	}
+	return "absent"
 }
 
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {

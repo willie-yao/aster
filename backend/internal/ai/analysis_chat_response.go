@@ -13,6 +13,14 @@ import (
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
+// analysisChatMaxQuoteBytes bounds one citation quote. It exists to keep the
+// downstream budgets satisfiable, not to judge evidence, so it is set as high as
+// those budgets allow: fix generation rejects a context over 64 KiB built from
+// up to 16 citations, and the chat store rejects state over 64 MiB. A larger
+// value would let a verified answer offer a fix that then fails to generate.
+// TestAnalysisChatQuoteCapFitsDownstreamBudgets pins that arithmetic.
+const analysisChatMaxQuoteBytes = 2000
+
 const (
 	analysisChatValidationCandidate = "candidate_selection"
 	analysisChatValidationJSON      = "json_validation"
@@ -391,19 +399,28 @@ func validateAnalysisChatCitations(
 				Detail: fmt.Sprintf("citation %d requires an exact quote of at least 4 bytes", i+1),
 			}
 		}
-		if len(citation.Quote) > 1000 {
+		if len(citation.Quote) > analysisChatMaxQuoteBytes {
 			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d quote exceeds 1000 bytes", i+1),
+				Gate: analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf(
+					"citation %d quote exceeds %d bytes; quote the passage that supports the answer",
+					i+1, analysisChatMaxQuoteBytes,
+				),
 			}
 		}
 		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
-			detail := fmt.Sprintf(
-				"citation %d quote does not appear in the cited artifact read; copy the text verbatim from the tool output instead of reformatting or shortening it",
-				i+1,
-			)
-			if analysisChatEvidenceSpansSegments(artifactEvidence, citation.Quote) {
+			var detail string
+			switch analysisChatQuoteMismatch(artifactEvidence, citation.Quote) {
+			case "joined":
+				detail = fmt.Sprintf("citation %d quote joins separate passages; quote one contiguous passage", i+1)
+			case "reflowed":
 				detail = fmt.Sprintf(
-					"citation %d quote joins separate passages; quote one contiguous passage",
+					"citation %d quote re-wrapped the artifact text; keep the original line breaks and spacing",
+					i+1,
+				)
+			default:
+				detail = fmt.Sprintf(
+					"citation %d quote does not appear in the cited artifact read; quote text the tools returned",
 					i+1,
 				)
 			}

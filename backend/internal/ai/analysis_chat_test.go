@@ -15,6 +15,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -949,7 +950,6 @@ func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
 		"line one alpha\nline two middle\nline three omega",
 		"echo safe \\ \nrm file",
 		"if authorized:\n    grant()\ndeny()",
-		"authorized=\x1b[2Afalse",
 	}}
 	rejected := map[string]string{
 		"skips content":    "line one alpha\nline three omega",
@@ -959,13 +959,6 @@ func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
 		"joins separate lines": "line one alpha line two middle",
 		// Trailing whitespace can change what a line means.
 		"drops trailing whitespace": "echo safe \\\nrm file",
-		// Leading indentation is semantic in the YAML and source that appear
-		// in artifacts, so a requoted block must not move a statement.
-		"reindents a block":  "if authorized:\n    grant()\n    deny()",
-		"strips indentation": "if authorized:\ngrant()\ndeny()",
-		// Cursor movement changes where text renders, so it is not display
-		// noise and a quote that drops it must fail closed.
-		"drops cursor movement": "authorized=false",
 	}
 	for name, quote := range rejected {
 		if analysisChatEvidenceContains(evidence, quote) {
@@ -973,10 +966,11 @@ func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
 		}
 	}
 	accepted := map[string]string{
-		"contiguous span":  "line one alpha\nline two middle",
-		"whole segment":    "line one alpha\nline two middle\nline three omega",
-		"single line":      "line two middle",
-		"indentation kept": "if authorized:\n    grant()\ndeny()",
+		"contiguous span": "line one alpha\nline two middle",
+		"whole segment":   "line one alpha\nline two middle\nline three omega",
+		"single line":     "line two middle",
+		// Leading indentation is presentation that models drop when quoting.
+		"drops indentation": "if authorized:\ngrant()\ndeny()",
 	}
 	for name, quote := range accepted {
 		if !analysisChatEvidenceContains(evidence, quote) {
@@ -985,25 +979,20 @@ func TestAnalysisChatEvidenceNormalizationKeepsTheGuarantee(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatEvidenceToleratesDisplayNoise(t *testing.T) {
-	// The real CAPZ build log carries CSI escapes on otherwise plain lines.
-	raw := "  \x1b[38;5;9m[FAILED] Timed out after 1200.001s.\n" +
-		"  The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/" +
-		"cluster-api-provider-azure/test/e2e/azure_securitygroups.go:128 with:\n"
-	evidence := &analysisChatEvidence{Segments: []string{raw}}
-
-	// Dropping the escape is presentation only, so the quote still verifies.
-	verbatim := "  [FAILED] Timed out after 1200.001s.\n" +
-		"  The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/" +
-		"cluster-api-provider-azure/test/e2e/azure_securitygroups.go:128 with:"
-	if !analysisChatEvidenceContains(evidence, verbatim) {
-		t.Fatal("quote differing only by an escape sequence was rejected")
-	}
-	// The observed live failure also shortened the path, which drops content.
-	shortened := "  [FAILED] Timed out after 1200.001s.\n" +
-		"  The function passed to Eventually failed at azure_securitygroups.go:128 with:"
-	if analysisChatEvidenceContains(evidence, shortened) {
-		t.Fatal("quote that elided part of the path was accepted")
+func TestAnalysisChatQuoteMismatchNamesTheReason(t *testing.T) {
+	evidence := &analysisChatEvidence{Segments: []string{
+		"first passage line\nsecond passage line",
+		"another read entirely",
+	}}
+	for reason, quote := range map[string]string{
+		// Re-wrapping collapses the line break the artifact had.
+		"reflowed": "first passage line second passage line",
+		"joined":   "second passage line\nanother read entirely",
+		"absent":   "text the tools never returned",
+	} {
+		if got := analysisChatQuoteMismatch(evidence, quote); got != reason {
+			t.Fatalf("mismatch for %q = %q, want %q", quote, got, reason)
+		}
 	}
 }
 
@@ -1034,7 +1023,7 @@ func TestAnalysisChatEvidenceDistinguishesEditedFromJoinedQuotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
 	}
-	if !strings.Contains(editedStats.EvidenceDetail, "copy the text verbatim") {
+	if !strings.Contains(editedStats.EvidenceDetail, "quote text the tools returned") {
 		t.Fatalf("edited quote detail = %q", editedStats.EvidenceDetail)
 	}
 }
@@ -1804,5 +1793,69 @@ func TestParseAnalysisChatReplyPrefersVerifiedCandidateOverEarlierDegradedDraft(
 	// a verified one must not be reported as verified.
 	if _, _, err := parseAnalysisChatReplyCandidates(final+"\n"+draft, evidence); err == nil {
 		t.Fatal("trailing degraded candidate was ignored")
+	}
+}
+
+// A verified answer offers a fix, so the quote cap must leave a worst-case
+// conversation still generatable. Raising the cap without checking this would
+// show the fix button and then fail generation.
+func TestAnalysisChatQuoteCapFitsDownstreamBudgets(t *testing.T) {
+	citations := make([]fixpr.Evidence, 0, 16)
+	for range 16 {
+		citations = append(citations, fixpr.Evidence{
+			Path:  strings.Repeat("a", 120),
+			Quote: strings.Repeat("q", analysisChatMaxQuoteBytes),
+		})
+	}
+	context := fixpr.GenerationContext{
+		AssistantAnswer:   strings.Repeat("s", 8<<10),
+		ProposedRevision:  &fixpr.RevisionContext{RootCause: "cause", SuggestedFix: "fix"},
+		ArtifactCitations: citations,
+	}
+	if err := context.Validate(); err != nil {
+		t.Fatalf("a conversation at the quote cap cannot generate a fix: %v", err)
+	}
+}
+
+func TestAnalysisChatQuoteCapBoundary(t *testing.T) {
+	body := strings.Repeat("x", analysisChatMaxQuoteBytes)
+	evidence := map[string]*analysisChatEvidence{"log.txt": {Segments: []string{body + "y"}}}
+	at := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + body + `"}],"assessment":null,"proposed_revision":null}`
+	if _, stats, err := parseAnalysisChatReplyCandidates(at, evidence); err != nil || stats.EvidenceGate != "" {
+		t.Fatalf("a quote at the cap was rejected: gate=%q err=%v", stats.EvidenceGate, err)
+	}
+	over := `{"answer":"a","citations":[{"path":"log.txt","quote":"` + body + `y"}],"assessment":null,"proposed_revision":null}`
+	_, stats, err := parseAnalysisChatReplyCandidates(over, evidence)
+	if err != nil {
+		t.Fatalf("unexpected hard error: %v", err)
+	}
+	if !strings.Contains(stats.EvidenceDetail, "exceeds 2000 bytes") {
+		t.Fatalf("over-cap detail = %q", stats.EvidenceDetail)
+	}
+}
+
+// Colour codes and indentation are presentation, but cursor movement changes
+// where text renders, so only the first two may be dropped from a quote.
+func TestAnalysisChatEvidenceSeparatesPresentationFromPositioning(t *testing.T) {
+	evidence := &analysisChatEvidence{Segments: []string{
+		"  \x1b[38;5;9mstatus: failed\n    reason: timeout",
+		"cursor=\x1b[2Amoved",
+	}}
+	if !analysisChatEvidenceContains(evidence, "status: failed\nreason: timeout") {
+		t.Fatal("quote dropping colour codes and indentation was rejected")
+	}
+	if analysisChatEvidenceContains(evidence, "cursor=moved") {
+		t.Fatal("quote dropping a cursor-movement sequence was accepted")
+	}
+}
+
+func TestAnalysisChatPromptStatesTheQuoteRules(t *testing.T) {
+	for _, want := range []string{
+		"keep the\noriginal text and line breaks",
+		"Leading\nindentation and colour codes may be dropped",
+	} {
+		if !strings.Contains(analysisChatResponseFormat, want) {
+			t.Fatalf("prompt does not state %q", want)
+		}
 	}
 }
