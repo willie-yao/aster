@@ -287,14 +287,7 @@ func decodeAnalysisChatReplyContract(candidate string) (analysischat.Reply, erro
 	decoder := json.NewDecoder(strings.NewReader(candidate))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&reply); err != nil {
-		category := analysisChatValidationContract
-		var syntaxErr *json.SyntaxError
-		if errors.As(err, &syntaxErr) {
-			category = analysisChatValidationJSON
-		}
-		return analysischat.Reply{}, newAnalysisChatValidationError(
-			category, errors.New("response is not valid analysis-chat JSON"),
-		)
+		return analysischat.Reply{}, analysisChatDecodeError(err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
@@ -420,6 +413,35 @@ func validateAnalysisChatCitations(
 		}
 	}
 	return nil
+}
+
+// analysisChatDecodeError maps a decoder failure onto actionable repair text.
+// Top-level unknown fields are rejected before decoding, so an unknown field
+// here is nested in a citation or proposed_revision. The offending key is
+// model-chosen, so the message names the allowed keys instead of echoing it.
+func analysisChatDecodeError(err error) error {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return newAnalysisChatValidationError(
+			analysisChatValidationJSON, errors.New("response is not valid JSON"),
+		)
+	}
+	if strings.HasPrefix(err.Error(), "json: unknown field ") {
+		return newAnalysisChatValidationError(
+			analysisChatValidationContract,
+			errors.New("a nested object uses an unsupported key; a citation uses only path, line_start, line_end, and quote, and proposed_revision uses only root_cause and suggested_fix"),
+		)
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return newAnalysisChatValidationError(
+			analysisChatValidationContract,
+			errors.New("a response field has the wrong type; answer is a string, citations is an array, citation path and quote are strings, citation line_start and line_end are integers or null, assessment is a string or null, and proposed_revision is null or an object with string root_cause and suggested_fix"),
+		)
+	}
+	return newAnalysisChatValidationError(
+		analysisChatValidationContract, errors.New("response is not valid analysis-chat JSON"),
+	)
 }
 
 func decodeAnalysisChatObject(raw string) (map[string]json.RawMessage, error) {

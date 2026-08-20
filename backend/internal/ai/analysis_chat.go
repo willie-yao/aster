@@ -34,17 +34,22 @@ Return one JSON object. The required fields are:
 
 {
   "answer": "Direct answer to the maintainer",
-  "citations": []
+  "citations": [
+    {"path": "build-log.txt", "line_start": 120, "line_end": 124, "quote": "exact text a tool returned"}
+  ]
 }
 
-Assessment is optional and, when present, must be "supports", "challenges",
-"inconclusive", or null. proposed_revision is optional and may be a complete
-root_cause and suggested_fix object only when assessment is "challenges". Normal
-follow-up answers should omit both optional fields. Citations must name artifacts
-read during this conversation and include an exact quote. Use line_start and
-line_end only when a tool returned source line numbers. An answer whose citations
-cannot be verified is returned to the maintainer labelled unverified, so cite
-only evidence the tools actually returned. Output JSON only.`
+Use an empty citations array when no artifact evidence supports the answer. A
+citation object uses only the keys path, line_start, line_end, and quote, and no
+others. Assessment is optional and, when present, must be "supports",
+"challenges", "inconclusive", or null. proposed_revision is optional and may be a
+complete root_cause and suggested_fix object only when assessment is
+"challenges". Normal follow-up answers should omit both optional fields.
+Citations must name artifacts read during this conversation and include an exact
+quote. Use line_start and line_end only when a tool returned source line numbers.
+An answer whose citations cannot be verified is returned to the maintainer
+labelled unverified, so cite only evidence the tools actually returned. Output
+JSON only.`
 
 const analysisChatToolDocs = `
 

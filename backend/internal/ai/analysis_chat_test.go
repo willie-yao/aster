@@ -318,6 +318,88 @@ func TestAnalysisChatAgentReturnsSafeProviderCategory(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatDecodeErrorNamesTheAllowedNestedKeys(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{}
+	// The live failure: the model guessed a key for the artifact path.
+	_, _, err := parseAnalysisChatReplyCandidates(
+		`{"answer":"x","citations":[{"artifact_path":"build-log.txt","quote":"boom"}],"assessment":null,"proposed_revision":null}`,
+		evidence,
+	)
+	if err == nil {
+		t.Fatal("expected a validation error")
+	}
+	if got := analysisChatValidationCategory(err); got != analysisChatValidationContract {
+		t.Fatalf("category = %q", got)
+	}
+	if !strings.Contains(err.Error(), "path, line_start, line_end, and quote") {
+		t.Fatalf("error does not name the allowed citation keys: %v", err)
+	}
+	if strings.Contains(err.Error(), "artifact_path") {
+		t.Fatalf("error echoed the model-chosen key: %v", err)
+	}
+	// The same decoder error is raised by proposed_revision, so the message
+	// must not blame a citation for it.
+	_, _, revisionErr := parseAnalysisChatReplyCandidates(
+		`{"answer":"x","citations":[],"assessment":"challenges","proposed_revision":{"root_cause":"r","suggested_fix":"f","extra":"e"}}`,
+		evidence,
+	)
+	if revisionErr == nil {
+		t.Fatal("expected a validation error")
+	}
+	if !strings.Contains(revisionErr.Error(), "root_cause and suggested_fix") {
+		t.Fatalf("error does not name the allowed revision keys: %v", revisionErr)
+	}
+}
+
+func TestAnalysisChatDecodeErrorReportsWrongFieldType(t *testing.T) {
+	evidence := map[string]*analysisChatEvidence{}
+	for name, raw := range map[string]string{
+		"citations":         `{"answer":"x","citations":"build-log.txt","assessment":null,"proposed_revision":null}`,
+		"assessment":        `{"answer":"x","citations":[],"assessment":5,"proposed_revision":null}`,
+		"proposed_revision": `{"answer":"x","citations":[],"assessment":"challenges","proposed_revision":"nope"}`,
+	} {
+		_, _, err := parseAnalysisChatReplyCandidates(raw, evidence)
+		if err == nil {
+			t.Fatalf("%s: expected a validation error", name)
+		}
+		// The guidance must state the whole contract, since the single
+		// corrective round relays it verbatim.
+		for _, want := range []string{
+			"answer is a string",
+			"citations is an array",
+			"line_start and line_end are integers or null",
+			"assessment is a string or null",
+			"proposed_revision is null or an object",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: guidance missing %q: %v", name, want, err)
+			}
+		}
+	}
+	// A null line range is valid, so the guidance must not promise otherwise.
+	_, _, err := parseAnalysisChatReplyCandidates(
+		`{"answer":"x","citations":[{"path":"p","quote":"q","line_start":null,"line_end":null}],"assessment":null,"proposed_revision":null}`,
+		evidence,
+	)
+	if err != nil {
+		t.Fatalf("null line range rejected: %v", err)
+	}
+}
+
+func TestAnalysisChatPromptShowsTheCitationShape(t *testing.T) {
+	for _, key := range []string{`"path"`, `"line_start"`, `"line_end"`, `"quote"`} {
+		if !strings.Contains(analysisChatResponseFormat, key) {
+			t.Fatalf("prompt does not name the citation key %s", key)
+		}
+	}
+	if !strings.Contains(analysisChatResponseFormat, "only the keys path, line_start, line_end, and quote") {
+		t.Fatal("prompt does not close the citation key set")
+	}
+	if !strings.Contains(analysisChatResponseFormat, "empty citations array") {
+		t.Fatal("prompt does not say an uncited answer uses an empty array")
+	}
+}
+
 func TestAnalysisChatResponseLogsValidationDetail(t *testing.T) {
 	shrinkCallDelay(t)
 	var logs bytes.Buffer
@@ -625,7 +707,7 @@ func TestParseAnalysisChatReplyRejectsDuplicateFields(t *testing.T) {
 
 func TestComposeAnalysisChatSystemPromptKeepsSeparateSchema(t *testing.T) {
 	prompt := ComposeAnalysisChatSystemPrompt("Consumer fact.")
-	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"citations": []`, "preserve the full builds/<build-id>/"} {
+	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"citations": [`, `{"path": "build-log.txt"`, "preserve the full builds/<build-id>/"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
