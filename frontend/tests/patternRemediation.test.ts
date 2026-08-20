@@ -168,7 +168,10 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   const component = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
   const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
 
-  assert.match(component, />\s*Remediation\s*</);
+  // The row names the mechanism it reports. A generic "Remediation" label made
+  // a block on this one operation read as if nothing could be done at all.
+  assert.match(component, />\s*Verified fix investigation\s*</);
+  assert.doesNotMatch(component, />\s*Remediation\s*</);
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /Investigation details/);
   assert.match(component, /Investigate possible fix/);
@@ -196,7 +199,7 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
 
   // Causes now carry their own h4 heading, so the remediation label sits one
   // level below it rather than competing with it.
-  assert.match(component, /component="h5"[\s\S]*>\s*Remediation\s*</);
+  assert.match(component, /component="h5"[\s\S]*>\s*Verified fix investigation\s*</);
 
   // Remediation is decided per cause, so it renders inside the causal group card.
   assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupRemediation/);
@@ -220,4 +223,17 @@ test("a cause in an unclassified pattern is reported instead of offered", () => 
   // Pattern eligibility defaults to true so existing callers are unaffected.
   assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true), null);
   assert.equal(causalRemediationBlockedReason(repeatedGroup, undefined, true, true), null);
+});
+
+test("a blocked investigation names the path that stays open", () => {
+  const component = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
+  const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
+
+  // The row reports one mechanism, so a block on it is not the end of the road.
+  assert.match(component, /blocked && chatAvailable/);
+  assert.match(component, /ask about this cause in the pattern chat below/);
+  // The chat picks its own evidence builds, so the copy must not claim parity.
+  assert.doesNotMatch(component, /reads the same evidence/);
+  // Only promised where a chat session can actually run.
+  assert.match(banner, /chatAvailable=\{Boolean\(chatRef\)\}/);
 });

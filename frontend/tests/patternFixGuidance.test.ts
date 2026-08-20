@@ -291,7 +291,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
   assert.match(banner, /const showFixGuidance = Boolean\(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget\)/);
-  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} \/>/);
+  assert.match(banner, /<PatternFixGuidance jobID=\{jobID\} buildID=\{fixGuidanceBuildID\} externalCause=\{patternUpstreamCause\} chatAvailable=\{Boolean\(chatRef\)\} \/>/);
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix proposal unavailable/);

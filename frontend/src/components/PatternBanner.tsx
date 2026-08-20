@@ -359,6 +359,7 @@ export function PatternBanner({
                       patternID={pattern.id}
                       patternHash={pattern.content_hash}
                       patternEligible={remediationPatternEligible}
+                      chatAvailable={Boolean(chatRef)}
                     />
                   )}
                   {fixCapable && (
@@ -479,7 +480,7 @@ export function PatternBanner({
   const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
       {showFixGuidance && jobID && fixGuidanceBuildID && (
-        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} />
+        <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} chatAvailable={Boolean(chatRef)} />
       )}
       {chatRef && (
         <AnalysisChat

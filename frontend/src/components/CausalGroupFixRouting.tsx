@@ -15,6 +15,11 @@ import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 // start a fix proposal, and says so plainly when no such test exists. The
 // visible label names the test it opens, so several causes on one briefing stay
 // tellable apart without reading the surrounding prose.
+//
+// Ownership is reported whether or not a Fix route exists. A cause owned by a
+// dependency still often has a project-side test that can start a Fix, and
+// hiding that ownership behind the button made an upstream cause look identical
+// to one the project can actually fix.
 export function CausalGroupFixRouting({
   jobID,
   target,
@@ -30,10 +35,12 @@ export function CausalGroupFixRouting({
 }) {
   if (!jobID) return null;
 
+  // A cause owned by a dependency is a real diagnosis, not missing evidence, so
+  // name the repository rather than reporting an unexplained dead end.
+  const ownership = externalCause ? <UpstreamCauseNotice location={externalCause} /> : null;
+
   if (!target) {
-    // A cause owned by a dependency is a real diagnosis, not missing evidence,
-    // so name the repository instead of reporting an unexplained dead end.
-    if (externalCause) return <UpstreamCauseNotice location={externalCause} />;
+    if (ownership) return ownership;
     return (
       <Typography color="textSecondary" sx={{ mt: 1.5, ...overviewTypography.description }}>
         No failed JUnit test in these builds meets the Fix eligibility requirements, so no fix proposal can start from this cause.
@@ -50,45 +57,48 @@ export function CausalGroupFixRouting({
   const subject = `Fix: ${testName}${buildSuffix}`;
 
   return (
-    <Tooltip title={subject}>
-      <Button
-        component={RouterLink}
-        to={testRunPath(jobID, target.testName, target.buildID)}
-        variant="outlined"
-        size="small"
-        startIcon={<AutoFixHigh aria-hidden />}
-        aria-label={subject}
-        sx={{
-          mt: 1.5,
-          minHeight: { xs: 44, sm: 32 },
-          maxWidth: "100%",
-          width: { xs: "100%", sm: "auto" },
-          justifyContent: "flex-start",
-          textAlign: "left",
-          textTransform: "none",
-          ...overviewTypography.secondaryBody,
-          fontWeight: 650,
-          "&:focus-visible": {
-            outline: "2px solid",
-            outlineColor: "primary.main",
-            outlineOffset: 2,
-          },
-        }}
-      >
-        <Box
-          component="span"
-          sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+    <>
+      {ownership}
+      <Tooltip title={subject}>
+        <Button
+          component={RouterLink}
+          to={testRunPath(jobID, target.testName, target.buildID)}
+          variant="outlined"
+          size="small"
+          startIcon={<AutoFixHigh aria-hidden />}
+          aria-label={subject}
+          sx={{
+            mt: 1.5,
+            minHeight: { xs: 44, sm: 32 },
+            maxWidth: "100%",
+            width: { xs: "100%", sm: "auto" },
+            justifyContent: "flex-start",
+            textAlign: "left",
+            textTransform: "none",
+            ...overviewTypography.secondaryBody,
+            fontWeight: 650,
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 2,
+            },
+          }}
         >
-          Fix: {testName}
-        </Box>
-        {showBuild && (
-          // whiteSpace: "pre" keeps the suffix's leading space, so the rendered
-          // text carries the same separator the accessible name does.
-          <Box component="span" sx={{ flexShrink: 0, whiteSpace: "pre" }}>
-            {buildSuffix}
+          <Box
+            component="span"
+            sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            Fix: {testName}
           </Box>
-        )}
-      </Button>
-    </Tooltip>
+          {showBuild && (
+            // whiteSpace: "pre" keeps the suffix's leading space, so the rendered
+            // text carries the same separator the accessible name does.
+            <Box component="span" sx={{ flexShrink: 0, whiteSpace: "pre" }}>
+              {buildSuffix}
+            </Box>
+          )}
+        </Button>
+      </Tooltip>
+    </>
   );
 }

@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { createServer } from "vite";
 import { externalCause, patternExternalCause } from "../src/lib/patternFixGuidance.js";
+import type { CausalGroupFixTarget } from "../src/lib/patternFixGuidance.js";
 import type {
   AnalysisCauseLocation,
   PatternAnalysis,
@@ -22,7 +23,7 @@ const vite = await createServer({
 const { CausalGroupFixRouting } = (await vite.ssrLoadModule("/src/components/CausalGroupFixRouting.tsx")) as {
   CausalGroupFixRouting: (props: {
     jobID?: string;
-    target: null;
+    target: CausalGroupFixTarget | null;
     externalCause?: AnalysisCauseLocation | null;
   }) => ReturnType<typeof createElement>;
 };
@@ -31,6 +32,7 @@ const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/Patter
     jobID: string;
     buildID: string;
     externalCause?: AnalysisCauseLocation | null;
+    chatAvailable?: boolean;
   }) => ReturnType<typeof createElement>;
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
@@ -149,4 +151,49 @@ test("the pattern panel names the dependency instead of reporting unavailability
   assert.match(generic, /Fix proposal unavailable/);
   assert.match(generic, /No failed JUnit test in the affected builds meets the Fix eligibility requirements/);
   assert.doesNotMatch(generic, /dependency/);
+});
+
+const fixTarget: CausalGroupFixTarget = { buildID: "208060", testName: "fails" };
+
+test("a cause owned by a dependency reports it even when a Fix route exists", () => {
+  // Ownership used to be suppressed whenever a Fix button rendered, which made
+  // an upstream cause indistinguishable from one the project can actually fix.
+  const html = render(
+    createElement(CausalGroupFixRouting, {
+      jobID: "job",
+      target: fixTarget,
+      externalCause: draCause,
+    }),
+  );
+
+  assert.match(html, /kubernetes\/kubernetes/);
+  assert.match(html, /project-side mitigation/);
+  // The action itself is unchanged and still opens the failing test.
+  assert.match(html, /aria-label="Fix: fails in build 208060"/i);
+
+  const owned = render(
+    createElement(CausalGroupFixRouting, {
+      jobID: "job",
+      target: fixTarget,
+      externalCause: null,
+    }),
+  );
+  assert.match(owned, /aria-label="Fix: fails in build 208060"/i);
+  assert.doesNotMatch(owned, /dependency/);
+});
+
+test("the pattern panel only points at a chat that is on the page", () => {
+  // Pattern chat needs a systemic pattern, which this panel does not, so the
+  // panel could previously send the reader to a chat that never rendered.
+  const withChat = render(
+    createElement(PatternFixGuidance, { jobID: "job", buildID: "208060", chatAvailable: true }),
+  );
+  assert.match(withChat, /The pattern chat below/);
+  assert.match(withChat, /A fix proposal becomes available/);
+
+  const withoutChat = render(createElement(PatternFixGuidance, { jobID: "job", buildID: "208060" }));
+  assert.doesNotMatch(withoutChat, /pattern chat/);
+  // The guidance that does not depend on chat survives.
+  assert.match(withoutChat, /A fix proposal becomes available/);
+  assert.match(withoutChat, /View failed tests/);
 });
