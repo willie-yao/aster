@@ -397,9 +397,19 @@ func validateAnalysisChatCitations(
 			}
 		}
 		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
+			detail := fmt.Sprintf(
+				"citation %d quote does not appear in the cited artifact read; copy the text verbatim from the tool output instead of reformatting or shortening it",
+				i+1,
+			)
+			if analysisChatEvidenceSpansSegments(artifactEvidence, citation.Quote) {
+				detail = fmt.Sprintf(
+					"citation %d quote joins separate passages; quote one contiguous passage",
+					i+1,
+				)
+			}
 			return &analysisChatEvidenceFailure{
 				Gate:   analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf("citation %d quote was not returned contiguously by the cited artifact read", i+1),
+				Detail: detail,
 			}
 		}
 		if citation.LineStart > 0 && len(artifactEvidence.Lines) == 0 {

@@ -46,10 +46,12 @@ others. Assessment is optional and, when present, must be "supports",
 complete root_cause and suggested_fix object only when assessment is
 "challenges". Normal follow-up answers should omit both optional fields.
 Citations must name artifacts read during this conversation and include an exact
-quote. Use line_start and line_end only when a tool returned source line numbers.
-An answer whose citations cannot be verified is returned to the maintainer
-labelled unverified, so cite only evidence the tools actually returned. Output
-JSON only.`
+quote. Copy the quote verbatim from the tool output: keep the original path
+names, escape codes, and indentation, and do not shorten, re-wrap, or otherwise
+tidy the text. Use line_start and line_end only when a tool returned source line
+numbers. An answer whose citations cannot be verified is returned to the
+maintainer labelled unverified, so cite only evidence the tools actually
+returned. Output JSON only.`
 
 const analysisChatToolDocs = `
 
@@ -1136,16 +1138,54 @@ func analysisChatEvidenceContexts(value any) []string {
 	}
 }
 
+// analysisChatDisplayNoise matches SGR escape sequences, the colour and style
+// codes Prow build logs carry in volume and models routinely drop when quoting.
+// Only SGR is matched: other CSI sequences such as cursor movement can change
+// where text renders, so a quote that drops one must fail closed.
+var analysisChatDisplayNoise = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// analysisChatNormalizeQuote strips escape sequences, which are pure display and
+// carry no content, so a quote that drops them still verifies. Whitespace is
+// left untouched: leading indentation is semantic in the YAML and source files
+// that appear in build artifacts, so normalizing it could let a quote
+// misrepresent structure. The prompt asks the model to copy indentation
+// verbatim, and a quote that does not is told to copy the text verbatim.
+func analysisChatNormalizeQuote(text string) string {
+	return analysisChatDisplayNoise.ReplaceAllString(text, "")
+}
+
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {
 	if evidence == nil {
 		return false
 	}
+	normalized := analysisChatNormalizeQuote(quote)
+	if normalized == "" {
+		return false
+	}
 	for _, segment := range evidence.Segments {
-		if strings.Contains(segment, quote) {
+		if strings.Contains(analysisChatNormalizeQuote(segment), normalized) {
 			return true
 		}
 	}
 	return false
+}
+
+// analysisChatEvidenceSpansSegments reports whether a quote is absent from every
+// single evidence segment but present across two or more concatenated, so the
+// repair text can tell "you edited the quote" apart from "you joined passages".
+func analysisChatEvidenceSpansSegments(evidence *analysisChatEvidence, quote string) bool {
+	if evidence == nil || len(evidence.Segments) < 2 {
+		return false
+	}
+	normalized := analysisChatNormalizeQuote(quote)
+	if normalized == "" {
+		return false
+	}
+	joined := make([]string, 0, len(evidence.Segments))
+	for _, segment := range evidence.Segments {
+		joined = append(joined, analysisChatNormalizeQuote(segment))
+	}
+	return strings.Contains(strings.Join(joined, "\n"), normalized)
 }
 
 func analysisChatQuoteForRange(lines map[int]string, start, end int) (string, bool) {
