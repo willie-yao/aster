@@ -479,8 +479,13 @@ func TestBenchmarkToolRegistryIncludesSourceTools(t *testing.T) {
 }
 
 func validateScoredBenchmarkTraceEnvironment(resultsPath string, getenv func(string) string) error {
-	if strings.TrimSpace(resultsPath) != "" && strings.TrimSpace(getenv("AGENTIC_TRACE_TOOLS")) != "" {
-		return fmt.Errorf("AGENTIC_TRACE_TOOLS must be unset for scored benchmark execution")
+	if strings.TrimSpace(resultsPath) != "" {
+		if strings.TrimSpace(getenv("AGENTIC_TRACE_TOOLS")) != "" {
+			return fmt.Errorf("AGENTIC_TRACE_TOOLS must be unset for scored benchmark execution")
+		}
+		if strings.TrimSpace(getenv("BENCH_USE_GCS")) != "" {
+			return fmt.Errorf("BENCH_USE_GCS is unscored and cannot be used with BENCH_RESULTS_JSONL")
+		}
 	}
 	return nil
 }
@@ -488,6 +493,14 @@ func validateScoredBenchmarkTraceEnvironment(resultsPath string, getenv func(str
 func TestValidateScoredBenchmarkTraceEnvironment(t *testing.T) {
 	if err := validateScoredBenchmarkTraceEnvironment("results.jsonl", func(string) string { return "1" }); err == nil {
 		t.Fatal("scored benchmark accepted raw tool tracing")
+	}
+	if err := validateScoredBenchmarkTraceEnvironment("results.jsonl", func(key string) string {
+		if key == "BENCH_USE_GCS" {
+			return "1"
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("scored benchmark accepted live GCS")
 	}
 	if err := validateScoredBenchmarkTraceEnvironment("", func(string) string { return "1" }); err != nil {
 		t.Fatal(err)

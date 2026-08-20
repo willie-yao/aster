@@ -618,7 +618,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		if len(bc.sourceRefs) > 1 {
 			root = filepath.Join(root, ref.ID)
 		}
-		policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, ref.Revision, nil)
+		policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, ref.Revision, ref.ID, sealed)
 		if err != nil {
 			t.Fatalf("verify benchmark source %s=%s: %v", ref.ID, root, err)
 		}
@@ -949,13 +949,13 @@ func agentSandboxAnalyzerRecordForResult(
 			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd,
 		})
 	}
-	repository, revision, sourceIdentityErr := benchmarkSourceIdentity(prepared.bc, prepared.bc.primarySourceID)
-	if sourceIdentityErr != nil {
-		record.EvidenceContractPassed = false
-		record.EvidenceContractStatus = "source_identity_invalid"
-		return record
-	}
 	for _, citation := range analysis.SourceCitations {
+		repository, revision, sourceIdentityErr := benchmarkSourceIdentity(prepared.bc, citation.SourceID)
+		if sourceIdentityErr != nil {
+			record.EvidenceContractPassed = false
+			record.EvidenceContractStatus = "source_identity_invalid"
+			return record
+		}
 		record.SourceCitations = append(record.SourceCitations, benchmarkSourceCitation{
 			benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd},
 			Emitted:              true, Verified: citation.Verified,
@@ -1120,11 +1120,18 @@ func agentSandboxAnalyzerBenchmarkExecutionID(requestHash, runtimeIdentity, arm 
 	return fmt.Sprintf("analysis-bench-%x", sum[:10])
 }
 
-func sealOrVerifyAgentSandboxAnalyzerSource(ctx context.Context, root, revision string, sealed *agentSandboxAnalyzerPrepared) (agentanalysis.WorkspaceSourceModePolicy, error) {
+func sealOrVerifyAgentSandboxAnalyzerSource(ctx context.Context, root, revision, sourceID string, sealed *agentSandboxAnalyzerPrepared) (agentanalysis.WorkspaceSourceModePolicy, error) {
 	if sealed == nil {
 		return agentanalysis.ConfigurePreparedSourceModePolicy(ctx, root, revision)
 	}
-	policy := agentanalysis.WorkspaceSourceModePolicy(sealed.LocalSourceModePolicy)
+	policy, ok := agentanalysis.WorkspaceSourceModeFor(sealed.LocalSourceModePolicies, sourceID)
+	if !ok && len(sealed.LocalSourceModePolicies) == 0 && len(sealed.SourceRefs) <= 1 {
+		policy = agentanalysis.WorkspaceSourceModePolicy(sealed.LocalSourceModePolicy)
+		ok = policy != ""
+	}
+	if !ok {
+		return "", fmt.Errorf("sealed source mode policy for %s is unavailable", sourceID)
+	}
 	if err := agentanalysis.VerifyPreparedSourceWorkspace(ctx, root, revision, policy); err != nil {
 		return "", err
 	}
@@ -1317,13 +1324,13 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 	run("add", "source.go")
 	run("commit", "-qm", "fixture")
 	revision := run("rev-parse", "HEAD")
-	policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, nil)
+	policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, "primary", nil)
 	if err != nil || policy != agentanalysis.WorkspaceSourceModePreserve {
 		t.Fatalf("policy=%q err=%v", policy, err)
 	}
 	sealed := agentSandboxAnalyzerPrepared{Version: 8, EvidenceMode: benchmarkEvidenceModeArtifactOnly, LocalSourceModePolicy: string(policy), SourceModePolicy: string(policy)}
 	run("config", "--local", "core.filemode", "false")
-	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, &sealed); agentanalysis.SourceIntegrityCategory(err) != agentanalysis.SourceModePolicyChanged {
+	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, "primary", &sealed); agentanalysis.SourceIntegrityCategory(err) != agentanalysis.SourceModePolicyChanged {
 		t.Fatalf("error=%v category=%q", err, agentanalysis.SourceIntegrityCategory(err))
 	}
 	if mode := run("config", "--local", "--bool", "--get", "core.filemode"); mode != "false" {
@@ -1331,6 +1338,36 @@ func TestAgentSandboxAnalyzerExecutionRejectsChangedSourceModePolicy(t *testing.
 	}
 	if sealed.SourceModePolicy != string(agentanalysis.WorkspaceSourceModePreserve) {
 		t.Fatalf("sealed record changed: %+v", sealed)
+	}
+}
+
+func TestSealOrVerifyAgentSandboxAnalyzerSourceUsesPerSourcePolicy(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte("package fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) string {
+		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	run("init", "-q")
+	run("config", "user.name", "Test")
+	run("config", "user.email", "test@example.com")
+	run("config", "commit.gpgsign", "false")
+	run("add", "source.go")
+	run("commit", "-qm", "fixture")
+	revision := run("rev-parse", "HEAD")
+	sealed := &agentSandboxAnalyzerPrepared{SourceRefs: []benchmarkSourceRef{{ID: "client", Repository: "owner/repo", Revision: revision}, {ID: "server", Repository: "owner/repo", Revision: strings.Repeat("b", 40)}}, LocalSourceModePolicies: []agentanalysis.WorkspaceSourceMode{{SourceID: "client", Policy: agentanalysis.WorkspaceSourceModePreserve}, {SourceID: "server", Policy: agentanalysis.WorkspaceSourceModeIgnoreExecutable}}}
+	policy, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, "client", sealed)
+	if err != nil || policy != agentanalysis.WorkspaceSourceModePreserve {
+		t.Fatalf("policy=%q err=%v", policy, err)
+	}
+	if _, err := sealOrVerifyAgentSandboxAnalyzerSource(t.Context(), root, revision, "missing", sealed); err == nil {
+		t.Fatal("missing source policy was accepted")
 	}
 }
 
