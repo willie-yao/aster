@@ -1158,10 +1158,8 @@ func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 	}
 }
 
-// TestAgToolDocs_TransientTriageAnchors pins the transient-triage step that
-// tells the agent to honor the project's known-transient classes and stop
-// before drilling, so the anti-punt / deep-investigation framing does not
-// override the consumer's transient rules and flag infra flake as a real bug.
+// TestAgToolDocs_CausalPriorityAnchors pins the guidance that ranks a specific
+// failure above repeated timeout and cleanup noise when picking a cause.
 func TestAgToolDocs_CausalPriorityAnchors(t *testing.T) {
 	for _, anchor := range []string{
 		"compare specific request/list/watch/assertion failures with repeated timeout, readiness, and cleanup noise",
@@ -1174,11 +1172,22 @@ func TestAgToolDocs_CausalPriorityAnchors(t *testing.T) {
 	}
 }
 
+// TestAgToolDocs_TransientTriageAnchors pins the transient-triage step. The
+// agent honors the project's known-transient classes and stops drilling for a
+// code root cause, so the anti-punt framing does not flag infra flake as a real
+// bug, but it still reports the durable improvement the evidence supports.
 func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 	required := []string{
 		"Triage for a known transient FIRST",
-		"set is_transient=true and stop",
+		"set is_transient=true and stop drilling for a code root cause",
 		"manufacture a remediation for infrastructure flake",
+		"Stopping the drill does not mean returning an empty remediation",
+		"artifacts you already read",
+		"durable resilience improvement that would have absorbed the flake",
+		"set cause_location when that evidence establishes the repository that owns it",
+		"verify the file with the repository tools before naming it in relevant_files",
+		"earliest upstream cause of a non-transient failure",
+		"For a non-transient failure, did I read the artifacts",
 		"rule out a known-transient class",
 		"classify by EVIDENCE, not by the string",
 		"absence of a specific cause favors transient",
@@ -1187,6 +1196,10 @@ func TestAgToolDocs_TransientTriageAnchors(t *testing.T) {
 		if !strings.Contains(agToolDocs, s) {
 			t.Errorf("agToolDocs missing transient-triage anchor %q\nfull text:\n%s", s, agToolDocs)
 		}
+	}
+	// The bare stop discarded every actionable finding a transient carried.
+	if strings.Contains(agToolDocs, "set is_transient=true and stop.") {
+		t.Error("agToolDocs reintroduced the bare transient stop")
 	}
 }
 
@@ -1242,11 +1255,19 @@ func TestForceFinalizePrompt_JSONOnlyAnchor(t *testing.T) {
 }
 
 // TestResponseFormatFooter_TransientAnchors pins guidance that defers to the
-// project's named transient classes.
+// project's named transient classes while keeping the transient verdict
+// separate from whether a durable remediation exists.
 func TestResponseFormatFooter_TransientAnchors(t *testing.T) {
 	required := []string{
 		"even if you could keep digging",
 		"infrastructure flake is not a code bug",
+		"is_transient answers whether a rerun is likely to pass",
+		"a transient verdict never empties suggested_fix",
+		"evidence you already read",
+		"durable resilience improvement",
+		"set cause_location when that evidence establishes the",
+		"never flip is_transient to false",
+		"merely to justify naming a fix",
 	}
 	for _, s := range required {
 		if !strings.Contains(ResponseFormatFooter, s) {
