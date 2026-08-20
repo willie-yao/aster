@@ -409,12 +409,18 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		canonicalContent := strings.ReplaceAll(content, "\r\n", "\n")
 		fullLines := strings.Split(canonicalContent, "\n")
 		body := content
-		if len(body) > grepMaxBytes {
+		bodyTruncated := len(body) > grepMaxBytes
+		if bodyTruncated {
 			body = body[:grepMaxBytes]
 		}
 		bytes += len(body)
 		body = strings.ReplaceAll(body, "\r\n", "\n")
 		lines := strings.Split(body, "\n")
+		if bodyTruncated && !strings.HasSuffix(body, "\n") {
+			lines = lines[:len(lines)-1]
+		} else if strings.HasSuffix(body, "\n") {
+			lines = lines[:len(lines)-1]
+		}
 		for i, line := range lines {
 			if !re.MatchString(line) {
 				continue

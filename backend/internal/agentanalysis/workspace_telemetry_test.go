@@ -216,3 +216,25 @@ func TestValidShadowProvenanceRejectsUnavailableUsageValues(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateWorkspaceUsageRejectsInconsistentCountsAndCost(t *testing.T) {
+	base := WorkspaceUsage{Available: true, Status: WorkspaceTelemetryAvailable, ModelRequests: 1, InputTokens: 10, CachedInputTokens: 2, OutputTokens: 4}
+	for name, mutate := range map[string]func(*WorkspaceUsage){
+		"negative reasoning":       func(v *WorkspaceUsage) { v.ReasoningTokens = -1 },
+		"cached exceeds input":     func(v *WorkspaceUsage) { v.CachedInputTokens = 11 },
+		"reasoning exceeds output": func(v *WorkspaceUsage) { v.ReasoningTokens = 5 },
+		"invalid cost":             func(v *WorkspaceUsage) { v.CostAvailable = true; v.CostUSD = "nan" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := base
+			mutate(&value)
+			if err := validateWorkspaceUsage(value); err == nil {
+				t.Fatalf("invalid usage accepted: %+v", value)
+			}
+		})
+	}
+	unavailable := WorkspaceUsage{Status: WorkspaceTelemetryUnavailable, ReasoningTokens: 1}
+	if err := validateWorkspaceUsage(unavailable); err == nil {
+		t.Fatal("unavailable reasoning tokens accepted")
+	}
+}

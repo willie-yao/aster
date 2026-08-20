@@ -163,7 +163,7 @@ func TestGrepRepoReturnsPrivateCanonicalMatchRanges(t *testing.T) {
 		t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
 	}
 	match := observation.Matches[0]
-	if match.SourceID != tools.PrimarySourceID || match.Path != "pkg/cloud/services/vm.go" || match.LineStart != 1 || match.LineEnd != 5 {
+	if match.SourceID != tools.PrimarySourceID || match.Path != "pkg/cloud/services/vm.go" || match.LineStart != 1 || match.LineEnd != 4 {
 		t.Fatalf("match=%+v", match)
 	}
 	if result.ContentBytes == 0 {
@@ -311,5 +311,15 @@ func TestRepoToolSchemasRequireSourceID(t *testing.T) {
 		if !found {
 			t.Fatalf("%s required=%v", tool.Name(), required)
 		}
+	}
+}
+
+func TestGrepRepoDoesNotObserveTruncatedTrailingLine(t *testing.T) {
+	prefix := "match " + strings.Repeat("x", grepMaxBytes)
+	env := envFor(&fakeRepo{files: map[string]string{"large.txt": prefix + "\ncomplete\n"}})
+	result := (&grepTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]interface{}{"pattern": "match", "path_glob": "*.txt"})))
+	observation, _ := result.Observation.(GrepObservation)
+	if len(observation.Matches) != 0 {
+		t.Fatalf("truncated line was observed as complete: %+v", observation.Matches)
 	}
 }

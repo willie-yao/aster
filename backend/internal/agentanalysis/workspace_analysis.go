@@ -908,7 +908,7 @@ func readWorkspaceText(root, relative string, expectedMax int64) (string, error)
 }
 
 func validateWorkspaceUsage(usage WorkspaceUsage) error {
-	if usage.ModelRequests < 0 || usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.OutputTokens < 0 || len(usage.CostUSD) > 64 {
+	if usage.ModelRequests < 0 || usage.InputTokens < 0 || usage.CachedInputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.CachedInputTokens > usage.InputTokens || usage.ReasoningTokens > usage.OutputTokens || len(usage.CostUSD) > 64 {
 		return fmt.Errorf("workspace execution usage is invalid")
 	}
 	if usage.Available {
@@ -918,7 +918,7 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 		if usage.Status == WorkspaceTelemetryPartial && (usage.CostAvailable || usage.CostUSD != "") {
 			return fmt.Errorf("partial workspace usage cannot report complete cost")
 		}
-		if usage.CostAvailable != (usage.CostUSD != "") {
+		if usage.CostAvailable != (usage.CostUSD != "") || usage.CostUSD != "" && !ledgerCostPattern.MatchString(usage.CostUSD) {
 			return fmt.Errorf("workspace execution cost availability is invalid")
 		}
 		return nil
@@ -926,7 +926,7 @@ func validateWorkspaceUsage(usage WorkspaceUsage) error {
 	if usage.Status != WorkspaceTelemetryUnavailable && usage.Status != WorkspaceTelemetryMalformed && usage.Status != WorkspaceTelemetryTruncated {
 		return fmt.Errorf("unavailable workspace usage status is invalid")
 	}
-	if usage.ModelRequests != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.CostAvailable || usage.CostUSD != "" {
+	if usage.ModelRequests != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.ReasoningTokens != 0 || usage.CostAvailable || usage.CostUSD != "" {
 		return fmt.Errorf("unavailable workspace usage must not contain inferred values")
 	}
 	return nil
