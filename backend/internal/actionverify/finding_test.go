@@ -2,6 +2,7 @@ package actionverify
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -19,8 +20,32 @@ func TestVerifyFindingSourceGroundsOnlyLocalSymbols(t *testing.T) {
 	if !slices.Equal(result.Symbols, want) {
 		t.Fatalf("symbols = %+v, want %+v", result.Symbols, want)
 	}
-	if !slices.Contains(result.Warnings, findingWarningExternal) {
-		t.Fatalf("warnings = %v", result.Warnings)
+	warning := findingMissingSymbolsWarning([]string{"CreateOrUpdate", "Get", "StatusError", "Update", "resourceVersion"})
+	if !slices.Contains(result.Warnings, warning) {
+		t.Fatalf("warnings = %v, want %q", result.Warnings, warning)
+	}
+}
+
+func TestVerifyFindingSourceIgnoresEvidenceQuotesAndGroundsStructFields(t *testing.T) {
+	const finding = "The log reports `\"resource up to date\"` for `capz-e2e-70q28c-ha`, while `Parameters()` reads `LastAppliedSecurityRules`."
+	files := map[string]string{
+		"azure/services/securitygroups/spec.go": "package securitygroups\n\ntype NSGSpec struct {\n\tLastAppliedSecurityRules map[string]any\n}\n\nfunc (s *NSGSpec) Parameters() {}\n",
+	}
+	result, err := VerifyFindingSource(finding, mapKeys(files), files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []FindingSymbol{
+		{Name: "LastAppliedSecurityRules", Path: "azure/services/securitygroups/spec.go"},
+		{Name: "Parameters", Path: "azure/services/securitygroups/spec.go"},
+	}
+	if !slices.Equal(result.Symbols, want) {
+		t.Fatalf("symbols = %+v, want %+v", result.Symbols, want)
+	}
+	for _, warning := range result.Warnings {
+		if strings.HasPrefix(warning, findingWarningUnresolved) {
+			t.Fatalf("evidence quotes produced unresolved-symbol warning: %v", result.Warnings)
+		}
 	}
 }
 
@@ -34,13 +59,19 @@ func TestVerifyFindingSourceWarningOnlyGroundingOutcomes(t *testing.T) {
 		{
 			name: "no grounded symbol", proposal: "Change the terminal branch near `ExternalHelper`.",
 			files:    map[string]string{"pkg/controller.go": "package pkg\nfunc reconcileDelete() {}\n"},
-			warnings: []string{findingWarningNoSymbol, findingWarningExternal},
+			warnings: []string{findingWarningNoSymbol, findingMissingSymbolsWarning([]string{"ExternalHelper"})},
 		},
 		{
 			name: "ambiguous symbol", proposal: "Update `reconcileDelete`.",
 			files: map[string]string{
 				"pkg/a.go": "package pkg\nfunc reconcileDelete() {}\n",
 				"pkg/b.go": "package pkg\nfunc reconcileDelete() {}\n",
+			}, warnings: []string{findingWarningNoSymbol, findingWarningAmbiguous},
+		},
+		{
+			name: "ambiguous struct field", proposal: "Update `Status`.",
+			files: map[string]string{
+				"pkg/types.go": "package pkg\ntype A struct { Status string }\ntype B struct { Status string }\n",
 			}, warnings: []string{findingWarningNoSymbol, findingWarningAmbiguous},
 		},
 		{

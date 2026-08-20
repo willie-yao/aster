@@ -290,7 +290,7 @@ export function ChatFixDialog({
     setError(null);
     setObservationMessage(null);
     try {
-      const recoverableTerminal = request.status === "failed" && request.reason_code === "no_reviewable_patch";
+      const recoverableTerminal = request.status === "failed" && request.failure?.category === "no_reviewable_patch";
       if (!recoverableTerminal) {
         let cancelled = await cancelAnalysisChatFixRequest(request.id);
         while (actionRequestIsPollable(cancelled.status)) {

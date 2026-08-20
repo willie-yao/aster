@@ -30,9 +30,18 @@ type SafeCommandResult struct {
 	TimedOut   bool     `json:"timed_out,omitempty"`
 }
 
+// AnalysisFixFailureDetail distinguishes safe outcomes within one failure category.
+type AnalysisFixFailureDetail string
+
+const (
+	AnalysisFixFailureDetailNoRepositoryChange  AnalysisFixFailureDetail = "no_repository_change"
+	AnalysisFixFailureDetailReviewScopeExceeded AnalysisFixFailureDetail = "review_scope_exceeded"
+)
+
 // AnalysisFixFailureView reports a bounded exact-JUnit generation failure.
 type AnalysisFixFailureView struct {
 	Category       AnalysisFixFailureCategory `json:"category"`
+	Detail         AnalysisFixFailureDetail   `json:"detail,omitempty"`
 	TerminalState  runtime.TerminalState      `json:"terminal_state,omitempty"`
 	CommandResults []SafeCommandResult        `json:"command_results,omitempty"`
 	ChangedFiles   []string                   `json:"changed_files,omitempty"`
@@ -52,7 +61,7 @@ func safeAnalysisFixPreviewError(err error) error {
 	}
 	if diagnostic, ok := fixpr.AnalysisFailureDiagnosticOf(err); ok {
 		code := analysisFixReasonCode(diagnostic.Category)
-		return withReason(code, err, ReasonMessage(code))
+		return withReason(code, err, analysisFixFailureMessage(diagnostic))
 	}
 	if errors.Is(err, fixpr.ErrPreviewBaseChanged) {
 		return classifiedAnalysisFixFailure(ReasonEvidenceUnavailable, AnalysisFixFailureSourceChanged, "", err)
@@ -61,6 +70,21 @@ func safeAnalysisFixPreviewError(err error) error {
 		return classifiedAnalysisFixFailure(ReasonGenerationFailed, AnalysisFixFailureRuntimeInfrastructure, "", err)
 	}
 	return classifiedAnalysisFixFailure(ReasonGenerationFailed, AnalysisFixFailureRuntimeInfrastructure, "", err)
+}
+
+func analysisFixFailureMessage(diagnostic fixpr.AnalysisFailureDiagnostic) string {
+	code := analysisFixReasonCode(diagnostic.Category)
+	if diagnostic.Category != fixpr.AnalysisFailureNoReviewablePatch {
+		return ReasonMessage(code)
+	}
+	switch diagnostic.Detail {
+	case fixpr.AnalysisFailureDetailNoRepositoryChange:
+		return "The coding agent completed without changing repository files."
+	case fixpr.AnalysisFailureDetailReviewScopeExceeded:
+		return "The coding agent returned changes outside the allowed review scope."
+	default:
+		return "The coding agent did not return a reviewable repository change."
+	}
 }
 
 func classifiedAnalysisFixFailure(
@@ -108,8 +132,9 @@ func analysisFixFailureView(err error) *AnalysisFixFailureView {
 	}
 	if diagnostic, ok := fixpr.AnalysisFailureDiagnosticOf(err); ok {
 		view := &AnalysisFixFailureView{
-			Category: AnalysisFixFailureCategory(diagnostic.Category), TerminalState: diagnostic.TerminalState,
-			ChangedFiles: append([]string(nil), diagnostic.ChangedFiles...),
+			Category: AnalysisFixFailureCategory(diagnostic.Category), Detail: AnalysisFixFailureDetail(diagnostic.Detail),
+			TerminalState: diagnostic.TerminalState,
+			ChangedFiles:  append([]string(nil), diagnostic.ChangedFiles...),
 		}
 		view.CommandResults = make([]SafeCommandResult, len(diagnostic.CommandResults))
 		for index, result := range diagnostic.CommandResults {
@@ -137,7 +162,7 @@ func cloneAnalysisFixFailureView(in *AnalysisFixFailureView) *AnalysisFixFailure
 		return nil
 	}
 	out := &AnalysisFixFailureView{
-		Category: in.Category, TerminalState: in.TerminalState,
+		Category: in.Category, Detail: in.Detail, TerminalState: in.TerminalState,
 		ChangedFiles: append([]string(nil), in.ChangedFiles...),
 	}
 	out.CommandResults = make([]SafeCommandResult, len(in.CommandResults))

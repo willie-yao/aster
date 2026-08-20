@@ -278,8 +278,11 @@ func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected no-change failure")
 	}
+	if err.Error() != "the coding agent completed without changing repository files" || strings.Contains(err.Error(), "external or operational") {
+		t.Fatalf("no-change error = %q", err)
+	}
 	diagnostic, ok := AnalysisFailureDiagnosticOf(err)
-	if !ok || diagnostic.Category != AnalysisFailureNoReviewablePatch || diagnostic.TerminalState != runtime.TerminalSucceeded {
+	if !ok || diagnostic.Category != AnalysisFailureNoReviewablePatch || diagnostic.Detail != AnalysisFailureDetailNoRepositoryChange || diagnostic.TerminalState != runtime.TerminalSucceeded {
 		t.Fatalf("diagnostic = %+v ok=%v", diagnostic, ok)
 	}
 	if agent.calls != 1 || len(diagnostic.CommandResults) != len(commands) {
@@ -296,16 +299,17 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	results := sandboxCommandResults()
 	tests := []struct {
-		name     string
-		result   runtime.GenerateResult
-		err      error
-		maxFiles int
-		want     AnalysisFailureCategory
+		name       string
+		result     runtime.GenerateResult
+		err        error
+		maxFiles   int
+		want       AnalysisFailureCategory
+		wantDetail AnalysisFailureDetail
 	}{
 		{
-			name: "too broad", maxFiles: 1, want: AnalysisFailureNoReviewablePatch,
+			name: "too broad", maxFiles: 1, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
 			result: runtime.GenerateResult{TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
-				Files: map[string]string{"a": "1", "b": "2"}, Diff: "diff", CommandResults: results},
+				ChangedFiles: []string{"a", "b"}, Files: map[string]string{"a": "1", "b": "2"}, Diff: "diff", CommandResults: results},
 		},
 		{
 			name: "runtime", maxFiles: 2, want: AnalysisFailureRuntimeInfrastructure,
@@ -319,14 +323,14 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			err: errors.New("agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403)"),
 		},
 		{
-			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch,
+			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
 			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureReviewScope,
 				CommandResults: results},
 			err: errors.New("agent Sandbox execution failed"),
 		},
 		{
 			name: "result contract", maxFiles: 2, want: AnalysisFailureResultContract,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, CommandResults: results},
+			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, ChangedFiles: []string{"../../private runtime text"}, CommandResults: results},
 			err:    runtime.ErrMalformedResult,
 		},
 		{
@@ -358,6 +362,12 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			diagnostic, ok := AnalysisFailureDiagnosticOf(err)
 			if !ok || diagnostic.Category != tt.want || agent.calls != 1 {
 				t.Fatalf("diagnostic=%+v ok=%v calls=%d err=%v", diagnostic, ok, agent.calls, err)
+			}
+			if diagnostic.Detail != tt.wantDetail {
+				t.Fatalf("detail = %q, want %q", diagnostic.Detail, tt.wantDetail)
+			}
+			if len(diagnostic.ChangedFiles) != 0 {
+				t.Fatalf("diagnostic exposed changed files: %v", diagnostic.ChangedFiles)
 			}
 		})
 	}

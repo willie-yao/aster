@@ -2093,7 +2093,13 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 		if err := service.setRequestWarning(ctx, analysisWarningCritique, analysisWarningSuggestedFix); err != nil {
 			return PreviewResult{}, err
 		}
-		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
+		return PreviewResult{}, &classifiedAnalysisFixError{
+			failure: &AnalysisFixFailureView{
+				Category: AnalysisFixFailureNoReviewablePatch, Detail: AnalysisFixFailureDetailNoRepositoryChange,
+				TerminalState: runtime.TerminalSucceeded,
+			},
+			cause: withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "The coding agent completed without changing repository files."),
+		}
 	}
 	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
@@ -2106,7 +2112,7 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 	if failed.ReasonCode != ReasonNoReviewablePatch {
 		t.Fatalf("reason code = %q", failed.ReasonCode)
 	}
-	if failed.Error != "No reviewable patch was generated. Add a maintainer instruction and regenerate." {
+	if failed.Error != "The coding agent completed without changing repository files." {
 		t.Fatalf("error = %q", failed.Error)
 	}
 }

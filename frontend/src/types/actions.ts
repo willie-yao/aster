@@ -66,8 +66,11 @@ export interface SafeCommandResult {
   timed_out?: boolean;
 }
 
+export type AnalysisFixFailureDetail = "no_repository_change" | "review_scope_exceeded";
+
 export interface AnalysisFixFailure {
   category: AnalysisFixFailureCategory;
+  detail?: AnalysisFixFailureDetail;
   terminal_state?: "succeeded" | "failed" | "timed_out" | "cancelled";
   command_results?: SafeCommandResult[];
   changed_files?: string[];
