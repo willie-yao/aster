@@ -221,10 +221,11 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 // salvageAnalysisChatReply recovers the answer text from a response that failed
 // the contract, so a formatting failure degrades the same way an unverifiable
 // citation already does instead of discarding a usable answer. The salvaged
-// reply carries no evidence, so it cannot start a fix or a correction.
+// reply carries no evidence, so it cannot start a fix or a correction. Content
+// that reaches no conclusion is declined rather than shown as an answer.
 func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
 	answer := analysisChatSalvagedAnswer(raw)
-	if answer == "" {
+	if answer == "" || analysisChatLooksLikeAnnouncement(answer) {
 		return analysischat.Reply{}, false
 	}
 	reply := analysischat.Reply{Answer: clampAnalysisChatText(answer, analysisChatMaxAnswerBytes)}
@@ -249,6 +250,16 @@ func analysisChatSalvagedAnswer(raw string) string {
 		return answer
 	}
 	return trimmed
+}
+
+// analysisChatLooksLikeAnnouncement reports whether content trails off instead
+// of concluding. A model that writes "let me now read the controller log:" and
+// calls no tool produces a tools-free turn the loop would otherwise treat as its
+// final answer. The test is only a trailing colon, so an answer that merely
+// contains one, including one inside a quoted YAML key, still reads as an
+// answer.
+func analysisChatLooksLikeAnnouncement(content string) bool {
+	return strings.HasSuffix(strings.TrimSpace(content), ":")
 }
 
 func analysisChatValidationRank(category string) int {

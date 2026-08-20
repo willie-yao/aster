@@ -90,7 +90,7 @@ const (
 
 // analysisChatMaxCorrectiveRounds bounds the corrective rounds a turn may spend
 // re-entering the tool loop after a failed response or evidence gate.
-const analysisChatMaxCorrectiveRounds = 1
+const analysisChatMaxCorrectiveRounds = 2
 
 // analysisChatCorrectivePrompt asks the model to repair one specific failure
 // with the artifact tools still available.
@@ -99,6 +99,13 @@ func analysisChatCorrectivePrompt(detail string) string {
 		". Read the artifacts you need with the available read-only tools, then return one corrected JSON object" +
 		" whose citations quote content those tools returned."
 }
+
+// analysisChatAnnouncementCorrectivePrompt answers a turn that described its
+// next step and called no tool. Naming that mistake works where the generic
+// validation text does not, because nothing about the response was malformed.
+const analysisChatAnnouncementCorrectivePrompt = "Your previous response announced a next step instead of taking it." +
+	" Either make that tool call now, or return the analysis-conversation JSON object using the evidence you already gathered." +
+	" Output JSON only."
 
 func analysisChatStructuredFormat() ResponseFormat {
 	stringOrNull := []any{
@@ -342,7 +349,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			if correctiveRounds < analysisChatMaxCorrectiveRounds {
 				correctiveRounds++
 				turn.ReportProgress(analysischat.PhaseValidationRetrying)
-				return toolLoopCorrect(analysisChatCorrectivePrompt(detail)).granting()
+				return toolLoopCorrect(analysisChatRepairPrompt(answer.Content, stats, validationErr, detail)).granting()
 			}
 			if validationErr == nil {
 				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceUnverified, stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
@@ -603,6 +610,20 @@ func analysisChatRequestErrorCategory(err error) string {
 
 func analysisChatSafeValidationError(err error) error {
 	return analysisChatSafeValidationCategory(analysisChatValidationCategory(err))
+}
+
+// analysisChatRepairPrompt picks the corrective message that describes what the
+// turn actually got wrong. A turn that carried no candidate and left off
+// mid-thought announced a step; a response that opens an object attempted the
+// contract and was cut off, so it gets the generic repair instead.
+func analysisChatRepairPrompt(content string, stats analysisChatParseStats, validationErr error, detail string) string {
+	announced := validationErr != nil && stats.Category == analysisChatValidationCandidate &&
+		stats.CandidateCount == 0 && !strings.HasPrefix(strings.TrimSpace(content), "{") &&
+		analysisChatLooksLikeAnnouncement(content)
+	if announced {
+		return analysisChatAnnouncementCorrectivePrompt
+	}
+	return analysisChatCorrectivePrompt(detail)
 }
 
 func recordAnalysisChatResponseFailure(

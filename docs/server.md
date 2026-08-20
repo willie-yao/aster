@@ -131,7 +131,9 @@ returned, or one so generic it names several, cannot be verified. An answer that
 fails that check, or that does not follow the response format at all, is still
 returned, with its unproven citations removed and the answer marked unverified so
 it is visually distinct in the UI. An unverified answer cannot start a Fix
-preview or a correction.
+preview or a correction. A response that only announces the model's next step is
+not an answer: the engine asks the model to take that step or conclude, and the
+turn fails if it does neither.
 
 A proposed correction or Fix finding is still inert model output. Corrections
 require their own preview and confirmation. Exact-JUnit Fix handoff requires the

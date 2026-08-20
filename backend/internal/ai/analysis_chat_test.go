@@ -1644,6 +1644,7 @@ func TestAnalysisChatEvidenceClaimWithoutCitationsDegradesToUnverified(t *testin
 	uncited := `{"answer":"The artifact supports it.","citations":[],"assessment":"supports","proposed_revision":null}`
 	server.push(200, chatRespFinal(uncited))
 	server.push(200, chatRespFinal(uncited))
+	server.push(200, chatRespFinal(uncited))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
 		"build-log.txt": []byte("controller stopped\n"),
 	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
@@ -1659,18 +1660,19 @@ func TestAnalysisChatEvidenceClaimWithoutCitationsDegradesToUnverified(t *testin
 	}
 	trace.Finish("success", nil)
 	if !reply.Unverified || reply.UnverifiedReason != analysischat.UnverifiedMissing ||
-		reply.Assessment != "inconclusive" || reply.ValidationRetries != 1 {
+		reply.Assessment != "inconclusive" || reply.ValidationRetries != 2 {
 		t.Fatalf("reply = %+v", reply)
 	}
 	if statuses := analysisChatEvidenceTraceStatuses(store.Snapshot()); !slices.Contains(statuses, analysisChatEvidenceUnverified) {
 		t.Fatalf("evidence statuses = %v", statuses)
 	}
 }
-func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRound(t *testing.T) {
+func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRounds(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
 	invalid := `{"answer":"The artifact supports it.","citations":[{"path":"build-log.txt","quote":"different evidence"}],"assessment":"supports","proposed_revision":null}`
+	server.push(200, chatRespFinal(invalid))
 	server.push(200, chatRespFinal(invalid))
 	server.push(200, chatRespFinal(invalid))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -1687,8 +1689,8 @@ func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRound(t *testing.T) 
 		reply.Assessment != "inconclusive" || len(reply.Citations) != 0 || reply.ProposedRevision != nil {
 		t.Fatalf("reply = %+v", reply)
 	}
-	if got := int(server.calls); got != 3 {
-		t.Fatalf("provider calls = %d, want 3", got)
+	if got, want := int(server.calls), 4; got != want {
+		t.Fatalf("provider calls = %d, want %d", got, want)
 	}
 }
 func TestAnalysisChatPublishedPatternMembershipNeedsNoArtifactRead(t *testing.T) {
@@ -1921,6 +1923,18 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			want: `{"answer":"maybe timeout","answer":"actually OOM","citations":[]}`,
 		},
 		{name: "empty", raw: "  "},
+		{name: "preamble", raw: "Let me now look at what happens during the deletion window:"},
+		{name: "contract-shaped preamble", raw: `{"answer":"Let me read the controller log:","citations":[],"confidence":0.9}`},
+		{
+			name: "answer ending in a quoted key that carries a colon",
+			raw:  "The manifest is missing **`securityGroup:`**",
+			want: "The manifest is missing **`securityGroup:`**",
+		},
+		{
+			name: "answer ending in an ellipsis",
+			raw:  "The evidence remains inconclusive…",
+			want: "The evidence remains inconclusive…",
+		},
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1939,8 +1953,9 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 	}
 }
 
-// Narration alongside a tool call is not an answer. Salvage runs only on a
-// tools-free turn, so "let me check the log" never becomes the reply.
+// Narration alongside a tool call is not an answer, and neither is narration on
+// its own: a model that announces a step and calls no tool produces a tools-free
+// turn the loop would otherwise treat as its final answer.
 func TestAnalysisChatNarrationIsNotSalvaged(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
@@ -1955,6 +1970,106 @@ func TestAnalysisChatNarrationIsNotSalvaged(t *testing.T) {
 
 	if _, err := agent.Reply(t.Context(), analysisChatTurn()); !errors.Is(err, analysischat.ErrResponseValidationFailed) {
 		t.Fatalf("Reply error = %v", err)
+	}
+}
+
+const analysisChatAnnouncementTurn = "The controller logs are very revealing. Let me now look for the critical" +
+	" pattern, what happens with test-security-group during the deletion window:"
+
+// A turn that only announces its next step fails rather than reaching the
+// maintainer as an answer, however many times the model repeats it.
+func TestAnalysisChatAnnouncementFailsInsteadOfBeingSalvaged(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	for i := 0; i < analysisChatMaxCorrectiveRounds+1; i++ {
+		server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
+	}
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+
+	_, err := agent.Reply(t.Context(), analysisChatTurn())
+	if !errors.Is(err, analysischat.ErrResponseValidationFailed) {
+		t.Fatalf("Reply error = %v", err)
+	}
+	if gate, ok := analysischat.ValidationGateOf(err); !ok || gate != analysischat.GateCandidate {
+		t.Fatalf("gate = %q ok = %t", gate, ok)
+	}
+}
+
+// The corrective rounds name the mistake and leave room to recover from it.
+func TestAnalysisChatAnnouncementRecoversOnTheLastCorrectiveRound(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
+	server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
+	server.push(200, chatRespFinal(`{
+		"answer":"The controller exit supports the published conclusion.",
+		"assessment":"supports",
+		"citations":[{"path":"build-log.txt","quote":"controller stopped"}],
+		"proposed_revision":null
+	}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+
+	reply, err := agent.Reply(t.Context(), analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Unverified || len(reply.Citations) != 1 || reply.ValidationRetries != 2 {
+		t.Fatalf("reply = %+v", reply)
+	}
+	corrections := 0
+	for _, request := range server.requests {
+		if bytes.Contains(request, []byte("announced a next step instead of taking it")) {
+			corrections++
+		}
+	}
+	if corrections != 2 {
+		t.Fatalf("announcement corrections = %d, want 2", corrections)
+	}
+}
+
+func TestAnalysisChatRepairPromptNamesTheFailure(t *testing.T) {
+	generic := analysisChatCorrectivePrompt("no JSON response object found")
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "announcement", content: analysisChatAnnouncementTurn, want: analysisChatAnnouncementCorrectivePrompt},
+		{name: "prose answer without the JSON envelope", content: "The node never joined.", want: generic},
+		{name: "response cut off inside its own JSON", content: `{"answer":"the deletion window:`, want: generic},
+		{
+			name:    "evidence gate on an answer ending in a colon",
+			content: `{"answer":"The failing pods were:","citations":[],"assessment":"supports","proposed_revision":null}`,
+			want:    generic,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, stats, err := parseAnalysisChatReplyCandidates(testCase.content, map[string]*analysisChatEvidence{})
+			got := analysisChatRepairPrompt(testCase.content, stats, err, "no JSON response object found")
+			if got != testCase.want {
+				t.Fatalf("prompt = %q", got)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatAnnouncementPromptOffersBothWaysOut(t *testing.T) {
+	for _, want := range []string{
+		"announced a next step instead of taking it",
+		"make that tool call now",
+		"return the analysis-conversation JSON object",
+		"Output JSON only.",
+	} {
+		if !strings.Contains(analysisChatAnnouncementCorrectivePrompt, want) {
+			t.Fatalf("announcement prompt missing %q", want)
+		}
 	}
 }
 
