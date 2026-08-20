@@ -690,8 +690,19 @@ func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) 
 	return strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), normalizeCitationText(quote))
 }
 
+// citationDisplayNoise matches SGR escape sequences, the colour and style codes
+// Prow build logs carry in volume and models routinely drop when quoting. Only
+// SGR is matched: other CSI sequences such as cursor movement can change where
+// text renders, so a quote that drops one must fail closed.
+var citationDisplayNoise = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// normalizeCitationText strips colour codes and collapses every whitespace run.
+// Both are presentation a model routinely drops or re-wraps when quoting a log,
+// and neither changes what the text says. Every citation check in the engine
+// compares through this function, so the analyzer and analysis chat apply the
+// same rule to the same recorded evidence.
 func normalizeCitationText(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+	return strings.Join(strings.Fields(citationDisplayNoise.ReplaceAllString(value, "")), " ")
 }
 
 func proseLineClaims(value string) []proseLineClaim {

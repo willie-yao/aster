@@ -124,6 +124,7 @@ const unverifiedReasonDetail: Record<AnalysisChatUnverifiedReason, string> = {
   citation: "The quoted evidence did not match what the artifact tools returned.",
   reference: "The cited artifact was never read in this conversation.",
   missing: "The answer claimed artifact evidence but cited none.",
+  format: "The answer did not follow the response format, so its evidence could not be verified.",
 };
 
 function isPendingAnalysisChatFailure(error: unknown): boolean {

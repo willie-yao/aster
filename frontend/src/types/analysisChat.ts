@@ -94,7 +94,7 @@ export type AnalysisChatAttemptFailureKind =
   | "validation"
   | "source";
 
-export type AnalysisChatUnverifiedReason = "citation" | "reference" | "missing";
+export type AnalysisChatUnverifiedReason = "citation" | "reference" | "missing" | "format";
 
 export interface AnalysisChatAttempt {
   request_id: string;

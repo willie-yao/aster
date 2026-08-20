@@ -13,13 +13,22 @@ import (
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
-// analysisChatMaxQuoteBytes bounds one citation quote. It exists to keep the
-// downstream budgets satisfiable, not to judge evidence, so it is set as high as
-// those budgets allow: fix generation rejects a context over 64 KiB built from
-// up to 16 citations, and the chat store rejects state over 64 MiB. A larger
-// value would let a verified answer offer a fix that then fails to generate.
+// analysisChatMaxQuoteBytes bounds one citation quote. The engine attributes the
+// quote from its own recorded tool output, so this is a clamp on that text, not
+// a judgement on the model's. It exists to keep the downstream budgets
+// satisfiable and is set as high as those budgets allow: fix generation rejects
+// a context over 64 KiB built from up to 16 citations, and the chat store
+// rejects state over 64 MiB.
 // TestAnalysisChatQuoteCapFitsDownstreamBudgets pins that arithmetic.
 const analysisChatMaxQuoteBytes = 2000
+
+// analysisChatMaxQuoteLines bounds how many lines one citation may cover,
+// whether the model named a line range or the engine resolved a locator.
+const analysisChatMaxQuoteLines = 50
+
+// analysisChatMaxAnswerBytes bounds the answer text, both when the model
+// returns a contract-shaped reply and when the engine salvages one.
+const analysisChatMaxAnswerBytes = 32 << 10
 
 const (
 	analysisChatValidationCandidate = "candidate_selection"
@@ -209,6 +218,38 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 	reply.UnverifiedReason = failure.Gate
 }
 
+// salvageAnalysisChatReply recovers the answer text from a response that failed
+// the contract, so a formatting failure degrades the same way an unverifiable
+// citation already does instead of discarding a usable answer. The salvaged
+// reply carries no evidence, so it cannot start a fix or a correction.
+func salvageAnalysisChatReply(raw string) (analysischat.Reply, bool) {
+	scan := scanAnalysisChatJSONCandidates(raw)
+	answer := ""
+	for _, candidate := range scan.candidates {
+		var fields struct {
+			Answer string `json:"answer"`
+		}
+		if json.Unmarshal([]byte(candidate.value), &fields) != nil {
+			continue
+		}
+		if answer = strings.TrimSpace(fields.Answer); answer != "" {
+			break
+		}
+	}
+	// With no JSON at all the model answered in prose, which is still an answer.
+	// A truncated object is a broken response, not prose, so it keeps failing
+	// rather than showing the maintainer a JSON fragment.
+	if answer == "" && len(scan.candidates) == 0 && len(scan.incomplete) == 0 {
+		answer = strings.TrimSpace(raw)
+	}
+	if answer == "" {
+		return analysischat.Reply{}, false
+	}
+	reply := analysischat.Reply{Answer: clampAnalysisChatText(answer, analysisChatMaxAnswerBytes)}
+	degradeAnalysisChatReply(&reply, &analysisChatEvidenceFailure{Gate: analysischat.UnverifiedFormat})
+	return reply, true
+}
+
 func analysisChatValidationRank(category string) int {
 	switch category {
 	case analysisChatValidationCitation:
@@ -305,7 +346,7 @@ func decodeAnalysisChatReplyContract(candidate string) (analysischat.Reply, erro
 	}
 	reply.Answer = strings.TrimSpace(reply.Answer)
 	reply.Assessment = strings.TrimSpace(reply.Assessment)
-	if reply.Answer == "" || len(reply.Answer) > 32<<10 {
+	if reply.Answer == "" || len(reply.Answer) > analysisChatMaxAnswerBytes {
 		return analysischat.Reply{}, newAnalysisChatValidationError(
 			analysisChatValidationContract, errors.New("answer must be 1-32768 bytes"),
 		)
@@ -346,9 +387,10 @@ func decodeAnalysisChatReplyContract(candidate string) (analysischat.Reply, erro
 	return reply, nil
 }
 
-// validateAnalysisChatCitations verifies each citation against the conversation
-// evidence, normalizing the ones that pass. It returns the first soft gate
-// failure rather than an error, so the caller can repair or degrade the reply.
+// validateAnalysisChatCitations attributes each citation's quote from the
+// conversation evidence and verifies it names something the tools returned. It
+// returns the first soft gate failure rather than an error, so the caller can
+// repair or degrade the reply.
 func validateAnalysisChatCitations(
 	reply *analysischat.Reply,
 	evidence map[string]*analysisChatEvidence,
@@ -378,60 +420,50 @@ func validateAnalysisChatCitations(
 		citation.Path = safe
 		if citation.LineStart < 0 || citation.LineEnd < 0 ||
 			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
-			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > 50) {
+			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > analysisChatMaxQuoteLines) {
 			return &analysisChatEvidenceFailure{
 				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d has an invalid line range", i+1),
 			}
 		}
+		if len(citation.Quote) < 4 {
+			return &analysisChatEvidenceFailure{
+				Gate:   analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the artifact", i+1),
+			}
+		}
+		// A line range pins the passage on its own, so it is the attribution.
+		// Without one the quote is a locator the engine resolves, and a locator
+		// that could name two different passages is not evidence.
 		if citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 {
 			quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
-			if !ok {
+			if !ok || !analysisChatEvidenceContains(artifactEvidence, quote) {
 				return &analysisChatEvidenceFailure{
 					Gate:   analysischat.UnverifiedCitation,
 					Detail: fmt.Sprintf("citation %d line range was not returned by the cited artifact read", i+1),
 				}
 			}
-			citation.Quote = quote
+			citation.Quote = clampAnalysisChatQuote(quote)
+			continue
 		}
-		if len(citation.Quote) < 4 {
-			return &analysisChatEvidenceFailure{
-				Gate:   analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf("citation %d requires an exact quote of at least 4 bytes", i+1),
-			}
-		}
-		if len(citation.Quote) > analysisChatMaxQuoteBytes {
+		quote, matches := attributeAnalysisChatQuote(artifactEvidence, citation.Quote)
+		switch {
+		case matches == 0:
 			return &analysisChatEvidenceFailure{
 				Gate: analysischat.UnverifiedCitation,
 				Detail: fmt.Sprintf(
-					"citation %d quote exceeds %d bytes; quote the passage that supports the answer",
-					i+1, analysisChatMaxQuoteBytes,
+					"citation %d quote does not appear in the cited artifact read; quote text the tools returned", i+1,
+				),
+			}
+		case matches > 1:
+			return &analysisChatEvidenceFailure{
+				Gate: analysischat.UnverifiedCitation,
+				Detail: fmt.Sprintf(
+					"citation %d quote matches more than one passage in the cited artifact; quote a longer, unique passage", i+1,
 				),
 			}
 		}
-		if !analysisChatEvidenceContains(artifactEvidence, citation.Quote) {
-			var detail string
-			switch analysisChatQuoteMismatch(artifactEvidence, citation.Quote) {
-			case "joined":
-				detail = fmt.Sprintf("citation %d quote joins separate passages; quote one contiguous passage", i+1)
-			case "reflowed":
-				detail = fmt.Sprintf(
-					"citation %d quote re-wrapped the artifact text; keep the original line breaks and spacing",
-					i+1,
-				)
-			default:
-				detail = fmt.Sprintf(
-					"citation %d quote does not appear in the cited artifact read; quote text the tools returned",
-					i+1,
-				)
-			}
-			return &analysisChatEvidenceFailure{
-				Gate:   analysischat.UnverifiedCitation,
-				Detail: detail,
-			}
-		}
-		if citation.LineStart > 0 && len(artifactEvidence.Lines) == 0 {
-			citation.LineStart, citation.LineEnd = 0, 0
-		}
+		citation.Quote = clampAnalysisChatQuote(quote)
+		citation.LineStart, citation.LineEnd = 0, 0
 	}
 	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
 		return &analysisChatEvidenceFailure{
