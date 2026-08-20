@@ -490,8 +490,11 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
             elif usage_status == "partial":
                 if record["token_usage_available"] or not token_usage_partial or record["cost_available"] or record.get("cost_usd"):
                     raise ReportError(f"sandbox line {record['_line']} partial usage flags are inconsistent")
-            elif record["token_usage_available"] or token_usage_partial:
-                raise ReportError(f"sandbox line {record['_line']} unavailable usage flags are inconsistent")
+            elif usage_status in ("unavailable", "malformed", "truncated", ""):
+                if record["token_usage_available"] or token_usage_partial or any(record[field] != 0 for field in ("model_requests", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens")) or record["cost_available"] or record.get("cost_usd"):
+                    raise ReportError(f"sandbox line {record['_line']} unavailable usage values are inconsistent")
+            else:
+                raise ReportError(f"sandbox line {record['_line']} usage_status is invalid")
         if record["provider_requests_known"] and record["provider_requests"] < record["model_requests"]:
             raise ReportError(f"sandbox line {record['_line']} provider request telemetry is inconsistent")
         if record["analysis_valid"] and not record["finalization_valid"]:

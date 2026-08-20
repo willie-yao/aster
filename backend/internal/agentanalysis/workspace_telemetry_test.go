@@ -204,3 +204,15 @@ func TestValidateWorkspaceUsageRejectsPartialCost(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidShadowProvenanceRejectsUnavailableUsageValues(t *testing.T) {
+	for _, value := range []Provenance{
+		{UsageStatus: WorkspaceTelemetryUnavailable, CostAvailable: true, CostUSD: "0.1"},
+		{UsageStatus: WorkspaceTelemetryUnavailable, InputTokens: 10, OutputTokens: 2},
+		{UsageStatus: "unknown"},
+	} {
+		if validShadowProvenance(value) {
+			t.Fatalf("invalid provenance accepted: %+v", value)
+		}
+	}
+}

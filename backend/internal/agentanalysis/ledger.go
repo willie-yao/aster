@@ -641,7 +641,7 @@ func validShadowProvenance(value Provenance) bool {
 			return false
 		}
 	case WorkspaceTelemetryUnavailable, WorkspaceTelemetryMalformed, WorkspaceTelemetryTruncated, "":
-		if value.TokenUsageAvailable || value.TokenUsagePartial {
+		if value.TokenUsageAvailable || value.TokenUsagePartial || value.Attempts != 0 || value.InputTokens != 0 || value.CachedInputTokens != 0 || value.OutputTokens != 0 || value.ReasoningTokens != 0 || value.CostAvailable || value.CostUSD != "" {
 			return false
 		}
 	default:
