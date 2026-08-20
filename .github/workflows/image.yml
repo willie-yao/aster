@@ -3,12 +3,19 @@ name: Image
 # Release tags publish the exact immutable application, remote-fixer, and Agent
 # Sandbox Fix executor identities. A manual run publishes those same three
 # targets under a commit-addressed sha-<short> tag, so a branch can be deployed
-# without cutting a release. The analysis executor and stager stay manual-only.
+# without cutting a release. The analysis executor and stager are opt-in
+# manual targets.
 on:
   push:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      publish_analysis_images:
+        description: Publish the experimental analysis executor and stager images
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -218,7 +225,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent-sandbox-fix-executor
 
   agent-sandbox-analysis-executor-image:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_analysis_images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -260,7 +267,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=agent-sandbox-analysis-executor
 
   agent-sandbox-analysis-stager-image:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_analysis_images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

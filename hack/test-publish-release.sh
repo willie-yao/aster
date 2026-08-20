@@ -387,6 +387,11 @@ for workflow in "$root/.github/workflows/release.yml" "$root/.github/workflows/i
 done
 grep -Fq '  tag-pair:' "$root/.github/workflows/image.yml"
 grep -Fq 'RELEASE_TAGS_ONLY=true hack/publish-release.sh' "$root/.github/workflows/image.yml"
+grep -Fq '      publish_analysis_images:' "$root/.github/workflows/image.yml"
+if [[ $(grep -Fc "if: github.event_name == 'workflow_dispatch' && inputs.publish_analysis_images" "$root/.github/workflows/image.yml") -ne 2 ]]; then
+  echo 'analysis images are not gated behind the opt-in workflow dispatch input' >&2
+  exit 1
+fi
 if [[ $(grep -Fc 'needs: tag-pair' "$root/.github/workflows/image.yml") -ne 3 ]]; then
   echo 'not all release image jobs require paired-tag validation' >&2
   exit 1
