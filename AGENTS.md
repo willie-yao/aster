@@ -275,7 +275,7 @@ The AI cache is on-disk JSON keyed by mode + hash. Changing the agentic
 cache schema (`agenticCacheData` in `agentic.go`) requires bumping
 `currentCritiqueVersion` if the change makes existing entries semantically
 wrong; otherwise leave it alone so warm caches survive engine upgrades. See
-`belowCurrentAgenticFloor` in `service.go` for the full revalidation gate.
+`reanalysisRequired` in `service.go` for the full revalidation gate.
 
 ## Code style and conventions
 
@@ -394,9 +394,10 @@ live deploy.
   After the consumer split, always pass `PROJECT_DIR=...` when running
   locally.
 - **AI cache "thrashing" on every run.** Means a floor or schema change
-  invalidated all entries. Check `belowCurrentAgenticFloor` and the
+  invalidated all entries. Check `reanalysisRequired` and the
   `agenticCacheKey` shape. Cache-key shape changes are catastrophic; tread
-  carefully.
+  carefully. A `preliminary` analysis is retried on later passes, but only
+  until `maxPreliminaryAttempts` is spent; see `agentic.go`.
 - **Anchor pin test failures.** You edited prompt text without updating
   the anchor test. Update both in the same commit.
 - **Stale-mode cache entries.** A cached analysis whose `mode` is not

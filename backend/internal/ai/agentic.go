@@ -28,6 +28,57 @@ const AgenticMode = "agentic"
 
 const preliminaryCacheTTL = 5 * time.Minute
 
+// maxPreliminaryAttempts bounds how many times one build and failure may be
+// re-analyzed to a preliminary result. Build artifacts are immutable, so past
+// this budget a retry re-reads identical evidence and the cached preliminary
+// result is served instead. A new build gets its own cache key and budget.
+const maxPreliminaryAttempts = 3
+
+// preliminaryAttemptsData is the retry budget spent on one analysis key.
+type preliminaryAttemptsData struct {
+	Attempts int `json:"attempts"`
+}
+
+// preliminaryAttemptsKey namespaces the retry budget in its own cache entry.
+// A preliminary draft often fails the result persistence contract, so the
+// budget cannot live inside the analysis entry without being lost on exactly
+// the drafts that need bounding.
+func preliminaryAttemptsKey(cacheKey string) string {
+	return cacheKey + ":preliminary-attempts"
+}
+
+// preliminaryAttempts returns the retry budget already spent on one key.
+func (c *Client) preliminaryAttempts(cacheKey string) int {
+	if c == nil || c.cache == nil || cacheKey == "" {
+		return 0
+	}
+	raw, ok := c.cache.Get(preliminaryAttemptsKey(cacheKey))
+	if !ok {
+		return 0
+	}
+	var data preliminaryAttemptsData
+	if err := json.Unmarshal(raw, &data); err != nil || data.Attempts < 0 {
+		return 0
+	}
+	return data.Attempts
+}
+
+// recordPreliminaryAttempt advances the retry budget for a preliminary result
+// and clears it once an analysis reaches a grounded disposition.
+func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int) {
+	if c == nil || c.cache == nil || cacheKey == "" {
+		return
+	}
+	key := preliminaryAttemptsKey(cacheKey)
+	if disposition != models.AnalysisDispositionPreliminary {
+		c.cache.Delete(key)
+		return
+	}
+	if err := c.cache.Set(key, preliminaryAttemptsData{Attempts: priorAttempts + 1}); err != nil {
+		log.Printf("  ⚠ failed to record preliminary retry budget: %v", err)
+	}
+}
+
 // ErrToolsUnsupported is returned from the agentic loop when the configured
 // provider rejects function-calling on the first call. There is no tools-free
 // fallback, so the affected failure is marked AI-unavailable for the run.
@@ -786,6 +837,10 @@ type agentState struct {
 	// cache-write paths reuse it without re-threading sysPrompt.
 	promptHash string
 
+	// priorPreliminaryAttempts carries the retry budget already spent on this
+	// cache key so a new preliminary result increments rather than resets it.
+	priorPreliminaryAttempts int
+
 	// Semantic-judge telemetry, for measuring the always-on second-line judge.
 	// judgeRan is set when the judge was invoked; judgeObjected when it raised
 	// objections; judgeRevised when its objections drove an accepted revision.
@@ -1112,28 +1167,37 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName))
 }
 
-func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, bool) {
+// cachedAgenticAnalysis serves one accepted cache entry. It also reports the
+// preliminary retry budget already spent on this key so a miss can carry it
+// forward into the analysis that replaces it.
+func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, int, bool) {
 	skillSetHash := ""
 	if in.Skills != nil {
 		skillSetHash = in.Skills.Hash()
 	}
+	attempts := c.preliminaryAttempts(cacheKey)
 	result, reason := LookupAgenticCache(c.cache, cacheKey, agenticCachePolicy(
 		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
 	))
 	if reason != CacheAccepted {
-		return nil, nil, false
+		return nil, nil, attempts, false
 	}
 	stampAgenticTelemetry(result.Analysis, nil, in.Mode, true, start)
 	if !StampAnalysisDisposition(result.Analysis) {
-		return result.Summary, result.Analysis, true
+		return result.Summary, result.Analysis, attempts, true
 	}
 	if result.Analysis.Disposition == models.AnalysisDispositionPreliminary {
+		// Retrying spent artifacts cannot surface new evidence, so serve the
+		// cached preliminary result once the budget is gone.
+		if attempts >= maxPreliminaryAttempts {
+			return result.Summary, result.Analysis, attempts, true
+		}
 		generatedAt, err := time.Parse(time.RFC3339, result.Analysis.GeneratedAt)
 		if err != nil || time.Since(generatedAt) > preliminaryCacheTTL {
-			return nil, nil, false
+			return nil, nil, attempts, false
 		}
 	}
-	return result.Summary, result.Analysis, true
+	return result.Summary, result.Analysis, attempts, true
 }
 
 // doAnalyzeAgentic runs the tool-calling AI loop for one failure. Returns the
@@ -1152,8 +1216,9 @@ func (c *Client) doAnalyzeAgentic(
 	cacheKey, sysPrompt, userPrompt string,
 ) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
-	if summary, analysis, ok := c.cachedAgenticAnalysis(in, cacheKey, sysPrompt, start); ok {
-		return summary, analysis, nil
+	cachedSummary, cachedAnalysis, priorPreliminaryAttempts, ok := c.cachedAgenticAnalysis(in, cacheKey, sysPrompt, start)
+	if ok {
+		return cachedSummary, cachedAnalysis, nil
 	}
 
 	state := &agentState{
@@ -1170,6 +1235,7 @@ func (c *Client) doAnalyzeAgentic(
 		selectionObserver: in.DraftSelectionObserver,
 		sourceObserver:    in.SourceEvidenceObserver,
 	}
+	state.priorPreliminaryAttempts = priorPreliminaryAttempts
 	// Skills are consulted inside the always-on critique gate. Recipe presence
 	// is the opt-in; an empty set is a no-op.
 	state.skillSet = in.Skills
@@ -1669,6 +1735,7 @@ agentLoop:
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
 	}
+	c.recordPreliminaryAttempt(cacheKey, analysis.Disposition, state.priorPreliminaryAttempts)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
 	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
 	return summary, analysis, nil

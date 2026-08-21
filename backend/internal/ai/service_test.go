@@ -726,6 +726,209 @@ func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.
 	}
 }
 
+// TestPreliminaryRetryBudgetBoundsReanalysis pins that a preliminary analysis
+// is retried only while its budget lasts, and that a current-contract failure
+// still forces reanalysis after the budget is spent.
+func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	s := &Service{client: client, systemPrompt: "sys", agenticOpts: AgenticOptions{CritiqueMaxRetries: 1}}
+	promptHash := PromptFingerprint("sys")
+	newAnalysis := func(disposition string) *models.AIAnalysis {
+		return &models.AIAnalysis{
+			Mode: AgenticMode, Disposition: disposition,
+			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+			ModelHash: client.modelFingerprint(), PromptHash: promptHash,
+		}
+	}
+
+	preliminary := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionPreliminary))
+	if !s.reanalysisRequired(preliminary, promptHash, false) {
+		t.Fatal("preliminary analysis with budget remaining should be re-analyzed")
+	}
+	if s.reanalysisRequired(preliminary, promptHash, true) {
+		t.Fatal("preliminary analysis with a spent budget should be reused")
+	}
+
+	grounded := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionGrounded))
+	if s.reanalysisRequired(grounded, promptHash, false) {
+		t.Fatal("grounded analysis should be reused")
+	}
+
+	// A spent budget must not resurrect an analysis that fails a current floor.
+	stale := newAnalysis(models.AnalysisDispositionPreliminary)
+	stale.CritiqueVersion = currentCritiqueVersion - 1
+	if !s.reanalysisRequired(reusablePublishedTestCase(stale), promptHash, true) {
+		t.Fatal("analysis below the current critique contract must be re-analyzed")
+	}
+
+	// Rejection reporting stops at the first failure, so a forgivable quality
+	// reason must not mask an analysis written under a different generation.
+	otherGeneration := &Service{
+		client: client, systemPrompt: "sys", cacheGeneration: "gen-b",
+		agenticOpts: AgenticOptions{CritiqueMaxRetries: 1},
+	}
+	fromGenerationA := newAnalysis(models.AnalysisDispositionPreliminary)
+	fromGenerationA.CritiquePassed = false
+	fromGenerationA.CacheGeneration = "gen-a"
+	if !otherGeneration.reanalysisRequired(reusablePublishedTestCase(fromGenerationA), promptHash, true) {
+		t.Fatal("analysis from a superseded cache generation must be re-analyzed")
+	}
+}
+
+// TestPreliminaryAttemptsBudgetLifecycle pins that the retry budget advances on
+// preliminary results and is cleared once an analysis becomes grounded.
+func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	const key = "agentic:kubernetes:job:1:abcd"
+
+	if got := client.preliminaryAttempts(key); got != 0 {
+		t.Fatalf("unseen key attempts = %d, want 0", got)
+	}
+	for want := 1; want <= 3; want++ {
+		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, want-1)
+		if got := client.preliminaryAttempts(key); got != want {
+			t.Fatalf("attempts after %d preliminary results = %d, want %d", want, got, want)
+		}
+	}
+
+	s := &Service{client: client}
+	if !s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
+		t.Fatalf("budget should be spent at %d attempts", maxPreliminaryAttempts)
+	}
+
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionGrounded, 3)
+	if got := client.preliminaryAttempts(key); got != 0 {
+		t.Fatalf("attempts after a grounded result = %d, want 0", got)
+	}
+	if s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
+		t.Fatal("a grounded result must clear the spent budget")
+	}
+}
+
+// TestPreliminaryRetryBudgetStopsUncachedReanalysis reproduces the deployed
+// churn: under the hard cache policy a preliminary draft with a citation
+// failure is never persisted, so every pass re-ran the full agentic loop
+// against immutable artifacts. The bounded budget must stop that.
+func TestPreliminaryRetryBudgetStopsUncachedReanalysis(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	for range maxPreliminaryAttempts {
+		srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+		srv.push(200, chatRespFinal(missingCitationFinalJSON))
+	}
+	client := newAgenticTestClient(t, srv.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	service.EnableAgentic(AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
+	}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
+
+	request := FailureAnalysisRequest{
+		JobID: "job", BuildPrefix: "logs/job/1/", Build: newRun("job", "1").BuildInfo,
+		TestCase: *newFailedTC("Test A", "failure"), ConsecutiveFailures: 1,
+	}
+	// Each pass feeds the previously published analysis back in, exactly as the
+	// fetcher does from jobs/*.json.
+	for pass := 1; pass <= maxPreliminaryAttempts+3; pass++ {
+		result, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+		if err != nil || result.Summary == nil || result.Analysis == nil {
+			t.Fatalf("pass %d result = %+v, error = %v", pass, result, err)
+		}
+		if result.Analysis.Disposition != models.AnalysisDispositionPreliminary {
+			t.Fatalf("pass %d disposition = %q, want preliminary", pass, result.Analysis.Disposition)
+		}
+		wantCalls := int32(2 * min(pass, maxPreliminaryAttempts))
+		if got := atomic.LoadInt32(&srv.calls); got != wantCalls {
+			t.Fatalf("provider calls after pass %d = %d, want %d", pass, got, wantCalls)
+		}
+		request.TestCase.AISummary = result.Summary
+		request.TestCase.AIAnalysis = result.Analysis
+	}
+}
+
+// TestPreliminaryBudgetIsolatedPerBuild pins that a new build starts with a
+// fresh retry budget, because its artifacts are new evidence.
+func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	s := &Service{client: client, module: &stubModule{name: "kubernetes"}}
+	first := s.agenticCacheKey("job", "1", "Test A", "boom")
+	second := s.agenticCacheKey("job", "2", "Test A", "boom")
+	if first == second {
+		t.Fatal("different builds must not share a cache key")
+	}
+	for i := range maxPreliminaryAttempts {
+		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, i)
+	}
+	if !s.preliminaryBudgetSpent(&models.TestCase{}, first, "") {
+		t.Fatal("first build budget should be spent")
+	}
+	if s.preliminaryBudgetSpent(&models.TestCase{}, second, "") {
+		t.Fatal("a new build must start with a fresh budget")
+	}
+}
+
+// TestPreliminaryBudgetEntryIsNotServableAnalysis pins that the budget lives in
+// its own namespace and can never be mistaken for a cached analysis.
+func TestPreliminaryBudgetEntryIsNotServableAnalysis(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	const key = "agentic:kubernetes:job:1:abcd"
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, 0)
+	if _, ok := client.cache.Lookup(key); ok {
+		t.Fatal("budget write must not create an entry under the analysis key")
+	}
+	if _, reason := LookupAgenticCache(client.cache, preliminaryAttemptsKey(key), AgenticCachePolicy{}); reason == CacheAccepted {
+		t.Fatal("budget entry must never be accepted as an analysis")
+	}
+}
+
+// TestPreliminaryBudgetPrefersAcceptedCacheEntry pins that a spent budget never
+// freezes a published preliminary analysis when the private cache can serve an
+// accepted one. A concurrent analysis of a shared key can settle grounded after
+// the preliminary result was published, and that better result must win.
+func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	s := &Service{
+		client: client, systemPrompt: "sys", module: &stubModule{name: "kubernetes"},
+		agenticOpts: AgenticOptions{CritiqueMaxRetries: 1},
+	}
+	key := s.agenticCacheKey("job", "1", "Test A", "boom")
+	promptHash := PromptFingerprint("sys")
+	for i := range maxPreliminaryAttempts {
+		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, i)
+	}
+	published := reusablePublishedTestCase(&models.AIAnalysis{
+		Mode: AgenticMode, Disposition: models.AnalysisDispositionPreliminary,
+		CritiqueVersion: currentCritiqueVersion, ModelHash: client.modelFingerprint(), PromptHash: promptHash,
+	})
+	if !s.preliminaryBudgetSpent(published, key, promptHash) {
+		t.Fatal("budget should be spent while the cache holds nothing servable")
+	}
+
+	// A concurrent same-key analysis settles grounded and persists its result.
+	grounded := FailureAnalysisResult{
+		Summary: &models.AISummary{Summary: "grounded summary"},
+		Analysis: &models.AIAnalysis{
+			Mode: AgenticMode, Model: client.model, RootCause: "root", Severity: "High",
+			EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 7, LineEnd: 7, Quote: "boom"}},
+			CritiquePassed:    true, CritiqueVersion: currentCritiqueVersion,
+			ModelHash: client.modelFingerprint(), PromptHash: promptHash,
+		},
+	}
+	entry, err := NewAgenticCacheEntry(key, grounded, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.cache.entries[key] = entry
+
+	if s.preliminaryBudgetSpent(published, key, promptHash) {
+		t.Fatal("an accepted cache entry must outrank the published preliminary analysis")
+	}
+	if !s.reanalysisRequired(published, promptHash, false) {
+		t.Fatal("the flow must proceed so the accepted entry is served without a model call")
+	}
+}
+
 func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model"})
 	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)

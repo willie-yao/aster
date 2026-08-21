@@ -199,7 +199,7 @@ func TestCachedAgenticAnalysisMatchesSharedAcceptance(t *testing.T) {
 			in.Mode = AgenticMode
 			policy := agenticCachePolicy(client, in.Opts, "current-skills", effectiveAgenticPromptHash(in, "sys"), in.ConsecutiveFailures)
 			_, reason := LookupAgenticCache(client.cache, key, policy)
-			_, _, ok := client.cachedAgenticAnalysis(in, key, "sys", now)
+			_, _, _, ok := client.cachedAgenticAnalysis(in, key, "sys", now)
 			if reason != tc.want || ok != (tc.want == CacheAccepted) {
 				t.Fatalf("shared reason = %q, cachedAgenticAnalysis ok = %t", reason, ok)
 			}
