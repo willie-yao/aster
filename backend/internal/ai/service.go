@@ -242,7 +242,9 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		return err
 	}
 	promptHash := s.analysisPromptHashWithSources(tc, basePrompt, sources)
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.shouldReanalyzeWithPromptHash(tc, promptHash) {
+	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
+	budgetSpent := s.preliminaryBudgetSpent(tc, cacheKey, promptHash)
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.reanalysisRequired(tc, promptHash, budgetSpent) {
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
@@ -498,13 +500,59 @@ func (s *Service) shouldReanalyzeWithPrompt(tc *models.TestCase, userPrompt stri
 }
 
 func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash string) bool {
+	return s.reanalysisRequired(tc, promptHash, false)
+}
+
+// reanalysisRequired reports whether a cached analysis must be discarded.
+// preliminaryBudgetSpent keeps a preliminary analysis whose bounded retry
+// budget is gone, because re-reading immutable build artifacts cannot improve
+// it. A spent budget forgives only the quality floors that made the analysis
+// preliminary; contract version, generation, and entry validity still force
+// reanalysis.
+func (s *Service) reanalysisRequired(tc *models.TestCase, promptHash string, preliminaryBudgetSpent bool) bool {
 	if tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
-	if tc.AIAnalysis.Disposition == models.AnalysisDispositionPreliminary {
+	preliminary := tc.AIAnalysis.Disposition == models.AnalysisDispositionPreliminary
+	reason := s.agenticRejection(tc, promptHash)
+	if reason == CacheAccepted {
+		return preliminary && !preliminaryBudgetSpent
+	}
+	if preliminary && preliminaryBudgetSpent &&
+		tc.AIAnalysis.CritiqueVersion >= currentCritiqueVersion &&
+		tc.AIAnalysis.CacheGeneration == s.cacheGeneration &&
+		forgivableForSpentPreliminaryBudget(reason) {
+		return false
+	}
+	return true
+}
+
+// forgivableForSpentPreliminaryBudget reports whether a spent retry budget may
+// keep an analysis rejected for this reason. These are the quality floors that
+// make an analysis preliminary in the first place, so retrying immutable
+// artifacts cannot clear them. Callers must confirm the critique version and
+// cache generation are current first: rejection reporting stops at the first
+// failure, so a quality reason can otherwise mask a staler invalidation.
+func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
+	switch reason {
+	case CacheRejectedToolFloor, CacheRejectedEvidenceFloor,
+		CacheRejectedCritiqueHardFailure, CacheRejectedCritiqueStrictWarning,
+		CacheRejectedCritiqueUnclassified, CacheRejectedSemanticObjection:
 		return true
 	}
-	return s.belowCurrentAgenticFloor(tc, promptHash)
+	return false
+}
+
+// preliminaryBudgetSpent reports whether one failure has used its bounded
+// preliminary retry budget with nothing better to fall back on. An accepted
+// private entry is always preferred, because serving it costs no model call
+// and may carry a grounded result a concurrent analysis of the same key wrote.
+func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey, promptHash string) bool {
+	if s.client == nil || s.client.preliminaryAttempts(cacheKey) < maxPreliminaryAttempts {
+		return false
+	}
+	_, reason := LookupAgenticCache(s.client.cache, cacheKey, s.agenticCachePolicyFor(tc, promptHash, 0))
+	return reason != CacheAccepted
 }
 
 func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) string {
@@ -523,11 +571,10 @@ func (s *Service) analysisPromptHashWithSources(tc *models.TestCase, userPrompt 
 	return PromptFingerprint(effectiveSystemPrompt)
 }
 
-// belowCurrentAgenticFloor returns true when the cached analysis fails a
-// current investigation floor or critique gate.
-func (s *Service) belowCurrentAgenticFloor(tc *models.TestCase, expectedPromptHash string) bool {
+// agenticRejection reports why a published analysis fails the current contract.
+func (s *Service) agenticRejection(tc *models.TestCase, expectedPromptHash string) CacheRejectionReason {
 	policy := s.agenticCachePolicyFor(tc, expectedPromptHash, 0)
-	return AgenticResultRejection(FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, policy) != CacheAccepted
+	return AgenticResultRejection(FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, policy)
 }
 
 func (s *Service) agenticCachePolicyFor(tc *models.TestCase, expectedPromptHash string, consecutiveFailures int) AgenticCachePolicy {
