@@ -191,12 +191,13 @@ func remediationClauses(text string) []string {
 	return out
 }
 
-// currentCritiqueVersion is the schema version of the critique contract.
-// Bumped on material strengthening of the gate so cache entries from a
-// weaker version are invalidated on read. Cosmetic prompt-shape changes
-// do not bump; only behavior changes that make an existing cached answer
-// invalid under today's contract.
-const currentCritiqueVersion = 10
+// currentCritiqueVersion is the schema version of the critique and publication
+// contract. Bumped when a change makes existing cached answers invalid under
+// today's contract, so entries from an earlier version are invalidated on read.
+// That covers both a materially stronger gate and a publication rule whose old
+// output no longer reflects what the model said. Cosmetic prompt-shape changes
+// do not bump.
+const currentCritiqueVersion = 11
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned

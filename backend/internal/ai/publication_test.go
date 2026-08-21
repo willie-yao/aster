@@ -148,9 +148,6 @@ func TestPreparePublishedAnalysisFiltersPathsAndCLIFlags(t *testing.T) {
 	if slices.Contains(got.SearchSuggestions, "build-log.txt") {
 		t.Fatalf("artifact path became a source search suggestion: %v", got.SearchSuggestions)
 	}
-	if strings.Contains(got.SuggestedFix, "config/observed.yaml") || strings.Contains(got.SuggestedFix, "scripts/aks-create.sh") || strings.Contains(got.SuggestedFix, "--enable-") || strings.Contains(got.SuggestedFix, "--lts-") {
-		t.Fatalf("unsupported remediation leaked: %q", got.SuggestedFix)
-	}
 	if strings.Contains(got.RootCause, "--enable-long-term-support") || !strings.Contains(got.RootCause, "AKS lifecycle configuration") {
 		t.Fatalf("root cause was not safely preserved: %q", got.RootCause)
 	}
@@ -170,49 +167,62 @@ func TestQualifiedArtifactPathRequiresExactRead(t *testing.T) {
 
 func TestPreparePublishedAnalysisKeepsGroundedFlag(t *testing.T) {
 	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported"}}}
-	parsed := analysisResponse{SuggestedFix: "Run tool --supported and rerun the job."}
-	if got := state.preparePublishedAnalysis(parsed).SuggestedFix; !strings.Contains(got, "--supported") {
+	parsed := analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}
+	if got := state.preparePublishedAnalysis(parsed).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("grounded flag removed: %q", got)
 	}
 }
 
-func TestPreparePublishedAnalysisFallsBackForAnyUnsupportedRemediationFlag(t *testing.T) {
-	for _, fix := range []string{
-		"Run helm uninstall --dry-run release.",
-		"Run kubectl apply -f guessed.yaml.",
-		"Run helm uninstall -n prod release.",
-	} {
-		got := (&agentState{}).preparePublishedAnalysis(analysisResponse{SuggestedFix: fix}).SuggestedFix
-		if strings.Contains(got, "helm uninstall") || strings.Contains(got, "kubectl apply") || !strings.Contains(got, "verified project automation") {
-			t.Fatalf("unsafe command rewrite was published: input=%q output=%q", fix, got)
-		}
+// TestPreparePublishedAnalysisKeepsProposedRemediation covers the remedy the
+// grounding rules must not reject: a fix names the flag to add, which cannot
+// appear in the evidence of the failure it fixes, and names a file it never
+// opened, which costs the instruction but must not cost the whole remediation.
+func TestPreparePublishedAnalysisKeepsProposedRemediation(t *testing.T) {
+	state := &agentState{readSourceFull: map[string]bool{"test/e2e/cni.go": true}}
+	fix := "Retry the CNI apply in test/e2e/cni.go with --force-conflicts so a concurrent update cannot fail the install."
+	if got := state.preparePublishedAnalysis(analysisResponse{SuggestedFix: fix}).SuggestedFix; got != fix {
+		t.Fatalf("proposed remediation was discarded: input=%q output=%q", fix, got)
+	}
+	got := state.preparePublishedAnalysis(analysisResponse{
+		SuggestedFix: "Define the annotation constant in azure/azure.go and stop re-appending tracked rules.",
+	}).SuggestedFix
+	want := "Define the annotation constant in " + unverifiedSourceReference + " and stop re-appending tracked rules."
+	if got != want {
+		t.Fatalf("unopened path cost the instruction: got %q want %q", got, want)
+	}
+}
+
+// TestPreparePublishedAnalysisRejectsArtifactGroundedRemediationPath covers the
+// gap between this sanitizer and the critique that consumes its output: the
+// critique's source scan accepts only a source read, so an artifact read must
+// not ground a remediation path here or the published draft hard-fails on
+// source.unverified.
+func TestPreparePublishedAnalysisRejectsArtifactGroundedRemediationPath(t *testing.T) {
+	state := &agentState{
+		readArtifactsFull: map[string]bool{"logs/observed.yaml": true},
+		readArtifactsBase: map[string]bool{"observed.yaml": true},
+	}
+	got := state.preparePublishedAnalysis(analysisResponse{
+		SuggestedFix: "Update observed.yaml to pin the version and rerun.",
+	}).SuggestedFix
+	if strings.Contains(got, "observed.yaml") {
+		t.Fatalf("artifact read grounded a remediation source path: %q", got)
 	}
 }
 
 func TestPreparePublishedAnalysisKeepsGroundedShortFlags(t *testing.T) {
 	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool -abc", "helm uninstall -nprod release"}}}
-	for _, fix := range []string{"Run tool -abc.", "Run helm uninstall -nprod release."} {
-		if got := state.preparePublishedAnalysis(analysisResponse{SuggestedFix: fix}).SuggestedFix; got != fix {
-			t.Fatalf("grounded short flag changed: input=%q output=%q", fix, got)
+	for _, cause := range []string{"The job ran tool -abc.", "The job ran helm uninstall -nprod release."} {
+		if got := state.preparePublishedAnalysis(analysisResponse{RootCause: cause}).RootCause; got != cause {
+			t.Fatalf("grounded short flag changed: input=%q output=%q", cause, got)
 		}
-	}
-}
-
-func TestPreparePublishedAnalysisFallsBackForUngroundedPathInCommand(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"kubectl apply -f"}}}
-	parsed := analysisResponse{
-		SuggestedFix: "Run kubectl apply -f guessed.yaml.",
-	}
-	got := state.preparePublishedAnalysis(parsed).SuggestedFix
-	if strings.Contains(got, "kubectl apply") || strings.Contains(got, "guessed.yaml") || !strings.Contains(got, "verified project automation") {
-		t.Fatalf("ungrounded command path was rewritten inline: %q", got)
 	}
 }
 
 func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
 	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported-extra"}}}
-	parsed := analysisResponse{SuggestedFix: "Run tool --supported and rerun the job."}
-	if got := state.preparePublishedAnalysis(parsed).SuggestedFix; strings.Contains(got, "--supported") {
+	parsed := analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}
+	if got := state.preparePublishedAnalysis(parsed).RootCause; strings.Contains(got, "--supported") {
 		t.Fatalf("substring-grounded flag survived: %q", got)
 	}
 }
@@ -224,7 +234,7 @@ func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
 			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
 		}},
 	})
-	if got := state.preparePublishedAnalysis(analysisResponse{SuggestedFix: "Run tool --supported and rerun the job."}).SuggestedFix; !strings.Contains(got, "--supported") {
+	if got := state.preparePublishedAnalysis(analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("visible grep grounding was not recorded: %q", got)
 	}
 }
