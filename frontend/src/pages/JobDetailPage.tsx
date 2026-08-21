@@ -167,6 +167,11 @@ export function JobDetailPage() {
   const manifest = useManifest();
 
   const runs = useMemo(() => data?.runs ?? [], [data]);
+  // The strip plots the full retained arc; every window above stays on runs.
+  const historyRuns = useMemo(
+    () => [...runs, ...(data?.retained_runs ?? [])],
+    [runs, data?.retained_runs],
+  );
   const canonicalJobID = data?.job_id ?? jobID ?? "";
   const shortenedName = shortJobName(
     data?.name ?? canonicalJobID,
@@ -174,10 +179,14 @@ export function JobDetailPage() {
   );
   const displayName = shortenedName || canonicalJobID;
 
-  const selectedBuildId = searchParams.get("run") ?? runs[0]?.build_id;
+  const selectedBuildId = searchParams.get("run") ?? historyRuns[0]?.build_id;
   const selectedRun = useMemo(
-    () => runs.find((run) => run.build_id === selectedBuildId),
-    [runs, selectedBuildId],
+    () => historyRuns.find((run) => run.build_id === selectedBuildId),
+    [historyRuns, selectedBuildId],
+  );
+  const selectedIsRetained = useMemo(
+    () => Boolean(selectedRun) && !runs.some((run) => run.build_id === selectedBuildId),
+    [runs, selectedBuildId, selectedRun],
   );
   const resultSummary = useMemo(
     () => summarizeResultTests(selectedRun?.test_cases ?? []),
@@ -189,17 +198,19 @@ export function JobDetailPage() {
     (run) => executedResultTests(run.test_cases).length > 0,
   );
   const emptyTestResults = selectedRun
-    ? emptyTestResultsPresentation(selectedRun)
+    ? emptyTestResultsPresentation(selectedRun, selectedIsRetained)
     : null;
 
+  // A pass rate over an empty analysis window is unknown, not zero. Retained
+  // history can still plot dots here, so this must not read as 0% failing.
   const passRateRecent = useMemo(
-    () => data?.pass_rate_recent ?? recentJobPassRate(runs),
+    () => (runs.length === 0 ? null : data?.pass_rate_recent ?? recentJobPassRate(runs)),
     [data?.pass_rate_recent, runs],
   );
 
   const runtimeSummary = useMemo(
-    () => summarizeRuntime(jobRuntimePoints(runs)),
-    [runs],
+    () => summarizeRuntime(jobRuntimePoints(historyRuns)),
+    [historyRuns],
   );
 
   const defaultResultFilter = selectedTestCases.some((testCase) => testCase.status === "failed") ? "failed" : "all";
@@ -258,9 +269,9 @@ export function JobDetailPage() {
 
   if (!data) return null;
 
-  const lastRun = runs[0] ?? null;
+  const lastRun = historyRuns[0] ?? null;
   const pattern = data.pattern_analyses?.[0];
-  const hasRuns = runs.length > 0;
+  const hasRuns = historyRuns.length > 0;
   const currentStatusView = statusPresentation(currentJobStatus(data.current_status, runs));
   const recoveryStreak = pattern?.lifecycle?.recovery_streak;
   const metricItems: MetricStripItem[] = [
@@ -277,7 +288,7 @@ export function JobDetailPage() {
     ...(recoveryStreak !== undefined
       ? [{ label: "Recovery streak", value: recoveryStreak.toLocaleString() } satisfies MetricStripItem]
       : []),
-    { label: "Runs", value: runs.length.toLocaleString() },
+    { label: "Runs", value: historyRuns.length.toLocaleString() },
     {
       label: "Median duration",
       value:
@@ -300,10 +311,10 @@ export function JobDetailPage() {
 
   const runHistory = (
     <RunHistory
-      runs={runs}
+      runs={historyRuns}
       selectedBuildId={selectedBuildId}
       onSelect={handleSelectRun}
-      metadata={`${runs.length} recent ${runs.length === 1 ? "run" : "runs"}`}
+      metadata={`${historyRuns.length} recent ${historyRuns.length === 1 ? "run" : "runs"}`}
     />
   );
 
@@ -628,7 +639,10 @@ export function JobDetailPage() {
               component="section"
               sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}
             >
-              <DetailSectionBand title="Test results" metadata="No executed tests" />
+              <DetailSectionBand
+                title="Test results"
+                metadata={emptyTestResults?.kind === "retained" ? "Results not retained" : "No executed tests"}
+              />
               <Box sx={{ px: 2, py: 4, textAlign: "center" }}>
                 {emptyTestResults?.kind === "pending" ? (
                   <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1 }}>

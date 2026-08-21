@@ -1,14 +1,29 @@
 import type { BuildResult } from "../types/dashboard";
 
 export interface EmptyTestResultsPresentation {
-  kind: "pending" | "failed" | "unavailable" | "unreadable" | "empty";
+  kind: "pending" | "failed" | "unavailable" | "unreadable" | "empty" | "retained";
   title: string;
   detail: string;
   severity: "info" | "warning" | "error";
 }
 
-export function emptyTestResultsPresentation(run: BuildResult): EmptyTestResultsPresentation | null {
+// retained marks a run kept only for the history strip. Its test cases were
+// dropped when it aged out of the analysis window, so the absence says nothing
+// about what the build reported at the time.
+export function emptyTestResultsPresentation(
+  run: BuildResult,
+  retained = false,
+): EmptyTestResultsPresentation | null {
   if ((run.test_cases?.length ?? 0) > 0) return null;
+
+  if (retained) {
+    return {
+      kind: "retained",
+      title: "Test results no longer stored",
+      detail: "This run is older than the analysis window, so only its outcome and timing are kept. Open it in Prow for the full results.",
+      severity: "info",
+    };
+  }
 
   if (run.result === "PENDING") {
     return {

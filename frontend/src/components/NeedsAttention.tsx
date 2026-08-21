@@ -15,7 +15,7 @@ import {
   attentionGroupNoun,
   attentionGroups,
   attentionSignal,
-  countLabel,
+  buildsAnalyzedLabel,
   disclosureLabel,
   MAX_OVERVIEW_PATTERNS,
   needsAttentionSummary,
@@ -34,6 +34,7 @@ import type {
   JobSummary,
   LowPassRateEntry,
   PatternAnalysis,
+  PatternRefreshStatus,
   ResolvedEntry,
   TestFlakiness,
 } from "../types/dashboard";
@@ -132,12 +133,14 @@ export function FeaturedPatternRow({
   rank,
   prefix,
   stale,
+  refreshStatus,
   job,
 }: {
   pattern: PatternAnalysis;
   rank: number;
   prefix: string;
   stale: boolean;
+  refreshStatus?: PatternRefreshStatus;
   job?: JobSummary;
 }) {
   const lead = rank === 1;
@@ -323,7 +326,7 @@ export function FeaturedPatternRow({
           color="textSecondary"
           sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}
         >
-          {countLabel(pattern.builds_analyzed, "build")}
+          {buildsAnalyzedLabel(pattern, refreshStatus)}
         </Typography>
         <Typography
           variant="caption"
@@ -810,6 +813,7 @@ export function NeedsAttention({
                 rank={index + 1}
                 prefix={filePrefix}
                 stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
+                refreshStatus={refreshStatus}
                 job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
               />
             );
@@ -845,7 +849,7 @@ export function NeedsAttention({
                       destinationLabel={`View analysis for ${subject}`}
                       subject={subject}
                       summary={pattern.shared_root_cause || pattern.summary}
-                      count={countLabel(pattern.builds_analyzed, "build")}
+                      count={buildsAnalyzedLabel(pattern, refreshStatus)}
                       signal={attentionSignal(pattern.confidence, stale)}
                     />
                   );

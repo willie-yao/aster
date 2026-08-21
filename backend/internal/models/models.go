@@ -362,7 +362,14 @@ type JobDetail struct {
 	ConfigRevision string           `json:"config_revision,omitempty"`
 	CurrentStatus  JobCurrentStatus `json:"current_status"`
 	PassRateRecent float64          `json:"pass_rate_recent"`
-	Runs           []BuildResult    `json:"runs"`
+	// Runs is the analysis window: the newest builds the fetcher was asked for.
+	// Every aggregation, correlation, and AI pass reads this and nothing else,
+	// so its width stays exactly the configured fetch depth.
+	Runs []BuildResult `json:"runs"`
+	// RetainedRuns carries builds that have aged out of Runs, newest-first, so
+	// the dashboard can plot a longer arc than one fetch window. Display only:
+	// test cases are dropped, and no analysis path reads this.
+	RetainedRuns []BuildResult `json:"retained_runs,omitempty"`
 	// PatternAnalyses holds cross-build correlations for this job.
 	// Empty unless the job failed in enough builds for pattern analysis.
 	PatternAnalyses []PatternAnalysis     `json:"pattern_analyses,omitempty"`

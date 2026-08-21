@@ -360,6 +360,9 @@ export interface JobDetail {
   current_status?: JobCurrentStatus;
   pass_rate_recent?: number;
   runs: BuildResult[];
+  // Builds that have aged out of runs, newest-first. Display only: the backend
+  // drops their test cases, and no analysis window includes them.
+  retained_runs?: BuildResult[];
   pattern_analyses?: PatternAnalysis[];
   pattern_refresh?: PatternRefreshStatus;
   // Durable history for the failure signatures this window shows. Correlation

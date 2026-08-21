@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -401,10 +402,12 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		return nil, fmt.Errorf("loading prior job details: %w", err)
 	}
 	cachedJobs := cachedBuildsFromDetails(priorDetails)
+	priorHistory := retainedRunsFromDetails(priorDetails)
 
 	type jobResult struct {
-		job  models.ProwJob
-		runs []models.BuildResult
+		job      models.ProwJob
+		runs     []models.BuildResult
+		retained []models.BuildResult
 	}
 
 	results := make([]jobResult, len(jobs))
@@ -430,7 +433,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 				return
 			}
 
-			results[idx] = jobResult{job: j, runs: runs}
+			results[idx] = jobResult{job: j, runs: runs, retained: selectRetainedRuns(runs, priorHistory[j.JobID])}
 			passed := 0
 			for _, r := range runs {
 				if r.Passed {
@@ -473,6 +476,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 			CurrentStatus:  summary.CurrentStatus,
 			PassRateRecent: summary.PassRateRecent,
 			Runs:           r.runs,
+			RetainedRuns:   r.retained,
 		})
 	}
 
@@ -1124,6 +1128,72 @@ func cachedBuildsFromDetails(details map[string]models.JobDetail) map[string]map
 		}
 	}
 	return cached
+}
+
+// maxRunHistory bounds Runs plus RetainedRuns per job. Retained builds keep only
+// their metadata, so the cost is a few hundred bytes each, but the strip stops
+// being readable long before the bound and the file should not grow forever.
+const maxRunHistory = 40
+
+// retainedRunsFromDetails collects the display history each job carries into the
+// next pass: everything it published last time, both the analysis window and the
+// prior retention. Test cases are dropped here, so a build that ages out of the
+// window costs metadata alone from then on.
+func retainedRunsFromDetails(details map[string]models.JobDetail) map[string][]models.BuildResult {
+	retained := make(map[string][]models.BuildResult, len(details))
+	for jobID, detail := range details {
+		history := make([]models.BuildResult, 0, len(detail.Runs)+len(detail.RetainedRuns))
+		for _, run := range detail.Runs {
+			history = append(history, retainedRun(run))
+		}
+		for _, run := range detail.RetainedRuns {
+			history = append(history, retainedRun(run))
+		}
+		if len(history) > 0 {
+			retained[jobID] = history
+		}
+	}
+	return retained
+}
+
+// retainedRun strips a build down to what the run history strip and the run
+// metadata panel render. Counts survive; the test cases behind them do not.
+func retainedRun(run models.BuildResult) models.BuildResult {
+	run.TestCases = nil
+	return run
+}
+
+// selectRetainedRuns returns the newest history builds that the current window
+// does not already carry, bounded so window plus retention stays at maxRunHistory.
+// A PENDING build is skipped: it is retained only once it has a final result.
+func selectRetainedRuns(window []models.BuildResult, history []models.BuildResult) []models.BuildResult {
+	budget := maxRunHistory - len(window)
+	if budget <= 0 || len(history) == 0 {
+		return nil
+	}
+
+	inWindow := make(map[string]bool, len(window))
+	for _, run := range window {
+		inWindow[run.BuildID] = true
+	}
+
+	seen := make(map[string]bool, len(history))
+	candidates := make([]models.BuildResult, 0, len(history))
+	for _, run := range history {
+		if run.BuildID == "" || inWindow[run.BuildID] || seen[run.BuildID] || run.Result == "PENDING" || run.Result == "" {
+			continue
+		}
+		seen[run.BuildID] = true
+		candidates = append(candidates, retainedRun(run))
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].Started.After(candidates[j].Started)
+	})
+	if len(candidates) > budget {
+		candidates = candidates[:budget]
+	}
+	return candidates
 }
 
 func loadCachedJobDetails(outDir string) map[string]map[string]models.BuildResult {

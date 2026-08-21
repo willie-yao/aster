@@ -29,6 +29,7 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
 import { patternActionEligibilityHint, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
+import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupRemediation } from "./CausalGroupRemediation";
@@ -171,11 +172,13 @@ export function PatternBanner({
       : lifecycle?.state === "recovered"
         ? "Watching recovery"
         : recurrenceLabel;
-  const metadata = `${pattern.builds_analyzed} ${pattern.builds_analyzed === 1 ? "build" : "builds"} · ${pattern.confidence} confidence`;
+  const metadata = `${buildsAnalyzedLabel(pattern, refreshStatus)} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
       Pattern from the last successful refresh at {refreshStatus.last_successful_at ?? "an earlier time"}.
       Current refresh status: {refreshStatus.failure_category ?? refreshStatus.state}.
+      {patternCountOutdated(pattern, refreshStatus) &&
+        " Some of the builds it correlated have aged out of the analysis window, so its build count covers a wider window than the current one."}
     </Alert>
   ) : null;
   const lifecycleNotice = lifecycle && !lifecycleActive ? (

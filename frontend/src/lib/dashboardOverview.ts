@@ -2,6 +2,8 @@ import type {
   FlakinessReport,
   JobSummary,
   LowPassRateEntry,
+  PatternAnalysis,
+  PatternRefreshStatus,
   ResolvedEntry,
   ResolvedState,
   TestFlakiness,
@@ -112,6 +114,31 @@ export function persistOverviewHistoryState(patch: Partial<OverviewHistoryState>
 
 export function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+// patternCountOutdated reports whether a pattern's builds_analyzed describes a
+// wider window than the current one. All three conditions matter: a current
+// refresh rebuilt the count from the live window, a pattern with no shared builds
+// leaves evidence_available false no matter what is still present, and an
+// available pattern still holds every build it correlated.
+export function patternCountOutdated(
+  pattern: Pick<PatternAnalysis, "shared_builds">,
+  refreshStatus?: PatternRefreshStatus,
+): boolean {
+  if (!refreshStatus || refreshStatus.state === "current") return false;
+  if ((pattern.shared_builds?.length ?? 0) === 0) return false;
+  return refreshStatus.evidence_available === false;
+}
+
+// buildsAnalyzedLabel describes how many builds a pattern correlated. The count
+// is fixed when the pattern is generated, so a pattern being retained keeps
+// reporting the window it was correlated in even after those builds age out.
+export function buildsAnalyzedLabel(
+  pattern: Pick<PatternAnalysis, "builds_analyzed" | "shared_builds">,
+  refreshStatus?: PatternRefreshStatus,
+): string {
+  const label = countLabel(pattern.builds_analyzed, "build");
+  return patternCountOutdated(pattern, refreshStatus) ? `${label} (earlier window)` : label;
 }
 
 export function needsAttentionSummary(
