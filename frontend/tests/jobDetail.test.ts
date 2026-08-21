@@ -101,6 +101,8 @@ test("job result filter state uses bounded URL values", () => {
   assert.equal(normalizeResultLedgerFilter("passed"), "passed");
   assert.equal(normalizeResultLedgerFilter("all"), "all");
   assert.equal(normalizeResultLedgerFilter("skipped"), "failed");
+  assert.equal(normalizeResultLedgerFilter(null, "all"), "all");
+  assert.equal(normalizeResultLedgerFilter("unknown", "passed"), "passed");
 
   const current = new URLSearchParams("run=123&results=passed&test=pod&failure=pattern-1");
   const next = withJobDetailParam(current, "run", "456");
@@ -141,6 +143,8 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /<RunMetadata[\s\S]*View in Prow[\s\S]*Build log/);
   assert.match(page, /<TestResultsGrid runs=\{runs\}/);
   assert.match(page, /<ResultLedger[\s\S]*executedCount[\s\S]*skippedCount/);
+  assert.match(page, /const defaultResultFilter = selectedTestCases\.some/);
+  assert.match(page, /normalizeResultLedgerFilter\(searchParams\.get\("results"\), defaultResultFilter\)/);
   assert.match(page, /updateSearchParam\("results", filter\)/);
   assert.match(page, /updateSearchParam\("test", query \|\| null, \{ replace: true \}\)/);
 

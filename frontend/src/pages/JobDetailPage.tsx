@@ -202,7 +202,8 @@ export function JobDetailPage() {
     [runs],
   );
 
-  const selectedFilter = normalizeResultLedgerFilter(searchParams.get("results"));
+  const defaultResultFilter = selectedTestCases.some((testCase) => testCase.status === "failed") ? "failed" : "all";
+  const selectedFilter = normalizeResultLedgerFilter(searchParams.get("results"), defaultResultFilter);
   const resultQuery = searchParams.get("test") ?? "";
   const visibleTestCases = useMemo(
     () =>

@@ -125,7 +125,8 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.match(page, /<MetricStrip items=\{metricItems\} label="Test metrics"/);
   assert.match(page, /<AnalysisBriefing/);
   assert.match(page, /icon=\{<AutoAwesome/);
-  assert.match(page, /collapseDetailsOnMobile=\{false\}/);
+  assert.doesNotMatch(page, /collapseDetailsOnMobile=\{false\}/);
+  assert.match(page, /mobileNotice=\{selectedTestCase\.ai_analysis\.disposition === "preliminary"/);
   assert.match(page, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
   assert.match(page, /traceRef=\{traceRef\}/);
   assert.match(page, /fixPatterns=\{fixPatterns\}/);

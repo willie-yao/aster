@@ -10,7 +10,7 @@ import SvgIcon from "@mui/material/SvgIcon";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
 import { useColorScheme } from "@mui/material/styles";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
@@ -45,7 +45,8 @@ function NavTab({
         px: { xs: 1, sm: 1.25 },
         py: 0.75,
         minWidth: 0,
-        minHeight: { xs: 44, lg: 36 },
+        flexShrink: 0,
+        minHeight: { xs: 44, xl: 36 },
         borderRadius: 0,
         fontSize: "0.8125rem",
         fontWeight: active ? 700 : 600,
@@ -84,6 +85,7 @@ export function Layout() {
   const { mode, setMode } = useColorScheme();
   const isDark = mode === "dark";
   const fetchStatus = useFetchStatus();
+  const navRef = useRef<HTMLElement>(null);
   const [dismissedFetchStrip, setDismissedFetchStrip] = useState<string | null>(null);
   usePageDocumentTitle(location.pathname, manifest.branding.title);
   const flakyActive = location.pathname === "/flaky" || location.pathname.startsWith("/flaky/");
@@ -93,9 +95,39 @@ export function Layout() {
   const overviewActive = !flakyActive && !pullRequestsActive && !healthActive && !usageActive;
   const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
 
+  useEffect(() => {
+    navRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+      block: "nearest",
+      inline: "center",
+    });
+  }, [features.ai_usage, features.analysis_health, location.pathname, pullRequestsEnabled]);
+
   return (
     <FetchStatusContext.Provider value={fetchStatus}>
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default", color: "text.primary" }}>
+      <MuiLink
+        href="#main-content"
+        sx={{
+          position: "fixed",
+          top: 8,
+          left: 8,
+          zIndex: (theme) => theme.zIndex.tooltip,
+          px: 1.5,
+          py: 1,
+          bgcolor: "background.paper",
+          color: "primary.main",
+          border: "1px solid",
+          borderColor: "primary.main",
+          borderRadius: "4px",
+          fontWeight: 700,
+          transform: "translateY(calc(-100% - 16px))",
+          transition: "transform 150ms ease",
+          "&:focus": { transform: "translateY(0)" },
+          "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+        }}
+      >
+        Skip to main content
+      </MuiLink>
       <AppBar
         position="sticky"
         color="transparent"
@@ -112,20 +144,20 @@ export function Layout() {
         <Toolbar
           disableGutters
           sx={{
-            minHeight: { xs: "auto !important", lg: "56px !important" },
+            minHeight: { xs: "auto !important", xl: "56px !important" },
             px: { xs: 2, sm: 3 },
-            py: { xs: 1, lg: 0 },
+            py: { xs: 1, xl: 0 },
             display: "grid",
             gridTemplateColumns: {
               xs: "minmax(0, 1fr) auto",
-              lg: "minmax(0, auto) auto minmax(0, 1fr)",
+              xl: "minmax(0, auto) auto minmax(0, 1fr)",
             },
             gridTemplateAreas: {
               xs: '"brand controls" "nav nav"',
-              lg: '"brand nav controls"',
+              xl: '"brand nav controls"',
             },
             columnGap: { xs: 1.5, sm: 2 },
-            rowGap: { xs: 0.75, lg: 0 },
+            rowGap: { xs: 0.75, xl: 0 },
             alignItems: "center",
           }}
         >
@@ -139,8 +171,9 @@ export function Layout() {
               display: "flex",
               gridArea: "brand",
               alignItems: "center",
+              minHeight: { xs: 44, xl: 32 },
               gap: 1.5,
-              minWidth: 0,
+              minWidth: { xs: 44, sm: 0 },
               maxWidth: "100%",
               transition: "opacity 150ms ease",
               "&:hover": { opacity: 0.8 },
@@ -182,7 +215,7 @@ export function Layout() {
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
-                maxWidth: { sm: "min(48vw, 28rem)", lg: "min(28vw, 32rem)" },
+                maxWidth: { sm: "min(48vw, 28rem)", xl: "min(28vw, 32rem)" },
               }}
             >
               {manifest.branding.title}
@@ -190,6 +223,7 @@ export function Layout() {
           </MuiLink>
 
           <Box
+            ref={navRef}
             component="nav"
             aria-label="Primary"
             sx={{
@@ -197,9 +231,9 @@ export function Layout() {
               gridArea: "nav",
               alignItems: "center",
               gap: 0.5,
-              justifySelf: { xs: "stretch", lg: "start" },
-              justifyContent: { xs: "center", lg: "flex-start" },
-              width: { xs: "100%", lg: "auto" },
+              justifySelf: { xs: "stretch", xl: "start" },
+              justifyContent: { xs: "flex-start", xl: "flex-start" },
+              width: { xs: "100%", xl: "auto" },
               minWidth: 0,
               overflowX: "auto",
               scrollbarWidth: "none",
@@ -273,7 +307,13 @@ export function Layout() {
         dismissedKey={dismissedFetchStrip}
         onDismiss={setDismissedFetchStrip}
       />
-      <Container component="main" maxWidth="xl" sx={{ minWidth: 0, py: { xs: 2, sm: 3 } }}>
+      <Container
+        id="main-content"
+        tabIndex={-1}
+        component="main"
+        maxWidth="xl"
+        sx={{ minWidth: 0, py: { xs: 2, sm: 3 }, "&:focus": { outline: "none" } }}
+      >
         <RouteErrorBoundary resetKey={`${location.pathname}${location.search}`}>
           <Outlet />
         </RouteErrorBoundary>

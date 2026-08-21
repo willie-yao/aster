@@ -129,6 +129,8 @@ export function CopyIdentifierAction({
   copied: boolean;
   onCopy: () => void;
 }) {
+  if (!value.trim()) return null;
+
   return (
     <Box
       sx={{
@@ -171,12 +173,13 @@ export function CopyIdentifierAction({
         aria-live="polite"
         sx={{
           position: "absolute",
-          width: 1,
-          height: 1,
+          width: "1px",
+          height: "1px",
           p: 0,
           m: -1,
           overflow: "hidden",
           clip: "rect(0 0 0 0)",
+          clipPath: "inset(50%)",
           whiteSpace: "nowrap",
           border: 0,
         }}
@@ -298,7 +301,11 @@ function TraceEventLedger({ events }: { events: AnalysisTraceEvent[] }) {
             </Typography>
           ))}
         </Box>
-        {events.map((event) => (
+        {events.length === 0 ? (
+          <Typography role="status" color="textSecondary" sx={{ px: 1.5, py: 2.5, ...overviewTypography.secondaryBody }}>
+            No trace events were recorded.
+          </Typography>
+        ) : events.map((event) => (
           <TraceEventRow key={`${event.sequence}-${event.kind}`} event={event} />
         ))}
       </Box>
@@ -350,7 +357,7 @@ export function TraceDetailBody({
         direction="row"
         sx={{ minWidth: 0, minHeight: 56, alignItems: "center", gap: 1, flexWrap: "wrap", px: 1.5, py: 1 }}
       >
-        {testHref && (
+        {testHref && trace.build_id.trim() && trace.test_name.trim() && (
           <Button
             component={RouterLink}
             to={testHref}

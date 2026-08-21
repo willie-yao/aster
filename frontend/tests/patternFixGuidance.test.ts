@@ -242,8 +242,8 @@ test("fix routing reads as an action and names the test it opens", () => {
   // The old treatment was the monospace data token, which is exactly how build
   // ID chips render a few lines above it in the same cause.
   assert.match(routing, /<Button/);
-  assert.match(routing, /variant="outlined"/);
-  assert.match(routing, /startIcon=\{<AutoFixHigh aria-hidden \/>\}/);
+  assert.match(routing, /variant=\{stale \? "text" : "outlined"\}/);
+  assert.match(routing, /stale \? <VisibilityOutlined aria-hidden \/> : <AutoFixHigh aria-hidden \/>/);
   assert.doesNotMatch(routing, /overviewTypography\.data/);
   assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
 
@@ -251,7 +251,8 @@ test("fix routing reads as an action and names the test it opens", () => {
   // as if it belonged to the next cause, and it uses the same humanized title
   // the test ledger shows rather than the raw JUnit name.
   assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
-  assert.match(routing, /Fix: \{testName\}/);
+  assert.match(routing, /const actionLabel = stale \? "View affected failure" : "Fix"/);
+  assert.match(routing, /\{actionLabel\}: \{testName\}/);
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
   // A long test name truncates inline, and the full value stays reachable on
@@ -271,6 +272,7 @@ test("the build only joins the label where it is needed to tell two actions apar
   assert.match(routing, /showBuild = false/);
   assert.match(routing, /\{showBuild && \(/);
   assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
+  assert.match(banner, /stale=\{!isCurrent\}/);
 
   // Counting the DISPLAYED label, not the canonical name: two canonical names
   // can humanize to one title, which would hide both builds and leave two
@@ -281,7 +283,7 @@ test("the build only joins the label where it is needed to tell two actions apar
   // One suffix backs both strings, so the visible label cannot drift out of
   // being a literal prefix of the accessible name.
   assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
-  assert.match(routing, /const subject = `Fix: \$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /const subject = `\$\{actionLabel\}: \$\{testName\}\$\{buildSuffix\}`/);
   assert.match(routing, /whiteSpace: "pre"/);
   assert.doesNotMatch(routing, /\\u00a0/);
 });

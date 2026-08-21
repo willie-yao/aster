@@ -134,6 +134,7 @@ test("causal group rhythm and headings express the hierarchy", () => {
   assert.match(cause, /component="h4"/);
   assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
   assert.match(remediation, /component="h5"/);
+  assert.match(remediation, /slotProps=\{\{ heading: \{ component: "h5" \} \}\}/);
   assert.doesNotMatch(remediation, /component="h4"/);
 });
 
@@ -289,4 +290,15 @@ test("the severity chip is suppressed exactly where a header already states it",
 
   // The inline table row has no header of its own, so it keeps the chip.
   assert.doesNotMatch(table, /severityInHeader/);
+});
+
+
+test("analysis prose preserves step breaks and cleans evidence placeholders", () => {
+  const section = source("src/components/BriefingSection.tsx");
+  const richText = source("src/components/RichText.tsx");
+
+  assert.match(section, /whiteSpace: "pre-line"/);
+  assert.match(richText, /normalizeAnalysisProse/);
+  assert.match(richText, /\(cited evidence\)/);
+  assert.match(richText, /\(\?:\[\\w\.-\]\+\\\/\)\*/);
 });

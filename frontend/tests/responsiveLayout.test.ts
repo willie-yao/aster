@@ -23,6 +23,21 @@ test("mobile branding link keeps an accessible home name", () => {
   assert.match(layout, /label="AI Usage"/);
 });
 
+test("header keeps navigation readable until the extra-large layout fits", () => {
+  const layout = source("src/components/Layout.tsx");
+  const profile = source("src/components/ProfileMenu.tsx");
+
+  assert.match(layout, /xl: '"brand nav controls"'/);
+  assert.doesNotMatch(layout, /lg: '"brand nav controls"'/);
+  assert.match(layout, /flexShrink: 0,[\s\S]*minHeight: \{ xs: 44, xl: 36 \}/);
+  assert.match(layout, /justifyContent: \{ xs: "flex-start", xl: "flex-start" \}/);
+  assert.match(layout, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)\?\.scrollIntoView/);
+  assert.match(layout, /href="#main-content"[\s\S]*Skip to main content/);
+  assert.match(layout, /id="main-content"[\s\S]*tabIndex=\{-1\}/);
+  assert.match(profile, /width: \{ xs: 44, sm: 36 \}/);
+  assert.match(profile, /height: \{ xs: 44, sm: 36 \}/);
+});
+
 test("run history remains contained on narrow detail pages", () => {
   const timeline = source("src/components/RunHistory.tsx");
   const jobDetail = source("src/pages/JobDetailPage.tsx");

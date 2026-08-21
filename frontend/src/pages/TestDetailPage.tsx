@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -483,6 +484,11 @@ export function TestDetailPage() {
       title="Analysis briefing"
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
       metadata={`${selectedTestCase.ai_analysis.severity} severity · ${matchingFailures} ${matchingFailures === 1 ? "matching failure" : "matching failures"}`}
+      mobileNotice={selectedTestCase.ai_analysis.disposition === "preliminary" ? (
+        <Alert severity="warning" variant="outlined">
+          Preliminary analysis. Evidence or quality checks remain unresolved. Review only.
+        </Alert>
+      ) : undefined}
       summary={(
         <RichText
           text={
@@ -511,7 +517,6 @@ export function TestDetailPage() {
           severityInHeader
         />
       )}
-      collapseDetailsOnMobile={false}
     />
   ) : selectedTestCase?.ai_summary ? (
     <AnalysisBriefing
@@ -524,7 +529,6 @@ export function TestDetailPage() {
           fileCtx={selectedFileContext}
         />
       )}
-      collapseDetailsOnMobile={false}
     />
   ) : (
     <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>

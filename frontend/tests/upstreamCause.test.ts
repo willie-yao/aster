@@ -25,6 +25,7 @@ const { CausalGroupFixRouting } = (await vite.ssrLoadModule("/src/components/Cau
     jobID?: string;
     target: CausalGroupFixTarget | null;
     externalCause?: AnalysisCauseLocation | null;
+    stale?: boolean;
   }) => ReturnType<typeof createElement>;
 };
 const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/PatternFixGuidance.tsx")) as {
@@ -180,6 +181,18 @@ test("a cause owned by a dependency reports it even when a Fix route exists", ()
   );
   assert.match(owned, /aria-label="Fix: fails in build 208060"/i);
   assert.doesNotMatch(owned, /dependency/);
+});
+
+test("stale causes point to evidence without presenting a Fix action", () => {
+  const html = render(createElement(CausalGroupFixRouting, {
+    jobID: "job",
+    target: fixTarget,
+    externalCause: null,
+    stale: true,
+  }));
+
+  assert.match(html, /aria-label="View affected failure: fails in build 208060"/i);
+  assert.doesNotMatch(html, /aria-label="Fix: fails in build 208060"/i);
 });
 
 test("the pattern panel only points at a chat that is on the page", () => {

@@ -43,7 +43,7 @@ export function BriefingSection({
       >
         {label}
       </Typography>
-      <Box sx={{ mt: 0.75, fontSize: "16px", lineHeight: "25px" }}>{children}</Box>
+      <Box sx={{ mt: 0.75, fontSize: "16px", lineHeight: "25px", whiteSpace: "pre-line" }}>{children}</Box>
     </Box>
   );
 }

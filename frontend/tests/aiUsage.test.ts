@@ -123,3 +123,14 @@ test("historical usage fixture covers required cost and coverage scenarios", () 
   assert.ok(fixture.daily.some((day) => day.coverage.states.includes("external_unmetered")));
   assert.ok(fixture.daily.some((day) => day.current_partial_utc));
 });
+
+
+test("daily cost chart opens on the newest mobile dates and avoids duplicate lines", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/components/AIUsageDaily.tsx"), "utf8");
+
+  assert.match(source, /scrollLeft = Math\.max\(0, scroller\.scrollWidth - scroller\.clientWidth\)/);
+  assert.match(source, /Newest dates are in view\. Scroll left for earlier dates\./);
+  assert.match(source, /const matchingSeries =/);
+  assert.match(source, /Current-rate estimate matches the recorded estimate\./);
+  assert.match(source, /Peak day:/);
+});
