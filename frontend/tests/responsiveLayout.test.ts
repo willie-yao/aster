@@ -44,7 +44,7 @@ test("run history remains contained on narrow detail pages", () => {
 
   assert.match(timeline, /width: "100%"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"[\s\S]*overflowX: "auto"/);
   assert.match(timeline, /width: "max-content"[\s\S]*minWidth: "100%"/);
-  assert.match(jobDetail, /<RunHistory[\s\S]*metadata=\{`\$\{runs\.length\} recent/);
+  assert.match(jobDetail, /<RunHistory[\s\S]*metadata=\{`\$\{historyRuns\.length\} recent/);
   assert.match(jobDetail, /gridTemplateColumns: \{ xs: "minmax\(0, 1fr\)"[\s\S]*minWidth: 0/);
 });
 
