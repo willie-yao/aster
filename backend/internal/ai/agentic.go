@@ -454,12 +454,13 @@ const (
 type evidenceGateOutcome string
 
 const (
-	evidenceGateNudge           evidenceGateOutcome = "nudge"
-	evidenceGateCovered         evidenceGateOutcome = "covered"
-	evidenceGateNoProgress      evidenceGateOutcome = "no_progress"
-	evidenceGateNudgeBudget     evidenceGateOutcome = "nudge_budget"
-	evidenceGateBudgetExhausted evidenceGateOutcome = "budget_exhausted"
-	evidenceGateTimeHeadroom    evidenceGateOutcome = "time_headroom"
+	evidenceGateNudge              evidenceGateOutcome = "nudge"
+	evidenceGateCovered            evidenceGateOutcome = "covered"
+	evidenceGateNoProgress         evidenceGateOutcome = "no_progress"
+	evidenceGateNudgeBudget        evidenceGateOutcome = "nudge_budget"
+	evidenceGateBudgetExhausted    evidenceGateOutcome = "budget_exhausted"
+	evidenceGateTimeHeadroom       evidenceGateOutcome = "time_headroom"
+	evidenceGateIterationExhausted evidenceGateOutcome = "iteration_exhausted"
 )
 
 // evidenceGate is the anti-thrash state for reopening a finalize attempt while
@@ -537,11 +538,20 @@ func (s *agentState) draftTriggeredEvidenceGroups(out critiqueOutcome, planned [
 // formatEvidenceNudge names the unread evidence groups and their ranked
 // candidate paths so the model can finish the plan it was given.
 func formatEvidenceNudge(groups []skills.PlanGroupRef) string {
+	return formatEvidenceNudgeWithLead("You attempted to finalize while required evidence for this failure class is still unread.", groups)
+}
+
+func formatEvidenceHeadroomNudge(groups []skills.PlanGroupRef) string {
+	return formatEvidenceNudgeWithLead("The investigation loop is on its final tools-enabled iteration while required evidence for this failure class is still unread.", groups)
+}
+
+func formatEvidenceNudgeWithLead(lead string, groups []skills.PlanGroupRef) string {
 	if len(groups) > evidenceNudgeMaxGroups {
 		groups = groups[:evidenceNudgeMaxGroups]
 	}
 	var b strings.Builder
-	b.WriteString("You attempted to finalize while required evidence for this failure class is still unread. Read at least one candidate path from every group below with read_artifact, tail_artifact, or grep_artifact before producing the final JSON:\n")
+	b.WriteString(lead)
+	b.WriteString(" Read at least one candidate path from every group below with read_artifact, tail_artifact, or grep_artifact before producing the final JSON:\n")
 	for _, group := range groups {
 		label := strings.TrimSpace(group.Description)
 		if label == "" {
@@ -569,6 +579,12 @@ func evidencePlanTraceEvent(outcome evidenceGateOutcome, coverage skills.PlanCov
 		plan.UnreadGroups = append(plan.UnreadGroups, EvidencePlanGroupTrace{SkillID: group.SkillID, GroupID: group.GroupID})
 	}
 	return TraceEvent{Kind: "evidence_plan", Outcome: string(outcome), EvidencePlan: plan}
+}
+
+func recordEvidencePlanTrace(ctx context.Context, status string, outcome evidenceGateOutcome, coverage skills.PlanCoverage, unread []skills.PlanGroupRef, draftTriggered int) {
+	event := evidencePlanTraceEvent(outcome, coverage, unread, draftTriggered)
+	event.Status = status
+	recordTrace(ctx, event)
 }
 
 // agenticCacheData is the on-disk shape of a cached agentic analysis. Embeds
@@ -1265,6 +1281,26 @@ agentLoop:
 			recordTrace(loopCtx, TraceEvent{Kind: "context_headroom", Outcome: "unavailable", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 			return nil, nil, ErrContextHeadroom
 		}
+		// Reserve the final tools-enabled request for unread planned evidence.
+		if iter+1 == maxIters && state.calls > 0 {
+			coverage := state.planCoverage()
+			if coverage.Applicable > 0 {
+				outcome, unread := evidence.decide(state, coverage.UnmetGroups)
+				if outcome == evidenceGateNudge {
+					nudgeMessages := slices.Clone(messages)
+					nudgeMessages = append(nudgeMessages, modelMessage{Role: "user", Content: strPtr(formatEvidenceHeadroomNudge(unread))})
+					if prepared, nudgeFits := prepareContextRequest(loopCtx, nudgeMessages, schemaBytes, headroom, "evidence_nudge"); nudgeFits {
+						messages = prepared
+						evidence.recordNudge(state)
+						draftPhase = "evidence_retry"
+						log.Printf("  ↻ agentic evidence nudge: reserving the final tools-enabled iteration for %d unread evidence group(s)", len(unread))
+					} else {
+						outcome = evidenceGateTimeHeadroom
+					}
+				}
+				recordEvidencePlanTrace(loopCtx, "iteration_headroom", outcome, coverage, unread, 0)
+			}
+		}
 		requestStart := time.Now()
 		resp, err := c.callModel(loopCtx, messages, schemas, parallelToolCalls)
 		state.recentModelRequest = time.Since(requestStart)
@@ -1408,7 +1444,7 @@ agentLoop:
 			}
 			if coverage.Applicable > 0 || len(unreadGroups) > 0 {
 				outcome, unread := evidence.decide(state, unreadGroups)
-				recordTrace(loopCtx, evidencePlanTraceEvent(outcome, coverage, unread, draftTriggered))
+				recordEvidencePlanTrace(loopCtx, "voluntary_finalize", outcome, coverage, unread, draftTriggered)
 				if outcome == evidenceGateNudge {
 					// Seed the selected draft before reopening. Otherwise a later,
 					// worse draft becomes the first candidate the critique gate
@@ -1579,6 +1615,14 @@ agentLoop:
 	// without parseable JSON, force a finalize round with tools omitted.
 	parsed, ok := tryParseAnalysis(finalContent)
 	if !ok {
+		coverage := state.planCoverage()
+		if coverage.Applicable > 0 {
+			outcome, unread := evidence.decide(state, coverage.UnmetGroups)
+			if outcome == evidenceGateNudge {
+				outcome = evidenceGateIterationExhausted
+			}
+			recordEvidencePlanTrace(loopCtx, "forced_finalize", outcome, coverage, unread, 0)
+		}
 		var safe bool
 		finalContent, finalProviderItems, safe = c.runFinalizeRoundTracked(loopCtx, state, messages, headroom)
 		if !safe {
@@ -2976,19 +3020,19 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
 		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
 		payload := map[string]interface{}{"error": message}
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled", Grep: undispatchedGrepObservation(tc)})
 		return toolErrJSON(message), payload
 	}
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "model byte budget exhausted; produce final JSON now"
 		payload := map[string]interface{}{"error": message}
 		return toolErrJSON(message), payload
 	}
 	if !isRepoTool(tc.Function.Name) && s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
-		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted"})
+		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "GCS byte budget exhausted; produce final JSON now"
 		payload := map[string]interface{}{"error": message}
 		return toolErrJSON(message), payload
@@ -3013,7 +3057,14 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	if toolFailed {
 		toolOutcome = "error"
 	}
-	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched})
+	grep := grepCallObservation(result.Observation)
+	if grep == nil {
+		grep = undispatchedGrepObservation(tc)
+	}
+	if grep != nil && toolFailed {
+		grep.Outcome = tools.GrepOutcomeError
+	}
+	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched, Grep: grep})
 	envelope := toolEnvelopeJSON(s, result.Payload)
 	visiblePayload := modelVisibleToolPayload(envelope)
 
@@ -3071,6 +3122,62 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 
 	return envelope, result.Payload
+}
+
+func grepCallObservation(observation any) *tools.GrepCallObservation {
+	var value tools.GrepCallObservation
+	switch observation := observation.(type) {
+	case tools.GrepCallObservation:
+		value = observation
+	case repotree.GrepObservation:
+		value = observation.Call
+	default:
+		return nil
+	}
+	value.ReturnedRanges = append([]tools.GrepRangeObservation(nil), value.ReturnedRanges...)
+	return &value
+}
+
+func undispatchedGrepObservation(tc modelToolCall) *tools.GrepCallObservation {
+	switch tc.Function.Name {
+	case "grep_artifact":
+		args := struct {
+			Path         string        `json:"path"`
+			ContextLines tools.FlexInt `json:"context_lines"`
+			MaxMatches   tools.FlexInt `json:"max_matches"`
+		}{ContextLines: -1}
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		contextLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+		path, err := artifacts.SafePath(args.Path)
+		if err != nil {
+			path = args.Path
+		}
+		filter, supplied, length, redacted := tools.ContentFreePathFilter(path)
+		return &tools.GrepCallObservation{
+			SelectorID: "artifact-workspace", PathFilter: filter, PathFilterSupplied: supplied,
+			PathFilterLength: length, PathFilterRedacted: redacted,
+			ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+			ReturnedRanges: []tools.GrepRangeObservation{},
+		}
+	case "grep_repo":
+		args := struct {
+			SourceID     string        `json:"source_id"`
+			PathGlob     string        `json:"path_glob"`
+			ContextLines tools.FlexInt `json:"context_lines"`
+			MaxMatches   tools.FlexInt `json:"max_matches"`
+		}{ContextLines: -1}
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		contextLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+		filter, supplied, length, redacted := tools.ContentFreePathFilter(args.PathGlob)
+		return &tools.GrepCallObservation{
+			SelectorID: tools.ContentFreeSelectorID(args.SourceID), PathFilter: filter, PathFilterSupplied: supplied,
+			PathFilterLength: length, PathFilterRedacted: redacted,
+			ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+			ReturnedRanges: []tools.GrepRangeObservation{},
+		}
+	default:
+		return nil
+	}
 }
 
 // unreadEvidenceGroupIDs names the initial-plan groups that have a candidate

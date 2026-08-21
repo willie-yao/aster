@@ -3,7 +3,9 @@ package filesystem
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,8 +16,12 @@ import (
 
 // fakeBrowser is a small in-memory Browser shared across filesystem tests.
 type fakeBrowser struct {
-	dirs  map[string][]string
-	files map[string][]byte
+	dirs             map[string][]string
+	files            map[string][]byte
+	grepContextLines []int
+	grepMaxMatches   []int
+	grepResult       *artifacts.GrepResult
+	grepErr          error
 }
 
 func (b *fakeBrowser) BuildRoot() string { return "fake/build/1" }
@@ -70,12 +76,115 @@ func (b *fakeBrowser) Tail(_ context.Context, p string, _, _ int) (*artifacts.Ta
 	return &artifacts.TailResult{FileSize: int64(len(d)), Content: d}, nil
 }
 
-func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, _, _, _, _ int) (*artifacts.GrepResult, error) {
+func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, contextLines, maxMatches, _, _ int) (*artifacts.GrepResult, error) {
 	d, ok := b.files[p]
 	if !ok {
 		return nil, fmt.Errorf("not found: %s", p)
 	}
+	b.grepContextLines = append(b.grepContextLines, contextLines)
+	b.grepMaxMatches = append(b.grepMaxMatches, maxMatches)
+	if b.grepErr != nil {
+		return nil, b.grepErr
+	}
+	if b.grepResult != nil {
+		return b.grepResult, nil
+	}
 	return &artifacts.GrepResult{FileSize: int64(len(d))}, nil
+}
+
+func TestGrepArtifactContextLinesDefaultAndExplicitZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args map[string]interface{}
+		want int
+	}{
+		{name: "omitted", args: map[string]interface{}{"path": "build-log.txt", "pattern": "failure"}, want: 2},
+		{name: "explicit zero", args: map[string]interface{}{"path": "build-log.txt", "pattern": "failure", "context_lines": 0}, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("failure\n")}}
+			raw, _ := json.Marshal(tc.args)
+			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+			if _, failed := result.Payload["error"]; failed {
+				t.Fatalf("payload=%v", result.Payload)
+			}
+			if len(browser.grepContextLines) != 1 || browser.grepContextLines[0] != tc.want {
+				t.Fatalf("context lines=%v, want %d", browser.grepContextLines, tc.want)
+			}
+		})
+	}
+}
+
+func TestGrepArtifactRetainsContentFreeCallTelemetry(t *testing.T) {
+	browser := &fakeBrowser{
+		files: map[string][]byte{"build-log.txt": []byte("before\nmatch\nafter\n")},
+		grepResult: &artifacts.GrepResult{
+			FileSize: 19, TotalMatches: 1, BytesScanned: 19,
+			Matches: []artifacts.GrepMatch{{LineNo: 2, Context: []string{"  1: before", "> 2: match", "  3: after"}}},
+		},
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "private model query"})
+	result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+	observation, ok := result.Observation.(tools.GrepCallObservation)
+	if !ok {
+		t.Fatalf("observation=%T", result.Observation)
+	}
+	if observation.SelectorID != artifactGrepSelector || observation.PathFilter != "build-log.txt" || observation.ContextLines != 2 || observation.MaxMatches != 30 || observation.MatchCount != 1 || observation.FilesScanned != 1 || observation.Outcome != tools.GrepOutcomeMatched {
+		t.Fatalf("observation=%+v", observation)
+	}
+	want := []tools.GrepRangeObservation{{SelectorID: artifactGrepSelector, Path: "build-log.txt", LineStart: 1, LineEnd: 3}}
+	if !reflect.DeepEqual(observation.ReturnedRanges, want) {
+		t.Fatalf("ranges=%+v, want %+v", observation.ReturnedRanges, want)
+	}
+	encoded, _ := json.Marshal(observation)
+	if strings.Contains(string(encoded), "private model query") {
+		t.Fatalf("observation retained regex: %s", encoded)
+	}
+}
+
+func TestGrepArtifactRedactsPlainFilterButRetainsCanonicalRange(t *testing.T) {
+	browser := &fakeBrowser{
+		files: map[string][]byte{"Makefile": []byte("target:\n")},
+		grepResult: &artifacts.GrepResult{
+			FileSize: 8, TotalMatches: 1, BytesScanned: 8,
+			Matches: []artifacts.GrepMatch{{LineNo: 1, Context: []string{"> 1: target:"}}},
+		},
+	}
+	raw, _ := json.Marshal(map[string]interface{}{"path": "Makefile", "pattern": "target"})
+	result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+	observation := result.Observation.(tools.GrepCallObservation)
+	if observation.PathFilter != "" || !observation.PathFilterRedacted || len(observation.ReturnedRanges) != 1 || observation.ReturnedRanges[0].Path != "Makefile" {
+		t.Fatalf("observation=%+v", observation)
+	}
+}
+
+func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pattern      string
+		outcome      string
+		browserError bool
+	}{
+		{name: "zero matches", pattern: "missing", outcome: tools.GrepOutcomeZeroMatches},
+		{name: "invalid regex", pattern: "(", outcome: tools.GrepOutcomeError},
+		{name: "browser error", pattern: "match", outcome: tools.GrepOutcomeError, browserError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("line\n")}}
+			if tc.browserError {
+				browser.grepErr = errors.New("read failed")
+			}
+			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": tc.pattern})
+			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+			observation, ok := result.Observation.(tools.GrepCallObservation)
+			if !ok || observation.Outcome != tc.outcome || observation.MatchCount != 0 || len(observation.ReturnedRanges) != 0 {
+				t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
+			}
+			if tc.browserError && (observation.FilesAttempted != 1 || observation.FileReadErrors != 1) {
+				t.Fatalf("browser error observation=%+v", observation)
+			}
+		})
+	}
 }
 
 // junitTree models a typical prow build with a handful of junit XML files

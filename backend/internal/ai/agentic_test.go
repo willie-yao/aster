@@ -364,6 +364,43 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	}
 }
 
+func TestAgentic_TraceRetainsZeroMatchGrepWithoutPattern(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{
+		"path": "build-log.txt", "pattern": "private model query",
+	}))
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"The retained evidence is inconclusive.","severity":"Low","suggested_fix":"Inspect the failing component logs.","relevant_files":[],"evidence_citations":[]}`))
+
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(
+		ctx,
+		newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("unrelated line\n")}}, AgenticOptions{
+			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+		}),
+		"agentic:test:zero-match-grep-trace", "sys", "user",
+	); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+
+	var got *tools.GrepCallObservation
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "tool_call" && event.Tool == "grep_artifact" {
+			got = event.Grep
+		}
+	}
+	if got == nil || got.Outcome != tools.GrepOutcomeZeroMatches || got.ContextLines != 2 || got.MaxMatches != 30 || got.MatchCount != 0 || got.FilesScanned != 1 || got.PathFilter != "build-log.txt" {
+		t.Fatalf("grep trace=%+v", got)
+	}
+	encoded, _ := json.Marshal(store.Snapshot())
+	if strings.Contains(string(encoded), "private model query") {
+		t.Fatalf("grep trace retained regex: %s", encoded)
+	}
+}
+
 func TestAgenticTraceRecordsModelToolAndCritique(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)

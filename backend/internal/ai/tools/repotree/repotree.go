@@ -310,9 +310,10 @@ type GrepMatchObservation struct {
 	LineEnd   int
 }
 
-// GrepObservation is private structured metadata for one successful grep_repo call.
+// GrepObservation is private structured metadata for one grep_repo call.
 type GrepObservation struct {
 	Matches []GrepMatchObservation
+	Call    tools.GrepCallObservation
 }
 
 type grepTool struct{}
@@ -348,39 +349,31 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		ContextLines tools.FlexInt `json:"context_lines"`
 		MaxMatches   tools.FlexInt `json:"max_matches"`
 	}
+	args.ContextLines = -1
+	ctxLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+	observation := repoGrepObservation(args.SourceID, args.PathGlob, ctxLines, maxMatches)
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return tools.ErrPayload("invalid arguments: " + err.Error())
+		return repoGrepError(observation, "invalid arguments: "+err.Error())
 	}
+	ctxLines, maxMatches = tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+	observation = repoGrepObservation(args.SourceID, args.PathGlob, ctxLines, maxMatches)
 	selected, err := source(env, args.SourceID)
 	if err != nil {
-		return tools.ErrPayload(err.Error())
+		return repoGrepError(observation, err.Error())
 	}
+	observation.Call.SelectorID = selected.ID
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
-		return tools.ErrPayload("invalid regex: " + err.Error())
-	}
-	ctxLines := args.ContextLines.Int()
-	if ctxLines < 0 {
-		ctxLines = 2
-	}
-	if ctxLines > grepMaxCtx {
-		ctxLines = grepMaxCtx
-	}
-	maxMatches := args.MaxMatches.Int()
-	if maxMatches <= 0 {
-		maxMatches = 30
-	}
-	if maxMatches > grepMaxHits {
-		maxMatches = grepMaxHits
+		return repoGrepError(observation, "invalid regex: "+err.Error())
 	}
 
 	paths, err := tree(ctx, env, selected)
 	if err != nil {
-		return tools.ErrPayload(err.Error())
+		return repoGrepError(observation, err.Error())
 	}
 	globRE, err := globToRegexp(args.PathGlob)
 	if err != nil {
-		return tools.ErrPayload("invalid path_glob: " + err.Error())
+		return repoGrepError(observation, "invalid path_glob: "+err.Error())
 	}
 
 	type hit struct {
@@ -390,22 +383,24 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	var hits []hit
 	var observations []GrepMatchObservation
-	scanned, fetched, bytes, contentBytes := 0, 0, 0, 0
+	var telemetryRanges []tools.GrepRangeObservation
+	scanned, attempted, readErrors, bytes, contentBytes := 0, 0, 0, 0, 0
 	truncatedFiles := false
 
 	for _, p := range paths {
 		if globRE != nil && !globRE.MatchString(p) {
 			continue
 		}
-		if fetched >= maxGrepFiles {
+		if attempted >= maxGrepFiles {
 			truncatedFiles = true
 			break
 		}
+		attempted++
 		content, found, ferr := readFile(ctx, env, selected, p)
 		if ferr != nil || !found {
+			readErrors++
 			continue
 		}
-		fetched++
 		canonicalContent := strings.ReplaceAll(content, "\r\n", "\n")
 		fullLines := strings.Split(canonicalContent, "\n")
 		body := content
@@ -435,6 +430,9 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			}
 			context := lines[lo:hi]
 			hits = append(hits, hit{Path: p, Line: i + 1, Context: context})
+			telemetryRanges = append(telemetryRanges, tools.GrepRangeObservation{
+				SelectorID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi,
+			})
 			if hi <= len(fullLines) {
 				fullMatch := strings.Join(fullLines[lo:hi], "\n")
 				if strings.TrimSpace(fullMatch) != "" && len(fullMatch) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
@@ -453,21 +451,53 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 
 	payload := map[string]interface{}{
-		"source_id":     selected.ID,
-		"pattern":       args.Pattern,
-		"path_glob":     args.PathGlob,
-		"files_scanned": scanned,
-		"total_matches": len(hits),
-		"matches":       hits,
+		"source_id":        selected.ID,
+		"pattern":          args.Pattern,
+		"path_glob":        args.PathGlob,
+		"files_attempted":  attempted,
+		"files_scanned":    scanned,
+		"file_read_errors": readErrors,
+		"total_matches":    len(hits),
+		"matches":          hits,
 	}
 	if truncatedFiles {
 		payload["truncated"] = true
 		payload["truncated_reason"] = "max_files"
 	}
+	observation.Call.MatchCount = len(hits)
+	observation.Call.FilesAttempted = attempted
+	observation.Call.FilesScanned = scanned
+	observation.Call.FileReadErrors = readErrors
+	observation.Call.FileScanTruncated = truncatedFiles
+	observation.Call.ResultTruncated = truncatedFiles || len(hits) >= maxMatches
+	observation.Call.Outcome = tools.GrepOutcomeZeroMatches
+	if len(hits) > 0 {
+		observation.Call.Outcome = tools.GrepOutcomeMatched
+	}
+	observation.Matches = observations
+	observation.Call.ReturnedRanges = telemetryRanges
+	if attempted > 0 && readErrors == attempted {
+		return repoGrepError(observation, "repository files could not be read")
+	}
 	return tools.Result{
 		BytesFetched: bytes, ContentBytes: contentBytes, Payload: payload,
-		Observation: GrepObservation{Matches: observations},
+		Observation: observation,
 	}
+}
+
+func repoGrepObservation(sourceID, pathFilter string, contextLines, maxMatches int) GrepObservation {
+	filter, supplied, length, redacted := tools.ContentFreePathFilter(pathFilter)
+	return GrepObservation{Call: tools.GrepCallObservation{
+		SelectorID: tools.ContentFreeSelectorID(sourceID), PathFilter: filter, PathFilterSupplied: supplied,
+		PathFilterLength: length, PathFilterRedacted: redacted,
+		ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+		ReturnedRanges: []tools.GrepRangeObservation{},
+	}}
+}
+
+func repoGrepError(observation GrepObservation, message string) tools.Result {
+	observation.Call.Outcome = tools.GrepOutcomeError
+	return tools.Result{Payload: map[string]interface{}{"error": message}, Observation: observation}
 }
 
 // normalizeDir turns a user directory arg into a clean prefix ending in "/"

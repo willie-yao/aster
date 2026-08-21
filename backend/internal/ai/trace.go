@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/textutil"
@@ -113,6 +114,8 @@ type EvidencePlanTrace struct {
 	UnreadGroups   []EvidencePlanGroupTrace `json:"unread_groups,omitempty"`
 }
 
+type GrepCallTrace = tools.GrepCallObservation
+
 // TraceEvent is one bounded, content-free analysis event.
 type TraceEvent struct {
 	Sequence                      int                 `json:"sequence"`
@@ -164,6 +167,7 @@ type TraceEvent struct {
 	CacheRejectionReason          string              `json:"cache_rejection_reason,omitempty"`
 	DraftDecision                 *DraftDecisionTrace `json:"draft_decision,omitempty"`
 	EvidencePlan                  *EvidencePlanTrace  `json:"evidence_plan,omitempty"`
+	Grep                          *GrepCallTrace      `json:"grep,omitempty"`
 	RetryAdmitted                 bool                `json:"retry_admitted,omitempty"`
 	RetryDeniedReason             string              `json:"retry_denied_reason,omitempty"`
 	InitialIssueCount             int                 `json:"initial_issue_count,omitempty"`
@@ -342,6 +346,9 @@ func (s *TraceSession) Record(event TraceEvent) {
 	if event.EvidencePlan != nil {
 		event.EvidencePlan = sanitizeEvidencePlanTrace(*event.EvidencePlan)
 	}
+	if event.Grep != nil {
+		event.Grep = sanitizeGrepCallObservation(*event.Grep)
+	}
 	event.Sequence = nextTraceSequence(s.trace.Events)
 	if len(s.trace.Events) < analysisTraceMaxEvents {
 		s.trace.Events = append(s.trace.Events, event)
@@ -365,6 +372,8 @@ func (s *TraceSession) Record(event TraceEvent) {
 // large plan cannot inflate a trace.
 const analysisTraceMaxEvidenceGroups = 8
 
+const analysisTraceMaxGrepRanges = 100
+
 func sanitizeEvidencePlanTrace(plan EvidencePlanTrace) *EvidencePlanTrace {
 	groups := plan.UnreadGroups
 	if len(groups) > analysisTraceMaxEvidenceGroups {
@@ -381,6 +390,46 @@ func sanitizeEvidencePlanTrace(plan EvidencePlanTrace) *EvidencePlanTrace {
 		out.UnreadGroups = append(out.UnreadGroups, EvidencePlanGroupTrace{
 			SkillID: traceText(group.SkillID),
 			GroupID: traceText(group.GroupID),
+		})
+	}
+	return &out
+}
+
+func sanitizeGrepCallObservation(observation tools.GrepCallObservation) *tools.GrepCallObservation {
+	out := observation
+	out.SelectorID = tools.ContentFreeSelectorID(observation.SelectorID)
+	if observation.PathFilterRedacted {
+		out.PathFilter = ""
+	} else {
+		filter, supplied, length, redacted := tools.ContentFreePathFilter(observation.PathFilter)
+		out.PathFilter = filter
+		out.PathFilterSupplied = supplied
+		out.PathFilterLength = length
+		out.PathFilterRedacted = redacted
+	}
+	out.ContextLines = max(observation.ContextLines, 0)
+	out.MaxMatches = max(observation.MaxMatches, 0)
+	out.MatchCount = max(observation.MatchCount, 0)
+	out.FilesAttempted = max(observation.FilesAttempted, 0)
+	out.FilesScanned = max(observation.FilesScanned, 0)
+	out.FileReadErrors = max(observation.FileReadErrors, 0)
+	switch observation.Outcome {
+	case tools.GrepOutcomeMatched, tools.GrepOutcomeZeroMatches, tools.GrepOutcomeError:
+	default:
+		out.Outcome = tools.GrepOutcomeError
+	}
+	ranges := observation.ReturnedRanges
+	if len(ranges) > analysisTraceMaxGrepRanges {
+		ranges = ranges[:analysisTraceMaxGrepRanges]
+		out.ResultTruncated = true
+	}
+	out.ReturnedRanges = make([]tools.GrepRangeObservation, 0, len(ranges))
+	for _, item := range ranges {
+		if item.LineStart <= 0 || item.LineEnd < item.LineStart {
+			continue
+		}
+		out.ReturnedRanges = append(out.ReturnedRanges, tools.GrepRangeObservation{
+			SelectorID: traceText(item.SelectorID), Path: traceText(item.Path), LineStart: item.LineStart, LineEnd: item.LineEnd,
 		})
 	}
 	return &out

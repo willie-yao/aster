@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
 func TestTraceStoreBoundsAndRedacts(t *testing.T) {
@@ -49,6 +51,26 @@ func TestTraceStoreKeepsOnlyAllowlistedSemanticFindings(t *testing.T) {
 	want := []string{semanticFindingDownstreamSymptomSelected, semanticFindingSpecificErrorIgnored}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("semantic findings = %v, want %v", got, want)
+	}
+}
+
+func TestTraceStoreRetainsContentFreeGrepTelemetry(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	trace.Record(TraceEvent{Kind: "tool_call", Tool: "grep_repo", Outcome: "success", Grep: &tools.GrepCallObservation{
+		SelectorID: "latest-client", PathFilter: "find the private failure please",
+		PathFilterSupplied: true, PathFilterLength: len("find the private failure please"),
+		ContextLines: 2, MaxMatches: 30, MatchCount: 1, FilesScanned: 4, Outcome: tools.GrepOutcomeMatched,
+		ReturnedRanges: []tools.GrepRangeObservation{{SelectorID: "latest-client", Path: "pkg/file.go", LineStart: 10, LineEnd: 14}},
+	}})
+	trace.Finish("success", nil)
+	got := store.Snapshot().Traces[0].Events[0].Grep
+	if got == nil || got.SelectorID != "latest-client" || got.PathFilter != "" || !got.PathFilterRedacted || got.ContextLines != 2 || got.MatchCount != 1 || len(got.ReturnedRanges) != 1 {
+		t.Fatalf("grep telemetry=%+v", got)
+	}
+	encoded, _ := json.Marshal(store.Snapshot())
+	if strings.Contains(string(encoded), "private failure") {
+		t.Fatalf("grep telemetry retained prose: %s", encoded)
 	}
 }
 

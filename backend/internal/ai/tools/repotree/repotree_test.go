@@ -3,6 +3,9 @@ package repotree
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,9 +15,10 @@ import (
 // fakeRepo is an in-memory RepoReader. reads counts ReadFile calls so tests can
 // assert the Cache prevents refetching.
 type fakeRepo struct {
-	files map[string]string
-	lists int
-	reads int
+	files      map[string]string
+	readErrors map[string]error
+	lists      int
+	reads      int
 }
 
 func (r *fakeRepo) ListTree(_ context.Context) ([]string, error) {
@@ -28,6 +32,9 @@ func (r *fakeRepo) ListTree(_ context.Context) ([]string, error) {
 
 func (r *fakeRepo) ReadFile(_ context.Context, path string) (string, bool, error) {
 	r.reads++
+	if err := r.readErrors[path]; err != nil {
+		return "", false, err
+	}
 	c, ok := r.files[path]
 	return c, ok, nil
 }
@@ -169,6 +176,136 @@ func TestGrepRepoReturnsPrivateCanonicalMatchRanges(t *testing.T) {
 	if result.ContentBytes == 0 {
 		t.Fatal("content-bearing grep reported zero content bytes")
 	}
+}
+
+func TestGrepRepoContextLinesDefaultAndExplicitZero(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         map[string]interface{}
+		want         GrepMatchObservation
+		contextLines int
+	}{
+		{
+			name:         "omitted",
+			args:         map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "timeout bug", "path_glob": "*.go"},
+			want:         GrepMatchObservation{SourceID: tools.PrimarySourceID, Path: "pkg/cloud/services/vm.go", LineStart: 1, LineEnd: 4},
+			contextLines: 2,
+		},
+		{
+			name:         "explicit zero",
+			args:         map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "timeout bug", "path_glob": "*.go", "context_lines": 0},
+			want:         GrepMatchObservation{SourceID: tools.PrimarySourceID, Path: "pkg/cloud/services/vm.go", LineStart: 3, LineEnd: 3},
+			contextLines: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := (&grepTool{}).Dispatch(context.Background(), envFor(sampleRepo()), mustJSON(tc.args))
+			observation, ok := result.Observation.(GrepObservation)
+			if !ok || len(observation.Matches) != 1 || observation.Matches[0] != tc.want {
+				t.Fatalf("observation=%T %+v, want %+v", result.Observation, result.Observation, tc.want)
+			}
+			call := observation.Call
+			wantRanges := []tools.GrepRangeObservation{{SelectorID: tc.want.SourceID, Path: tc.want.Path, LineStart: tc.want.LineStart, LineEnd: tc.want.LineEnd}}
+			if call.SelectorID != tools.PrimarySourceID || call.PathFilter != "*.go" || call.ContextLines != tc.contextLines || call.MaxMatches != 30 || call.MatchCount != 1 || call.Outcome != tools.GrepOutcomeMatched || !reflect.DeepEqual(call.ReturnedRanges, wantRanges) {
+				t.Fatalf("call=%+v, want ranges %+v", call, wantRanges)
+			}
+		})
+	}
+}
+
+func TestGrepRepoRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    map[string]interface{}
+		outcome string
+	}{
+		{name: "zero matches", args: map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "missing", "path_glob": "*.go"}, outcome: tools.GrepOutcomeZeroMatches},
+		{name: "invalid regex", args: map[string]interface{}{"source_id": tools.PrimarySourceID, "pattern": "(", "path_glob": "*.go"}, outcome: tools.GrepOutcomeError},
+		{name: "unknown source", args: map[string]interface{}{"source_id": "unknown", "pattern": "match", "path_glob": "*.go"}, outcome: tools.GrepOutcomeError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := (&grepTool{}).Dispatch(context.Background(), envFor(sampleRepo()), mustJSON(tc.args))
+			observation, ok := result.Observation.(GrepObservation)
+			if !ok || observation.Call.Outcome != tc.outcome || observation.Call.MatchCount != 0 || len(observation.Call.ReturnedRanges) != 0 {
+				t.Fatalf("observation=%T %+v", result.Observation, result.Observation)
+			}
+			if observation.Call.PathFilter != "*.go" || observation.Call.ContextLines != 2 || observation.Call.MaxMatches != 30 {
+				t.Fatalf("call=%+v", observation.Call)
+			}
+		})
+	}
+}
+
+func TestGrepRepoTelemetryRangesIgnoreGroundingCaps(t *testing.T) {
+	t.Run("more than grounding range cap", func(t *testing.T) {
+		repo := &fakeRepo{files: map[string]string{"many.go": strings.Repeat("match\n", grepEvidenceMaxHits+6)}}
+		result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]interface{}{
+			"pattern": "match", "path_glob": "*.go", "context_lines": 0, "max_matches": 100,
+		})))
+		observation := result.Observation.(GrepObservation)
+		if len(observation.Matches) != grepEvidenceMaxHits {
+			t.Fatalf("grounding ranges=%d, want %d", len(observation.Matches), grepEvidenceMaxHits)
+		}
+		if len(observation.Call.ReturnedRanges) != grepEvidenceMaxHits+6 || observation.Call.MatchCount != grepEvidenceMaxHits+6 || observation.Call.ResultTruncated {
+			t.Fatalf("call=%+v", observation.Call)
+		}
+	})
+
+	t.Run("context exceeds grounding byte cap", func(t *testing.T) {
+		repo := &fakeRepo{files: map[string]string{"large.go": "match " + strings.Repeat("x", grepEvidenceMaxBytes+1) + "\n"}}
+		result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]interface{}{
+			"pattern": "match", "path_glob": "*.go", "context_lines": 0,
+		})))
+		observation := result.Observation.(GrepObservation)
+		if len(observation.Matches) != 0 || len(observation.Call.ReturnedRanges) != 1 || observation.Call.MatchCount != 1 {
+			t.Fatalf("observation=%+v", observation)
+		}
+	})
+}
+
+func TestGrepRepoReadFailuresAreReportedHonestly(t *testing.T) {
+	t.Run("all reads fail", func(t *testing.T) {
+		repo := &fakeRepo{files: map[string]string{"broken.go": "match\n"}, readErrors: map[string]error{"broken.go": errors.New("read failed")}}
+		result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]interface{}{
+			"pattern": "match", "path_glob": "*.go",
+		})))
+		observation := result.Observation.(GrepObservation).Call
+		if result.Payload["error"] == nil || observation.Outcome != tools.GrepOutcomeError || observation.FilesAttempted != 1 || observation.FilesScanned != 0 || observation.FileReadErrors != 1 {
+			t.Fatalf("payload=%v observation=%+v", result.Payload, observation)
+		}
+	})
+
+	t.Run("partial read failure", func(t *testing.T) {
+		repo := &fakeRepo{
+			files:      map[string]string{"broken.go": "match\n", "good.go": "match\n"},
+			readErrors: map[string]error{"broken.go": errors.New("read failed")},
+		}
+		result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]interface{}{
+			"pattern": "match", "path_glob": "*.go",
+		})))
+		observation := result.Observation.(GrepObservation).Call
+		if result.Payload["error"] != nil || observation.Outcome != tools.GrepOutcomeMatched || observation.FilesAttempted != 2 || observation.FilesScanned != 1 || observation.FileReadErrors != 1 || observation.MatchCount != 1 {
+			t.Fatalf("payload=%v observation=%+v", result.Payload, observation)
+		}
+	})
+
+	t.Run("failed reads respect file cap", func(t *testing.T) {
+		files := map[string]string{}
+		readErrors := map[string]error{}
+		for i := 0; i < maxGrepFiles+1; i++ {
+			path := fmt.Sprintf("broken-%02d.go", i)
+			files[path] = "match\n"
+			readErrors[path] = errors.New("read failed")
+		}
+		repo := &fakeRepo{files: files, readErrors: readErrors}
+		result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]interface{}{
+			"pattern": "match", "path_glob": "*.go",
+		})))
+		observation := result.Observation.(GrepObservation).Call
+		if result.Payload["error"] == nil || observation.FilesAttempted != maxGrepFiles || observation.FileReadErrors != maxGrepFiles || !observation.FileScanTruncated || repo.reads != maxGrepFiles {
+			t.Fatalf("payload=%v observation=%+v reads=%d", result.Payload, observation, repo.reads)
+		}
+	})
 }
 
 func TestGrepRepo_GlobNarrowsScope(t *testing.T) {

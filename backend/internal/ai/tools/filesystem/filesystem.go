@@ -19,8 +19,11 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 // Group is the alias used in config to enable all filesystem tools at once.
@@ -199,6 +202,8 @@ func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 
 type grepTool struct{}
 
+const artifactGrepSelector = "artifact-workspace"
+
 func (*grepTool) Name() string  { return "grep_artifact" }
 func (*grepTool) Group() string { return Group }
 func (*grepTool) Schema() tools.Schema {
@@ -228,29 +233,23 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		ContextLines tools.FlexInt `json:"context_lines"`
 		MaxMatches   tools.FlexInt `json:"max_matches"`
 	}
+	args.ContextLines = -1
+	contextLines, maxMatches := tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+	observation := artifactGrepObservation(args.Path, contextLines, maxMatches)
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return tools.ErrPayload("invalid arguments: " + err.Error())
+		return artifactGrepError(observation, "invalid arguments: "+err.Error())
 	}
-	contextLines, maxMatches := args.ContextLines.Int(), args.MaxMatches.Int()
-	if contextLines < 0 {
-		contextLines = 0
-	}
-	if contextLines > 5 {
-		contextLines = 5
-	}
-	if maxMatches <= 0 {
-		maxMatches = 30
-	}
-	if maxMatches > 100 {
-		maxMatches = 100
-	}
+	contextLines, maxMatches = tools.EffectiveGrepLimits(args.ContextLines, args.MaxMatches)
+	observation = artifactGrepObservation(args.Path, contextLines, maxMatches)
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
-		return tools.ErrPayload("invalid regex: " + err.Error())
+		return artifactGrepError(observation, "invalid regex: "+err.Error())
 	}
+	observation.FilesAttempted = 1
 	res, err := env.Browser.Grep(ctx, args.Path, re, contextLines, maxMatches, 1000, env.RemainingGCSBytes)
 	if err != nil {
-		return tools.ErrPayload(err.Error())
+		observation.FileReadErrors = 1
+		return artifactGrepError(observation, err.Error())
 	}
 	matches := make([]map[string]interface{}, 0, len(res.Matches))
 	for _, m := range res.Matches {
@@ -259,6 +258,14 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			"context": m.Context,
 		})
 	}
+	observation.MatchCount = res.TotalMatches
+	observation.FilesScanned = 1
+	observation.ResultTruncated = res.Truncated
+	observation.Outcome = tools.GrepOutcomeZeroMatches
+	if res.TotalMatches > 0 {
+		observation.Outcome = tools.GrepOutcomeMatched
+	}
+	observation.ReturnedRanges = artifactGrepRanges(canonicalArtifactGrepPath(args.Path), res.Matches)
 	return tools.Result{
 		BytesFetched: int(res.BytesScanned),
 		Payload: map[string]interface{}{
@@ -268,7 +275,61 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			"matches":       matches,
 			"truncated":     res.Truncated,
 		},
+		Observation: observation,
 	}
+}
+
+func artifactGrepObservation(path string, contextLines, maxMatches int) tools.GrepCallObservation {
+	canonical := canonicalArtifactGrepPath(path)
+	if canonical == "" {
+		canonical = path
+	}
+	filter, supplied, length, redacted := tools.ContentFreePathFilter(canonical)
+	return tools.GrepCallObservation{
+		SelectorID: artifactGrepSelector, PathFilter: filter, PathFilterSupplied: supplied,
+		PathFilterLength: length, PathFilterRedacted: redacted,
+		ContextLines: contextLines, MaxMatches: maxMatches, Outcome: tools.GrepOutcomeError,
+		ReturnedRanges: []tools.GrepRangeObservation{},
+	}
+}
+
+func canonicalArtifactGrepPath(path string) string {
+	canonical, err := artifacts.SafePath(path)
+	if err != nil {
+		return ""
+	}
+	return canonical
+}
+
+func artifactGrepError(observation tools.GrepCallObservation, message string) tools.Result {
+	observation.Outcome = tools.GrepOutcomeError
+	return tools.Result{Payload: map[string]interface{}{"error": message}, Observation: observation}
+}
+
+func artifactGrepRanges(path string, matches []artifacts.GrepMatch) []tools.GrepRangeObservation {
+	ranges := make([]tools.GrepRangeObservation, 0, len(matches))
+	for _, match := range matches {
+		start, end := match.LineNo, match.LineNo
+		for _, line := range match.Context {
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, ">"), " "))
+			prefix, _, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			value, err := strconv.Atoi(strings.TrimSpace(prefix))
+			if err != nil || value <= 0 {
+				continue
+			}
+			if value < start {
+				start = value
+			}
+			if value > end {
+				end = value
+			}
+		}
+		ranges = append(ranges, tools.GrepRangeObservation{SelectorID: artifactGrepSelector, Path: path, LineStart: start, LineEnd: end})
+	}
+	return ranges
 }
 
 type findTool struct{}

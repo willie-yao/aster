@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -96,6 +97,129 @@ func TestAgentic_EvidenceGateReopensFinalizeWithUnreadPlannedGroup(t *testing.T)
 	for _, want := range []string{"required evidence for this failure class is still unread", "group-b", "logs/beta.log"} {
 		if !strings.Contains(nudgeRequest, want) {
 			t.Errorf("nudge request missing %q", want)
+		}
+	}
+}
+
+func TestAgentic_EvidenceGateReservesFinalIterationBeforeForcedFinalize(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion and beta.log shows the skewed client version","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, final)
+
+	browser := &fakeBrowser{files: map[string][]byte{
+		"logs/alpha.log": []byte("failing assertion\n"),
+		"logs/beta.log":  []byte("skewed client version\n"),
+	}}
+	in := newTwoGroupEvidenceInputs(t, browser)
+	in.Opts.MaxIters = 2
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(
+		ctx, in, "agentic:test:evidence-final-iteration", "sys", "user",
+	); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+
+	events := evidencePlanEvents(t, store)
+	if len(events) != 2 {
+		t.Fatalf("evidence_plan events = %d, want 2: %+v", len(events), events)
+	}
+	if events[0].Status != "iteration_headroom" || events[0].Outcome != string(evidenceGateNudge) {
+		t.Fatalf("headroom event = %+v, want iteration_headroom/nudge", events[0])
+	}
+	if events[1].Status != "forced_finalize" || events[1].Outcome != string(evidenceGateCovered) {
+		t.Fatalf("forced finalize event = %+v, want forced_finalize/covered", events[1])
+	}
+	srv.mu.Lock()
+	requests := append([][]byte(nil), srv.requests...)
+	srv.mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("model requests = %d, want two configured iterations plus one forced finalize", len(requests))
+	}
+	for _, want := range []string{"final tools-enabled iteration", "group-b", "logs/beta.log"} {
+		if !bytes.Contains(requests[1], []byte(want)) {
+			t.Errorf("reserved request missing %q", want)
+		}
+	}
+}
+
+func TestAgentic_EvidenceGateRecordsIterationExhaustion(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/gamma.log"}))
+	srv.push(200, final)
+
+	browser := &fakeBrowser{files: map[string][]byte{
+		"logs/alpha.log": []byte("failing assertion\n"),
+		"logs/beta.log":  []byte("skewed client version\n"),
+		"logs/gamma.log": []byte("unrelated detail\n"),
+	}}
+	in := newTwoGroupEvidenceInputs(t, browser)
+	in.Opts.MaxIters = 2
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(
+		ctx, in, "agentic:test:evidence-iteration-exhausted", "sys", "user",
+	); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+
+	events := evidencePlanEvents(t, store)
+	if len(events) != 2 {
+		t.Fatalf("evidence_plan events = %d, want 2: %+v", len(events), events)
+	}
+	if events[0].Status != "iteration_headroom" || events[0].Outcome != string(evidenceGateNudge) {
+		t.Fatalf("headroom event = %+v, want iteration_headroom/nudge", events[0])
+	}
+	if events[1].Status != "forced_finalize" || events[1].Outcome != string(evidenceGateIterationExhausted) {
+		t.Fatalf("forced finalize event = %+v, want forced_finalize/iteration_exhausted", events[1])
+	}
+}
+
+func TestAgentic_EvidenceGateLeavesEarlyFinalizeUnchanged(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion and beta.log shows the skewed client version","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`))
+
+	browser := &fakeBrowser{files: map[string][]byte{
+		"logs/alpha.log": []byte("failing assertion\n"),
+		"logs/beta.log":  []byte("skewed client version\n"),
+	}}
+	in := newTwoGroupEvidenceInputs(t, browser)
+	in.Opts.MaxIters = 4
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, _, err := newAgenticTestClient(t, srv.URL).doAnalyzeAgentic(
+		ctx, in, "agentic:test:evidence-early-finalize", "sys", "user",
+	); err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+
+	srv.mu.Lock()
+	requests := append([][]byte(nil), srv.requests...)
+	srv.mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("model requests = %d, want the unchanged tool, tool, final sequence", len(requests))
+	}
+	if bytes.Contains(requests[2], []byte("final tools-enabled iteration")) {
+		t.Fatal("early finalize request received the reserved-iteration nudge")
+	}
+	for _, event := range evidencePlanEvents(t, store) {
+		if event.Status == "iteration_headroom" || event.Status == "forced_finalize" {
+			t.Fatalf("early finalize recorded exhaustion telemetry: %+v", event)
 		}
 	}
 }
