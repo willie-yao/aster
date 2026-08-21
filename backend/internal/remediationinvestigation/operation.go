@@ -19,6 +19,7 @@ var (
 	ErrOperationInvalid             = errors.New("invalid remediation investigation request")
 	ErrOperationNotFound            = errors.New("remediation investigation subject not found")
 	ErrOperationStale               = errors.New("remediation investigation subject is stale")
+	ErrOperationEvidenceExpired     = errors.New("remediation investigation evidence has left the analysis window")
 	ErrOperationInactive            = errors.New("remediation investigation subject is not active")
 	ErrOperationRefreshRunning      = errors.New("dashboard refresh is in progress")
 	ErrOperationUnavailable         = errors.New("remediation investigation is unavailable")
@@ -189,8 +190,8 @@ func (s *OperationService) Start(ctx context.Context, ref OperationRef, owner, r
 			// Running it before the claim avoids charging a reuse that is then
 			// discarded.
 			if err := s.validateBeforePublish(ctx, ref, resolved.Input); err != nil {
-				if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) {
-					return operationStaleView(ref, s.opts.Now()), nil
+				if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) || errors.Is(err, ErrOperationEvidenceExpired) {
+					return operationBlockedView(ref, err, s.opts.Now()), nil
 				}
 				// A run would need this same validation to publish, so spending
 				// model budget now would only reach the same failure.
@@ -252,8 +253,8 @@ func (s *OperationService) Get(ctx context.Context, ref OperationRef) (models.Pa
 		return models.PatternRemediationInvestigationSummary{}, err
 	}
 	if err := s.resolver.Validate(ctx, ref); err != nil {
-		if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) {
-			return operationStaleView(ref, s.opts.Now()), nil
+		if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) || errors.Is(err, ErrOperationEvidenceExpired) {
+			return operationBlockedView(ref, err, s.opts.Now()), nil
 		}
 		return models.PatternRemediationInvestigationSummary{}, err
 	}
@@ -269,8 +270,8 @@ func (s *OperationService) Get(ctx context.Context, ref OperationRef) (models.Pa
 
 	resolved, err := s.resolver.Resolve(ctx, ref)
 	if err != nil {
-		if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) {
-			return operationStaleView(ref, s.opts.Now()), nil
+		if errors.Is(err, ErrOperationStale) || errors.Is(err, ErrOperationInactive) || errors.Is(err, ErrOperationEvidenceExpired) {
+			return operationBlockedView(ref, err, s.opts.Now()), nil
 		}
 		return models.PatternRemediationInvestigationSummary{}, err
 	}
@@ -296,7 +297,7 @@ func (s *OperationService) Get(ctx context.Context, ref OperationRef) (models.Pa
 		return operationPhaseView(ref, models.PatternRemediationNotInvestigated), nil
 	}
 	if err := s.validateBeforePublish(ctx, ref, resolved.Input); err != nil {
-		return operationStaleView(ref, s.opts.Now()), nil
+		return operationBlockedView(ref, err, s.opts.Now()), nil
 	}
 	view := safeOperationView(ref, verified, entry.Provenance.CompletedAt)
 	s.storeRecovered(identity, cacheKey, strings.TrimSpace(resolved.Input.Group.Signature), ref, view)
@@ -343,8 +344,8 @@ func (s *OperationService) run(record *operationRecord, resolved ResolvedOperati
 			}
 			if previousView != nil {
 				validationErr := s.validateBeforePublish(recoveryCtx, record.ref, resolved.Input)
-				if errors.Is(validationErr, ErrOperationStale) || errors.Is(validationErr, ErrOperationInactive) {
-					s.finish(record, operationStaleView(record.ref, s.opts.Now()), false)
+				if errors.Is(validationErr, ErrOperationStale) || errors.Is(validationErr, ErrOperationInactive) || errors.Is(validationErr, ErrOperationEvidenceExpired) {
+					s.finish(record, operationBlockedView(record.ref, validationErr, s.opts.Now()), false)
 					return
 				}
 				s.finish(record, *previousView, false)
@@ -362,7 +363,7 @@ func (s *OperationService) run(record *operationRecord, resolved ResolvedOperati
 		return
 	}
 	if err := s.validateBeforePublish(ctx, record.ref, resolved.Input); err != nil {
-		s.finish(record, operationStaleView(record.ref, s.opts.Now()), false)
+		s.finish(record, operationBlockedView(record.ref, err, s.opts.Now()), false)
 		return
 	}
 	s.finish(record, safeOperationView(record.ref, verified, run.Entry.Provenance.CompletedAt), !run.CacheHit)
@@ -592,6 +593,23 @@ func operationStaleView(ref OperationRef, now time.Time) models.PatternRemediati
 		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
 		State:       models.PatternRemediationStale,
 		Reason:      "The displayed cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
+		CompletedAt: now.UTC().Format(time.RFC3339),
+	}
+}
+
+// operationBlockedView reports why a subject cannot be investigated. Expired
+// evidence is kept separate from staleness because the two ask different things
+// of the maintainer: a stale subject becomes investigable again on the next
+// correlation, while an expired one never does, so telling its viewer to refresh
+// would send them after something that cannot come back.
+func operationBlockedView(ref OperationRef, err error, now time.Time) models.PatternRemediationInvestigationSummary {
+	if !errors.Is(err, ErrOperationEvidenceExpired) {
+		return operationStaleView(ref, now)
+	}
+	return models.PatternRemediationInvestigationSummary{
+		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
+		State:       models.PatternRemediationEvidenceExpired,
+		Reason:      "The builds this cause was correlated from have left the analysis window, so its evidence can no longer be read. A later failure of the same cause will produce a fresh, investigable pattern.",
 		CompletedAt: now.UTC().Format(time.RFC3339),
 	}
 }

@@ -116,6 +116,8 @@ func causalRemediationErrorDetails(err error) (int, string) {
 		return http.StatusNotFound, "remediation investigation subject not found"
 	case errors.Is(err, remediationinvestigation.ErrOperationStale):
 		return http.StatusConflict, "the displayed cause is stale"
+	case errors.Is(err, remediationinvestigation.ErrOperationEvidenceExpired):
+		return http.StatusConflict, "the cause's evidence has left the analysis window"
 	case errors.Is(err, remediationinvestigation.ErrOperationInactive):
 		return http.StatusConflict, "the cause is no longer active"
 	case errors.Is(err, remediationinvestigation.ErrOperationRefreshRunning):
@@ -148,7 +150,8 @@ func causalRemediationTerminal(state models.PatternRemediationInvestigationState
 	case models.PatternRemediationActionable, models.PatternRemediationAlreadyFixed,
 		models.PatternRemediationExternalDependency, models.PatternRemediationEnvironmentOrInfrastructure,
 		models.PatternRemediationMitigationOnly, models.PatternRemediationInsufficientEvidence,
-		models.PatternRemediationInvestigationFailed, models.PatternRemediationStale:
+		models.PatternRemediationInvestigationFailed, models.PatternRemediationStale,
+		models.PatternRemediationEvidenceExpired:
 		return true
 	default:
 		return false

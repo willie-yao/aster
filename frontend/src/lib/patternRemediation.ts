@@ -86,6 +86,11 @@ const presentations: Record<
     label: "Stale",
     message: "This cause is no longer the current active causal group. Refresh the dashboard before investigating again.",
   },
+  evidence_expired: {
+    label: "Evidence expired",
+    message:
+      "The builds this cause was correlated from have left the analysis window, so its evidence can no longer be read. A later failure of the same cause will produce a fresh, investigable pattern.",
+  },
 };
 
 export function patternRemediationPresentation(

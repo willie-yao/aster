@@ -24,7 +24,8 @@ func ValidPatternRemediationInvestigationState(state PatternRemediationInvestiga
 		PatternRemediationMitigationOnly,
 		PatternRemediationInsufficientEvidence,
 		PatternRemediationInvestigationFailed,
-		PatternRemediationStale:
+		PatternRemediationStale,
+		PatternRemediationEvidenceExpired:
 		return true
 	default:
 		return false

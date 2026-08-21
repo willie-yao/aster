@@ -263,7 +263,8 @@ export type PatternRemediationInvestigationState =
   | "mitigation_only"
   | "insufficient_evidence"
   | "failed"
-  | "stale";
+  | "stale"
+  | "evidence_expired";
 
 export interface PatternRemediationTargetSummary {
   kind: string;
