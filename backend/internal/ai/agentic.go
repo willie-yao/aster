@@ -1734,7 +1734,11 @@ func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) s
 var longCLIFlagRE = regexp.MustCompile(`--[A-Za-z][A-Za-z0-9-]*`)
 var shortCLIFlagRE = regexp.MustCompile(`(^|[[:space:]])(-[A-Za-z][A-Za-z0-9]*)`)
 
-const ungroundedRemediationFallback = "Apply the required remediation outcome using verified project automation, then rerun the failing job."
+// unverifiedSourceReference stands in for a remediation path the model never
+// opened. It is a single token with no shell metacharacters so that substituting
+// it into a command leaves one obvious placeholder argument rather than several
+// words the shell would read as separate paths.
+const unverifiedSourceReference = "REPORTED_SOURCE_FILE"
 
 type cliFlagMatch struct {
 	Value string
@@ -1773,20 +1777,32 @@ func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisR
 	parsed.RelevantFiles = compactPublishedStrings(verified, 50)
 	parsed.SearchSuggestions = compactPublishedStrings(suggestions, 50)
 	parsed.CauseLocation = normalizeCauseLocation(parsed.CauseLocation, s.sourceOwner, s.sourceName, parsed.RelevantFiles)
-	// A cause owned by a dependency cannot be remediated by this project's
-	// automation, so the generic fallback would be actively misleading there.
-	remediationFallback := ungroundedRemediationFallback
-	if parsed.CauseLocation != nil && parsed.CauseLocation.External {
-		remediationFallback = externalRemediationFallback(parsed.CauseLocation)
-	}
+	// A cause owned by a dependency cannot be remediated by this project, and a
+	// dependency path resolved against this project's repository would link to
+	// the wrong file, so it names the owning repository instead and keeps its
+	// paths in the structured cause location. Decided before the sanitizer runs
+	// and applied after it, so a source-shaped repository slug such as
+	// nats-io/nats.go is never rewritten as a path.
+	externalRemediation := parsed.CauseLocation != nil && parsed.CauseLocation.External &&
+		s.hasUngroundedSourcePath(parsed.SuggestedFix, false)
+	// Every prose field sheds ungrounded source paths. A diagnosis reads fine
+	// without one, but a remediation's path is the object of its instruction, so
+	// it is replaced by a placeholder instead of cut, and the path still reaches
+	// the maintainer through search_suggestions. An artifact read does not ground
+	// a remediation path: the critique's source scan accepts only a source read,
+	// so keeping one here would publish a draft it then hard-fails.
 	parsed.RootCause = s.removeUngroundedSourcePaths(parsed.RootCause, "", true)
 	parsed.Summary = s.removeUngroundedSourcePaths(parsed.Summary, "", true)
-	if s.hasUngroundedSourcePath(parsed.SuggestedFix, false) {
-		parsed.SuggestedFix = remediationFallback
+	parsed.SuggestedFix = s.removeUngroundedSourcePaths(parsed.SuggestedFix, unverifiedSourceReference, false)
+	if externalRemediation {
+		parsed.SuggestedFix = externalRemediationFallback(parsed.CauseLocation)
 	}
-	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills, "")
-	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills, "")
-	parsed.SuggestedFix = s.removeUngroundedCLIFlags(parsed.SuggestedFix, matchedSkills, remediationFallback)
+	// Flag grounding applies to the diagnosis, not the remedy. A root cause
+	// citing a flag present nowhere in the evidence is a hallucination, but a
+	// remediation proposes the flag that is missing, so requiring one to already
+	// appear in the failing evidence would reject the most actionable fixes.
+	parsed.RootCause = s.removeUngroundedCLIFlags(parsed.RootCause, matchedSkills)
+	parsed.Summary = s.removeUngroundedCLIFlags(parsed.Summary, matchedSkills)
 	return parsed
 }
 
@@ -1821,7 +1837,7 @@ func readsArtifact(candidate string, full, base map[string]bool) bool {
 	return full[normalized] || base[path.Base(normalized)]
 }
 
-func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill, remediationFallback string) string {
+func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skills.Skill) string {
 	flags := cliFlagMatches(text)
 	if len(flags) == 0 {
 		return text
@@ -1849,9 +1865,6 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 	}
 	if len(unsupported) == 0 {
 		return text
-	}
-	if remediationFallback != "" {
-		return remediationFallback
 	}
 	var cleaned strings.Builder
 	last := 0

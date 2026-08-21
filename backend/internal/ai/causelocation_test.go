@@ -149,9 +149,6 @@ func TestExternalCauseReplacesBoilerplateRemediation(t *testing.T) {
 	if got.CauseLocation == nil || !got.CauseLocation.External {
 		t.Fatalf("cause location = %+v", got.CauseLocation)
 	}
-	if got.SuggestedFix == ungroundedRemediationFallback {
-		t.Fatalf("upstream cause kept the generic remediation: %q", got.SuggestedFix)
-	}
 	if !strings.Contains(got.SuggestedFix, "kubernetes/kubernetes") {
 		t.Fatalf("remediation %q does not name the owning repository", got.SuggestedFix)
 	}
@@ -200,14 +197,37 @@ func TestExternalRemediationKeepsDependencyPathsOutOfProse(t *testing.T) {
 	}
 }
 
-func TestProjectCauseKeepsGenericRemediationFallback(t *testing.T) {
+// TestExternalRemediationIsNotRewrittenBySanitizer pins the ordering: the
+// fallback is decided from the model's own text but applied after the path
+// sanitizer, so its wording is never rewritten on the way out. A repository slug
+// that reads as a source path, such as a Go module repository, is the case that
+// detects the ordering being reversed.
+func TestExternalRemediationIsNotRewrittenBySanitizer(t *testing.T) {
 	state := &agentState{sourceOwner: causeProjectOwner, sourceName: causeProjectName}
 	got := state.preparePublishedAnalysis(analysisResponse{
-		SuggestedFix:  "Update controllers/never_read.go and rerun.",
+		SuggestedFix:  "Patch conn.go upstream.",
+		CauseLocation: &models.AnalysisCauseLocation{Repository: "nats-io/nats.go"},
+	})
+	if got.SuggestedFix != externalRemediationFallback(got.CauseLocation) {
+		t.Fatalf("external remediation was rewritten: %q", got.SuggestedFix)
+	}
+}
+
+// TestProjectCauseKeepsReportedRemediation is the counterpart to the external
+// case: a cause owned by this project keeps the instruction its own analysis
+// reported instead of a generic sentence, even when the path it names was never
+// opened and is therefore stripped from the prose.
+func TestProjectCauseKeepsReportedRemediation(t *testing.T) {
+	state := &agentState{sourceOwner: causeProjectOwner, sourceName: causeProjectName}
+	got := state.preparePublishedAnalysis(analysisResponse{
+		SuggestedFix:  "Update controllers/never_read.go to requeue on conflict and rerun.",
 		CauseLocation: &models.AnalysisCauseLocation{Repository: causeProjectOwner + "/" + causeProjectName},
 	})
-	if got.SuggestedFix != ungroundedRemediationFallback {
+	if !strings.Contains(got.SuggestedFix, "requeue on conflict") {
 		t.Fatalf("project remediation = %q", got.SuggestedFix)
+	}
+	if strings.Contains(got.SuggestedFix, "controllers/never_read.go") {
+		t.Fatalf("unopened path survived in prose: %q", got.SuggestedFix)
 	}
 }
 

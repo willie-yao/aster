@@ -1372,7 +1372,7 @@ func TestAgentic_Critique_FailRetryPass(t *testing.T) {
 	if summary.Summary != "deep" {
 		t.Errorf("expected clean final, got summary=%q", summary.Summary)
 	}
-	if !strings.Contains(analysis.SuggestedFix, "verified project automation") || len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
+	if !strings.Contains(analysis.SuggestedFix, "match the staging vnet peering name") || len(analysis.RelevantFiles) != 0 || !slices.Contains(analysis.SearchSuggestions, "kustomize/cluster-template.yaml") {
 		t.Errorf("expected filtered remediation, got fix=%q relevant=%v suggestions=%v", analysis.SuggestedFix, analysis.RelevantFiles, analysis.SearchSuggestions)
 	}
 
