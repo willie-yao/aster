@@ -8,8 +8,9 @@ const setupPatterns =
 
 export function normalizeResultLedgerFilter(
   value: string | null,
+  fallback: ResultLedgerFilter = "failed",
 ): ResultLedgerFilter {
-  return value === "passed" || value === "all" ? value : "failed";
+  return value === "failed" || value === "passed" || value === "all" ? value : fallback;
 }
 
 export interface ResultTestSummary {

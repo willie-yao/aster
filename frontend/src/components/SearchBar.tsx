@@ -57,6 +57,17 @@ interface SearchResultButtonProps {
 }
 
 export function SearchResultButton({ entry, filePrefix, onSelect }: SearchResultButtonProps) {
+  const title = entry.kind === "job"
+    ? entry.tab_name || shortJobName(entry.job_name, filePrefix)
+    : shortTestName(entry.test_name);
+  const jobContext = shortJobName(entry.job_name, filePrefix);
+  const testStatus = entry.status
+    ? `${entry.status.charAt(0).toUpperCase()}${entry.status.slice(1).toLowerCase()}`
+    : "Unknown";
+  const context = entry.kind === "job"
+    ? [entry.job_type === "presubmit" ? "Presubmit" : "Periodic", entry.branch].filter(Boolean).join(" · ")
+    : [jobContext, entry.branch, testStatus].filter(Boolean).join(" · ");
+
   return (
     <ListItemButton
       component="button"
@@ -65,66 +76,54 @@ export function SearchResultButton({ entry, filePrefix, onSelect }: SearchResult
       onClick={() => onSelect(entry)}
       sx={{
         width: "100%",
+        minHeight: 56,
         display: "flex",
         alignItems: "center",
-        gap: 1.5,
+        gap: 1,
         px: 1.5,
-        py: 1,
+        py: 0.75,
         color: "text.primary",
         textAlign: "left",
         transition: "background-color 150ms ease",
         "&:hover": { bgcolor: (theme) => (theme.vars ?? theme).palette.surface.containerHigh },
       }}
     >
-      {entry.kind === "job" ? (
-        <>
-          <Box
-            sx={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              flexShrink: 0,
-              bgcolor: "primary.main",
-            }}
-          />
-          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: 600 }}>
-            {entry.tab_name || shortJobName(entry.job_name, filePrefix)}
+      <Chip
+        size="small"
+        label={entry.kind === "job" ? "Job" : "Test"}
+        variant="outlined"
+        color={entry.kind === "job" ? "primary" : "default"}
+        sx={{
+          flexShrink: 0,
+          height: 22,
+          "& .MuiChip-label": { px: 0.75, fontSize: 11 },
+        }}
+      />
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
+          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1, fontWeight: entry.kind === "job" ? 650 : 500 }}>
+            {title}
           </Typography>
-          <Typography variant="label" noWrap sx={{ flexShrink: 0, fontSize: 12, color: "text.secondary" }}>
-            {entry.branch}
-          </Typography>
-        </>
-      ) : (
-        <>
-          <Box
-            sx={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              flexShrink: 0,
-              bgcolor: entry.status === "passed" ? "success.main" : "error.main",
-            }}
-          />
-          <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>
-            {shortTestName(entry.test_name)}
-          </Typography>
-          {entry.fail_rate > 0 && (
+          {entry.kind === "test" && entry.fail_rate > 0 && (
             <Chip
               size="small"
               color="error"
-              label={`${Math.round(entry.fail_rate * 100)}%`}
+              label={`${Math.round(entry.fail_rate * 100)}% fail`}
               sx={{
                 flexShrink: 0,
                 height: 22,
                 bgcolor: (theme) => soft(theme, "error", 0.18),
                 color: "error.main",
                 fontWeight: 600,
-                "& .MuiChip-label": { px: 1 },
+                "& .MuiChip-label": { px: 0.75 },
               }}
             />
           )}
-        </>
-      )}
+        </Box>
+        <Typography variant="label" noWrap sx={{ display: "block", mt: 0.25, fontSize: 12, color: "text.secondary" }}>
+          {context}
+        </Typography>
+      </Box>
     </ListItemButton>
   );
 }
@@ -361,14 +360,16 @@ export function SearchBar() {
           sx={{
             position: mobileExpanded ? "fixed" : "absolute",
             top: mobileExpanded ? 64 : "calc(100% + 8px)",
-            left: mobileExpanded ? 16 : { md: 0 },
-            right: mobileExpanded ? 16 : { xs: 0, md: "auto" },
+            bottom: mobileExpanded ? 0 : "auto",
+            left: mobileExpanded ? 0 : { md: 0 },
+            right: mobileExpanded ? 0 : { xs: 0, md: "auto" },
             width: mobileExpanded ? "auto" : { xs: "min(28rem, calc(100vw - 32px))", md: "28rem" },
+            borderRadius: mobileExpanded ? 0 : undefined,
             overflow: "hidden",
             zIndex: (theme) => theme.zIndex.modal,
           }}
         >
-          <Box sx={{ maxHeight: 400, overflowY: "auto" }}>
+          <Box sx={{ maxHeight: mobileExpanded ? "calc(100dvh - 64px)" : 400, height: mobileExpanded ? "100%" : "auto", overflowY: "auto" }}>
             {loading ? (
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
                 <Typography variant="body2" color="textSecondary" role="status">
@@ -385,6 +386,9 @@ export function SearchBar() {
               <Box sx={{ px: 4, py: 3, textAlign: "center" }}>
                 <Typography variant="body2" color="textSecondary">
                   No results
+                </Typography>
+                <Typography variant="caption" color="textSecondary">
+                  Try a job, test, branch, or failure term.
                 </Typography>
               </Box>
             ) : (

@@ -58,11 +58,11 @@ function basename(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
-// Candidate file path in prose: slash-separated segments ending in a known
+// Candidate source or artifact filename, optionally with path segments, ending in a known
 // source or artifact extension. Trailing line refs such as :120 or :120-130 are
 // excluded so the path still resolves.
 const PATH_RE =
-  /(?:[\w.-]+\/)+[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf|star|bzl|toml|cfg|mod|sum|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql)\b/g;
+  /(?:[\w.-]+\/)*[\w.-]+\.(?:go|ya?ml|sh|json|tpl|md|log|txt|xml|out|conf|star|bzl|toml|cfg|mod|sum|py|js|jsx|ts|tsx|java|rs|c|cc|cpp|h|hpp|proto|sql)\b/g;
 
 // Linkify resolvable bare file paths in prose. Return the raw string when
 // nothing resolves so the parent's pre-line whitespace handling stays intact.
@@ -101,6 +101,13 @@ function linkifyPaths(
   return out;
 }
 
+
+function normalizeAnalysisProse(text: string): string {
+  return text
+    .replace(/\s+the cited artifact evidence\+/giu, " and related cited evidence")
+    .replace(/\s+the cited artifact evidence/giu, " (cited evidence)");
+}
+
 /**
  * Render one inline token run: prose, code spans, and bold, in any nesting.
  * Bold recurses so a code span inside it still renders as code.
@@ -121,7 +128,7 @@ function renderInline(
     if (!value) return;
     out.push(
       <Fragment key={`t${key++}`}>
-        {linkifyPaths(steps ? formatSteps(value) : value, fileCtx, key)}
+        {linkifyPaths(steps ? formatSteps(normalizeAnalysisProse(value)) : normalizeAnalysisProse(value), fileCtx, key)}
       </Fragment>,
     );
   };

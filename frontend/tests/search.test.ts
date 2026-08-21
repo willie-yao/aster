@@ -195,6 +195,10 @@ test("SearchBar result button exposes the descriptive accessible name", () => {
     html,
     /<button[^>]*aria-label="Conformance: conformance-tests, job periodic-capz-e2e-main, branch main, 25% failure rate"/,
   );
+  assert.match(html, />Test</);
+  assert.match(html, /periodic-capz-e2e-main/);
+  assert.match(html, /Failed/);
+  assert.match(html, /25% fail/);
 });
 
 test("SearchBar keeps job and test navigation targets", () => {
@@ -220,4 +224,13 @@ test("SearchBar keeps job and test navigation targets", () => {
     searchResultPath(result),
     "/job/kubernetes-sigs%2Fcluster-api-provider-azure%2Fpull-capz-e2e/test/%5BIt%5D%20validates%20A%2FB%3F",
   );
+});
+
+
+test("mobile search uses the full remaining viewport", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/components/SearchBar.tsx"), "utf8");
+
+  assert.match(source, /bottom: mobileExpanded \? 0 : "auto"/);
+  assert.match(source, /maxHeight: mobileExpanded \? "calc\(100dvh - 64px\)" : 400/);
+  assert.match(source, /Try a job, test, branch, or failure term\./);
 });

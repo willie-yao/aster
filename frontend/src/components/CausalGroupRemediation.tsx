@@ -223,6 +223,7 @@ export function CausalGroupRemediation({
       {details && (
         <Accordion
           disableGutters
+          slotProps={{ heading: { component: "h5" } }}
           elevation={0}
           sx={{
             mt: 1,

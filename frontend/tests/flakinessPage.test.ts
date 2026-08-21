@@ -114,6 +114,7 @@ test("focusable tabs own their visible names and descriptions", () => {
     /label=\{<TabLabel label=\{tab\.label\} count=\{tabCounts\[tab\.value\]\} \/>\}/,
   );
   assert.match(source, /title=\{tab\.tooltip\}/);
+  assert.match(source, /allowScrollButtonsMobile/);
   assert.match(source, /height: "1px"[\s\S]*width: "1px"/);
   assert.doesNotMatch(source, /<Tooltip/);
   assert.doesNotMatch(source, /<Tab(?=[\s>])[^>]*aria-label=/);

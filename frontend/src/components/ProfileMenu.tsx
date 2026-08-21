@@ -37,6 +37,7 @@ export function ProfileMenu() {
           color: "text.secondary",
           textTransform: "none",
           whiteSpace: "nowrap",
+          minHeight: { xs: 44, sm: 36 },
           "&:hover": { color: "text.primary" },
         }}
       >
@@ -51,7 +52,12 @@ export function ProfileMenu() {
         aria-label="Account"
         size="small"
         onClick={(e) => setAnchor(e.currentTarget)}
-        sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}
+        sx={{
+          width: { xs: 44, sm: 36 },
+          height: { xs: 44, sm: 36 },
+          color: "text.secondary",
+          "&:hover": { color: "text.primary" },
+        }}
       >
         <AccountCircle fontSize="small" />
       </IconButton>

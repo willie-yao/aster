@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import KeyboardArrowDown from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
 import Box from "@mui/material/Box";
@@ -62,6 +62,7 @@ function chartDateLabel(date: string): string {
 function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCurrency: boolean }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [tooltipLeft, setTooltipLeft] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const width = 960; const height = 270;
   const plot = { left: 70, right: 18, top: 24, bottom: 42 };
   const plotWidth = width - plot.left - plot.right; const plotHeight = height - plot.top - plot.bottom;
@@ -74,17 +75,27 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   const current = currencyPolicy.showCurrent ? currentCandidates : currentCandidates.map(() => null);
   const availableIndexes = days.flatMap((_, index) => recorded[index] !== null || current[index] !== null ? [index] : []);
   const rawMax = Math.max(0, ...recorded.map((value) => value ?? 0), ...current.map((value) => value ?? 0));
+  const peakIndex = rawMax > 0 ? days.findIndex((_, index) => recorded[index] === rawMax || current[index] === rawMax) : -1;
+  const peakDay = peakIndex >= 0 ? days[peakIndex] : null;
   const scale = chartScale(rawMax, availableIndexes.length > 0); const ticks = scale.ticks; const axisMax = scale.max;
   const recordedPath = linePath(recorded, plotWidth, plotHeight, axisMax);
   const currentPath = linePath(current, plotWidth, plotHeight, axisMax);
+  const matchingSeries = Boolean(recordedPath && currentPath) && recorded.every((value, index) => value === current[index]);
+  const visibleCurrentPath = matchingSeries ? "" : currentPath;
   const xForIndex = (index: number) => plot.left + (days.length === 1 ? plotWidth / 2 : index / (days.length - 1) * plotWidth);
   const yForValue = (value: number) => plot.top + plotHeight - value / axisMax * plotHeight;
   const chartCurrency = current.some((value) => value !== null) ? currentCurrency : recordedCurrency;
-  const seriesDescription = chartSeriesDescription(Boolean(recordedPath), Boolean(currentPath));
+  const seriesDescription = `${chartSeriesDescription(Boolean(recordedPath), Boolean(currentPath))}${matchingSeries ? " Current-rate values match the recorded estimates for every comparable day." : ""}`;
   const selectedIndex = activeIndex !== null && availableIndexes.includes(activeIndex) ? activeIndex : null;
   const activeDay = selectedIndex === null ? null : days[selectedIndex];
   const activeX = selectedIndex === null ? null : xForIndex(selectedIndex);
   const tooltipTransform = selectedIndex !== null && selectedIndex <= Math.max(1, days.length * .2) ? "translateX(0)" : selectedIndex !== null && selectedIndex >= days.length * .8 ? "translateX(-100%)" : "translateX(-50%)";
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    scroller.scrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  }, [days]);
+
   const clearActiveDay = () => {
     setActiveIndex(null);
     setTooltipLeft(null);
@@ -121,7 +132,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   };
   if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="textSecondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="textSecondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
-    <Box sx={{ overflowX: "auto", pb: .5 }}>
+    <Box ref={scrollRef} sx={{ overflowX: "auto", pb: .5, overscrollBehaviorInline: "contain" }}>
       <Box sx={{ position: "relative", minWidth: { xs: 720, md: 0 } }}>
         <Box
           component="svg"
@@ -150,27 +161,32 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         })}
         {chartDateTickIndexes(days.length).map((index) => <text key={days[index].date} x={xForIndex(index)} y={plot.top + plotHeight + 27} textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"} fill="var(--mui-palette-text-secondary)" fontSize="11">{chartDateLabel(days[index].date)}</text>)}
         <g transform={`translate(${plot.left} ${plot.top})`}>
+          {visibleCurrentPath && <path d={visibleCurrentPath} fill="none" stroke="var(--mui-palette-warning-main)" strokeWidth="3" strokeDasharray="9 7" strokeLinecap="round" />}
           {recordedPath && <path d={recordedPath} fill="none" stroke="var(--mui-palette-primary-main)" strokeWidth="3" strokeLinecap="round" />}
-          {currentPath && <path d={currentPath} fill="none" stroke="var(--mui-palette-warning-main)" strokeWidth="3" strokeDasharray="9 7" strokeLinecap="round" />}
+          {!matchingSeries && current.map((value, index) => value === null ? null : <rect key={`current-${days[index].date}`} x={xForIndex(index) - plot.left - 3.5} y={yForValue(value) - plot.top - 3.5} width="7" height="7" fill="var(--mui-palette-warning-main)" stroke="var(--mui-palette-background-default)" strokeWidth="1.5" />)}
           {recorded.map((value, index) => value === null ? null : <circle key={`recorded-${days[index].date}`} cx={xForIndex(index) - plot.left} cy={yForValue(value) - plot.top} r="3.5" fill="var(--mui-palette-primary-main)" stroke="var(--mui-palette-background-default)" strokeWidth="1.5" />)}
-          {current.map((value, index) => value === null ? null : <rect key={`current-${days[index].date}`} x={xForIndex(index) - plot.left - 3.5} y={yForValue(value) - plot.top - 3.5} width="7" height="7" fill="var(--mui-palette-warning-main)" stroke="var(--mui-palette-background-default)" strokeWidth="1.5" />)}
         </g>
         {activeX !== null && <line x1={activeX} x2={activeX} y1={plot.top} y2={plot.top + plotHeight} stroke="var(--mui-palette-text-secondary)" strokeDasharray="3 5" opacity="0.7" />}
+        {!matchingSeries && selectedIndex !== null && current[selectedIndex] !== null && <rect x={(activeX ?? 0) - 6.5} y={yForValue(current[selectedIndex] ?? 0) - 6.5} width="13" height="13" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-warning-main)" strokeWidth="3" />}
         {selectedIndex !== null && recorded[selectedIndex] !== null && <circle cx={activeX ?? 0} cy={yForValue(recorded[selectedIndex] ?? 0)} r="7" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-primary-main)" strokeWidth="3" />}
-        {selectedIndex !== null && current[selectedIndex] !== null && <rect x={(activeX ?? 0) - 6.5} y={yForValue(current[selectedIndex] ?? 0) - 6.5} width="13" height="13" fill="var(--mui-palette-background-paper)" stroke="var(--mui-palette-warning-main)" strokeWidth="3" />}
         </Box>
         {activeDay && tooltipLeft !== null && <Box role="status" aria-live="polite" sx={{ position: "absolute", top: 22, left: tooltipLeft, transform: tooltipTransform, minWidth: 210, maxWidth: 270, p: 1.25, borderRadius: "4px", border: "1px solid", borderColor: "divider", bgcolor: "background.paper", boxShadow: "none", pointerEvents: "none", zIndex: 1 }}>
         <Typography variant="subtitle2" sx={{ fontFamily: "monospace" }}>{activeDay.date} UTC{activeDay.current_partial_utc ? " · Partial UTC day" : ""}</Typography>
         {recordedPath && <Typography variant="caption" component="div" sx={{ mt: .5 }}><Box component="span" sx={{ color: "primary.main" }}>●</Box> Recorded: {recordedCost(activeDay)}</Typography>}
-        {currentPath && <Typography variant="caption" component="div"><Box component="span" sx={{ color: "warning.main" }}>■</Box> Current rate: {currentRateCost(activeDay)}</Typography>}
+        {currentPath && <Typography variant="caption" component="div"><Box component="span" sx={{ color: "warning.main" }}>■</Box> Current rate: {currentRateCost(activeDay)}{matchingSeries ? " · matches recorded" : ""}</Typography>}
         <Typography variant="caption" component="div" color="textSecondary">Coverage: {activeDay.coverage.status}{activeDay.coverage.states?.length ? ` · ${activeDay.coverage.states.map(coverageStateLabel).join(", ")}` : ""}</Typography>
         </Box>}
       </Box>
     </Box>
+    <Typography color="textSecondary" sx={{ display: { xs: "block", md: "none" }, mt: 0.5, ...overviewTypography.description }}>
+      Newest dates are in view. Scroll left for earlier dates.
+    </Typography>
     <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center", mt: .5 }}>
       {recordedPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Recorded estimate (solid)</Typography>}
-      {currentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}
+      {visibleCurrentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}
+      {matchingSeries && <Typography variant="caption" color="textSecondary">Current-rate estimate matches the recorded estimate.</Typography>}
       <Typography variant="caption" color="textSecondary">Hover to inspect. Keyboard: focus chart, then use ← and →.</Typography>
+      {peakDay && <Typography variant="caption" color="textSecondary">Peak day: {peakDay.date} · {formatChartCost(rawMax, chartCurrency)}.</Typography>}
       {rawMax === 0 && <Typography variant="caption" color="textSecondary">All reported values in this chart are {formatChartCost(0, chartCurrency)}.</Typography>}
       {currencyPolicy.note && <Typography variant="caption" color="textSecondary" sx={{ flexBasis: "100%" }}>{currencyPolicy.note}</Typography>}
     </Box>

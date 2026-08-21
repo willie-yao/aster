@@ -368,6 +368,7 @@ export function PatternBanner({
                       target={causalFixTargets[index]}
                       showBuild={fixTargetNeedsBuild[index]}
                       externalCause={externalCause(group.cause_location)}
+                      stale={!isCurrent}
                     />
                   )}
                   {/* Published data, so this stays available where the Fix and

@@ -684,6 +684,7 @@ export function FlakinessPage() {
           onChange={(_, value: FailureTab) => setActiveTab(value)}
           variant="scrollable"
           scrollButtons="auto"
+          allowScrollButtonsMobile
           aria-label="Failure trend views"
           sx={{
             minHeight: 44,

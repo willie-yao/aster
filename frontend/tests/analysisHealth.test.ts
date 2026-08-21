@@ -529,6 +529,24 @@ test("copy completion is exposed through the button name and a polite status", (
   assert.match(html, />Build copied</);
 });
 
+test("blank identifiers do not render empty copy actions", () => {
+  const html = render(createElement(CopyIdentifierAction, {
+    label: "Build",
+    value: "",
+    copied: false,
+    onCopy: () => undefined,
+  }));
+
+  assert.doesNotMatch(html, /<button/);
+  assert.doesNotMatch(html, />Build</);
+});
+
+test("trace detail empty states stay contained and explicit", () => {
+  assert.match(ledgerSource, /width: "1px"[\s\S]*height: "1px"[\s\S]*clipPath: "inset\(50%\)"/);
+  assert.match(ledgerSource, /testHref && trace\.build_id\.trim\(\) && trace\.test_name\.trim\(\)/);
+  assert.match(ledgerSource, /No trace events were recorded\./);
+});
+
 test("Analysis health page preserves private gates, problem-first grouping, and downloads", () => {
   const source = readFileSync(resolve(process.cwd(), "src/pages/AnalysisHealthPage.tsx"), "utf8");
   const filters = readFileSync(resolve(process.cwd(), "src/components/AnalysisTraceFilters.tsx"), "utf8");
