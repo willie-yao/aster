@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -413,4 +414,75 @@ func TestDiscoverJUnitPathsListingFailures(t *testing.T) {
 			t.Fatalf("error = %v, want both causes and artifact path", err)
 		}
 	})
+}
+
+// TestListRecentBuildsPresubmitHonorsCancellation pins that presubmit
+// enumeration is interruptible. Each candidate costs an index read whose failure
+// is reported as "not this repo", so without an explicit check a cancelled
+// context reads the whole index and reports success with nothing found. Callers
+// that bound this work by deadline depend on it returning instead.
+func TestListRecentBuildsPresubmitHonorsCancellation(t *testing.T) {
+	objects := map[string]string{}
+	for i := 100; i < 160; i++ {
+		id := strconv.Itoa(i)
+		objects["pr-logs/directory/pull-e2e/"+id+".txt"] = "pr-logs/pull/example_project/3/pull-e2e/" + id
+	}
+	b := &fakeBackend{objects: objects}
+	job := &models.ProwJob{Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/project"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	builds, err := ListRecentBuilds(ctx, b, job, 40)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(builds) != 0 {
+		t.Errorf("builds = %d, want none from a cancelled enumeration", len(builds))
+	}
+
+	// A live context still enumerates normally.
+	live, err := ListRecentBuilds(context.Background(), b, job, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 5 || live[0].ID != "159" {
+		t.Errorf("live enumeration = %d builds starting at %v, want 5 starting at 159", len(live), live)
+	}
+}
+
+// cancelOnOpenBackend cancels the enumeration context from inside a candidate
+// read, reproducing a deadline that expires mid-flight rather than between
+// candidates.
+type cancelOnOpenBackend struct {
+	*fakeBackend
+	cancel func()
+}
+
+func (c *cancelOnOpenBackend) Open(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	c.cancel()
+	return nil, 0, context.Canceled
+}
+
+// TestListRecentBuildsPresubmitHonorsCancellationDuringResolution pins the
+// narrow window the loop-top check cannot see. With a single candidate there is
+// no next iteration to catch the cancellation, and a read cancelled in flight
+// fails exactly as a foreign build does, so without a recheck the enumeration
+// would report an empty result as a complete success.
+func TestListRecentBuildsPresubmitHonorsCancellationDuringResolution(t *testing.T) {
+	objects := map[string]string{
+		"pr-logs/directory/pull-e2e/100.txt": "pr-logs/pull/example_project/3/pull-e2e/100",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &cancelOnOpenBackend{fakeBackend: &fakeBackend{objects: objects}, cancel: cancel}
+	job := &models.ProwJob{Name: "pull-e2e", JobType: models.JobTypePresubmit, Repo: "example/project"}
+
+	builds, err := ListRecentBuilds(ctx, b, job, 40)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled from a read cancelled in flight", err)
+	}
+	if len(builds) != 0 {
+		t.Errorf("builds = %d, want none", len(builds))
+	}
 }

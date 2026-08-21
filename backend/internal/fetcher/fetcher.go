@@ -448,6 +448,14 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	if len(fetchErrors) > 0 {
 		log.Printf("Warning: %d jobs had fetch errors", len(fetchErrors))
 	}
+
+	// A pass that ran out of time never saw some jobs, and publishing that view
+	// would prune the job files it failed to fetch, taking their cached builds
+	// and retained pattern analyses with them. Abort so the last good snapshot
+	// stands and the next pass republishes from it.
+	if err := fetchCtx.Err(); err != nil {
+		return nil, fmt.Errorf("fetching builds: %w", err)
+	}
 	p.markProgressChecked()
 	p.completeProgressPhase()
 	p.startProgressPhase(fetchprogress.PhaseAggregation)

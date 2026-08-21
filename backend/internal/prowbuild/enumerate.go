@@ -58,8 +58,21 @@ func ListRecentBuilds(ctx context.Context, b storage.Backend, job *models.ProwJo
 			if len(out) >= count {
 				break
 			}
+			// Resolution reads one index object per candidate and reports a
+			// failed read as "not this repo", so a cancelled context would
+			// otherwise be indistinguishable from a long tail of foreign builds
+			// and this loop would run to the end of the index regardless.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			pull, ok := resolvePresubmitPath(ctx, b, indexPrefix, id, expectedRepoSeg, job.Name)
 			if !ok {
+				// A read cancelled mid-flight fails the same way a foreign build
+				// does, so a failed resolution has to be rechecked before it is
+				// dismissed as one.
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			out = append(out, Build{ID: id, PullNumber: pull})
