@@ -504,3 +504,27 @@ func TestSafeOperationViewDoesNotPublishStructuredFailureMetadata(t *testing.T) 
 		}
 	}
 }
+
+// TestOperationBlockedViewSeparatesExpiredEvidence pins that the two blocked
+// verdicts stay distinct: only the recoverable one tells the viewer to refresh.
+func TestOperationBlockedViewSeparatesExpiredEvidence(t *testing.T) {
+	ref := OperationRef{CausalGroupID: "group", CausalGroupHash: "hash"}
+	now := time.Unix(0, 0).UTC()
+
+	expired := operationBlockedView(ref, ErrOperationEvidenceExpired, now)
+	if expired.State != models.PatternRemediationEvidenceExpired {
+		t.Fatalf("expired state = %q", expired.State)
+	}
+	if strings.Contains(expired.Reason, "Refresh the dashboard") {
+		t.Fatalf("expired verdict told the viewer to refresh: %q", expired.Reason)
+	}
+	if !models.ValidPatternRemediationInvestigationState(expired.State) {
+		t.Fatalf("expired state is not publishable: %q", expired.State)
+	}
+
+	for _, err := range []error{ErrOperationStale, ErrOperationInactive} {
+		if got := operationBlockedView(ref, err, now); got.State != models.PatternRemediationStale {
+			t.Fatalf("%v mapped to %q, want stale", err, got.State)
+		}
+	}
+}

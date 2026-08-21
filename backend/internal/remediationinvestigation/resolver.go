@@ -169,9 +169,6 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 	if json.Unmarshal(data, &detail) != nil || detail.JobID != ref.JobID {
 		return publishedSubject{}, ErrOperationNotFound
 	}
-	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent {
-		return publishedSubject{}, ErrOperationStale
-	}
 	patternsWithIDs, _ := models.BackfillPatternIdentities(detail.PatternAnalyses)
 	var pattern *models.PatternAnalysis
 	for index := range patternsWithIDs {
@@ -207,6 +204,17 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 	for _, run := range detail.Runs {
 		runsByID[run.BuildID] = run
 	}
+	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent {
+		// A retained subject becomes investigable again once the correlation
+		// runs, but only while its evidence survives. Scoped to the requested
+		// cause, because a sibling cause keeping its builds says nothing about
+		// this one: with every build of this cause gone from the window there is
+		// nothing left to read, and no later refresh brings them back.
+		if !anyBuildPresent(group.Builds, runsByID) {
+			return publishedSubject{}, ErrOperationEvidenceExpired
+		}
+		return publishedSubject{}, ErrOperationStale
+	}
 	seenBuilds := map[string]bool{}
 	runs := make([]publishedRun, 0, len(group.Builds))
 	relevant := slices.Clone(pattern.RelevantFiles)
@@ -217,7 +225,7 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 		seenBuilds[buildID] = true
 		run, ok := runsByID[buildID]
 		if !ok {
-			return publishedSubject{}, ErrOperationStale
+			return publishedSubject{}, ErrOperationEvidenceExpired
 		}
 		representative := patterns.RepresentativeAnalyzedFailure(&run)
 		if representative == nil || representative.AIAnalysis == nil {
@@ -390,4 +398,15 @@ func (g *GitHubSourceAccess) ReadFile(ctx context.Context, repository sourceinve
 		return "", os.ErrNotExist
 	}
 	return content, nil
+}
+
+// anyBuildPresent reports whether at least one of a cause's builds is still in
+// the job window.
+func anyBuildPresent(builds []string, runsByID map[string]models.BuildResult) bool {
+	for _, buildID := range builds {
+		if _, ok := runsByID[buildID]; ok {
+			return true
+		}
+	}
+	return false
 }

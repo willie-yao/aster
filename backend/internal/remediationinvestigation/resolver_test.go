@@ -262,3 +262,52 @@ func TestFrozenCausalGroupDropsReportedRemediation(t *testing.T) {
 		t.Error("a remediation-only refresh changed the frozen group")
 	}
 }
+
+// TestPublishedResolverSeparatesExpiredEvidenceFromStaleness covers the two ways
+// a retained pattern blocks: its causes may still be readable, in which case the
+// next correlation can investigate them, or their builds may have left the
+// window, in which case no refresh ever brings them back.
+func TestPublishedResolverSeparatesExpiredEvidenceFromStaleness(t *testing.T) {
+	dataDir, cfg, ref, detail := publishedResolverFixture(t, false)
+	resolver, err := NewPublishedResolver(PublishedResolverOptions{
+		DataDir: dataDir, Config: cfg, ProviderFingerprint: strings.Repeat("d", 16),
+		Artifacts: fixtureArtifactFactory(detail),
+		Source:    fakeSourceAccess{current: map[string]string{"example/repo": strings.Repeat("e", 40)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Retained, but every correlated build is still in the window.
+	detail.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained}
+	writePublishedJob(t, dataDir, detail)
+	if err := resolver.Validate(t.Context(), ref); !errors.Is(err, ErrOperationStale) {
+		t.Fatalf("retained with readable evidence err=%v", err)
+	}
+
+	// Retained, and the window has rolled past every build of this cause. A
+	// sibling cause that kept a build must not answer for this one.
+	sibling := models.PatternCausalGroup{Builds: []string{"9"}, RootCause: "unrelated", Confidence: "high"}
+	detail.PatternAnalyses[0].CausalGroups = append(detail.PatternAnalyses[0].CausalGroups, sibling)
+	detail.PatternAnalyses[0].Recurrence = models.PatternRecurrenceMixedCauses
+	models.AssignPatternIdentity(&detail.PatternAnalyses[0])
+	detail.Runs = []models.BuildResult{{BuildInfo: models.BuildInfo{
+		BuildID: "9", JobName: "periodic-test", Result: "SUCCESS", Passed: true,
+	}}}
+	writePublishedJob(t, dataDir, detail)
+	expired := ref
+	expired.PatternHash = detail.PatternAnalyses[0].ContentHash
+	expired.CausalGroupID = detail.PatternAnalyses[0].CausalGroups[0].ID
+	expired.CausalGroupHash = detail.PatternAnalyses[0].CausalGroups[0].ContentHash
+	if err := resolver.Validate(t.Context(), expired); !errors.Is(err, ErrOperationEvidenceExpired) {
+		t.Fatalf("retained with expired evidence err=%v", err)
+	}
+
+	// A subject whose identity no longer matches is stale, not expired, even
+	// when its evidence is also gone: the displayed cause is the wrong one.
+	mismatched := expired
+	mismatched.CausalGroupHash = strings.Repeat("f", 64)
+	if err := resolver.Validate(t.Context(), mismatched); !errors.Is(err, ErrOperationStale) {
+		t.Fatalf("mismatched identity err=%v", err)
+	}
+}

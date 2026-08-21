@@ -577,6 +577,10 @@ const (
 	PatternRemediationInsufficientEvidence        PatternRemediationInvestigationState = "insufficient_evidence"
 	PatternRemediationInvestigationFailed         PatternRemediationInvestigationState = "failed"
 	PatternRemediationStale                       PatternRemediationInvestigationState = "stale"
+	// PatternRemediationEvidenceExpired is terminal in a way stale is not: the
+	// builds the cause was correlated from have left the analysis window, so the
+	// investigation has nothing left to read and no refresh can bring them back.
+	PatternRemediationEvidenceExpired PatternRemediationInvestigationState = "evidence_expired"
 )
 
 // PatternRemediationInvestigationSummary is the safe public state for one
