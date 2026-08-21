@@ -259,6 +259,26 @@ test("the chat wears the page's section band instead of its own chat styling", (
   assert.match(header, /detailAppearance && turnUsage/);
   assert.match(chat, /turnUsage && !detailAppearance/);
 
+  // A `border-*` shorthand carries no color, so CSS resets that edge to
+  // currentColor. `sectionBandSx()` contributes `borderColor`, and a duplicate
+  // key keeps its first position, so the spread is where the color is really
+  // emitted and any shorthand written after it lands last, painting a
+  // near-white rule in dark mode.
+  const bandSx = header.slice(header.indexOf("<Stack"), header.indexOf("{/* The heading wraps"));
+  const spreadAt = bandSx.indexOf("...sectionBandSx()");
+  const explicitColorAt = bandSx.indexOf('borderColor: "divider"');
+  const topAt = bandSx.indexOf("borderTop:");
+  const bottomAt = bandSx.indexOf("borderBottom:");
+  assert.ok(
+    spreadAt > 0 && explicitColorAt > 0 && topAt > 0 && bottomAt > 0,
+    "chat header band border rules not found",
+  );
+  assert.doesNotMatch(
+    bandSx.slice(Math.min(spreadAt, explicitColorAt)),
+    /border(Top|Right|Bottom|Left|(Block|Inline)(Start|End)?)?:/,
+    "a border shorthand after borderColor resets that edge to currentColor",
+  );
+
   // A heading is not valid phrasing content inside a button, so the heading
   // wraps the toggle rather than sitting within it.
   assert.match(header, /component=\{detailAppearance \? "h3" : "div"\}[\s\S]*<ButtonBase/);

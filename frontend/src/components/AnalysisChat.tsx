@@ -1158,16 +1158,18 @@ export function AnalysisChat({
           sx={{
             alignItems: "center",
             px: detailAppearance ? 1.5 : 1,
-            py: detailAppearance ? 0.5 : 0.5,
+            py: 0.5,
+            borderTop: detailAppearance ? "1px solid" : 0,
+            borderBottom: expanded || detailAppearance ? "1px solid" : 0,
             // On a detail page the chat is a peer of Run history and Runtime
             // trend, so it wears the same section band as they do instead of a
             // transparent bar with a tinted icon tile.
             ...(detailAppearance && {
               minHeight: overviewLayout.categoryBandMinHeight,
-              borderBlock: "1px solid",
               ...sectionBandSx(),
             }),
-            borderBottom: expanded || detailAppearance ? "1px solid" : 0,
+            // Keep the color last: a border shorthand emitted after it resets
+            // that edge back to currentColor, which reads as a white rule.
             borderColor: "divider",
           }}
         >
@@ -1223,7 +1225,7 @@ export function AnalysisChat({
                 component="span"
                 sx={detailAppearance ? undefined : { fontSize: "0.875rem", fontWeight: 750 }}
               >
-                Chat with agent
+                Investigate and fix
               </Box>
             </ButtonBase>
           </Box>
@@ -1249,7 +1251,7 @@ export function AnalysisChat({
           <IconButton
             disableRipple
             size="small"
-            aria-label={expanded ? "Collapse analysis chat" : "Expand analysis chat"}
+            aria-label={expanded ? "Collapse investigate and fix" : "Expand investigate and fix"}
             aria-expanded={expanded}
             aria-controls="analysis-chat-content"
             onClick={toggleChat}
