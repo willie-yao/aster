@@ -26,6 +26,7 @@ const { CausalGroupFixRouting } = (await vite.ssrLoadModule("/src/components/Cau
     target: CausalGroupFixTarget | null;
     externalCause?: AnalysisCauseLocation | null;
     stale?: boolean;
+    evidencePresent?: boolean;
   }) => ReturnType<typeof createElement>;
 };
 const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/PatternFixGuidance.tsx")) as {
@@ -209,4 +210,30 @@ test("the pattern panel only points at a chat that is on the page", () => {
   // The guidance that does not depend on chat survives.
   assert.match(withoutChat, /A fix proposal becomes available/);
   assert.match(withoutChat, /View failed tests/);
+});
+
+// The two dead ends read the same before this split, so a cause whose builds had
+// aged out was reported as an eligibility problem in tests that were never
+// examined.
+test("a cause without a fix target names which dead end it hit", () => {
+  const eligibility = render(
+    createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: true }),
+  );
+  assert.match(eligibility, /Fix eligibility requirements/);
+  assert.doesNotMatch(eligibility, /left the analysis window/);
+
+  const expired = render(
+    createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: false }),
+  );
+  assert.match(expired, /have left the analysis window/);
+  assert.doesNotMatch(expired, /Fix eligibility requirements/);
+
+  // An upstream cause still reports ownership rather than either dead end.
+  const upstream = render(
+    createElement(CausalGroupFixRouting, {
+      jobID: "job", target: null, externalCause: draCause, evidencePresent: false,
+    }),
+  );
+  assert.doesNotMatch(upstream, /left the analysis window/);
+  assert.match(upstream, /kubernetes\/kubernetes/);
 });

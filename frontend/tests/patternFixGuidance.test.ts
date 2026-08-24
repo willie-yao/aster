@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { causalGroupFixTarget, patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
+import { causalGroupEvidencePresent, causalGroupFixTarget, patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
 import type { BuildResult, PatternAnalysis, PatternCausalGroup } from "../src/types/dashboard.js";
 
 function source(path: string): string {
@@ -272,7 +272,7 @@ test("the build only joins the label where it is needed to tell two actions apar
   assert.match(routing, /showBuild = false/);
   assert.match(routing, /\{showBuild && \(/);
   assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
-  assert.match(banner, /stale=\{!isCurrent\}/);
+  assert.match(banner, /stale=\{!lifecycleActive\}/);
 
   // Counting the DISPLAYED label, not the canonical name: two canonical names
   // can humanize to one title, which would hide both builds and leave two
@@ -424,4 +424,24 @@ test("a cause opens the build its displayed suggestion came from", () => {
     ),
     { buildID: "208060", testName: "fails" },
   );
+});
+
+// A cause offers no fix target for two unrelated reasons, and only one of them
+// is about eligibility. Reporting the wrong one sends the reader looking for a
+// JUnit problem that is not there.
+test("a cause separates builds that left the window from builds with no eligible failure", () => {
+  // Builds present, but the failure carries no analysis, so nothing qualifies.
+  assert.equal(causalGroupEvidencePresent(firstGroup, [junitRun]), true);
+  assert.equal(causalGroupFixTarget(firstGroup, [junitRun]), null);
+
+  // The window has rolled past every build this cause names.
+  const laterRun: BuildResult = { ...groundedRun, build_id: "999999" };
+  assert.equal(causalGroupEvidencePresent(firstGroup, [laterRun]), false);
+  assert.equal(causalGroupFixTarget(firstGroup, [laterRun]), null);
+
+  // A readable build still resolves a target.
+  assert.deepEqual(causalGroupFixTarget(firstGroup, [groundedRun]), {
+    buildID: groundedRun.build_id,
+    testName: "fails",
+  });
 });
