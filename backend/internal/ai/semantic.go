@@ -915,7 +915,7 @@ func semanticCitationQuoteLines(citation models.EvidenceCitation, evidence *anal
 	if evidence == nil {
 		return nil
 	}
-	quote := normalizeCitationText(citation.Quote)
+	quote := NormalizeCitationText(citation.Quote)
 	if quote == "" {
 		return nil
 	}
@@ -931,7 +931,7 @@ func semanticCitationQuoteLines(citation models.EvidenceCitation, evidence *anal
 				}
 				parts = append(parts, text)
 			}
-			if !valid || !strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), quote) {
+			if !valid || !strings.Contains(NormalizeCitationText(strings.Join(parts, "\n")), quote) {
 				continue
 			}
 			out := make(map[int]bool, width)

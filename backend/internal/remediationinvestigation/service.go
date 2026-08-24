@@ -952,7 +952,10 @@ func prepareArtifactEvidence(ctx context.Context, input FrozenInput, browser art
 			if lastLine != citation.LineEnd {
 				return nil, fmt.Errorf("frozen analysis artifact evidence has an invalid line range")
 			}
-			if !strings.Contains(selected, strings.TrimSpace(citation.Quote)) {
+			want := ai.NormalizeCitationText(citation.Quote)
+			// A quote of nothing but colour codes normalizes away and would
+			// otherwise match every range.
+			if want == "" || !strings.Contains(ai.NormalizeCitationText(selected), want) {
 				return nil, fmt.Errorf("frozen analysis artifact evidence quote does not match %s", file)
 			}
 			record := EvidenceRecord{
