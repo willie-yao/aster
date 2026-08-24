@@ -20,12 +20,17 @@ Failure emails include the project, job, test, consecutive count, latest error,
 available AI root cause or summary, dashboard link, and Prow link. Each message
 contains plain-text and HTML alternatives.
 
-When `action_links: true`, the notifier also sends pattern-level email. It sends
-one message when a job first becomes systemic and another when that job's shared
-root cause changes materially. Ordinary AI paraphrasing updates the stored
-pattern without sending again. A changed-pattern message includes both the
-previous and current root causes. Each message includes inert **Review issue
-draft** and **Review fix proposal** links.
+The notifier also sends pattern-level email. It sends one message when a job
+first becomes systemic and another when that job's shared root cause changes
+materially. Ordinary AI paraphrasing updates the stored pattern without sending
+again. A changed-pattern message includes both the previous and current root
+causes.
+
+Pattern email is sent whether or not the pattern supports maintainer actions.
+Analysis-only causal-group results still notify; their messages simply carry no
+action links. When `action_links: true` and the pattern supports actions, the
+message also includes inert **Review issue draft** and **Review fix proposal**
+links.
 
 ## Project configuration
 
@@ -164,8 +169,8 @@ Deduplication state is stored in `notification_state.json` alongside the fetcher
 cache. It is preserved between runs but is not published by Pages or served by
 the Kubernetes server.
 
-State tracks both persistent-test alerts and action-enabled systemic-pattern
-alerts. Systemic patterns are keyed by job ID, with the latest pattern ID and
+State tracks both persistent-test alerts and systemic-pattern alerts. Systemic
+patterns are keyed by job ID, with the latest pattern ID and
 root cause retained for links and changed-pattern comparison. The state resets
 after an authoritative non-systemic verdict or recovery. Delivery-tracking
 transitions happen only after successful delivery; ordinary paraphrases may
@@ -180,6 +185,41 @@ refresh the stored pattern metadata without sending a message:
 The email implementation uses the state channel `email-v1`. On the first run
 after upgrading from Slack notifications, old channel-less state is reset. Each
 currently persistent failure therefore receives one initial email.
+
+## Verifying delivery
+
+`aster notify-test` sends one test email through the relay in `project.yaml`. It
+uses the same sender the fetcher uses, so success proves the relay, credentials,
+TLS mode, and network path all work without waiting for a real alert:
+
+```bash
+EMAIL_SMTP_PASSWORD=... aster notify-test -project-dir=.
+```
+
+Use `-to` to probe a single address instead of mailing the configured list:
+
+```bash
+EMAIL_SMTP_PASSWORD=... aster notify-test -project-dir=. -to=me@example.com
+```
+
+In a Kubernetes deployment, run it inside a pod that already mounts the project
+config and the SMTP secret. The CLI is installed as `/usr/local/bin/fetcher`,
+and selecting the pod by label avoids depending on the release's generated name.
+The server runs in every mode; the worker exists only in watch mode:
+
+```bash
+TARGET=$(kubectl -n <namespace> get deploy \
+  -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=server -o name)
+kubectl -n <namespace> exec "$TARGET" -- \
+  /usr/local/bin/fetcher notify-test -project-dir=/config
+```
+
+This requires `EMAIL_SMTP_PASSWORD` in that pod's environment. The server
+already needs it for draft-ready email, and the worker gets it for scheduled
+alerts.
+
+The command prints the relay, authentication mode, sender, and recipients before
+sending, then reports acceptance or the exact SMTP error.
 
 ## Troubleshooting
 
@@ -200,6 +240,7 @@ currently persistent failure therefore receives one initial email.
 - `backend/internal/notify/notify.go`: triggers, deduplication, recovery, state.
 - `backend/internal/notify/email.go`: failure and recovery email rendering.
 - `backend/internal/notify/smtp.go`: SMTP, authentication, TLS, MIME delivery.
+- `backend/internal/notify/probe.go`: the `notify-test` delivery check.
 - `backend/internal/fetcher/fetcher.go`: configuration and side-effect wiring.
 
 ## Retained patterns

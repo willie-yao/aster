@@ -330,7 +330,7 @@ func TestSystemicPatternSendsActionableEmailOnce(t *testing.T) {
 	}
 }
 
-func TestPatternEmailOmitsActionsWhenDisabled(t *testing.T) {
+func TestPatternEmailOmitsActionLinksWhenDisabled(t *testing.T) {
 	sender := &fakeSender{}
 	from, to, err := ParseAddresses("Prow Dashboard <prow@example.com>", []string{"team@example.com"})
 	if err != nil {
@@ -344,8 +344,48 @@ func TestPatternEmailOmitsActionsWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.PatternAlerts != 0 || len(sender.messages) != 0 || len(n.state.Patterns) != 0 {
-		t.Fatalf("disabled action links sent pattern email: stats=%+v messages=%d state=%+v", stats, len(sender.messages), n.state.Patterns)
+	if stats.PatternAlerts != 1 || len(sender.messages) != 1 || len(n.state.Patterns) != 1 {
+		t.Fatalf("stats=%+v messages=%d state=%+v", stats, len(sender.messages), n.state.Patterns)
+	}
+	body := sender.messages[0].TextBody + sender.messages[0].HTMLBody
+	for _, unwanted := range []string{"Review issue draft", "Review fix proposal", "action=create-issue"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("disabled action links still rendered %q", unwanted)
+		}
+	}
+}
+
+// A causal-group pattern is analysis-only. It still earns a notification, but
+// the email must not advertise action links the server would reject.
+func TestCausalGroupPatternSendsEmailWithoutActionLinks(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	pattern.Recurrence = models.PatternRecurrenceSharedCause
+	pattern.CausalGroups = []models.PatternCausalGroup{{RootCause: "shared controller timeout"}}
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+
+	stats, err := n.ProcessFailures(context.Background(), report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.PatternAlerts != 1 || len(sender.messages) != 1 {
+		t.Fatalf("causal-group pattern did not notify: stats=%+v messages=%d", stats, len(sender.messages))
+	}
+	body := sender.messages[0].TextBody + sender.messages[0].HTMLBody
+	if !strings.Contains(body, "shared controller timeout") {
+		t.Errorf("message missing shared root cause: %s", body)
+	}
+	for _, unwanted := range []string{"Review issue draft", "Review fix proposal", "action=create-issue"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("analysis-only pattern advertised action link %q", unwanted)
+		}
+	}
+
+	stats, err = n.ProcessFailures(context.Background(), report, nil)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("repeat stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
 	}
 }
 
@@ -628,6 +668,39 @@ func TestPatternStateSurvivesUnavailableAnalysis(t *testing.T) {
 	}
 	if len(n.state.Patterns) != 1 {
 		t.Fatalf("unavailable analysis cleared pattern state: %+v", n.state.Patterns)
+	}
+}
+
+// A job whose correlation falls back to a retained result between passes must
+// not re-notify when it refreshes again. Production alternates between current
+// and retained when pattern analysis is suppressed by cooldown.
+func TestRetainedPassKeepsStateAndDoesNotResend(t *testing.T) {
+	sender := &fakeSender{}
+	n := newTestNotifier(t, sender, filepath.Join(t.TempDir(), "state.json"))
+	pattern := systemicPattern("pattern-1", "job-id", "periodic-job")
+	pattern.Recurrence = models.PatternRecurrenceSharedCause
+	pattern.CausalGroups = []models.PatternCausalGroup{{RootCause: "shared controller timeout"}}
+	report := makeReport()
+	report.RecurringPatterns = []models.PatternAnalysis{pattern}
+
+	fresh := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}, PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent}}}
+	stats, err := n.ProcessFailures(context.Background(), report, fresh)
+	if err != nil || stats.PatternAlerts != 1 {
+		t.Fatalf("first pass stats=%+v err=%v", stats, err)
+	}
+
+	retained := []models.JobDetail{{JobID: "job-id", Name: "periodic-job", Runs: failedRuns(3), PatternAnalyses: []models.PatternAnalysis{pattern}, PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained}}}
+	stats, err = n.ProcessFailures(context.Background(), report, retained)
+	if err != nil || stats.PatternAlerts != 0 {
+		t.Fatalf("retained pass stats=%+v err=%v", stats, err)
+	}
+	if len(n.state.Patterns) != 1 {
+		t.Fatalf("retained pass cleared pattern state: %+v", n.state.Patterns)
+	}
+
+	stats, err = n.ProcessFailures(context.Background(), report, fresh)
+	if err != nil || stats.PatternAlerts != 0 || len(sender.messages) != 1 {
+		t.Fatalf("refresh resent duplicate: stats=%+v err=%v messages=%d", stats, err, len(sender.messages))
 	}
 }
 

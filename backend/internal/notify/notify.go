@@ -286,35 +286,36 @@ func (n *Notifier) ProcessFailures(ctx context.Context, report models.FlakinessR
 		delete(n.state.Notified, key)
 	}
 
-	if n.actionLinks {
-		for _, pattern := range report.RecurringPatterns {
-			if !models.PatternAllowsActions(pattern) || !pattern.Systemic || !models.PatternIsCurrent(jobDetails, pattern.JobID) {
-				continue
-			}
-			if pattern.ID == "" {
-				pattern.ID = models.PatternID(pattern)
-			}
-			key := patternJobID(pattern)
-			existing, notified, stateKeys := n.patternStateFor(pattern)
-			changed := notified && patternsMateriallyDifferent(existing.SharedRootCause, pattern.SharedRootCause)
-			if notified && !changed {
-				n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
-				continue
-			}
-			previousRootCause := ""
-			if changed {
-				previousRootCause = existing.SharedRootCause
-			}
-			if err := n.sender.Send(ctx, n.patternMessage(pattern, previousRootCause)); err != nil {
-				stats.Failed++
-				sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", key, err))
-				continue
-			}
-			stats.PatternAlerts++
-			n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
+	// Systemic patterns notify regardless of whether they support write
+	// actions. Causal-group results are analysis-only, so patternMessage omits
+	// the action links for them rather than suppressing the whole alert.
+	for _, pattern := range report.RecurringPatterns {
+		if !pattern.Systemic || !models.PatternIsCurrent(jobDetails, pattern.JobID) {
+			continue
 		}
-		n.reconcilePatternState(report.RecurringPatterns, jobDetails)
+		if pattern.ID == "" {
+			pattern.ID = models.PatternID(pattern)
+		}
+		key := patternJobID(pattern)
+		existing, notified, stateKeys := n.patternStateFor(pattern)
+		changed := notified && patternsMateriallyDifferent(existing.SharedRootCause, pattern.SharedRootCause)
+		if notified && !changed {
+			n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
+			continue
+		}
+		previousRootCause := ""
+		if changed {
+			previousRootCause = existing.SharedRootCause
+		}
+		if err := n.sender.Send(ctx, n.patternMessage(pattern, previousRootCause)); err != nil {
+			stats.Failed++
+			sendErrs = append(sendErrs, fmt.Errorf("pattern %s: %w", key, err))
+			continue
+		}
+		stats.PatternAlerts++
+		n.replacePatternState(key, stateKeys, notifiedPattern(pattern))
 	}
+	n.reconcilePatternState(report.RecurringPatterns, jobDetails)
 
 	return stats, errors.Join(sendErrs...)
 }
@@ -325,7 +326,7 @@ func (n *Notifier) reconcilePatternState(current []models.PatternAnalysis, jobDe
 	}
 	currentJobs := make(map[string]bool, len(current))
 	for _, pattern := range current {
-		if !models.PatternAllowsActions(pattern) || !pattern.Systemic {
+		if !pattern.Systemic {
 			continue
 		}
 		currentJobs[patternJobID(pattern)] = true
