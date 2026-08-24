@@ -484,45 +484,64 @@ test("degraded states retain severity and the persistent alert strip", () => {
   assert.equal(fetchStatusPresentation({ available: false, state: "missing" }), null);
 });
 
-test("default popover is compact and nests debug identifiers and recent history", () => {
-  const technicalIndex = fetchStatusSource.indexOf("Technical details");
-  const debugIndex = fetchStatusSource.indexOf("Debug identifiers", technicalIndex);
-  assert.ok(technicalIndex > 0 && debugIndex > technicalIndex);
-  const summarySource = fetchStatusSource.slice(0, technicalIndex);
-  const technicalSource = fetchStatusSource.slice(technicalIndex, debugIndex);
-  const debugSource = fetchStatusSource.slice(debugIndex);
+test("the status popover stays a fixed-height summary with no nested disclosure", () => {
+  // The control is anchored in the navigation rail footer, roughly 90px from
+  // the bottom of the viewport. MUI positions a Popover when it opens and does
+  // not reposition it when its children grow, so anything that expands in
+  // place pushes content past the bottom edge where it cannot be scrolled to.
+  const controlIndex = fetchStatusSource.indexOf("export function FetchStatusControl");
+  const detailsIndex = fetchStatusSource.indexOf("export function RefreshPipelineDetails");
+  assert.ok(controlIndex > 0 && detailsIndex > controlIndex);
+  const popoverSource = fetchStatusSource.slice(controlIndex, detailsIndex);
+
+  assert.doesNotMatch(popoverSource, /<Collapse/);
+  assert.doesNotMatch(popoverSource, /aria-expanded=\{(technicalOpen|debugOpen|historyOpen)\}/);
+  assert.doesNotMatch(popoverSource, /Run ID|Pass ID|Engine version/);
+  // It keeps the freshness answer, which is what a persistent control owes the
+  // reader, and links to the rest.
+  assert.match(popoverSource, /Last published/);
+  assert.match(popoverSource, /Current pass began/);
+  assert.match(popoverSource, /Last activity/);
+  assert.match(popoverSource, /Next check/);
+  assert.match(popoverSource, /Next full reconciliation/);
+  assert.match(popoverSource, /published dashboard.*available/i);
+  assert.match(popoverSource, /to="\/analysis-health#refresh-pipeline"/);
+  assert.match(fetchStatusSource, /overflowX: "hidden"/);
+});
+
+test("refresh pipeline details keep the operator diagnostics off the popover", () => {
+  const detailsSource = fetchStatusSource.slice(
+    fetchStatusSource.indexOf("export function RefreshPipelineDetails"),
+  );
+  // The last-pass block ends where the copyable identifiers begin; several
+  // labels below are legitimate there but were dropped from the summary rows.
+  const lastPassSource = detailsSource.slice(0, detailsSource.indexOf("Debug identifiers"));
 
   for (const label of ["Timing", "Analysis", "Cache", "Patterns", "Follow-up", "Retries", "Failures and cancellations"]) {
-    assert.match(technicalSource, new RegExp(`label="${label}"`));
+    assert.match(lastPassSource, new RegExp(`label="${label}"`));
   }
+  // These were deliberately dropped as noise and must not creep back in.
   for (const removed of [
     "Phase", "Pattern stage", "Publication stage", "Follow-up stage", "Phase began", "Last checked",
     "Compatible results", "Exact results reused", "Same-failure results reused", "Existing Tasks adopted",
     "New analyzer Tasks", "Task attempts", "Same-failure candidates", "Cache rejections", "Phase durations",
   ]) {
-    assert.doesNotMatch(technicalSource, new RegExp(`label="${removed}"`));
+    assert.doesNotMatch(lastPassSource, new RegExp(`label="${removed}"`));
   }
-  assert.doesNotMatch(summarySource, /Run ID|Pass ID|Engine version/);
-  assert.doesNotMatch(technicalSource, /Run ID|Pass ID|Engine version/);
-  assert.match(debugSource, /Run ID/);
-  assert.match(debugSource, /Pass ID/);
-  assert.match(debugSource, /Engine version/);
-  assert.match(debugSource, /Follow-up code/);
-  assert.match(debugSource, /Recent refreshes/);
-  assert.match(debugSource, /history\.slice\(-3\)/);
+  // Debug identifiers are what an operator pastes into a bug report, so they
+  // survive the move and stay copyable.
+  for (const id of ["Run ID", "Pass ID", "Engine version", "Follow-up code"]) {
+    assert.match(detailsSource, new RegExp(id));
+  }
+  assert.match(detailsSource, /Recent refreshes/);
+  // The component must only bail when there is genuinely no snapshot; an
+  // unconditional null would silently empty the section.
+  assert.match(detailsSource, /if \(!response \|\| !status\) return null;/);
+  assert.doesNotMatch(detailsSource, /^\s*return null;\s*$/m);
+  // Only the last three passes are shown, however the call is wrapped.
+  assert.match(detailsSource, /history\s*\n?\s*\.slice\(-3\)/);
   assert.match(fetchStatusSource, /navigator\.clipboard\.writeText/);
-  assert.match(summarySource, /Last published/);
-  assert.match(summarySource, /Current pass began/);
-  assert.match(summarySource, /Last activity/);
-  assert.match(summarySource, /Next check/);
-  assert.match(summarySource, /Next full reconciliation/);
-  assert.match(summarySource, /published dashboard.*available/i);
-  assert.match(fetchStatusSource, /overflowX: "hidden"/);
-  assert.match(fetchStatusSource, /<Collapse in=\{technicalOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
-  assert.match(fetchStatusSource, /<Collapse in=\{debugOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
-  assert.match(fetchStatusSource, /<Collapse in=\{historyOpen\} timeout=\{reduceMotion \? 0 : "auto"\}>/);
 });
-
 test("phase changes are announced politely without counter churn", () => {
   const liveStart = fetchStatusSource.indexOf('role="status" aria-live="polite" aria-atomic="true"');
   const liveEnd = fetchStatusSource.indexOf("</Box>", liveStart);
@@ -599,4 +618,38 @@ test("endpoint absence stops polling without surfacing an error", async () => {
   });
   assert.equal(updates, 0);
   assert.equal(waits, 0);
+});
+
+test("the refresh pipeline section survives a missing snapshot and is reachable", () => {
+  const page = readFileSync(resolve(process.cwd(), "src/pages/AnalysisHealthPage.tsx"), "utf8");
+  const section = page.slice(page.indexOf("function RefreshPipelineSection"));
+
+  // A null response means the endpoint is off for this viewer. A response with
+  // no status means the pipeline has nothing to report, which is exactly when
+  // an operator goes looking, so the section must stay visible and say so.
+  assert.match(section, /if \(!response\) return null;/);
+  assert.match(section, /response\.status \?/);
+  assert.match(page, /No refresh snapshot is available/);
+  // "missing" and "unavailable" mean different things to an operator trying to
+  // tell a broken pipeline from one that has not run.
+  assert.match(page, /Refresh progress could not be read/);
+  assert.match(page, /case "unavailable":/);
+  assert.match(page, /case "missing":/);
+  assert.doesNotMatch(section, /if \(!response\?\.status\) return null;/);
+
+  // The popover deep-links here, so the section scrolls itself once the trace
+  // ledger above it has settled. Matches the Overview page's restore pattern.
+  assert.match(section, /useLayoutEffect/);
+  assert.match(section, /location\.hash !== "#refresh-pipeline"/);
+  // Keyed on the history entry so following the link a second time re-scrolls.
+  assert.match(section, /handledKey\.current === location\.key/);
+  assert.doesNotMatch(section, /scrolled\.current/);
+  assert.match(section, /requestAnimationFrame/);
+  assert.match(section, /id="refresh-pipeline"/);
+  // Focus lands on the heading, which shows a focus ring, rather than on a
+  // wrapper with its outline suppressed.
+  assert.match(section, /getElementById\("refresh-pipeline-heading"\)/);
+  assert.match(section, /headingTabIndex=\{-1\}/);
+  assert.doesNotMatch(section, /"&:focus": \{ outline: "none" \}/);
+  assert.match(page, /<RefreshPipelineSection response=\{fetchStatus\} ready=\{!loading\} \/>/);
 });

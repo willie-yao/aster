@@ -1,23 +1,23 @@
 import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
 import Close from "@mui/icons-material/Close";
 import ErrorOutlineOutlined from "@mui/icons-material/ErrorOutlineOutlined";
+import ArrowForward from "@mui/icons-material/ArrowForward";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import Schedule from "@mui/icons-material/Schedule";
 import WarningAmber from "@mui/icons-material/WarningAmber";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
-import Collapse from "@mui/material/Collapse";
 import Container from "@mui/material/Container";
-import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
 import Popover from "@mui/material/Popover";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import useMediaQuery from "@mui/material/useMediaQuery";
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Link as RouterLink } from "react-router-dom";
+import { useCapabilities } from "../hooks/useCapabilities";
 import {
   analysisProgressBreakdown,
   fetchStatusCompactPresentation,
@@ -410,13 +410,7 @@ function CopyableDebugRow({ label, value }: { label: string; value: string }) {
 
 export function FetchStatusControl({ response, iconOnly = false }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const [technicalOpen, setTechnicalOpen] = useState(false);
-  const [debugOpen, setDebugOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const technicalID = useId();
-  const debugID = useId();
-  const historyID = useId();
-  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const { features } = useCapabilities();
   const compact = response ? fetchStatusCompactPresentation(response) : null;
   const presentation = response ? fetchStatusPresentation(response) : null;
   const status = response?.status;
@@ -430,14 +424,6 @@ export function FetchStatusControl({ response, iconOnly = false }: FetchStatusCo
     : null;
   const completedPipeline = fetchStatusHasCompletedPipeline(response);
   const publishedThisPass = fetchStatusPublishedThisPass(response);
-  const timing = timingDetail(status);
-  const analysisSummary = analysisDetail(status);
-  const cacheSummary = cacheDetail(status);
-  const patternsSummary = patternDetail(status);
-  const followUpSummary = followUpDetail(status);
-  const retryCount = Math.max(0, status.analyses.retries) + Math.max(0, status.analyses.result_retrieval_retries);
-  const failures = failureDetail(status);
-  const failureCodes = followUpFailureCodes(status);
   const availabilityMessage = response.state === "active"
     ? "The last published dashboard remains available while this refresh finishes."
     : publishedThisPass || completedPipeline
@@ -606,106 +592,18 @@ export function FetchStatusControl({ response, iconOnly = false }: FetchStatusCo
             </Typography>
           )}
 
-          <Button
-            size="small"
-            aria-expanded={technicalOpen}
-            aria-controls={technicalID}
-            onClick={() => setTechnicalOpen((open) => !open)}
-            endIcon={(
-              <ExpandMore
-                sx={{
-                  fontSize: 16,
-                  transform: technicalOpen ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: reduceMotion ? "none" : "transform 150ms ease",
-                }}
-              />
-            )}
-            sx={{ mt: 1.25, px: 0.5, textTransform: "none" }}
-          >
-            Technical details
-          </Button>
-          <Collapse in={technicalOpen} timeout={reduceMotion ? 0 : "auto"}>
-            <Stack id={technicalID} spacing={0.75} sx={{ mt: 0.75 }}>
-              <Divider sx={{ mb: 0.5 }} />
-              {timing && <DetailRow label="Timing" value={timing} />}
-              {analysisSummary && <DetailRow label="Analysis" value={analysisSummary} />}
-              {cacheSummary && <DetailRow label="Cache" value={cacheSummary} />}
-              {patternsSummary && <DetailRow label="Patterns" value={patternsSummary} />}
-              {followUpSummary && <DetailRow label="Follow-up" value={followUpSummary} />}
-              {retryCount > 0 && <DetailRow label="Retries" value={retryCount} />}
-              {failures && <DetailRow label="Failures and cancellations" value={failures} />}
-
-              <Button
-                size="small"
-                aria-expanded={debugOpen}
-                aria-controls={debugID}
-                onClick={() => setDebugOpen((open) => !open)}
-                endIcon={(
-                  <ExpandMore
-                    sx={{
-                      fontSize: 16,
-                      transform: debugOpen ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: reduceMotion ? "none" : "transform 150ms ease",
-                    }}
-                  />
-                )}
-                sx={{ alignSelf: "flex-start", px: 0.5, textTransform: "none" }}
-              >
-                Debug identifiers
-              </Button>
-              <Collapse in={debugOpen} timeout={reduceMotion ? 0 : "auto"}>
-                <Stack id={debugID} spacing={0.75} sx={{ pt: 0.25 }}>
-                  <CopyableDebugRow label="Run ID" value={status.run_id} />
-                  <CopyableDebugRow label="Pass ID" value={status.pass_id} />
-                  {status.engine_version && <CopyableDebugRow label="Engine version" value={status.engine_version} />}
-                  {status.failure_category && <CopyableDebugRow label="Failure category" value={status.failure_category} />}
-                  {failureCodes.length > 0 && <CopyableDebugRow label="Follow-up code" value={failureCodes.join(", ")} />}
-                  <CopyableDebugRow label="Run started" value={formatFetchTimestamp(status.run_started_at)} />
-                  <CopyableDebugRow label="Pass started" value={formatFetchTimestamp(status.pass_started_at)} />
-                  <CopyableDebugRow label="Phase started" value={formatFetchTimestamp(status.phase_started_at)} />
-                  <CopyableDebugRow label="Last activity" value={formatFetchTimestamp(status.last_progress_at)} />
-                  {status.last_checked_at && <CopyableDebugRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />}
-                  {status.last_successful_publication_at && (
-                    <CopyableDebugRow label="Last published" value={formatFetchTimestamp(status.last_successful_publication_at)} />
-                  )}
-                </Stack>
-              </Collapse>
-
-              {response.history && response.history.length > 0 && (
-                <>
-                  <Button
-                    size="small"
-                    aria-expanded={historyOpen}
-                    aria-controls={historyID}
-                    onClick={() => setHistoryOpen((open) => !open)}
-                    endIcon={(
-                      <ExpandMore
-                        sx={{
-                          fontSize: 16,
-                          transform: historyOpen ? "rotate(180deg)" : "rotate(0deg)",
-                          transition: reduceMotion ? "none" : "transform 150ms ease",
-                        }}
-                      />
-                    )}
-                    sx={{ alignSelf: "flex-start", px: 0.5, textTransform: "none" }}
-                  >
-                    Recent refreshes
-                  </Button>
-                  <Collapse in={historyOpen} timeout={reduceMotion ? 0 : "auto"}>
-                    <Stack id={historyID} spacing={0.75} sx={{ pt: 0.25 }}>
-                      {response.history.slice(-3).reverse().map((pass) => (
-                        <DetailRow
-                          key={`${pass.started_at}/${pass.pass_type}`}
-                          label={passTypeLabel(pass.pass_type)}
-                          value={recentPassDetail(pass)}
-                        />
-                      ))}
-                    </Stack>
-                  </Collapse>
-                </>
-              )}
-            </Stack>
-          </Collapse>
+          {features.analysis_health && (
+            <Button
+              component={RouterLink}
+              to="/analysis-health#refresh-pipeline"
+              size="small"
+              onClick={() => setAnchor(null)}
+              endIcon={<ArrowForward sx={{ fontSize: 16 }} />}
+              sx={{ mt: 1.25, px: 0.5, textTransform: "none", alignSelf: "flex-start" }}
+            >
+              Pipeline details
+            </Button>
+          )}
         </Box>
       </Popover>
     </>
@@ -766,5 +664,86 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
         </Tooltip>
       </Container>
     </Box>
+  );
+}
+
+/**
+ * Refresh pipeline diagnostics: phase timing, analysis and cache counts,
+ * copyable run identifiers, and recent passes. These live on the Analysis
+ * Health page rather than in the status popover, which is anchored to a 44px
+ * control and has no room to grow.
+ */
+export function RefreshPipelineDetails({ response }: { response: FetchStatusResponse | null }) {
+  const status = response?.status;
+  if (!response || !status) return null;
+
+  const timing = timingDetail(status);
+  const analysisSummary = analysisDetail(status);
+  const cacheSummary = cacheDetail(status);
+  const patternsSummary = patternDetail(status);
+  const followUpSummary = followUpDetail(status);
+  const retryCount =
+    Math.max(0, status.analyses.retries) + Math.max(0, status.analyses.result_retrieval_retries);
+  const failures = failureDetail(status);
+  const failureCodes = followUpFailureCodes(status);
+  const history = response.history ?? [];
+
+  return (
+    <Stack spacing={3}>
+      <Stack spacing={0.75}>
+        <Typography variant="label" component="h3" color="textSecondary">
+          Last pass
+        </Typography>
+        {timing && <DetailRow label="Timing" value={timing} />}
+        {analysisSummary && <DetailRow label="Analysis" value={analysisSummary} />}
+        {cacheSummary && <DetailRow label="Cache" value={cacheSummary} />}
+        {patternsSummary && <DetailRow label="Patterns" value={patternsSummary} />}
+        {followUpSummary && <DetailRow label="Follow-up" value={followUpSummary} />}
+        {retryCount > 0 && <DetailRow label="Retries" value={retryCount} />}
+        {failures && <DetailRow label="Failures and cancellations" value={failures} />}
+      </Stack>
+
+      {history.length > 0 && (
+        <Stack spacing={0.75}>
+          <Typography variant="label" component="h3" color="textSecondary">
+            Recent refreshes
+          </Typography>
+          {history
+            .slice(-3)
+            .reverse()
+            .map((pass) => (
+              <DetailRow
+                key={`${pass.started_at}/${pass.pass_type}`}
+                label={passTypeLabel(pass.pass_type)}
+                value={recentPassDetail(pass)}
+              />
+            ))}
+        </Stack>
+      )}
+
+      <Stack spacing={0.75}>
+        <Typography variant="label" component="h3" color="textSecondary">
+          Debug identifiers
+        </Typography>
+        <Typography variant="caption" color="textSecondary" sx={{ mb: 0.5 }}>
+          Include these when reporting a refresh problem.
+        </Typography>
+        <CopyableDebugRow label="Run ID" value={status.run_id} />
+        <CopyableDebugRow label="Pass ID" value={status.pass_id} />
+        {status.engine_version && <CopyableDebugRow label="Engine version" value={status.engine_version} />}
+        {status.failure_category && <CopyableDebugRow label="Failure category" value={status.failure_category} />}
+        {failureCodes.length > 0 && <CopyableDebugRow label="Follow-up code" value={failureCodes.join(", ")} />}
+        <CopyableDebugRow label="Run started" value={formatFetchTimestamp(status.run_started_at)} />
+        <CopyableDebugRow label="Pass started" value={formatFetchTimestamp(status.pass_started_at)} />
+        <CopyableDebugRow label="Phase started" value={formatFetchTimestamp(status.phase_started_at)} />
+        <CopyableDebugRow label="Last activity" value={formatFetchTimestamp(status.last_progress_at)} />
+        {status.last_checked_at && (
+          <CopyableDebugRow label="Last checked" value={formatFetchTimestamp(status.last_checked_at)} />
+        )}
+        {status.last_successful_publication_at && (
+          <CopyableDebugRow label="Last published" value={formatFetchTimestamp(status.last_successful_publication_at)} />
+        )}
+      </Stack>
+    </Stack>
   );
 }
