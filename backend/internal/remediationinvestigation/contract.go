@@ -17,11 +17,11 @@ import (
 const (
 	PromptVersion                  = 8
 	SchemaVersion                  = 4
-	VerificationVersion            = 5
+	VerificationVersion            = 6
 	ResultVersion                  = 4
 	TargetExtractionVersion        = 1
 	NonActionableAssessmentVersion = 1
-	EvidenceCatalogVersion         = 2
+	EvidenceCatalogVersion         = 3
 )
 
 type Versions struct {
@@ -249,8 +249,14 @@ type AnalysisEvidenceIdentity struct {
 }
 
 type ArtifactEvidenceIdentity struct {
-	BuildID       string `json:"build_id"`
-	Path          string `json:"path"`
+	BuildID string `json:"build_id"`
+	Path    string `json:"path"`
+	// LineStart and LineEnd bound the region this record covers, and
+	// ContentDigest covers exactly that region. Verification re-reads the same
+	// lines, so a citation into a large artifact stays checkable without ever
+	// holding the whole file.
+	LineStart     int    `json:"line_start"`
+	LineEnd       int    `json:"line_end"`
 	ContentDigest string `json:"content_digest"`
 }
 

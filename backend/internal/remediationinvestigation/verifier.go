@@ -351,7 +351,7 @@ func verifyStructuralRelationship(ctx context.Context, source sourceinvestigatio
 		case EvidenceArtifact:
 			if record.Artifact != nil {
 				buildID = record.Artifact.BuildID
-				content, readErr := readArtifactEvidence(ctx, browser, record.Artifact.Path)
+				content, _, readErr := readArtifactEvidenceRange(ctx, browser, record.Artifact.Path, record.Artifact.LineStart, record.Artifact.LineEnd)
 				if readErr == nil && HashText(content) == record.Artifact.ContentDigest {
 					evidenceText = content
 				}
