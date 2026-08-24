@@ -76,12 +76,13 @@ test("action eligibility titles explain each state", () => {
 
 
 test("structured action reasons distinguish safe blocked states", () => {
-  assert.equal(actionEligibilityTitle(eligibilityForCode("retained_stale")), "Using a retained analysis");
   assert.equal(actionEligibilityTitle(eligibilityForCode("non_systemic")), "Not a recurring systemic pattern");
   assert.equal(actionEligibilityTitle(eligibilityForCode("unsafe_remediation")), "Unsafe remediation blocked");
   assert.equal(actionEligibilityTitle(eligibilityForCode("observing")), "Observing verified remediation");
   assert.equal(actionEligibilityTitle(eligibilityForCode("verified_fixed")), "Verified fixed");
-  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, true, { state: "retained", evidence_available: true })?.code, "retained_stale");
+  // A retained correlation is not a blocker; unreadable evidence is.
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, true, { state: "retained", evidence_available: true }), null);
+  assert.equal(patternActionEligibilityHint([actionableTarget], undefined, true, { state: "retained", evidence_available: false })?.code, "evidence_unavailable");
   assert.equal(patternActionEligibilityHint([actionableTarget], undefined, false)?.code, "non_systemic");
 });
 
@@ -98,7 +99,8 @@ test("pattern drafting stays independent of dismissal", () => {
   assert.equal(patternDraftable({ ...legacy, systemic: false }), false);
   assert.equal(patternDraftable({ ...legacy, id: undefined }), false);
   assert.equal(patternDraftable({ ...legacy, lifecycle: { state: "observing", reason: "r" } }), false);
-  assert.equal(patternDraftable(legacy, { state: "retained", evidence_available: true }), false);
+  assert.equal(patternDraftable(legacy, { state: "retained", evidence_available: true }), true);
+  assert.equal(patternDraftable(legacy, { state: "retained", evidence_available: false }), false);
 });
 
 test("legacy eligibility payloads derive a compatible reason code", () => {
@@ -139,11 +141,12 @@ test("pattern dismissal matches the gates the server enforces", () => {
   assert.equal(patternDismissible({ ...causalGroup, shared_builds: [] }), false);
   assert.equal(patternDismissible({ ...causalGroup, shared_builds: ["not-a-build"] }), false);
 
-  // findPattern rejects a pattern whose refresh is not current or whose evidence
-  // has left the job window.
+  // findPattern rejects a pattern whose evidence has left the job window, or
+  // whose correlation failed outright. A retained correlation is not a blocker.
   assert.equal(patternDismissible(causalGroup, { state: "current", evidence_available: true }), true);
   assert.equal(patternDismissible(causalGroup, { state: "current", evidence_available: false }), false);
-  assert.equal(patternDismissible(causalGroup, { state: "retained", evidence_available: true }), false);
+  assert.equal(patternDismissible(causalGroup, { state: "retained", evidence_available: true }), true);
+  assert.equal(patternDismissible(causalGroup, { state: "retained", evidence_available: false }), false);
   assert.equal(patternDismissible(causalGroup, { state: "failed", evidence_available: true }), false);
 });
 
@@ -161,7 +164,7 @@ test("action eligibility explanations use a polite status surface", async () => 
 
 
 test("component eligibility selection preserves structured hint codes", () => {
-  for (const code of ["retained_stale", "non_systemic", "unsafe_remediation"] as const) {
+  for (const code of ["evidence_unavailable", "non_systemic", "unsafe_remediation"] as const) {
     const hint = eligibilityForCode(code);
     assert.equal(selectActionEligibility(hint, null, "pattern")?.code, code);
   }
@@ -175,6 +178,6 @@ test("actionable null hints fall through to authoritative fetched eligibility", 
   const fetched = { failureID: "pattern", value: actionable };
   assert.equal(selectActionEligibility(undefined, fetched, "pattern")?.code, "actionable");
   assert.equal(selectActionEligibility(null, fetched, "pattern")?.code, "actionable");
-  assert.equal(selectActionEligibility(eligibilityForCode("retained_stale"), fetched, "pattern")?.code, "retained_stale");
+  assert.equal(selectActionEligibility(eligibilityForCode("evidence_unavailable"), fetched, "pattern")?.code, "evidence_unavailable");
   assert.equal(selectActionEligibility(null, fetched, "other"), null);
 });

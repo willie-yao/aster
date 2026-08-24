@@ -628,7 +628,7 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	code := actions.ReasonCodeOf(err)
 	switch code {
 	case actions.ReasonAlreadyPresent, actions.ReasonRecovered, actions.ReasonObserving, actions.ReasonVerifiedFixed,
-		actions.ReasonRetainedStale, actions.ReasonEvidenceUnavailable, actions.ReasonSourceVerificationInconclusive:
+		actions.ReasonEvidenceUnavailable, actions.ReasonSourceVerificationInconclusive:
 		if code == actions.ReasonSourceVerificationInconclusive {
 			log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
 		}

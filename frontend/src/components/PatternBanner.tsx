@@ -27,7 +27,7 @@ import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
-import { patternActionEligibilityHint, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternActionRefreshBlocked, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
@@ -129,7 +129,6 @@ export function PatternBanner({
     builds: buildContexts,
     fileLinks: pattern.file_links,
   } satisfies FileToUrlContext;
-  const isCurrent = !refreshStatus || refreshStatus.state === "current";
   const lifecycle = pattern.lifecycle;
   const lifecycleActive = patternLifecycleActive(lifecycle);
   // Dismissal acknowledges the whole pattern, so it is available even where the
@@ -149,10 +148,10 @@ export function PatternBanner({
   );
   const fixPatterns =
     !analysisOnly &&
-    // Still refresh-gated: a pattern-scope fix is confirmed through the actions
-    // service, which refuses a retained subject, so offering it here would only
-    // spend a preview on something that cannot publish.
-    isCurrent &&
+    // The pattern-scope fix confirms through the actions service, which turns on
+    // readable evidence rather than a fresh correlation, so this mirrors that
+    // instead of requiring the correlation to have refreshed.
+    !patternActionRefreshBlocked(refreshStatus) &&
     lifecycleActive &&
     pattern.id &&
     pattern.content_hash &&

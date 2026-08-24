@@ -829,19 +829,19 @@ func TestTargetDriftRetiresPreviewForReplacement(t *testing.T) {
 	}
 }
 
-func TestStalePatternIsNotActionable(t *testing.T) {
+func TestPatternWithoutEvidenceIsNotActionable(t *testing.T) {
 	dataDir := t.TempDir()
 	pa := models.PatternAnalysis{JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SharedBuilds: []string{"100"}}
 	models.AssignPatternIdentity(&pa)
 	writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{
 		JobID: "periodic-x", PatternAnalyses: []models.PatternAnalysis{pa},
-		PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true},
+		PatternRefresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained},
 	})
 	if err := (&resolve.State{Resolved: map[string]resolve.Entry{pa.ID: {Watermark: "100"}}}).Save(dataDir); err != nil {
 		t.Fatal(err)
 	}
 	s := NewService(&project.Config{}, dataDir, AIConfig{})
-	if err := s.Resolve(pa.ID, "alice", ""); ReasonCodeOf(err) != ReasonRetainedStale {
+	if err := s.Resolve(pa.ID, "alice", ""); ReasonCodeOf(err) != ReasonEvidenceUnavailable {
 		t.Fatalf("Resolve error = %v code=%s", err, ReasonCodeOf(err))
 	}
 	// Revoking an acknowledgement only un-hides a pattern, so it stays possible

@@ -4,7 +4,7 @@ import "testing"
 
 func TestReasonCodeContractIsStableAndComplete(t *testing.T) {
 	required := map[string]bool{
-		"recovered": true, "observing": true, "verified_fixed": true, "retained_stale": true,
+		"recovered": true, "observing": true, "verified_fixed": true,
 		"non_systemic": true, "evidence_unavailable": true, "investigation_required": true,
 		"contract_generation_failed": true, "unsafe_remediation": true, "already_present": true,
 		"source_verification_inconclusive": true,
