@@ -26,6 +26,7 @@ export function CausalGroupFixRouting({
   showBuild = false,
   externalCause,
   stale = false,
+  evidencePresent = true,
 }: {
   jobID?: string;
   target: CausalGroupFixTarget | null;
@@ -34,6 +35,10 @@ export function CausalGroupFixRouting({
   showBuild?: boolean;
   externalCause?: AnalysisCauseLocation | null;
   stale?: boolean;
+  // False when this cause's builds have left the analysis window, which is a
+  // different dead end from builds that are present but carry no eligible
+  // failure, and the only one no rerun of the eligibility rules can change.
+  evidencePresent?: boolean;
 }) {
   if (!jobID) return null;
 
@@ -45,7 +50,9 @@ export function CausalGroupFixRouting({
     if (ownership) return ownership;
     return (
       <Typography color="textSecondary" sx={{ mt: 1.5, ...overviewTypography.description }}>
-        No failed JUnit test in these builds meets the Fix eligibility requirements, so no fix proposal can start from this cause.
+        {evidencePresent
+          ? "No failed JUnit test in these builds meets the Fix eligibility requirements, so no fix proposal can start from this cause."
+          : "The builds this cause was correlated from have left the analysis window, so no fix proposal can start from it. A later failure of the same cause will produce a fresh, fixable one."}
       </Typography>
     );
   }

@@ -36,7 +36,7 @@ import { CausalGroupRemediation } from "./CausalGroupRemediation";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
 import { CausalGroupReportedFix } from "./CausalGroupReportedFix";
 import { PatternFixGuidance } from "./PatternFixGuidance";
-import { causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
 
 function firstSentence(value: string): string {
@@ -72,6 +72,7 @@ export function PatternBanner({
   const causalFixTargets = causalGroups.map((group) =>
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
+  const causalEvidencePresent = causalGroups.map((group) => causalGroupEvidencePresent(group, runs));
   // Correlation only ever sees the current window, so a cause it reports as new
   // may have been failing for months.
   const causalRecurrence = causalGroups.map((group) =>
@@ -148,6 +149,9 @@ export function PatternBanner({
   );
   const fixPatterns =
     !analysisOnly &&
+    // Still refresh-gated: a pattern-scope fix is confirmed through the actions
+    // service, which refuses a retained subject, so offering it here would only
+    // spend a preview on something that cannot publish.
     isCurrent &&
     lifecycleActive &&
     pattern.id &&
@@ -371,7 +375,13 @@ export function PatternBanner({
                       target={causalFixTargets[index]}
                       showBuild={fixTargetNeedsBuild[index]}
                       externalCause={externalCause(group.cause_location)}
-                      stale={!isCurrent}
+                      // A target exists only where the cause's build is still
+                      // readable, so the offer turns on the pattern's lifecycle
+                      // rather than on whether the correlation refreshed: a
+                      // recovered or verified-fixed cause is worth viewing but
+                      // not worth fixing.
+                      stale={!lifecycleActive}
+                      evidencePresent={causalEvidencePresent[index]}
                     />
                   )}
                   {/* Published data, so this stays available where the Fix and

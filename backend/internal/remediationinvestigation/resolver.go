@@ -204,17 +204,11 @@ func (r *PublishedResolver) loadPublished(_ context.Context, ref OperationRef) (
 	for _, run := range detail.Runs {
 		runsByID[run.BuildID] = run
 	}
-	if detail.PatternRefresh != nil && detail.PatternRefresh.State != models.PatternRefreshCurrent {
-		// A retained subject becomes investigable again once the correlation
-		// runs, but only while its evidence survives. Scoped to the requested
-		// cause, because a sibling cause keeping its builds says nothing about
-		// this one: with every build of this cause gone from the window there is
-		// nothing left to read, and no later refresh brings them back.
-		if !anyBuildPresent(group.Builds, runsByID) {
-			return publishedSubject{}, ErrOperationEvidenceExpired
-		}
-		return publishedSubject{}, ErrOperationStale
-	}
+	// Whether the correlation produced a fresh result this pass says nothing
+	// about this cause: identity is proven by the recomputed hashes above, and
+	// the loop below proves every build it needs is still readable. A retained
+	// pattern whose evidence survives is investigable, so only the evidence is
+	// gated here.
 	seenBuilds := map[string]bool{}
 	runs := make([]publishedRun, 0, len(group.Builds))
 	relevant := slices.Clone(pattern.RelevantFiles)
@@ -398,15 +392,4 @@ func (g *GitHubSourceAccess) ReadFile(ctx context.Context, repository sourceinve
 		return "", os.ErrNotExist
 	}
 	return content, nil
-}
-
-// anyBuildPresent reports whether at least one of a cause's builds is still in
-// the job window.
-func anyBuildPresent(builds []string, runsByID map[string]models.BuildResult) bool {
-	for _, buildID := range builds {
-		if _, ok := runsByID[buildID]; ok {
-			return true
-		}
-	}
-	return false
 }

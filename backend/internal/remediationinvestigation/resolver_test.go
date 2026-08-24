@@ -263,10 +263,10 @@ func TestFrozenCausalGroupDropsReportedRemediation(t *testing.T) {
 	}
 }
 
-// TestPublishedResolverSeparatesExpiredEvidenceFromStaleness covers the two ways
-// a retained pattern blocks: its causes may still be readable, in which case the
-// next correlation can investigate them, or their builds may have left the
-// window, in which case no refresh ever brings them back.
+// TestPublishedResolverSeparatesExpiredEvidenceFromStaleness covers what a
+// retained pattern turns on: its evidence, not its refresh state. A cause whose
+// builds are still readable investigates normally, and only one whose builds
+// left the window is refused.
 func TestPublishedResolverSeparatesExpiredEvidenceFromStaleness(t *testing.T) {
 	dataDir, cfg, ref, detail := publishedResolverFixture(t, false)
 	resolver, err := NewPublishedResolver(PublishedResolverOptions{
@@ -278,10 +278,11 @@ func TestPublishedResolverSeparatesExpiredEvidenceFromStaleness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Retained, but every correlated build is still in the window.
+	// Retained, but every correlated build is still in the window. The
+	// correlation not running this pass does not make the cause unreadable.
 	detail.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained}
 	writePublishedJob(t, dataDir, detail)
-	if err := resolver.Validate(t.Context(), ref); !errors.Is(err, ErrOperationStale) {
+	if err := resolver.Validate(t.Context(), ref); err != nil {
 		t.Fatalf("retained with readable evidence err=%v", err)
 	}
 

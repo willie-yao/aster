@@ -21,6 +21,18 @@ export function patternFixGuidanceBuildID(
     ?.build_id ?? null;
 }
 
+// causalGroupEvidencePresent reports whether any build this cause names is still
+// in the job window. It separates the two reasons a cause offers no fix target:
+// its builds have left the window, or they are here and no failure in them
+// qualifies. Retained runs carry no test cases, so they are not evidence.
+export function causalGroupEvidencePresent(
+  group: PatternCausalGroup,
+  runs: BuildResult[],
+): boolean {
+  const affectedBuilds = new Set(group.builds);
+  return runs.some((run) => affectedBuilds.has(run.build_id));
+}
+
 // causalGroupFixTarget returns the failure a cause is actually built from, when
 // that failure can start a fix proposal. Returns null when the cause offers
 // no reachable target.
