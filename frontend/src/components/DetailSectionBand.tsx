@@ -10,6 +10,8 @@ interface DetailSectionBandProps {
   metadata?: ReactNode;
   headingLevel?: "h2" | "h3";
   id?: string;
+  /** Set to -1 to make the heading a programmatic focus target for in-page links. */
+  headingTabIndex?: -1;
   sx?: SxProps<Theme>;
 }
 
@@ -19,6 +21,7 @@ export function DetailSectionBand({
   metadata,
   headingLevel = "h2",
   id,
+  headingTabIndex,
   sx,
 }: DetailSectionBandProps) {
   const headingStyle = headingLevel === "h2"
@@ -46,7 +49,7 @@ export function DetailSectionBand({
     >
       <Box sx={{ gridArea: "title", minWidth: 0, display: "flex", alignItems: "center", gap: 0.75 }}>
         {icon}
-        <Typography id={id} component={headingLevel} sx={headingStyle}>
+        <Typography id={id} component={headingLevel} tabIndex={headingTabIndex} sx={headingStyle}>
           {title}
         </Typography>
       </Box>

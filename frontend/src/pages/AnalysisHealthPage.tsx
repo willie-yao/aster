@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ChevronRight from "@mui/icons-material/ChevronRight";
 import Download from "@mui/icons-material/Download";
 import Box from "@mui/material/Box";
@@ -7,7 +7,7 @@ import ButtonBase from "@mui/material/ButtonBase";
 import CircularProgress from "@mui/material/CircularProgress";
 import Collapse from "@mui/material/Collapse";
 import Typography from "@mui/material/Typography";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { AnalysisTraceFilters } from "../components/AnalysisTraceFilters";
 import {
   AnalysisTraceLedger,
@@ -15,9 +15,13 @@ import {
   type AnalysisTraceLedgerItem,
 } from "../components/AnalysisTraceLedger";
 import { DetailSectionBand } from "../components/DetailSectionBand";
+import { RefreshPipelineDetails } from "../components/FetchStatus";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
+import { fetchStatusCompactPresentation } from "../lib/fetchStatus";
+import type { FetchStatusResponse } from "../types/fetchStatus";
 import { useManifest } from "../hooks/useManifest";
 import {
   analysisHealthCounts,
@@ -211,6 +215,7 @@ export function AnalysisHealthPage() {
   const { features } = useCapabilities();
   const auth = useAuth();
   const manifest = useManifest();
+  const fetchStatus = useSharedFetchStatus();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.toString();
   const [showHealthy, setShowHealthy] = useState(false);
@@ -414,7 +419,89 @@ export function AnalysisHealthPage() {
         </>
       )}
 
+      <RefreshPipelineSection response={fetchStatus} ready={!loading} />
+
       <TracePrivacyDisclosure />
     </AnalysisHealthPageFrame>
   );
+}
+
+// The refresh pipeline is a sibling of analysis health, not part of it: traces
+// are keyed per analysis, this is keyed per refresh pass. It lives here because
+// both are operator-only surfaces and this one needs more room than the status
+// popover can give it.
+function RefreshPipelineSection({
+  response,
+  ready,
+}: {
+  response: FetchStatusResponse | null;
+  ready: boolean;
+}) {
+  const location = useLocation();
+  const handledKey = useRef<string | null>(null);
+
+  // The section mounts after the browser has handled the hash, so the deep link
+  // from the status popover scrolls itself once the trace ledger above it has
+  // settled and stopped changing this section's position. Keyed on the history
+  // entry so following the link again re-scrolls instead of doing nothing.
+  useLayoutEffect(() => {
+    if (!response || !ready) return;
+    if (location.hash !== "#refresh-pipeline") return;
+    if (handledKey.current === location.key) return;
+    const frame = requestAnimationFrame(() => {
+      handledKey.current = location.key;
+      const heading = document.getElementById("refresh-pipeline-heading");
+      const target = document.getElementById("refresh-pipeline");
+      if (!heading || !target) return;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      heading.focus({ preventScroll: true });
+      target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [location.hash, location.key, ready, response]);
+
+  // A null response means the endpoint is not enabled for this viewer at all.
+  if (!response) return null;
+
+  return (
+    <Box id="refresh-pipeline" sx={{ scrollMarginTop: 16 }}>
+      <DetailSectionBand
+        id="refresh-pipeline-heading"
+        headingTabIndex={-1}
+        title="Refresh pipeline"
+        metadata={fetchStatusCompactPresentation(response)?.label ?? "Unavailable"}
+      />
+      <Box sx={{ mt: 2 }}>
+        {response.status ? (
+          <RefreshPipelineDetails response={response} />
+        ) : (
+          // Reported but with no snapshot. This is exactly when an operator
+          // comes looking, so say so rather than hiding the section.
+          <TraceNotice severity="warning" title={missingSnapshotTitle(response.state)}>
+            {missingSnapshotDetail(response.state)}
+          </TraceNotice>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+// A status-less response means different things per state, and an operator
+// reading this is trying to work out whether the pipeline is broken or simply
+// has not run.
+function missingSnapshotTitle(state: FetchStatusResponse["state"]): string {
+  return state === "unavailable"
+    ? "Refresh progress could not be read."
+    : "No refresh snapshot is available.";
+}
+
+function missingSnapshotDetail(state: FetchStatusResponse["state"]): string {
+  switch (state) {
+    case "unavailable":
+      return "The server could not read or validate the progress file. Pipeline diagnostics return once a pass writes a readable snapshot.";
+    case "missing":
+      return "No progress file has been written yet. Pipeline diagnostics appear here once a refresh pass reports.";
+    default:
+      return "The server has not reported a snapshot for this state. Pipeline diagnostics appear here once a refresh pass reports.";
+  }
 }
