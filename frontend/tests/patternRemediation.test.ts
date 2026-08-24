@@ -60,15 +60,32 @@ test("every remediation investigation state has user-visible copy", () => {
   }
 });
 
-test("technical reasons remain separate from the concise state message", () => {
+test("a server reason is carried separately so the specific account can lead", () => {
   const presentation = patternRemediationPresentation({
     causal_group_id: "group",
     causal_group_hash: "hash",
     state: "failed",
     reason: "The pinned source revision was unavailable.",
   });
+  // The state's own copy stays available as the fallback, and the server's
+  // account of this particular failure is what the card shows.
   assert.match(presentation.message, /Published causal analysis is unchanged/);
   assert.equal(presentation.detail, "The pinned source revision was unavailable.");
+
+  // A reason that only repeats the state copy is not a second sentence.
+  const generic = patternRemediationPresentation({
+    causal_group_id: "group",
+    causal_group_hash: "hash",
+    state: "failed",
+    reason: presentation.message,
+  });
+  assert.equal(generic.detail, undefined);
+
+  const card = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
+  // The visible line prefers the specific reason; the disclosure no longer
+  // repeats it, so a distinct failure account cannot end up collapsed.
+  assert.match(card, /presentation\.detail \?\? presentation\.message/);
+  assert.doesNotMatch(card, /investigation\.reason !== conciseMessage/);
 });
 
 test("an unreachable investigation reports why instead of looking pending", () => {

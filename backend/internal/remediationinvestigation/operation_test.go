@@ -528,3 +528,69 @@ func TestOperationBlockedViewSeparatesExpiredEvidence(t *testing.T) {
 		}
 	}
 }
+
+// TestOperationFailureReasonSeparatesCauses pins that the categories a run
+// records privately reach the maintainer as different accounts. They ask for
+// different things: a source or provider problem is worth chasing and retrying,
+// an exhausted attempt budget is not. Every category the service can record is
+// covered, because a category with no mapping silently falls back to the generic
+// sentence this change exists to remove.
+func TestOperationFailureReasonSeparatesCauses(t *testing.T) {
+	attempt := func(outcome ai.StructuredAttemptOutcome) ai.StructuredCompletionMetadata {
+		return ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{
+			Phase:   string(PhaseTargetExtractionInitial),
+			Path:    ai.StructuredAttemptResponseFormat,
+			Outcome: outcome,
+		}}}
+	}
+	recorded := func(category FailureCategory) error {
+		return &categorizedError{category: category, err: errors.New("cause")}
+	}
+
+	for _, test := range []struct {
+		name  string
+		err   error
+		match string
+	}{
+		{"source unavailable", recorded(FailureSourceUnavailable), "pinned source revision could not be read"},
+		// The evidence phase records FailureProvider directly; it must not read
+		// as a failure that never reached the model.
+		{"provider unreachable", recorded(FailureProvider), "model provider could not be reached"},
+		{"extraction transport", newResultError(PhaseTargetExtractionInitial, "", attempt(ai.StructuredOutcomeProviderError), errors.New("provider")), "model provider could not be reached"},
+		{"extraction rejected", newResultError(PhaseTargetExtractionInitial, "", attempt(ai.StructuredOutcomeValidatorRejected), errors.New("rejected")), "attempt budget"},
+		{"attempts exhausted", recorded(FailureTargetExtractionAttempts), "attempt budget"},
+		{"assessment failed", recorded(FailureNonActionableAssessment), "could not establish why"},
+		{"invalid input", recorded(FailureInvalidInput), "published inputs"},
+		{"invalid result", recorded(FailureInvalidResult), "published inputs"},
+		{"recorded timeout", recorded(FailureTimeout), "timed out"},
+		{"recorded cancellation", recorded(FailureCancelled), "cancelled"},
+		{"unknown category", recorded(FailureUnknown), "did not produce a verified result"},
+		{"context timeout", context.DeadlineExceeded, "timed out"},
+		{"context cancellation", context.Canceled, "cancelled"},
+		{"before the model", errors.New("browser is required"), "before it could reach the model"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := operationFailureReason(test.err)
+			if !strings.Contains(got, test.match) {
+				t.Fatalf("reason = %q, want it to mention %q", got, test.match)
+			}
+			if !strings.Contains(got, "Published causal analysis is unchanged") {
+				t.Fatalf("reason dropped the no-op assurance: %q", got)
+			}
+		})
+	}
+
+	// The accounts that answer different questions must stay distinct.
+	seen := map[string]bool{}
+	for _, err := range []error{
+		recorded(FailureSourceUnavailable), recorded(FailureProvider), recorded(FailureTargetExtractionAttempts),
+		recorded(FailureNonActionableAssessment), recorded(FailureInvalidInput), recorded(FailureUnknown),
+		context.DeadlineExceeded, errors.New("browser is required"),
+	} {
+		reason := operationFailureReason(err)
+		if seen[reason] {
+			t.Fatalf("two distinct failures share a reason: %q", reason)
+		}
+		seen[reason] = true
+	}
+}

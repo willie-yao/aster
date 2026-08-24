@@ -574,17 +574,50 @@ func operationPhaseView(ref OperationRef, state models.PatternRemediationInvesti
 	}
 }
 
+// operationFailureView reports why a run produced no verdict. The categories the
+// run records privately answer different questions for whoever is looking at the
+// cause: a source or provider problem is an operator's to chase and is worth
+// retrying, while an exhausted attempt budget is the investigation itself coming
+// up short on this evidence. Collapsing them into one sentence left every
+// failure looking identical and none of them actionable.
 func operationFailureView(ref OperationRef, err error, now time.Time) models.PatternRemediationInvestigationSummary {
-	reason := "The read-only investigation failed. Published causal analysis is unchanged."
-	if errors.Is(err, context.DeadlineExceeded) {
-		reason = "The read-only investigation timed out. Published causal analysis is unchanged."
-	} else if errors.Is(err, context.Canceled) {
-		reason = "The read-only investigation was cancelled. Published causal analysis is unchanged."
-	}
 	return models.PatternRemediationInvestigationSummary{
 		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
-		State: models.PatternRemediationInvestigationFailed, Reason: reason,
+		State: models.PatternRemediationInvestigationFailed, Reason: operationFailureReason(err),
 		CompletedAt: now.UTC().Format(time.RFC3339),
+	}
+}
+
+const publishedAnalysisUnchanged = " Published causal analysis is unchanged."
+
+func operationFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "The read-only investigation timed out." + publishedAnalysisUnchanged
+	case errors.Is(err, context.Canceled):
+		return "The read-only investigation was cancelled." + publishedAnalysisUnchanged
+	}
+	category, ok := FailureCategoryOf(err)
+	if !ok {
+		return "The read-only investigation failed before it could reach the model." + publishedAnalysisUnchanged
+	}
+	switch category {
+	case FailureSourceUnavailable:
+		return "The pinned source revision could not be read, so no implementation target could be verified. Check the configured source repository and access, then investigate again." + publishedAnalysisUnchanged
+	case FailureProvider, FailureTargetExtractionTransport:
+		return "The model provider could not be reached during the investigation. This is usually transient, so investigating again may succeed." + publishedAnalysisUnchanged
+	case FailureTargetExtractionValidation, FailureTargetExtractionAttempts:
+		return "The investigation could not derive a verifiable implementation target from this cause's evidence within its attempt budget." + publishedAnalysisUnchanged
+	case FailureNonActionableAssessment:
+		return "The investigation found no verifiable implementation target and could not establish why, so no verdict is published for this cause." + publishedAnalysisUnchanged
+	case FailureInvalidInput, FailureInvalidResult:
+		return "The investigation could not be run against this cause's published inputs." + publishedAnalysisUnchanged
+	case FailureTimeout:
+		return "The read-only investigation timed out." + publishedAnalysisUnchanged
+	case FailureCancelled:
+		return "The read-only investigation was cancelled." + publishedAnalysisUnchanged
+	default:
+		return "The read-only investigation did not produce a verified result." + publishedAnalysisUnchanged
 	}
 }
 
