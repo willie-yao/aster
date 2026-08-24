@@ -60,7 +60,7 @@ func verificationFixture(t *testing.T, current, failure string) (*Verifier, Froz
 		"builds/1/log.txt": "reconcile missing applyFix transition\n",
 		"builds/2/log.txt": "reconcile missing applyFix transition\n",
 	}}
-	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", current, browser.files)
+	catalog := evidenceCatalogForFixture(t, input, "controllers/reconcile.go", current, browser.files)
 	result := Result{
 		Version: ResultVersion,
 		Hypotheses: []TargetHypothesis{{
@@ -92,7 +92,9 @@ func verificationFixture(t *testing.T, current, failure string) (*Verifier, Froz
 	return verifier, input, entry, browser
 }
 
-func evidenceCatalogForFixture(input FrozenInput, sourcePath, sourceContent string, artifactFiles map[string]string) EvidenceCatalog {
+func evidenceCatalogForFixture(t *testing.T, input FrozenInput, sourcePath, sourceContent string, artifactFiles map[string]string) EvidenceCatalog {
+	t.Helper()
+	browser := fakeBrowser{files: artifactFiles}
 	catalog := EvidenceCatalog{Version: EvidenceCatalogVersion}
 	if sourcePath != "" {
 		record := EvidenceRecord{
@@ -124,10 +126,17 @@ func evidenceCatalogForFixture(input FrozenInput, sourcePath, sourceContent stri
 		if !ok {
 			continue
 		}
+		// Mirror what buildEvidenceCatalog records for a browsed artifact.
+		content, lastLine, err := readArtifactEvidenceRange(
+			t.Context(), browser, file, 1, maxArtifactEvidenceCatalogLines)
+		if err != nil {
+			t.Fatalf("read artifact evidence %s: %v", file, err)
+		}
 		record := EvidenceRecord{
 			Kind: EvidenceArtifact,
 			Artifact: &ArtifactEvidenceIdentity{
-				BuildID: buildID, Path: file, ContentDigest: HashText(artifactFiles[file]),
+				BuildID: buildID, Path: file, LineStart: 1, LineEnd: lastLine,
+				ContentDigest: HashText(content),
 			},
 		}
 		record.ID = evidenceRecordID(record)
@@ -454,7 +463,7 @@ func TestVerifierProwTargetRequiresExactFrozenJobID(t *testing.T) {
 		"builds/1/log.txt": "periodic-capz FEATURE_FLAG is missing\n",
 		"builds/2/log.txt": "periodic-capz FEATURE_FLAG is missing\n",
 	}
-	catalog := evidenceCatalogForFixture(input, configPath, config, artifacts)
+	catalog := evidenceCatalogForFixture(t, input, configPath, config, artifacts)
 	result := hypothesisResult(&ProwEnvironmentEntryCandidate{
 		Kind: CandidateProwEnvironmentEntry, ConfigPath: configPath, Job: "periodic-capz", Container: "test", Name: "FEATURE_FLAG", Value: "enabled",
 	}, evidenceIDs(catalog), "the job omits FEATURE_FLAG")
@@ -491,7 +500,7 @@ func TestVerifierProwEvidenceRequiresExactEnvironmentName(t *testing.T) {
 		"builds/1/log.txt": "periodic-capz failed during startup\n",
 		"builds/2/log.txt": "periodic-capz failed during startup\n",
 	}
-	catalog := evidenceCatalogForFixture(input, proposal.Target.Path, "periodic-capz\n", artifacts)
+	catalog := evidenceCatalogForFixture(t, input, proposal.Target.Path, "periodic-capz\n", artifacts)
 	result := hypothesisResult(&ProwEnvironmentEntryCandidate{
 		Kind: CandidateProwEnvironmentEntry, ConfigPath: proposal.Target.Path, Job: "periodic-capz", Container: "test", Name: "FABRICATED_FLAG", Value: "enabled",
 	}, evidenceIDs(catalog), "the job failed")
@@ -517,7 +526,7 @@ func TestVerifierRejectsLegacyFabricatedSymbolAdditionDespiteRecurringText(t *te
 		"builds/1/log.txt": "analysis suggested fabricatedFix without source support\n",
 		"builds/2/log.txt": "analysis suggested fabricatedFix without source support\n",
 	}
-	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", missing, artifacts)
+	catalog := evidenceCatalogForFixture(t, input, "controllers/reconcile.go", missing, artifacts)
 	result := hypothesisResult(&SymbolAdditionCandidate{
 		Kind: CandidateSymbolAddition, Path: "controllers/reconcile.go", Symbol: "fabricatedFix",
 	}, evidenceIDs(catalog), "the repeated analysis mentions fabricatedFix")
@@ -578,7 +587,7 @@ func TestVerifierMultipleDistinctVerifiedHypothesesAreAmbiguous(t *testing.T) {
 		"builds/1/log.txt": "periodic-test FLAG_ONE FLAG_TWO missing\n",
 		"builds/2/log.txt": "periodic-test FLAG_ONE FLAG_TWO missing\n",
 	}
-	catalog := evidenceCatalogForFixture(input, path, config, artifactFiles)
+	catalog := evidenceCatalogForFixture(t, input, path, config, artifactFiles)
 	hypotheses := []TargetHypothesis{
 		{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FLAG_ONE", Value: "enabled"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "FLAG_ONE is missing"},
 		{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FLAG_TWO", Value: "enabled"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "FLAG_TWO is missing"},
@@ -616,7 +625,7 @@ func TestVerifierRejectsFabricatedProwEnvironmentValue(t *testing.T) {
 	}
 	config := "# expected FEATURE_FLAG=enabled\nperiodics:\n- name: periodic-test\n  spec:\n    containers:\n    - name: test\n"
 	artifacts := map[string]string{"builds/1/log.txt": "periodic-test FEATURE_FLAG missing\n", "builds/2/log.txt": "periodic-test FEATURE_FLAG missing\n"}
-	catalog := evidenceCatalogForFixture(input, path, config, artifacts)
+	catalog := evidenceCatalogForFixture(t, input, path, config, artifacts)
 	hypothesis := TargetHypothesis{Target: &ProwEnvironmentEntryCandidate{Kind: CandidateProwEnvironmentEntry, ConfigPath: path, Job: "periodic-test", Container: "test", Name: "FEATURE_FLAG", Value: "fabricated"}, EvidenceIDs: evidenceIDs(catalog), RelationshipReason: "fabricated value"}
 	reader := revisionSource{files: map[string]map[string]string{sourceKey(input.InvestigationSource): {path: config}, sourceKey(*input.Builds[0].Source): {path: config}}}
 	verifier, _ := NewVerifier(reader)
@@ -655,7 +664,7 @@ func TestVerifierAcceptsSingleBuildCause(t *testing.T) {
 	}
 
 	browser := fakeBrowser{files: map[string]string{"builds/2/log.txt": "reconcile missing applyFix transition\n"}}
-	catalog := evidenceCatalogForFixture(input, "controllers/reconcile.go", source, browser.files)
+	catalog := evidenceCatalogForFixture(t, input, "controllers/reconcile.go", source, browser.files)
 	result := Result{
 		Version: ResultVersion,
 		Hypotheses: []TargetHypothesis{{

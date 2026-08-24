@@ -23,6 +23,15 @@ const (
 	maxSourceGrepRecords      = 64
 	maxSourceGrepMatchBytes   = 2048
 	maxSourceGrepCatalogBytes = 64 << 10
+	// maxPreparedArtifactRecords bounds the cited ranges carried into the
+	// evidence prompt and the catalog. A frozen input may hold far more
+	// citations than the catalog can list, and every prepared range occupies a
+	// catalog slot.
+	maxPreparedArtifactRecords = 64
+	// maxServiceIters bounds tool rounds so the records they add to the catalog
+	// keep it, alongside the prepared, analysis, and grep records, inside the
+	// 256-record limit ValidateEvidenceCatalog enforces.
+	maxServiceIters = 64
 )
 
 type Model interface {
@@ -48,6 +57,9 @@ func (o ServiceOptions) normalized() ServiceOptions {
 	}
 	if o.MaxIters <= 0 {
 		o.MaxIters = 10
+	}
+	if o.MaxIters > maxServiceIters {
+		o.MaxIters = maxServiceIters
 	}
 	if o.ContextByteBudget <= 0 {
 		o.ContextByteBudget = 256 << 10
@@ -171,7 +183,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		memo = memo[:maxEvidenceMemoBytes]
 	}
 
-	catalog, err := s.buildEvidenceCatalog(runCtx, input, browser, ledger)
+	catalog, err := s.buildEvidenceCatalog(runCtx, input, browser, ledger, preparedArtifactEvidence)
 	if err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
@@ -716,7 +728,7 @@ func selectedEvidenceRecords(ids []string, catalog EvidenceCatalog) ([]EvidenceR
 	return records, nil
 }
 
-func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger) (EvidenceCatalog, error) {
+func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, browser artifacts.Browser, ledger *evidenceLedger, prepared []EvidenceRecord) (EvidenceCatalog, error) {
 	catalog := EvidenceCatalog{Version: EvidenceCatalogVersion}
 	paths := make([]string, 0, len(ledger.sourceReads))
 	for file := range ledger.sourceReads {
@@ -777,8 +789,22 @@ func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, b
 		record.ID = evidenceRecordID(record)
 		catalog.Records = append(catalog.Records, record)
 	}
+	// The cited ranges the evidence prompt showed the model have to stay
+	// selectable, so they go in verbatim. A browsed artifact carries no range of
+	// its own and gets a bounded front-of-file record instead.
+	citedPaths := make(map[string]bool, len(prepared))
+	for _, record := range prepared {
+		if record.Artifact == nil {
+			continue
+		}
+		citedPaths[record.Artifact.Path] = true
+		catalog.Records = append(catalog.Records, record)
+	}
 	artifactPaths := make([]string, 0, len(ledger.artifactReads))
 	for file := range ledger.artifactReads {
+		if citedPaths[file] {
+			continue
+		}
 		artifactPaths = append(artifactPaths, file)
 	}
 	slices.Sort(artifactPaths)
@@ -787,14 +813,14 @@ func (s *Service) buildEvidenceCatalog(ctx context.Context, input FrozenInput, b
 		if !ok {
 			return EvidenceCatalog{}, fmt.Errorf("artifact evidence %s does not belong to the frozen causal group", file)
 		}
-		content, err := readArtifactEvidence(ctx, browser, file)
+		content, lastLine, err := readArtifactEvidenceRange(ctx, browser, file, 1, maxArtifactEvidenceCatalogLines)
 		if err != nil {
 			return EvidenceCatalog{}, err
 		}
 		record := EvidenceRecord{
 			Kind: EvidenceArtifact,
 			Artifact: &ArtifactEvidenceIdentity{
-				BuildID: buildID, Path: file, ContentDigest: HashText(content),
+				BuildID: buildID, Path: file, LineStart: 1, LineEnd: lastLine, ContentDigest: HashText(content),
 			},
 		}
 		record.ID = evidenceRecordID(record)
@@ -915,22 +941,30 @@ func prepareArtifactEvidence(ctx context.Context, input FrozenInput, browser art
 			if !strings.HasPrefix(file, "builds/") {
 				file = "builds/" + analysis.BuildID + "/" + file
 			}
-			content, err := readArtifactEvidence(ctx, browser, file)
+			buildID, ok := artifactBuildID(file, input.Group.Builds)
+			if !ok || buildID != analysis.BuildID {
+				return nil, fmt.Errorf("frozen analysis artifact evidence %s does not belong to build %s", file, analysis.BuildID)
+			}
+			selected, lastLine, err := readArtifactEvidenceRange(ctx, browser, file, citation.LineStart, citation.LineEnd)
 			if err != nil {
 				return nil, fmt.Errorf("frozen analysis artifact evidence is unavailable: %w", err)
 			}
-			lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
-			if citation.LineStart < 1 || citation.LineEnd < citation.LineStart || citation.LineEnd > len(lines) {
+			if lastLine != citation.LineEnd {
 				return nil, fmt.Errorf("frozen analysis artifact evidence has an invalid line range")
 			}
-			selected := strings.Join(lines[citation.LineStart-1:citation.LineEnd], "\n")
 			if !strings.Contains(selected, strings.TrimSpace(citation.Quote)) {
 				return nil, fmt.Errorf("frozen analysis artifact evidence quote does not match %s", file)
 			}
 			record := EvidenceRecord{
 				Kind: EvidenceArtifact,
 				Artifact: &ArtifactEvidenceIdentity{
-					BuildID: analysis.BuildID, Path: file, ContentDigest: HashText(content),
+					BuildID:   buildID,
+					Path:      file,
+					LineStart: citation.LineStart,
+					LineEnd:   citation.LineEnd,
+					// The digest covers the cited lines, which is what
+					// verification re-reads.
+					ContentDigest: HashText(selected),
 				},
 			}
 			record.ID = evidenceRecordID(record)
@@ -940,12 +974,18 @@ func prepareArtifactEvidence(ctx context.Context, input FrozenInput, browser art
 			if seen[record.ID] {
 				continue
 			}
+			if len(prepared) >= maxPreparedArtifactRecords {
+				// Every citation is checked, because the raw analyses reach the
+				// model whether or not a prepared record carries them. Only the
+				// catalog slot is budgeted.
+				continue
+			}
 			seen[record.ID] = true
 			prepared = append(prepared, record)
 			if !ledger.artifactReads[file] {
 				ledger.stats.ToolCalls++
 				ledger.stats.ArtifactReads++
-				ledger.stats.ArtifactReadBytes += len(content)
+				ledger.stats.ArtifactReadBytes += len(selected)
 				ledger.artifactReads[file] = true
 			}
 		}
@@ -961,23 +1001,97 @@ func artifactBuildID(file string, buildIDs []string) (string, bool) {
 	return parts[1], true
 }
 
-func readArtifactEvidence(ctx context.Context, browser artifacts.Browser, file string) (string, error) {
-	const maxArtifactEvidenceBytes = 256 << 10
-	content, size, err := browser.Read(ctx, file, 0, maxArtifactEvidenceBytes)
-	if err != nil {
-		return "", fmt.Errorf("read artifact evidence %s: %w", file, err)
+// Artifact evidence is bounded by the cited line range, not by the size of the
+// file the citation points into. Junit and build logs routinely run past a
+// megabyte while the cited region stays small.
+const (
+	// artifactEvidenceChunkBytes is one forward read while locating a range.
+	// Large enough that a typical artifact resolves in a single call.
+	artifactEvidenceChunkBytes = 4 << 20
+	// maxArtifactEvidenceScanBytes bounds how far into a file a range may sit.
+	maxArtifactEvidenceScanBytes = 16 << 20
+	// maxArtifactEvidenceRangeBytes bounds the returned region.
+	maxArtifactEvidenceRangeBytes = 256 << 10
+	// maxArtifactEvidenceCatalogLines bounds a catalog entry for an artifact the
+	// model browsed, which carries no citation range of its own.
+	maxArtifactEvidenceCatalogLines = 4096
+)
+
+// readArtifactEvidenceRange returns lines [start, end] of file plus the last
+// line actually returned, scanning forward in bounded chunks. The caller records
+// the returned end so verification reproduces exactly the same region.
+func readArtifactEvidenceRange(ctx context.Context, browser artifacts.Browser, file string, start, end int) (string, int, error) {
+	if start < 1 || end < start {
+		return "", 0, fmt.Errorf("artifact evidence %s has an invalid line range", file)
 	}
-	if size > maxArtifactEvidenceBytes {
-		return "", fmt.Errorf("artifact evidence %s exceeds bounded verification size", file)
+	var (
+		selected  []string
+		carry     string
+		line      int
+		offset    int
+		scanned   int
+		rangeSize int
+		truncated bool
+		atEOF     bool
+	)
+	take := func(text string) bool {
+		line++
+		if line < start || line > end {
+			return true
+		}
+		text = strings.TrimSuffix(text, "\r")
+		if rangeSize+len(text)+1 > maxArtifactEvidenceRangeBytes {
+			truncated = true
+			return false
+		}
+		rangeSize += len(text) + 1
+		selected = append(selected, text)
+		return true
 	}
-	return string(content), nil
+
+	for scanned < maxArtifactEvidenceScanBytes && !truncated && !atEOF && line < end {
+		chunk, _, err := browser.Read(ctx, file, offset, artifactEvidenceChunkBytes)
+		if err != nil {
+			return "", 0, fmt.Errorf("read artifact evidence %s: %w", file, err)
+		}
+		offset += len(chunk)
+		scanned += len(chunk)
+		// Every backend returns a short read only at end of file.
+		atEOF = len(chunk) < artifactEvidenceChunkBytes
+		// Split after joining the carry so a line spanning a chunk boundary is
+		// counted once, and a CRLF split across one still resolves.
+		parts := strings.Split(carry+string(chunk), "\n")
+		if atEOF {
+			// A trailing empty element is the artifact of the final newline,
+			// not a line; a non-empty one is a real last line with no EOL.
+			carry = ""
+			if parts[len(parts)-1] == "" {
+				parts = parts[:len(parts)-1]
+			}
+		} else {
+			carry = parts[len(parts)-1]
+			parts = parts[:len(parts)-1]
+		}
+		for _, part := range parts {
+			if !take(part) {
+				break
+			}
+		}
+	}
+	if len(selected) == 0 {
+		if !atEOF && !truncated {
+			return "", 0, fmt.Errorf("artifact evidence %s line %d sits past the bounded scan window", file, start)
+		}
+		return "", 0, fmt.Errorf("artifact evidence %s has no content at lines %d-%d", file, start, end)
+	}
+	return strings.Join(selected, "\n"), start + len(selected) - 1, nil
 }
 
 func verifyArtifactEvidence(ctx context.Context, browser artifacts.Browser, record EvidenceRecord) error {
 	if record.Kind != EvidenceArtifact || record.Artifact == nil {
 		return fmt.Errorf("artifact evidence identity is missing")
 	}
-	content, err := readArtifactEvidence(ctx, browser, record.Artifact.Path)
+	content, _, err := readArtifactEvidenceRange(ctx, browser, record.Artifact.Path, record.Artifact.LineStart, record.Artifact.LineEnd)
 	if err != nil {
 		return err
 	}

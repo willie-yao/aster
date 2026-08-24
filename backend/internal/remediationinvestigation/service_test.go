@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -928,5 +929,269 @@ func TestServiceTargetExtractionUsesConversationWhenMemoOmitsSourceIdentity(t *t
 	entry, ok, err := cache.Lookup(key)
 	if err != nil || !ok || strings.Contains(entry.Result.Hypotheses[0].RelationshipReason, serviceSourceContent) {
 		t.Fatalf("entry=%+v ok=%v err=%v", entry, ok, err)
+	}
+}
+
+// TestReadArtifactEvidenceRange covers the regression that stopped every
+// investigation on real data: a citation into a CI junit or build log of several
+// hundred kilobytes. The whole file is deliberately not a bound, so the range is
+// located by scanning rather than by holding the file.
+func TestReadArtifactEvidenceRange(t *testing.T) {
+	// Comfortably past the old 256 KiB whole-file limit and past one chunk.
+	var big strings.Builder
+	for i := 1; i <= 40000; i++ {
+		fmt.Fprintf(&big, "line %d %s\n", i, strings.Repeat("x", 120))
+	}
+	browser := fakeBrowser{files: map[string]string{
+		"builds/1/build-log.txt": big.String(),
+		"builds/1/small.txt":     "alpha\nbravo\ncharlie\n",
+		"builds/1/crlf.txt":      "alpha\r\nbravo\r\ncharlie\r\n",
+		"builds/1/noeol.txt":     "alpha\nbravo",
+	}}
+	if len(big.String()) <= artifactEvidenceChunkBytes {
+		t.Fatalf("fixture does not span more than one chunk: %d bytes", len(big.String()))
+	}
+
+	for _, test := range []struct {
+		name       string
+		file       string
+		start, end int
+		want       string
+		wantLast   int
+	}{
+		{"first line", "builds/1/small.txt", 1, 1, "alpha", 1},
+		{"middle range", "builds/1/small.txt", 2, 3, "bravo\ncharlie", 3},
+		{"crlf is normalized", "builds/1/crlf.txt", 1, 2, "alpha\nbravo", 2},
+		{"final line without newline", "builds/1/noeol.txt", 2, 2, "bravo", 2},
+		// Deep into a file the old code rejected outright.
+		{"deep range in a large file", "builds/1/build-log.txt", 39999, 40000,
+			"line 39999 " + strings.Repeat("x", 120) + "\nline 40000 " + strings.Repeat("x", 120), 40000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, last, err := readArtifactEvidenceRange(t.Context(), browser, test.file, test.start, test.end)
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("content = %q, want %q", got, test.want)
+			}
+			if last != test.wantLast {
+				t.Fatalf("last line = %d, want %d", last, test.wantLast)
+			}
+		})
+	}
+
+	// A range past the end reports the last line it reached, so the citation
+	// check in prepareArtifactEvidence can reject it.
+	if _, last, err := readArtifactEvidenceRange(t.Context(), browser, "builds/1/small.txt", 2, 99); err != nil || last != 3 {
+		t.Fatalf("past-end range: last=%d err=%v", last, err)
+	}
+	if _, _, err := readArtifactEvidenceRange(t.Context(), browser, "builds/1/small.txt", 0, 2); err == nil {
+		t.Fatal("an invalid start line was accepted")
+	}
+
+	t.Run("range past the scan window is reported distinctly", func(t *testing.T) {
+		var huge strings.Builder
+		for huge.Len() <= maxArtifactEvidenceScanBytes {
+			fmt.Fprintf(&huge, "%s\n", strings.Repeat("y", 1023))
+		}
+		deep := fakeBrowser{files: map[string]string{"builds/1/huge.txt": huge.String()}}
+		lastLine := strings.Count(huge.String(), "\n")
+		_, _, err := readArtifactEvidenceRange(t.Context(), deep, "builds/1/huge.txt", lastLine, lastLine)
+		if err == nil {
+			t.Fatal("a range past the scan window was accepted")
+		}
+		if !strings.Contains(err.Error(), "bounded scan window") {
+			t.Fatalf("err = %v, want the scan-window reason", err)
+		}
+	})
+
+	t.Run("range larger than the returned region is truncated", func(t *testing.T) {
+		got, last, err := readArtifactEvidenceRange(t.Context(), browser, "builds/1/build-log.txt", 1, 40000)
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if last >= 40000 {
+			t.Fatalf("last line = %d, want a truncated range", last)
+		}
+		if len(got) > maxArtifactEvidenceRangeBytes {
+			t.Fatalf("returned %d bytes, over the region cap", len(got))
+		}
+	})
+}
+
+// TestArtifactEvidenceDigestsAgreeAcrossPrepareAndVerify is the trap this change
+// had to avoid: prepare digesting one region and verification re-reading another
+// would fail every record and turn one failure mode into another.
+func TestArtifactEvidenceDigestsAgreeAcrossPrepareAndVerify(t *testing.T) {
+	var big strings.Builder
+	for i := 1; i <= 30000; i++ {
+		fmt.Fprintf(&big, "log line %d\n", i)
+	}
+	browser := fakeBrowser{files: map[string]string{"builds/7/build-log.txt": big.String()}}
+	input := FrozenInput{Group: models.PatternCausalGroup{Builds: []string{"7"}}, Analyses: []AnalysisReference{{
+		BuildID: "7",
+		Evidence: []models.EvidenceCitation{{
+			Path: "build-log.txt", LineStart: 29998, LineEnd: 29999, Quote: "log line 29998",
+		}},
+	}}}
+
+	records, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].Artifact.LineStart != 29998 || records[0].Artifact.LineEnd != 29999 {
+		t.Fatalf("record did not carry the cited range: %+v", records[0].Artifact)
+	}
+	if err := verifyArtifactEvidence(t.Context(), browser, records[0]); err != nil {
+		t.Fatalf("verification disagreed with preparation: %v", err)
+	}
+}
+
+// A cited range shown to the model in the evidence phase has to remain
+// selectable from the final catalog, otherwise the model can only cite a
+// front-of-file record covering a region it never read.
+func TestEvidenceCatalogKeepsCitedArtifactRanges(t *testing.T) {
+	var big strings.Builder
+	for i := 1; i <= 30000; i++ {
+		fmt.Fprintf(&big, "log line %d\n", i)
+	}
+	browser := fakeBrowser{files: map[string]string{
+		"builds/7/build-log.txt": big.String(),
+		"builds/7/other.txt":     "alpha\nbravo\n",
+	}}
+	input := FrozenInput{
+		Group: models.PatternCausalGroup{Builds: []string{"7"}},
+		Analyses: []AnalysisReference{{
+			BuildID: "7", GeneratedAt: "2026-01-01T00:00:00Z", RootCause: "the node pool never became ready",
+			Evidence: []models.EvidenceCitation{{
+				Path: "build-log.txt", LineStart: 29998, LineEnd: 29999, Quote: "log line 29998",
+			}},
+		}},
+	}
+
+	ledger := newEvidenceLedger()
+	prepared, err := prepareArtifactEvidence(t.Context(), input, browser, ledger)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	// The model also browsed a second artifact that carries no citation.
+	ledger.artifactReads["builds/7/other.txt"] = true
+
+	catalog, err := (&Service{}).buildEvidenceCatalog(t.Context(), input, browser, ledger, prepared)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+
+	byPath := map[string][]*ArtifactEvidenceIdentity{}
+	ids := map[string]bool{}
+	for _, record := range catalog.Records {
+		ids[record.ID] = true
+		if record.Kind == EvidenceArtifact {
+			byPath[record.Artifact.Path] = append(byPath[record.Artifact.Path], record.Artifact)
+		}
+	}
+	if !ids[prepared[0].ID] {
+		t.Fatal("the cited range is not selectable from the catalog")
+	}
+	cited := byPath["builds/7/build-log.txt"]
+	if len(cited) != 1 || cited[0].LineStart != 29998 || cited[0].LineEnd != 29999 {
+		t.Fatalf("cited artifact records = %+v, want only the cited range", cited)
+	}
+	browsed := byPath["builds/7/other.txt"]
+	if len(browsed) != 1 || browsed[0].LineStart != 1 || browsed[0].LineEnd != 2 {
+		t.Fatalf("browsed artifact records = %+v, want a front-of-file range", browsed)
+	}
+	for _, record := range catalog.Records {
+		if record.Kind != EvidenceArtifact {
+			continue
+		}
+		if err := verifyArtifactEvidence(t.Context(), browser, record); err != nil {
+			t.Fatalf("catalog record %s does not verify: %v", record.ID, err)
+		}
+	}
+}
+
+func TestPrepareArtifactEvidenceRejectsCrossBuildCitation(t *testing.T) {
+	browser := fakeBrowser{files: map[string]string{
+		"builds/7/build-log.txt": "alpha\nbravo\n",
+		"builds/9/build-log.txt": "alpha\nbravo\n",
+	}}
+	input := FrozenInput{
+		Group: models.PatternCausalGroup{Builds: []string{"7", "9"}},
+		Analyses: []AnalysisReference{{
+			BuildID: "7", GeneratedAt: "2026-01-01T00:00:00Z", RootCause: "boom",
+			// Build 9 is in the group, but this citation belongs to build 7.
+			Evidence: []models.EvidenceCitation{{
+				Path: "builds/9/build-log.txt", LineStart: 1, LineEnd: 1, Quote: "alpha",
+			}},
+		}},
+	}
+	if _, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger()); err == nil {
+		t.Fatal("a citation naming another build was accepted")
+	}
+}
+
+// A frozen input may carry far more citations than the catalog can list, so the
+// prompt and the catalog are bounded by the same budget.
+func TestPrepareArtifactEvidenceBoundsRecordCount(t *testing.T) {
+	var log strings.Builder
+	for i := 1; i <= 500; i++ {
+		fmt.Fprintf(&log, "log line %d\n", i)
+	}
+	browser := fakeBrowser{files: map[string]string{"builds/7/build-log.txt": log.String()}}
+	input := FrozenInput{Group: models.PatternCausalGroup{Builds: []string{"7"}}}
+	line := 0
+	for a := range 10 {
+		analysis := AnalysisReference{
+			BuildID:   "7",
+			RootCause: "boom",
+			// Distinct analyses citing distinct ranges, so nothing dedups away.
+			GeneratedAt: fmt.Sprintf("2026-01-%02dT00:00:00Z", a+1),
+		}
+		for range 20 {
+			line++
+			analysis.Evidence = append(analysis.Evidence, models.EvidenceCitation{
+				Path: "build-log.txt", LineStart: line, LineEnd: line,
+				Quote: fmt.Sprintf("log line %d", line),
+			})
+		}
+		input.Analyses = append(input.Analyses, analysis)
+	}
+
+	prepared, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if len(prepared) != maxPreparedArtifactRecords {
+		t.Fatalf("prepared = %d, want the budget of %d", len(prepared), maxPreparedArtifactRecords)
+	}
+	catalog, err := (&Service{}).buildEvidenceCatalog(t.Context(), input, browser, newEvidenceLedger(), prepared)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	if err := ValidateEvidenceCatalog(catalog); err != nil {
+		t.Fatalf("catalog exceeded its own bounds: %v", err)
+	}
+
+	// The raw analyses reach the model regardless of the budget, so a citation
+	// past it must still be checked rather than waved through.
+	past := input.Analyses[len(input.Analyses)-1]
+	past.Evidence[len(past.Evidence)-1].Quote = "a quote that is not in the log"
+	input.Analyses[len(input.Analyses)-1] = past
+	if _, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger()); err == nil {
+		t.Fatal("a bad citation past the budget was not checked")
+	}
+}
+
+func TestServiceOptionsBoundIterations(t *testing.T) {
+	if got := (ServiceOptions{MaxIters: 5000}).normalized().MaxIters; got != maxServiceIters {
+		t.Fatalf("MaxIters = %d, want the bound of %d", got, maxServiceIters)
+	}
+	if got := (ServiceOptions{}).normalized().MaxIters; got != 10 {
+		t.Fatalf("default MaxIters = %d, want 10", got)
 	}
 }

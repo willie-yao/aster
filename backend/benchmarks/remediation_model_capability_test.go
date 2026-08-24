@@ -35,7 +35,7 @@ import (
 const (
 	copilotResponsesEndpoint                 = "https://api.githubcopilot.com/responses"
 	remediationModelCapabilityManifest       = "testdata/benchmarks/remediation-investigation-temporal-v1.json"
-	remediationModelCapabilityManifestSHA256 = "5ce4a5933eafd6a7eb98a66c6a04e9a6bab537b6cbedd67e77998f1ff392e922"
+	remediationModelCapabilityManifestSHA256 = "522e6c026fad5a2c00e1f0950199ba9ab9356719c6780b417c215423fa08d9f3"
 	remediationModelCapabilityRepetitions    = 3
 )
 
@@ -902,10 +902,17 @@ func remediationModelCapabilityOracleEntry(ctx context.Context, input remediatio
 		if len(parts) < 3 {
 			return remediationinvestigation.CacheEntry{}, fmt.Errorf("invalid benchmark artifact path %q", path)
 		}
+		// The catalog records a bounded line range and digests exactly that
+		// range, so the benchmark fixture has to do the same.
+		content, lastLine, err := benchmarkArtifactCatalogRange(browser.files[path])
+		if err != nil {
+			return remediationinvestigation.CacheEntry{}, fmt.Errorf("artifact fixture %s: %w", path, err)
+		}
 		record := remediationinvestigation.EvidenceRecord{
 			Kind: remediationinvestigation.EvidenceArtifact,
 			Artifact: &remediationinvestigation.ArtifactEvidenceIdentity{
-				BuildID: parts[1], Path: path, ContentDigest: remediationinvestigation.HashText(browser.files[path]),
+				BuildID: parts[1], Path: path, LineStart: 1, LineEnd: lastLine,
+				ContentDigest: remediationinvestigation.HashText(content),
 			},
 		}
 		record.ID = remediationModelCapabilityEvidenceRecordID(record)
@@ -1345,4 +1352,23 @@ func TestRemediationPostFixEnvironmentTargetUsesContinuedEvidence(t *testing.T) 
 	if !model.continued || len(result.Entry.Result.Hypotheses) != 1 || verified.Classification != remediationinvestigation.ClassificationAlreadyFixed || verified.Proposal != nil {
 		t.Fatalf("continued=%v result=%+v verified=%+v", model.continued, result.Entry.Result, verified)
 	}
+}
+
+// benchmarkArtifactCatalogRange mirrors the engine's catalog region for a whole
+// fixture file. The engine additionally caps the region by line count and by
+// bytes; these fixtures are far below both, and this errors rather than
+// drifting if one ever grows past them.
+func benchmarkArtifactCatalogRange(content string) (string, int, error) {
+	const (
+		maxCatalogLines = 4096
+		maxRegionBytes  = 256 << 10
+	)
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > maxCatalogLines || len(content) >= maxRegionBytes {
+		return "", 0, fmt.Errorf("fixture has %d lines and %d bytes, past the engine catalog bounds", len(lines), len(content))
+	}
+	return strings.Join(lines, "\n"), len(lines), nil
 }

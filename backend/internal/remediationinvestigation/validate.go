@@ -684,6 +684,9 @@ func validateEvidenceRecord(record EvidenceRecord) error {
 		if err := validateCandidatePath(record.Artifact.Path); err != nil {
 			return err
 		}
+		if record.Artifact.LineStart < 1 || record.Artifact.LineEnd < record.Artifact.LineStart {
+			return fmt.Errorf("artifact evidence line range is invalid")
+		}
 		if !fullHexDigest.MatchString(record.Artifact.ContentDigest) {
 			return fmt.Errorf("artifact content digest is invalid")
 		}
