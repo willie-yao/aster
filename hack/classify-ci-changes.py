@@ -586,8 +586,12 @@ def self_test() -> None:
     workflow = (
         pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
     ).read_text(encoding="utf-8")
+    changes_start = workflow.index("\n  changes:")
     backend_start = workflow.index("\n  backend:")
     frontend_start = workflow.index("\n  frontend:", backend_start)
+    changes_job = workflow[changes_start:backend_start]
+    if "make check-onboarding-release-pins" not in changes_job:
+        raise AssertionError("always-running changes job does not check onboarding release pins")
     backend_job = workflow[backend_start:frontend_start]
     if "bash hack/test-release-cli-assets.sh" not in backend_job:
         raise AssertionError("backend job does not run the release CLI asset contract")

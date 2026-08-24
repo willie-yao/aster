@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	planArtifactSchemaVersion = 2
+	planArtifactSchemaVersion = 3
 	maxPlanArtifactBytes      = 4 << 20
 )
 
@@ -37,6 +37,9 @@ func WritePlanArtifact(path string, plan *Plan) (string, error) {
 		return "", fmt.Errorf("onboarding plan artifacts do not support open-PR destinations")
 	}
 	if err := validatePlan(plan); err != nil {
+		return "", err
+	}
+	if err := requireReviewedK8sStorage(plan); err != nil {
 		return "", err
 	}
 	planCopy := *plan
@@ -165,6 +168,9 @@ func ReadPlanArtifact(path, expectedDigest string) (*Plan, error) {
 		}
 	}
 	if err := validatePlan(&artifact.Plan); err != nil {
+		return nil, fmt.Errorf("validate onboarding plan artifact: %w", err)
+	}
+	if err := requireReviewedK8sStorage(&artifact.Plan); err != nil {
 		return nil, fmt.Errorf("validate onboarding plan artifact: %w", err)
 	}
 	return &artifact.Plan, nil

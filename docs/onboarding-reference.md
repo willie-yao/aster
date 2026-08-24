@@ -34,7 +34,7 @@ API reads and is not printed, retained in the plan, or written to the scaffold.
 Inspect inferred inputs without rendering files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 \
   onboard discover \
   -source-repo owner/name
 ```
@@ -104,10 +104,13 @@ deploy/values.yaml
 deploy/README.md
 ```
 
-Onboarding does not inspect a cluster, choose a storage class, create a
-namespace or Secret, install Helm releases, or configure DNS and ingress. It
-configures authoritative in-process analysis only. Follow the generated guide
-and [Kubernetes quickstart](kubernetes.md).
+Onboarding does not inspect a cluster or choose storage. Interactive runs leave
+a reviewed placeholder for later editing. Non-interactive Kubernetes runs
+require exactly one of `-k8s-storage-class` or `-k8s-existing-claim` so reviewed
+plan application can pass static doctor. The command does not create a namespace
+or Secret, install Helm releases, or configure DNS and ingress. It configures
+authoritative in-process analysis only. Follow the generated guide and
+[Kubernetes quickstart](kubernetes.md).
 
 ## Prompt handoff
 
@@ -144,7 +147,9 @@ The command never deletes stale or unrelated files.
 ## Dry-run and reviewed plan application
 
 `-dry-run` renders and validates the complete scaffold without writing it.
-`-plan-out` writes a private machine-readable plan outside the destination:
+`-plan-out` writes a private machine-readable plan outside the destination. A
+Kubernetes saved plan requires `-k8s-storage-class` or
+`-k8s-existing-claim` so exact application can pass static doctor:
 
 ```bash
 aster onboard \
@@ -182,8 +187,8 @@ Add `-non-interactive` when missing values must fail rather than prompt.
 Pages example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
-  -engine-ref v0.9.0-rc.3 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard \
+  -engine-ref v0.9.0-rc.9 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -193,15 +198,20 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
   -out ./my-dashboard
 ```
 
+Kubernetes automation requires a CLI whose `onboard -h` output includes
+`-k8s-storage-class` and `-k8s-existing-claim`. Use a current clean engine
+checkout or a later exact release containing that command surface.
+
 Kubernetes example:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
+aster onboard \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
   -source-repo "<owner>/<source-repo>" \
   -mode k8s \
+  -k8s-storage-class "<rwx-storage-class>" \
   -artifact-access private \
   -deployment-reason "Artifacts require in-cluster authenticated access." \
   -out ./my-dashboard
@@ -230,7 +240,7 @@ emit the prompt handoff bundle.
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
-  -engine-ref v0.9.0-rc.3 \
+  -engine-ref v0.9.0-rc.9 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
@@ -249,7 +259,8 @@ confirmed pull request.
 Onboarding does not guess:
 
 - provider reachability or credential validity;
-- Kubernetes context, namespace, storage class, ingress, DNS, or certificates;
+- Kubernetes context, namespace, ingress, DNS, or certificates;
+- which ReadWriteMany StorageClass or existing PVC the operator should select;
 - OAuth, notification routing, or Secret values;
 - optional Agent Sandbox feature installation;
 - a TestGrid dashboard or artifact bucket when no source match exists.
@@ -257,7 +268,7 @@ Onboarding does not guess:
 ## Validate an existing consumer
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

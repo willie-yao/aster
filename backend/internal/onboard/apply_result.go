@@ -14,7 +14,7 @@ import (
 
 const (
 	applyResultSchemaVersion  = 1
-	setupHandoffSchemaVersion = 1
+	setupHandoffSchemaVersion = 2
 	maxArtifactSmokeBuilds    = 5
 )
 

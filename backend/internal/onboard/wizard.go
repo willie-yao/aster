@@ -121,6 +121,9 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 		opts.Mode = choice
 	}
+	if opts.Mode == modeK8s && (opts.PlanOut != "" || opts.OpenPR) && opts.K8sStorageClass == "" && opts.K8sExistingClaim == "" {
+		return nil, opts, fmt.Errorf("saved or open-PR Kubernetes onboarding requires --k8s-storage-class or --k8s-existing-claim")
+	}
 
 	if opts.DashboardRepo == "" {
 		opts.DashboardRepo, err = prompt.Input(ctx, inputPrompt{
@@ -224,6 +227,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	planning := planningContext{discovery: &report, selected: selected}
+	opts.allowK8sStoragePlaceholder = opts.Mode == modeK8s && opts.PlanOut == "" && !opts.OpenPR
 	fmt.Fprintln(deps.terminal.Out, "\nRunning the real job sweep and validating the scaffold...")
 	plan, err := buildPlan(ctx, opts, planning, deps)
 	if err != nil {

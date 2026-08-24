@@ -50,9 +50,14 @@ fork coordinate because the generated workflow hardcodes
 The default published pair is:
 
 ```text
-<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3
-<engine-ref> = v0.9.0-rc.3
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9
+<engine-ref> = v0.9.0-rc.9
 ```
+
+This published pair is the default for Pages setup. It predates the Kubernetes
+storage flags required by this skill. For Kubernetes, use a current clean Aster
+checkout or a later exact release or full commit SHA whose `onboard -h` output
+advertises both storage flags. Stop before planning when that surface is absent.
 
 For an explicitly requested exact release tag or full commit SHA, use that
 exact ref in the module command and as `<engine-ref>`. Do not use `main`,
@@ -98,15 +103,16 @@ checkout origin for context. A Pages `<engine-ref>` may use that full commit SHA
 only when the checkout is unmodified and the official-repository fetch above
 proves that exact commit is available from `willie-yao/aster`. If the checkout
 is dirty, the commit is fork-only or local-only, or official availability
-cannot be established, local discovery and Kubernetes work may continue but
-stop before a Pages plan and ask for an exact tag or full commit SHA published
-in the official repository. Do not claim that a fork-only or local-only
+cannot be established, only read-only discovery may continue. Before any Pages
+or Kubernetes plan, switch to an unmodified detached worktree at the reviewed
+commit or use an exact release or full commit SHA available from the official
+repository. Do not claim that a fork-only or local-only
 checkout can be deployed by the reusable workflow.
 
 Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard ...
 ```
 
 Use one form consistently as `<aster>` for discovery, planning, application,
@@ -201,6 +207,15 @@ Pass each reviewed reason separately:
 If a factor is unknown, record it as unresolved. Do not turn an assumption into
 a deployment claim.
 
+Kubernetes setup also requires one reviewed ReadWriteMany storage coordinate.
+Use an exact existing PVC name when the platform pre-provisions storage, or an
+exact StorageClass name when the chart should provision it. Never infer either
+value from a cloud provider or cluster type. Before Kubernetes planning, require
+the selected CLI's `onboard -h` output to include both
+`-k8s-storage-class` and `-k8s-existing-claim`. If it does not, stop and request
+a newer exact release tag or full commit SHA. Do not apply a plan that leaves
+the storage placeholder unresolved.
+
 ## 5. Build explicit non-interactive flags
 
 Use exactly one discovery selector:
@@ -240,7 +255,20 @@ carries that exact ref through apply. Do not pass scaffold flags alongside
 
 For Kubernetes-only setup, omit `-engine-ref`. It does not select application
 image tags or chart versions; those belong to the Kubernetes deployment values
-and release procedure.
+and release procedure. Include exactly one reviewed storage coordinate:
+
+```text
+-k8s-storage-class <rwx-storage-class>
+```
+
+or:
+
+```text
+-k8s-existing-claim <rwx-pvc-name>
+```
+
+The non-interactive Kubernetes command rejects a missing, invalid, or ambiguous
+storage selection so post-apply doctor can succeed without an unreviewed edit.
 
 Add only when selected:
 
@@ -298,7 +326,8 @@ Present:
 - For Pages, the immutable engine ref and matching rendered workflow ref.
 - Source repository and resolved revision.
 - Discovery selector, digest, catalog revision, and exact job identities.
-- Pages or Kubernetes mode, artifact access, and every selection reason.
+- Pages or Kubernetes mode, artifact access, every selection reason, and the
+  reviewed Kubernetes storage coordinate when applicable.
 - Consumer repository and canonical destination.
 - Every file marked create, replace, or preserve, including ownership.
 - Existing and candidate prompt hashes and source-only baseline status.
@@ -345,8 +374,9 @@ Use [references/setup-handoff.schema.json](references/setup-handoff.schema.json)
 as the contract. Confirm the handoff records engine, source, first-class
 `test_infra` repository and revision, selected jobs, first-class
 `artifact_location` provider and bucket or base, deployment rationale, artifact
-access, original and candidate prompt hashes, generated file hashes, doctor
-results, smoke results, and unresolved warnings.
+access, the Kubernetes storage coordinate when applicable, original and
+candidate prompt hashes, generated file hashes, doctor results, smoke results,
+and unresolved warnings.
 For Pages, verify the generated workflow still ends in `@<engine-ref>` and
 repeat the external proof that the exact module selector and `<engine-ref>`
 resolve to `<selected-commit>`. If the handoff or CLI build information contains
@@ -416,7 +446,7 @@ Report:
 
 - Consumer location and repository identity.
 - Engine, source, test-infra, discovery, and selected-job pins.
-- Deployment mode, artifact access, and reasons.
+- Deployment mode, artifact access, reasons, and Kubernetes storage coordinate.
 - Created, replaced, and preserved files.
 - Active, original, and candidate prompt hashes.
 - Doctor and artifact-smoke results.

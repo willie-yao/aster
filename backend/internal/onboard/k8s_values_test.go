@@ -52,7 +52,7 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 	for path, want := range map[string]any{
 		"persistence.enabled":          true,
 		"persistence.existingClaim":    "",
-		"persistence.storageClass":     "<your-rwx-storage-class>",
+		"persistence.storageClass":     "fixture-rwx",
 		"persistence.accessMode":       "ReadWriteMany",
 		"persistence.size":             "1Gi",
 		"persistence.retain":           true,
@@ -81,6 +81,32 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 			t.Errorf("cron-only key fetcher.%s is active in the watch scaffold", cronOnly)
 		}
 	}
+}
+
+func TestK8sValuesStorageSelection(t *testing.T) {
+	t.Run("storage class", func(t *testing.T) {
+		data := k8sValuesFixtureData(true)
+		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
+		assertYAMLValue(t, root, "", "persistence", "existingClaim")
+		assertYAMLValue(t, root, "fixture-rwx", "persistence", "storageClass")
+	})
+
+	t.Run("existing claim", func(t *testing.T) {
+		data := k8sValuesFixtureData(true)
+		data.K8sStorageClass = ""
+		data.K8sExistingClaim = "shared-data"
+		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
+		assertYAMLValue(t, root, "shared-data", "persistence", "existingClaim")
+		assertYAMLValue(t, root, "", "persistence", "storageClass")
+	})
+
+	t.Run("interactive placeholder", func(t *testing.T) {
+		data := k8sValuesFixtureData(true)
+		data.K8sStorageClass = ""
+		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
+		assertYAMLValue(t, root, "", "persistence", "existingClaim")
+		assertYAMLValue(t, root, "<your-rwx-storage-class>", "persistence", "storageClass")
+	})
 }
 
 func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
@@ -187,13 +213,14 @@ func renderK8sValuesForTest(t *testing.T, data scaffoldData) string {
 
 func k8sValuesFixtureData(enabled bool) scaffoldData {
 	return scaffoldData{
-		EngineRef:     "fixture-engine-ref",
-		AIEnabled:     enabled,
-		AIAPI:         project.AIAPIResponses,
-		AIEndpoint:    "https://provider.example/v1/responses",
-		AIModel:       "fixture-model",
-		Namespace:     "fixture-dashboard",
-		DashboardName: "fixture-dashboard",
+		EngineRef:       "fixture-engine-ref",
+		AIEnabled:       enabled,
+		AIAPI:           project.AIAPIResponses,
+		AIEndpoint:      "https://provider.example/v1/responses",
+		AIModel:         "fixture-model",
+		K8sStorageClass: "fixture-rwx",
+		Namespace:       "fixture-dashboard",
+		DashboardName:   "fixture-dashboard",
 	}
 }
 

@@ -40,7 +40,8 @@ whole story of the versions that led up to it.
 
 1. Make sure `main` is green. Write `changelog/<tag>.md` from the `release-note`
    blocks merged since the previous tag, and add the release to the index in
-   `CHANGELOG.md`.
+   `CHANGELOG.md`. Keep `docs/supported-onboarding-release.txt`, current onboarding
+   examples, and the setup skill pinned to the last published release.
 2. Create the root and nested-module tags at the same reviewed commit, then
    push both without force:
    ```bash
@@ -85,6 +86,13 @@ tag state without changing it, run the publishing script with
 `RELEASE_DRY_RUN=true`. To recover only a missing module tag without publishing
 artifacts, use `RELEASE_TAGS_ONLY=true`. Both modes still reject invalid
 versions, moved tags, and mismatched tag pairs.
+
+4. After both tags and release artifacts are published and the onboarding contract
+   passes at that exact tag, update `docs/supported-onboarding-release.txt`, current
+   onboarding examples, and the setup skill in a follow-up change. Run
+   `make check-onboarding-release-pins`; the guard requires both tags to exist and
+   identify the same commit. An older supported tag may be retained when maintainers
+   explicitly record that compatibility boundary.
 
 ## Pre-release to stable
 

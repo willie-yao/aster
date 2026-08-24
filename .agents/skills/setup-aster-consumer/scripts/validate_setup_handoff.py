@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+K8S_NAME_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$")
 MODES = {"pages", "k8s"}
 ARTIFACT_ACCESS = {"public", "authenticated", "private", "unknown"}
 PROMPT_STATUS = {
@@ -25,6 +26,10 @@ PROMPT_STATUS = {
 
 def add(errors: list[str], path: str, message: str) -> None:
     errors.append(f"{path}: {message}")
+
+
+def is_json_integer(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and float(value).is_integer()
 
 
 def require_dict(value: Any, path: str, errors: list[str]) -> dict[str, Any]:
@@ -62,8 +67,12 @@ def require_sha(obj: dict[str, Any], key: str, path: str, errors: list[str], opt
 def validate(data: Any) -> list[str]:
     errors: list[str] = []
     root = require_dict(data, "$", errors)
-    if root.get("schema_version") != 1:
-        add(errors, "$.schema_version", "must equal 1")
+    raw_schema_version = root.get("schema_version")
+    if not is_json_integer(raw_schema_version) or raw_schema_version not in {1, 2}:
+        add(errors, "$.schema_version", "must equal numeric integer 1 or 2")
+        schema_version = None
+    else:
+        schema_version = int(raw_schema_version)
     plan_digest = require_sha(root, "plan_digest", "$", errors)
 
     engine = require_dict(root.get("engine"), "$.engine", errors)
@@ -71,6 +80,8 @@ def validate(data: Any) -> list[str]:
     require_text(engine, "version", "$.engine", errors)
     if "revision" in engine and not isinstance(engine["revision"], str):
         add(errors, "$.engine.revision", "must be a string")
+    if "modified" in engine and not isinstance(engine["modified"], bool):
+        add(errors, "$.engine.modified", "must be a boolean")
 
     consumer = require_dict(root.get("consumer"), "$.consumer", errors)
     consumer_path = require_text(consumer, "path", "$.consumer", errors)
@@ -162,6 +173,24 @@ def validate(data: Any) -> list[str]:
         add(errors, "$.deployment.reasons", "must contain non-empty reviewed reasons")
     if deployment.get("artifact_access") not in ARTIFACT_ACCESS:
         add(errors, "$.deployment.artifact_access", "is invalid")
+    if not isinstance(deployment.get("ai_enabled"), bool):
+        add(errors, "$.deployment.ai_enabled", "must be a boolean")
+    storage = {
+        key: deployment[key]
+        for key in ("k8s_storage_class", "k8s_existing_claim")
+        if key in deployment
+    }
+    for key, value in storage.items():
+        if not isinstance(value, str) or value != value.strip() or len(value) > 253 or not K8S_NAME_RE.fullmatch(value):
+            add(errors, f"$.deployment.{key}", "must be a valid Kubernetes DNS-1123 subdomain")
+    if schema_version == 1:
+        if storage:
+            add(errors, "$.deployment", "schema version 1 does not allow Kubernetes storage coordinates")
+    elif deployment.get("mode") == "k8s":
+        if len(storage) != 1:
+            add(errors, "$.deployment", "k8s mode requires exactly one storage class or existing claim")
+    elif storage:
+        add(errors, "$.deployment", "Kubernetes storage coordinates require k8s mode")
 
     prompt = require_dict(root.get("prompt"), "$.prompt", errors)
     original = require_sha(prompt, "original_sha256", "$.prompt", errors, optional=True)
@@ -181,8 +210,9 @@ def validate(data: Any) -> list[str]:
         add(errors, "$.prompt.active_sha256", "must match the candidate when the candidate was applied")
 
     apply_result = require_dict(root.get("apply_result"), "$.apply_result", errors)
-    if apply_result.get("schema_version") != 1:
-        add(errors, "$.apply_result.schema_version", "must equal 1")
+    apply_schema_version = apply_result.get("schema_version")
+    if not is_json_integer(apply_schema_version) or apply_schema_version != 1:
+        add(errors, "$.apply_result.schema_version", "must equal numeric integer 1")
     if apply_result.get("plan_digest") != plan_digest:
         add(errors, "$.apply_result.plan_digest", "must match the top-level plan digest")
     if apply_result.get("destination") != consumer_path:
@@ -213,10 +243,13 @@ def validate(data: Any) -> list[str]:
     if smoke.get("read_only") is not True:
         add(errors, "$.artifact_smoke.read_only", "must be true")
     builds_per_job = smoke.get("builds_per_job")
-    if not isinstance(builds_per_job, int) or not 0 <= builds_per_job <= 5:
-        add(errors, "$.artifact_smoke.builds_per_job", "must be an integer from 0 to 5")
+    if not is_json_integer(builds_per_job) or not 0 <= builds_per_job <= 5:
+        add(errors, "$.artifact_smoke.builds_per_job", "must be a numeric integer from 0 to 5")
+        builds_enabled = False
+    else:
+        builds_enabled = int(builds_per_job) > 0
     smoke_jobs = require_list(smoke.get("jobs"), "$.artifact_smoke.jobs", errors)
-    if builds_per_job and len(smoke_jobs) != len(jobs):
+    if builds_enabled and len(smoke_jobs) != len(jobs):
         add(errors, "$.artifact_smoke.jobs", "must cover every selected job when enabled")
 
     doctor = require_dict(root.get("doctor"), "$.doctor", errors)
@@ -267,7 +300,7 @@ def valid_fixture() -> dict[str, Any]:
         "prompt": {"candidate_sha256": candidate, "active_sha256": candidate, "status": "created-source-only-baseline"},
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "plan_digest": plan_digest,
         "engine": {"path": "/tmp/engine", "version": "v1.2.3", "revision": "a" * 40},
         "consumer": {"repository": {"owner": "example", "name": "dashboard", "full_name": "example/dashboard"}, "path": "/tmp/consumer", "project_id": "project", "name": "Project"},
@@ -298,6 +331,63 @@ def self_test() -> None:
     broken["apply_result"]["files"][0]["matches_reviewed_plan"] = False
     if not any("matches_reviewed_plan" in item for item in validate(broken)):
         raise AssertionError("manifest mismatch was accepted")
+    broken = copy.deepcopy(fixture)
+    broken["deployment"]["mode"] = "k8s"
+    if not any("requires exactly one" in item for item in validate(broken)):
+        raise AssertionError("Kubernetes handoff without storage was accepted")
+    for numeric_version in (1.0, 2.0):
+        numeric = copy.deepcopy(fixture)
+        numeric["schema_version"] = numeric_version
+        if validate(numeric):
+            raise AssertionError(f"integral numeric schema version {numeric_version} was rejected")
+    broken = copy.deepcopy(fixture)
+    broken["schema_version"] = True
+    if not any("numeric integer 1 or 2" in item for item in validate(broken)):
+        raise AssertionError("boolean schema version was accepted")
+    nested_numeric = copy.deepcopy(fixture)
+    nested_numeric["apply_result"]["schema_version"] = 1.0
+    nested_numeric["artifact_smoke"]["builds_per_job"] = 1.0
+    nested_numeric["engine"]["modified"] = False
+    if validate(nested_numeric):
+        raise AssertionError("valid nested numeric or boolean fields were rejected")
+    broken = copy.deepcopy(fixture)
+    broken["apply_result"]["schema_version"] = True
+    if not any("apply_result.schema_version" in item for item in validate(broken)):
+        raise AssertionError("boolean apply-result schema version was accepted")
+    broken = copy.deepcopy(fixture)
+    broken["artifact_smoke"]["builds_per_job"] = True
+    if not any("artifact_smoke.builds_per_job" in item for item in validate(broken)):
+        raise AssertionError("boolean artifact smoke build count was accepted")
+    broken = copy.deepcopy(fixture)
+    broken["engine"]["modified"] = "false"
+    if not any("engine.modified" in item for item in validate(broken)):
+        raise AssertionError("non-boolean engine modified value was accepted")
+    broken = copy.deepcopy(fixture)
+    broken["deployment"]["ai_enabled"] = "false"
+    if not any("deployment.ai_enabled" in item for item in validate(broken)):
+        raise AssertionError("non-boolean AI enabled value was accepted")
+    legacy = copy.deepcopy(fixture)
+    legacy["schema_version"] = 1
+    legacy["deployment"]["mode"] = "k8s"
+    if validate(legacy):
+        raise AssertionError("valid schema version 1 Kubernetes handoff was rejected")
+    legacy["deployment"]["k8s_storage_class"] = "shared-rwx"
+    if not any("version 1" in item for item in validate(legacy)):
+        raise AssertionError("schema version 1 storage extension was accepted")
+    kubernetes = copy.deepcopy(fixture)
+    kubernetes["deployment"]["mode"] = "k8s"
+    kubernetes["deployment"]["k8s_storage_class"] = "shared-rwx"
+    if validate(kubernetes):
+        raise AssertionError("valid Kubernetes storage was rejected")
+    broken = copy.deepcopy(kubernetes)
+    broken["deployment"]["k8s_existing_claim"] = "shared-data"
+    if not any("requires exactly one" in item for item in validate(broken)):
+        raise AssertionError("ambiguous Kubernetes storage was accepted")
+    broken = copy.deepcopy(kubernetes)
+    broken["deployment"]["k8s_existing_claim"] = None
+    null_errors = validate(broken)
+    if not any("valid Kubernetes" in item or "requires exactly one" in item for item in null_errors):
+        raise AssertionError("null Kubernetes storage was accepted")
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "handoff.json"
         path.write_text(json.dumps(fixture))

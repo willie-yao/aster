@@ -25,13 +25,15 @@ type SourceRevisionPlan struct {
 
 // DeploymentPlan describes the selected first-run deployment profile.
 type DeploymentPlan struct {
-	Mode           string   `json:"mode"`
-	Reasons        []string `json:"reasons,omitempty"`
-	ArtifactAccess string   `json:"artifact_access,omitempty"`
-	AIEnabled      bool     `json:"ai_enabled"`
-	AIAPI          string   `json:"ai_api,omitempty"`
-	Endpoint       string   `json:"ai_endpoint,omitempty"`
-	Model          string   `json:"ai_model,omitempty"`
+	Mode             string   `json:"mode"`
+	Reasons          []string `json:"reasons,omitempty"`
+	ArtifactAccess   string   `json:"artifact_access,omitempty"`
+	AIEnabled        bool     `json:"ai_enabled"`
+	AIAPI            string   `json:"ai_api,omitempty"`
+	Endpoint         string   `json:"ai_endpoint,omitempty"`
+	Model            string   `json:"ai_model,omitempty"`
+	K8sStorageClass  string   `json:"k8s_storage_class,omitempty"`
+	K8sExistingClaim string   `json:"k8s_existing_claim,omitempty"`
 }
 
 // DiscoveryPlan records the selected source and completed real job sweep.
@@ -94,19 +96,20 @@ type DestinationPlan struct {
 
 // Plan is a complete credential-free onboarding plan.
 type Plan struct {
-	Engine         EnginePlan                  `json:"engine"`
-	SourceRepo     Repo                        `json:"source_repo"`
-	SourceRevision SourceRevisionPlan          `json:"source_revision"`
-	DashboardRepo  Repo                        `json:"dashboard_repo"`
-	Deployment     DeploymentPlan              `json:"deployment"`
-	Discovery      DiscoveryPlan               `json:"discovery"`
-	Project        project.Config              `json:"project"`
-	Prompt         PromptPlan                  `json:"prompt"`
-	Destination    DestinationPlan             `json:"destination"`
-	Warnings       []string                    `json:"warnings,omitempty"`
-	Provenance     map[string]Inferred[string] `json:"provenance,omitempty"`
-	Files          map[string]string           `json:"-"`
-	reviewedDigest string
+	Engine                     EnginePlan                  `json:"engine"`
+	SourceRepo                 Repo                        `json:"source_repo"`
+	SourceRevision             SourceRevisionPlan          `json:"source_revision"`
+	DashboardRepo              Repo                        `json:"dashboard_repo"`
+	Deployment                 DeploymentPlan              `json:"deployment"`
+	Discovery                  DiscoveryPlan               `json:"discovery"`
+	Project                    project.Config              `json:"project"`
+	Prompt                     PromptPlan                  `json:"prompt"`
+	Destination                DestinationPlan             `json:"destination"`
+	Warnings                   []string                    `json:"warnings,omitempty"`
+	Provenance                 map[string]Inferred[string] `json:"provenance,omitempty"`
+	Files                      map[string]string           `json:"-"`
+	reviewedDigest             string
+	allowK8sStoragePlaceholder bool
 }
 
 // Terminal supplies injected input and output for the interactive wizard.

@@ -33,6 +33,8 @@ type scaffoldData struct {
 	AIAPI             string // seeds deploy/values.yaml ai.api (k8s mode)
 	AIEndpoint        string // seeds deploy/values.yaml ai.endpoint (k8s mode)
 	AIModel           string // seeds deploy/values.yaml ai.model (k8s mode)
+	K8sStorageClass   string // shared ReadWriteMany storage class (k8s mode)
+	K8sExistingClaim  string // existing shared ReadWriteMany PVC (k8s mode)
 	Namespace         string // k8s namespace / helm release name (k8s mode)
 	DashboardName     string // dashboard repo name; the scaffold's directory
 }
@@ -177,8 +179,8 @@ mode: watch
 # PVC. retain protects chart-managed data during removal or claim changes.
 persistence:
   enabled: true
-  existingClaim: ""
-  storageClass: "<your-rwx-storage-class>"
+  existingClaim: {{quote .K8sExistingClaim}}
+  storageClass: {{if .K8sExistingClaim}}""{{else if .K8sStorageClass}}{{quote .K8sStorageClass}}{{else}}"<your-rwx-storage-class>"{{end}}
   accessMode: ReadWriteMany
   size: 1Gi
   retain: true

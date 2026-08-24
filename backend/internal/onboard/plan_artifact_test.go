@@ -377,3 +377,88 @@ func TestApplyReviewedPlanRejectsDestinationDrift(t *testing.T) {
 		t.Fatalf("writes = %d", writer.writes)
 	}
 }
+
+func TestPlanArtifactRejectsPreviousSchema(t *testing.T) {
+	plan, _, _ := testReviewedPlan(t)
+	planCopy := *plan
+	planCopy.Files = nil
+	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion - 1, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "old-plan.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanArtifactRejectsK8sStorageMetadataMismatch(t *testing.T) {
+	_, deps, _ := testReviewedPlan(t)
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
+		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+		AIEnabled: &disabled, K8sStorageClass: "shared-rwx", DryRun: true,
+		PlanOut: filepath.Join(t.TempDir(), "reviewed-plan.json"),
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Deployment.K8sStorageClass = "other-rwx"
+	if _, err := WritePlanArtifact(filepath.Join(t.TempDir(), "plan.json"), plan); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPlanArtifactRejectsInvalidStorageMetadata(t *testing.T) {
+	t.Run("Pages storage metadata", func(t *testing.T) {
+		plan, _, _ := testReviewedPlan(t)
+		plan.Deployment.K8sStorageClass = "shared-rwx"
+		writeAndReadInvalidPlanArtifact(t, plan, "Pages deployment contains Kubernetes storage metadata")
+	})
+
+	t.Run("invalid Kubernetes name", func(t *testing.T) {
+		_, deps, _ := testReviewedPlan(t)
+		disabled := false
+		opts := Options{
+			TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
+			SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
+			OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+			AIEnabled: &disabled, K8sStorageClass: "shared-rwx",
+		}
+		plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan.Deployment.K8sStorageClass = "INVALID_CLASS"
+		plan.Files["deploy/values.yaml"] = strings.ReplaceAll(plan.Files["deploy/values.yaml"], "shared-rwx", "INVALID_CLASS")
+		writeAndReadInvalidPlanArtifact(t, plan, "is invalid")
+	})
+}
+
+func writeAndReadInvalidPlanArtifact(t *testing.T, plan *Plan, want string) {
+	t.Helper()
+	if err := bindPlanArtifactDestination(plan); err != nil {
+		t.Fatal(err)
+	}
+	planCopy := *plan
+	planCopy.Files = nil
+	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "invalid-plan.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want containing %q", err, want)
+	}
+}
