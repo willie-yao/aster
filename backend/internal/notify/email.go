@@ -225,7 +225,9 @@ func (n *Notifier) patternMessage(pattern models.PatternAnalysis, previousRootCa
 		SuggestedFix:   textutil.Truncate(pattern.SuggestedFix, 1000),
 		DashboardURL:   n.patternURL(pattern),
 	}
-	if n.actionLinks && pattern.ID != "" {
+	// Causal-group results are analysis-only, so the server rejects actions on
+	// them. Rendering the links would advertise a dead end.
+	if n.actionLinks && pattern.ID != "" && models.PatternAllowsActions(pattern) {
 		view.IssueURL = n.patternActionURL(pattern, "create-issue")
 		view.FixURL = n.patternActionURL(pattern, "propose-fix")
 	}

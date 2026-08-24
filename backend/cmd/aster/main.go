@@ -5,7 +5,8 @@
 //
 // The onboard subcommand scaffolds a new dashboard config from a TestGrid
 // dashboard name or storage bucket. The kubernetes subcommand validates and
-// installs a consumer bundle with Helm.
+// installs a consumer bundle with Helm. The notify-test subcommand sends one
+// test email through the configured relay.
 package main
 
 import (
@@ -23,7 +24,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetcher"
 	"github.com/willie-yao/aster/backend/internal/kubernetesdeploy"
+	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/onboard"
+	"github.com/willie-yao/aster/backend/internal/project"
 )
 
 // version is the engine version. Builds can override it with
@@ -46,6 +49,10 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "onboard" {
 		runOnboard(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "notify-test" {
+		runNotifyTest(os.Args[2:])
 		return
 	}
 
@@ -354,6 +361,45 @@ func runOnboardDoctor(args []string) {
 		os.Exit(1)
 	}
 	if report.HasFailures() {
+		os.Exit(1)
+	}
+}
+
+// runNotifyTest sends one test email through the consumer's configured relay.
+// It exercises the same sender the fetcher uses, which lets an operator confirm
+// deliverability from the deployment itself rather than waiting for an alert.
+func runNotifyTest(args []string) {
+	fs := flag.NewFlagSet("notify-test", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var projectDir string
+	var to string
+	fs.StringVar(&projectDir, "project-dir", ".", "directory containing project.yaml")
+	fs.StringVar(&to, "to", "", "comma-separated recipients overriding notifications.email.to")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "error: unexpected arguments: %s\n", strings.Join(fs.Args(), " "))
+		os.Exit(2)
+	}
+
+	cfg, err := project.Load(filepath.Join(projectDir, "project.yaml"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	var recipients []string
+	for _, recipient := range strings.Split(to, ",") {
+		if trimmed := strings.TrimSpace(recipient); trimmed != "" {
+			recipients = append(recipients, trimmed)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := notify.ProbeOptions{Config: cfg, Password: os.Getenv("EMAIL_SMTP_PASSWORD"), To: recipients}
+	if err := notify.Probe(ctx, opts, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
