@@ -437,7 +437,7 @@ func validateAnalysisChatCitations(
 				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d has an invalid line range", i+1),
 			}
 		}
-		locator := normalizeCitationText(citation.Quote)
+		locator := NormalizeCitationText(citation.Quote)
 		// A quote of nothing but colour codes normalizes away and would match
 		// any passage.
 		if len(citation.Quote) < 4 || locator == "" {
@@ -467,7 +467,7 @@ func validateAnalysisChatCitations(
 			// stored text and the cited lines still describe each other. What
 			// survives has to still cover the passage the model pointed at.
 			clamped, kept := clampAnalysisChatQuote(quote)
-			if clamped != quote && !strings.Contains(normalizeCitationText(clamped), locator) {
+			if clamped != quote && !strings.Contains(NormalizeCitationText(clamped), locator) {
 				return tooLong
 			}
 			citation.Quote = clamped
@@ -494,7 +494,7 @@ func validateAnalysisChatCitations(
 		clamped, _ := clampAnalysisChatQuote(quote)
 		// Recording only part of the passage would leave the maintainer reading
 		// text that no longer covers what the citation claimed.
-		if !strings.Contains(normalizeCitationText(clamped), locator) {
+		if !strings.Contains(NormalizeCitationText(clamped), locator) {
 			return tooLong
 		}
 		citation.Quote = clamped

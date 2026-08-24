@@ -1240,7 +1240,7 @@ func analysisChatEvidenceContexts(value any) []string {
 // evidence, so the caller marks the citation unverified rather than attributing
 // the wrong passage.
 func attributeAnalysisChatQuote(evidence *analysisChatEvidence, locator string) (string, int) {
-	want := normalizeCitationText(locator)
+	want := NormalizeCitationText(locator)
 	if evidence == nil || want == "" {
 		return "", 0
 	}
@@ -1250,7 +1250,7 @@ func attributeAnalysisChatQuote(evidence *analysisChatEvidence, locator string) 
 		lines := strings.Split(segment, "\n")
 		normalized := make([]string, len(lines))
 		for i, line := range lines {
-			normalized[i] = normalizeCitationText(line)
+			normalized[i] = NormalizeCitationText(line)
 		}
 		for start := range lines {
 			// A blank start line would attribute the same passage with a leading
@@ -1340,12 +1340,12 @@ func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) 
 	if evidence == nil {
 		return false
 	}
-	normalized := normalizeCitationText(quote)
+	normalized := NormalizeCitationText(quote)
 	if normalized == "" {
 		return false
 	}
 	for _, segment := range evidence.Segments {
-		if strings.Contains(normalizeCitationText(segment), normalized) {
+		if strings.Contains(NormalizeCitationText(segment), normalized) {
 			return true
 		}
 	}

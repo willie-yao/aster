@@ -680,7 +680,7 @@ func evidenceCitationIssue(citation models.EvidenceCitation, evidenceByPath map[
 }
 
 func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) bool {
-	want := normalizeCitationText(quote)
+	want := NormalizeCitationText(quote)
 	// A quote of nothing but colour codes normalizes away and would otherwise
 	// match every range.
 	if want == "" {
@@ -694,7 +694,7 @@ func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) 
 		}
 		parts = append(parts, text)
 	}
-	return strings.Contains(normalizeCitationText(strings.Join(parts, "\n")), want)
+	return strings.Contains(NormalizeCitationText(strings.Join(parts, "\n")), want)
 }
 
 // citationDisplayNoise matches SGR escape sequences, the colour and style codes
@@ -703,12 +703,12 @@ func normalizedQuoteInRange(lines map[int]string, start, end int, quote string) 
 // text renders, so a quote that drops one must fail closed.
 var citationDisplayNoise = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// normalizeCitationText strips colour codes and collapses every whitespace run.
+// NormalizeCitationText strips colour codes and collapses every whitespace run.
 // Both are presentation a model routinely drops or re-wraps when quoting a log,
 // and neither changes what the text says. Every citation check in the engine
 // compares through this function, so the analyzer and analysis chat apply the
 // same rule to the same recorded evidence.
-func normalizeCitationText(value string) string {
+func NormalizeCitationText(value string) string {
 	return strings.Join(strings.Fields(citationDisplayNoise.ReplaceAllString(value, "")), " ")
 }
 

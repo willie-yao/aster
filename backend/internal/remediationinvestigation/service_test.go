@@ -1195,3 +1195,54 @@ func TestServiceOptionsBoundIterations(t *testing.T) {
 		t.Fatalf("default MaxIters = %d, want 10", got)
 	}
 }
+
+// A Ginkgo build log carries ANSI colour codes and indentation that a model
+// drops when it quotes, so citations are compared through the engine's shared
+// citation rule rather than byte for byte.
+func TestPrepareArtifactEvidenceAcceptsRenderedQuote(t *testing.T) {
+	log := "  Aug  8 18:59:39.232: INFO: Deployment kube-system/csi-azuredisk-controller is now available\n" +
+		"  INFO: Installing a CNI plugin to the workload cluster capz-e2e-hfmn8i\n" +
+		"  \x1b[38;5;9m[FAILED]\x1b[0m in [It] - clusterctl_helpers.go:432 \x1b[38;5;243m@ 08/08/26 18:59:40.163\x1b[0m\n"
+	browser := fakeBrowser{files: map[string]string{"builds/7/build-log.txt": log}}
+	input := FrozenInput{
+		Group: models.PatternCausalGroup{Builds: []string{"7"}},
+		Analyses: []AnalysisReference{{
+			BuildID: "7", GeneratedAt: "2026-01-01T00:00:00Z", RootCause: "boom",
+			Evidence: []models.EvidenceCitation{{
+				Path: "build-log.txt", LineStart: 1, LineEnd: 3,
+				// Colour codes stripped and indentation re-wrapped, exactly as
+				// a published analysis records it.
+				Quote: "Aug  8 18:59:39.232: INFO: Deployment kube-system/csi-azuredisk-controller is now available\n" +
+					"   INFO: Installing a CNI plugin to the workload cluster capz-e2e-hfmn8i\n" +
+					"   [FAILED] in [It] - clusterctl_helpers.go:432 @ 08/08/26 18:59:40.163",
+			}},
+		}},
+	}
+
+	records, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger())
+	if err != nil {
+		t.Fatalf("a faithfully rendered quote was rejected: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	// The digest still covers the raw cited bytes, so verification is unaffected.
+	if err := verifyArtifactEvidence(t.Context(), browser, records[0]); err != nil {
+		t.Fatalf("verification disagreed with preparation: %v", err)
+	}
+
+	// Normalization must not accept a quote that is not in the cited range.
+	input.Analyses[0].Evidence[0].Quote = "INFO: Deployment kube-system/csi-azurefile-controller is now available"
+	if _, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger()); err == nil {
+		t.Fatal("a quote absent from the cited range was accepted")
+	}
+
+	// A quote that normalizes away carries no claim and must not match every
+	// range through an empty substring.
+	for _, empty := range []string{"\x1b[0m", "   ", ""} {
+		input.Analyses[0].Evidence[0].Quote = empty
+		if _, err := prepareArtifactEvidence(t.Context(), input, browser, newEvidenceLedger()); err == nil {
+			t.Fatalf("quote %q normalized away and was accepted", empty)
+		}
+	}
+}
