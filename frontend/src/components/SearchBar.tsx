@@ -131,7 +131,17 @@ export function SearchResultButton({ entry, filePrefix, onSelect }: SearchResult
 SearchResultButton.accessibleName = searchResultAccessibleName;
 SearchResultButton.path = searchResultPath;
 
-export function SearchBar() {
+/**
+ * Global job and test search.
+ *
+ * `inline` renders the field directly, collapsing to an icon below `md`.
+ * `rail` always renders the compact trigger and opens the same full-screen
+ * overlay, so the navigation rail can host search without a top bar.
+ *
+ * Only one instance may be mounted: it registers a global Cmd+K listener.
+ */
+export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" }) {
+  const rail = variant === "rail";
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
   const [activated, setActivated] = useState(false);
@@ -212,7 +222,15 @@ export function SearchBar() {
   }
 
   return (
-    <Box ref={containerRef} sx={{ position: "relative", display: "flex", alignItems: "center" }}>
+    <Box
+      ref={containerRef}
+      sx={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        ...(rail && { flexDirection: "column", width: "100%" }),
+      }}
+    >
       <IconButton
         type="button"
         onClick={() => {
@@ -223,25 +241,38 @@ export function SearchBar() {
         aria-label="Search jobs and tests"
         size="small"
         sx={{
-          display: { xs: "inline-flex", md: "none" },
-          width: 44,
-          height: 44,
-          minWidth: 44,
+          display: rail ? "flex" : { xs: "inline-flex", md: "none" },
+          ...(rail
+            ? {
+                flexDirection: "column",
+                gap: 0.375,
+                width: "100%",
+                height: 54,
+                borderRadius: 0,
+              }
+            : { width: 44, height: 44, minWidth: 44, borderRadius: "4px" }),
           flexShrink: 0,
           p: 0,
           alignItems: "center",
           justifyContent: "center",
-          borderRadius: "4px",
           color: "text.secondary",
           "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
           "&.Mui-focusVisible": {
             outline: "2px solid",
             outlineColor: "primary.main",
-            outlineOffset: 1,
+            outlineOffset: rail ? -2 : 1,
           },
         }}
       >
         <Search sx={{ fontSize: 20 }} />
+        {rail && (
+          <Box
+            component="span"
+            sx={{ fontSize: "0.625rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+          >
+            Search
+          </Box>
+        )}
       </IconButton>
 
       <Box
@@ -261,7 +292,7 @@ export function SearchBar() {
                 borderBottom: "1px solid",
                 borderColor: "divider",
               }
-            : { display: { xs: "none", md: "block" } },
+            : { display: rail ? "none" : { xs: "none", md: "block" } },
         ]}
       >
         <Box sx={{ flex: 1, width: { xs: "100%", md: 256, lg: 320 } }}>
@@ -340,7 +371,7 @@ export function SearchBar() {
               setQuery("");
             }}
             sx={{
-              display: { xs: "inline-flex", md: "none" },
+              display: rail ? "inline-flex" : { xs: "inline-flex", md: "none" },
               flexShrink: 0,
               minWidth: 0,
               px: 0.5,

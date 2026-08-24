@@ -48,6 +48,73 @@ test("primary navigation swaps between a rail and a bottom bar without a gap", (
   assert.match(profile, /height: \{ xs: 44, sm: 36 \}/);
 });
 
+test("search and account controls are placed once, never mounted twice", () => {
+  const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+
+  // SearchBar owns a global Cmd+K listener, so two mounts would register two
+  // handlers and fight over focus. The breakpoint decides placement at render
+  // time instead of hiding a second copy with CSS.
+  assert.match(layout, /const railHostsControls = useMediaQuery\(theme\.breakpoints\.up\("md"\)\)/);
+  assert.match(layout, /search=\{railHostsControls \? <SearchBar variant="rail" \/> : undefined\}/);
+  assert.match(layout, /controls=\{railHostsControls \? controls : undefined\}/);
+  // The top bar exists only when the rail is not hosting those controls.
+  assert.match(layout, /\{!railHostsControls && \(\s*<AppBar/);
+  assert.equal(layout.match(/<SearchBar/g)?.length, 2);
+  assert.equal(layout.match(/<ProfileMenu /g)?.length, 1);
+  assert.equal(layout.match(/<FetchStatusControl /g)?.length, 1);
+  // The rail renders each slot once; the bottom bar must not repeat them.
+  assert.equal(rail.match(/\{search\}/g)?.length, 1);
+  assert.equal(rail.match(/\{controls\}/g)?.length, 1);
+});
+
+test("rail-hosted controls stay inside the 76px column", () => {
+  const layout = source("src/components/Layout.tsx");
+  const profile = source("src/components/ProfileMenu.tsx");
+  const fetchStatus = source("src/components/FetchStatus.tsx");
+
+  // At md+ these render their labelled desktop form, which overflows the rail.
+  assert.match(layout, /<FetchStatusControl response=\{fetchStatus\} iconOnly=\{railHostsControls\} \/>/);
+  assert.match(layout, /<ProfileMenu compact=\{railHostsControls\} \/>/);
+  assert.match(fetchStatus, /width: iconOnly \? 44 : \{ xs: 44, md: "auto" \}/);
+  assert.match(fetchStatus, /"& \.MuiButton-endIcon": \{ display: iconOnly \? "none"/);
+  // The status label is the widest part of the control and must be hidden too,
+  // or a 44px button still overflows the rail.
+  assert.match(fetchStatus, /display: iconOnly \? "none" : \{ xs: "none", md: "inline" \}/);
+  // Signed out, the labelled "Sign in" button becomes an icon button.
+  assert.match(profile, /if \(compact\) \{[\s\S]*?aria-label="Sign in"/);
+});
+
+test("the rail keeps every destination reachable on a short viewport", () => {
+  const rail = source("src/components/NavRail.tsx");
+
+  // The rail is pinned to 100vh. Search, five destinations, and the footer can
+  // exceed a short laptop viewport, so the destination list scrolls while the
+  // brand and footer stay put.
+  assert.match(rail, /height: "100vh"/);
+  assert.match(rail, /overflow: "hidden"/);
+  assert.match(rail, /flex: 1, minHeight: 0, overflowY: "auto"/);
+  // The rail root, brand, search, and footer must not shrink or the list would
+  // not be the element that scrolls.
+  assert.equal(rail.match(/flexShrink: 0/g)?.length, 4);
+});
+
+test("the deployment title identifies the instance on its home page", () => {
+  const dashboard = source("src/pages/DashboardPage.tsx");
+  const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+
+  // The rail only has room for the short name, so the full title lives in the
+  // overview header. It is a sibling of the h1, not a competing heading.
+  assert.match(dashboard, /component="p"[\s\S]*?\{manifest\.branding\.title\}/);
+  assert.match(dashboard, /component="h1"[\s\S]*?Test Health Overview/);
+  assert.doesNotMatch(dashboard, /component="h1"[^>]*>\s*\{manifest\.branding\.title\}/);
+  // short_name is optional, so the rail always has something to show.
+  assert.match(layout, /brandLabel=\{manifest\.short_name \?\? manifest\.name\}/);
+  // The accessible name must contain the visible short name (WCAG 2.5.3).
+  assert.match(rail, /aria-label=\{brandLabel \? `\$\{brandLabel\} home` : homeLabel\}/);
+});
+
 test("run history remains contained on narrow detail pages", () => {
   const timeline = source("src/components/RunHistory.tsx");
   const jobDetail = source("src/pages/JobDetailPage.tsx");

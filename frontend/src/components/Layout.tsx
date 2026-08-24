@@ -7,7 +7,8 @@ import IconButton from "@mui/material/IconButton";
 import MuiLink from "@mui/material/Link";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
-import { useColorScheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import { useColorScheme, useTheme } from "@mui/material/styles";
 import { useState } from "react";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
@@ -43,6 +44,33 @@ export function Layout() {
     operatorAccess: auth.status === "authenticated",
   });
   const homeLabel = `${manifest.branding.title} home`;
+  // The rail hosts search and the account controls from md up; below that the
+  // top bar does. They are placed rather than duplicated because SearchBar owns
+  // a global Cmd+K listener and must be mounted exactly once.
+  const theme = useTheme();
+  const railHostsControls = useMediaQuery(theme.breakpoints.up("md"));
+
+  const controls = (
+    <>
+      <FetchStatusControl response={fetchStatus} iconOnly={railHostsControls} />
+      {mode !== undefined && (
+        <IconButton
+          aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
+          onClick={() => setMode(isDark ? "light" : "dark")}
+          size="small"
+          sx={{
+            width: { xs: 44, sm: 36 },
+            height: { xs: 44, sm: 36 },
+            color: "text.secondary",
+            "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
+          }}
+        >
+          {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
+        </IconButton>
+      )}
+      <ProfileMenu compact={railHostsControls} />
+    </>
+  );
 
   return (
     <FetchStatusContext.Provider value={fetchStatus}>
@@ -71,9 +99,16 @@ export function Layout() {
         Skip to main content
       </MuiLink>
 
-      <NavRail destinations={destinations} homeLabel={homeLabel} />
+      <NavRail
+        destinations={destinations}
+        homeLabel={homeLabel}
+        brandLabel={manifest.short_name ?? manifest.name}
+        search={railHostsControls ? <SearchBar variant="rail" /> : undefined}
+        controls={railHostsControls ? controls : undefined}
+      />
 
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      {!railHostsControls && (
       <AppBar
         position="sticky"
         color="transparent"
@@ -88,7 +123,7 @@ export function Layout() {
         <Toolbar
           disableGutters
           sx={{
-            minHeight: { xs: "56px !important", md: "52px !important" },
+            minHeight: "56px !important",
             px: { xs: 2, sm: 3 },
             display: "flex",
             alignItems: "center",
@@ -102,7 +137,7 @@ export function Layout() {
             underline="none"
             color="inherit"
             sx={{
-              display: { xs: "flex", md: "none" },
+              display: "flex",
               alignItems: "center",
               minHeight: 44,
               gap: 1.25,
@@ -156,26 +191,11 @@ export function Layout() {
               flex: 1,
             }}
           >
-            <FetchStatusControl response={fetchStatus} />
-            {mode !== undefined && (
-              <IconButton
-                aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
-                onClick={() => setMode(isDark ? "light" : "dark")}
-                size="small"
-                sx={{
-                  width: { xs: 44, sm: 32 },
-                  height: { xs: 44, sm: 32 },
-                  color: "text.secondary",
-                  "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
-                }}
-              >
-                {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
-              </IconButton>
-            )}
-            <ProfileMenu />
+            {controls}
           </Box>
         </Toolbar>
       </AppBar>
+      )}
 
       <FetchStatusStrip
         response={fetchStatus}

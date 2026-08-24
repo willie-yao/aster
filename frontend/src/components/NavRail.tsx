@@ -9,6 +9,7 @@ import AltRoute from "@mui/icons-material/AltRouteOutlined";
 import MonitorHeart from "@mui/icons-material/MonitorHeartOutlined";
 import Paid from "@mui/icons-material/PaidOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
+import type { ReactNode } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { AsterMark } from "./AsterMark";
 import type { NavDestination } from "../lib/navigation";
@@ -71,9 +72,15 @@ function NavLabel({ children }: { children: string }) {
 export function NavRail({
   destinations,
   homeLabel,
+  brandLabel,
+  search,
+  controls,
 }: {
   destinations: NavDestination[];
   homeLabel: string;
+  brandLabel?: string;
+  search?: ReactNode;
+  controls?: ReactNode;
 }) {
   const signal = destinations.filter((d) => d.scope === "signal");
   const operator = destinations.filter((d) => d.scope === "operator");
@@ -91,6 +98,7 @@ export function NavRail({
         top: 0,
         height: "100vh",
         py: 1.5,
+        overflow: "hidden",
         bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
         borderRight: "1px solid",
         borderColor: "divider",
@@ -100,13 +108,18 @@ export function NavRail({
       <MuiLink
         component={RouterLink}
         to="/"
-        aria-label={homeLabel}
+        // The accessible name must contain the visible label (WCAG 2.5.3), so
+        // it is built from the short name shown here, not the full title.
+        aria-label={brandLabel ? `${brandLabel} home` : homeLabel}
+        title={homeLabel}
         underline="none"
+        color="inherit"
         sx={{
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "center",
-          height: 40,
+          gap: 0.25,
+          flexShrink: 0,
           mb: 1,
           transition: "opacity 150ms ease",
           "@media (prefers-reduced-motion: reduce)": { transition: "none" },
@@ -114,41 +127,85 @@ export function NavRail({
         }}
       >
         <AsterMark size={28} />
+        {brandLabel && (
+          <Typography
+            component="span"
+            sx={{
+              fontSize: "0.625rem",
+              fontWeight: 700,
+              letterSpacing: "0.02em",
+              maxWidth: "100%",
+              px: 0.5,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {brandLabel}
+          </Typography>
+        )}
       </MuiLink>
 
-      {signal.map((d) => (
-        <ButtonBase
-          key={d.id}
-          component={RouterLink}
-          to={d.to}
-          title={d.title}
-          aria-current={d.active ? "page" : undefined}
-          sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
-        >
-          {d.active && <ActiveBar />}
-          <NavIcon id={d.id} />
-          <NavLabel>{d.label}</NavLabel>
-        </ButtonBase>
-      ))}
-
-      {operator.length > 0 && (
+      {search && (
         <>
+          <Box sx={{ flexShrink: 0, display: "flex" }}>{search}</Box>
           <Divider sx={{ mx: 1.75, my: 1 }} />
-          {operator.map((d) => (
-            <ButtonBase
-              key={d.id}
-              component={RouterLink}
-              to={d.to}
-              title={d.title}
-              aria-current={d.active ? "page" : undefined}
-              sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
-            >
-              {d.active && <ActiveBar />}
-              <NavIcon id={d.id} />
-              <NavLabel>{d.label}</NavLabel>
-            </ButtonBase>
-          ))}
         </>
+      )}
+
+      {/* The destination list scrolls so a short viewport cannot trap an item. */}
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", scrollbarWidth: "thin" }}>
+        {signal.map((d) => (
+          <ButtonBase
+            key={d.id}
+            component={RouterLink}
+            to={d.to}
+            title={d.title}
+            aria-current={d.active ? "page" : undefined}
+            sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
+          >
+            {d.active && <ActiveBar />}
+            <NavIcon id={d.id} />
+            <NavLabel>{d.label}</NavLabel>
+          </ButtonBase>
+        ))}
+
+        {operator.length > 0 && (
+          <>
+            <Divider sx={{ mx: 1.75, my: 1 }} />
+            {operator.map((d) => (
+              <ButtonBase
+                key={d.id}
+                component={RouterLink}
+                to={d.to}
+                title={d.title}
+                aria-current={d.active ? "page" : undefined}
+                sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
+              >
+                {d.active && <ActiveBar />}
+                <NavIcon id={d.id} />
+                <NavLabel>{d.label}</NavLabel>
+              </ButtonBase>
+            ))}
+          </>
+        )}
+      </Box>
+
+      {controls && (
+        <Box
+          sx={{
+            flexShrink: 0,
+            pt: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 0.5,
+            borderTop: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          {controls}
+        </Box>
       )}
     </Box>
   );

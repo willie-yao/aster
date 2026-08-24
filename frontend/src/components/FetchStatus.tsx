@@ -38,6 +38,8 @@ import { soft } from "../theme";
 
 interface FetchStatusControlProps {
   response: FetchStatusResponse | null;
+  /** Icon-only rendering for the navigation rail's 76px column. */
+  iconOnly?: boolean;
 }
 
 interface FetchStatusStripProps {
@@ -406,7 +408,7 @@ function CopyableDebugRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function FetchStatusControl({ response }: FetchStatusControlProps) {
+export function FetchStatusControl({ response, iconOnly = false }: FetchStatusControlProps) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -453,10 +455,11 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
         onClick={(event) => setAnchor(event.currentTarget)}
         endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
         sx={{
-          minWidth: { xs: 44, md: "auto" },
-          width: { xs: 44, md: "auto" },
-          height: { xs: 44, md: 34 },
-          px: { xs: 0, md: 1.1 },
+          // The rail hosts this in a 76px column, so it stays icon-only there.
+          minWidth: iconOnly ? 44 : { xs: 44, md: "auto" },
+          width: iconOnly ? 44 : { xs: 44, md: "auto" },
+          height: iconOnly ? 44 : { xs: 44, md: 34 },
+          px: iconOnly ? 0 : { xs: 0, md: 1.1 },
           border: "1px solid",
           borderColor: "divider",
           borderRadius: 999,
@@ -465,18 +468,23 @@ export function FetchStatusControl({ response }: FetchStatusControlProps) {
           textTransform: "none",
           whiteSpace: "nowrap",
           boxShadow: "none",
-          "& .MuiButton-endIcon": { display: { xs: "none", md: "inherit" } },
+          "& .MuiButton-endIcon": { display: iconOnly ? "none" : { xs: "none", md: "inherit" } },
           "&:hover": {
             borderColor: `${compact.severity}.main`,
             bgcolor: (theme) => soft(theme, compact.severity, 0.08),
           },
         }}
       >
-        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: { xs: 0, md: 1 } }}>
+        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: iconOnly ? 0 : { xs: 0, md: 1 } }}>
           {stateIcon(response, 18, presentation.severity)}
           <Box
             component="span"
-            sx={{ display: { xs: "none", md: "inline" }, color: "text.primary", fontSize: "0.75rem", fontWeight: 700 }}
+            sx={{
+              display: iconOnly ? "none" : { xs: "none", md: "inline" },
+              color: "text.primary",
+              fontSize: "0.75rem",
+              fontWeight: 700,
+            }}
           >
             {compact.label}
           </Box>
