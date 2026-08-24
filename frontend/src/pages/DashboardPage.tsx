@@ -184,9 +184,19 @@ export function DashboardPage() {
           gap: 1,
         }}
       >
-        <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
-          Test Health Overview
-        </Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            variant="label"
+            component="p"
+            color="textSecondary"
+            sx={{ mb: 0.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+          >
+            {manifest.branding.title}
+          </Typography>
+          <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
+            Test Health Overview
+          </Typography>
+        </Box>
         <Typography variant="data" color="textSecondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>

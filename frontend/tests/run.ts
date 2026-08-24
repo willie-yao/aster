@@ -11,6 +11,7 @@ import "./briefingSection.test.js";
 import "./upstreamCause.test.js";
 import "./patternDismissal.test.js";
 import "./pageMetadata.test.js";
+import "./navigation.test.js";
 import "./routes.test.js";
 import "./securityMarkup.test.js";
 import "./spaRedirect.test.js";

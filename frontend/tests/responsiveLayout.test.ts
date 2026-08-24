@@ -9,33 +9,110 @@ function source(path: string): string {
 
 test("mobile branding link keeps an accessible home name", () => {
   const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+  const navigation = source("src/lib/navigation.ts");
 
-  assert.match(
-    layout,
-    /<MuiLink[\s\S]*?aria-label=\{`\$\{manifest\.branding\.title\} home`\}[\s\S]*?>/,
-  );
+  assert.match(layout, /<MuiLink[\s\S]*?aria-label=\{homeLabel\}[\s\S]*?>/);
   assert.match(
     layout,
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
-  assert.match(layout, /label="Failure Trends"/);
-  assert.match(layout, /label="Analysis Health"/);
-  assert.match(layout, /label="AI Usage"/);
+  // Both navs are rendered, so each must carry the full destination name as a
+  // description. The visible label stays the accessible name so speech control
+  // can target what it reads (WCAG 2.5.3).
+  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
+  assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
+  assert.match(navigation, /title: "Failure Trends"/);
+  assert.match(navigation, /title: "Analysis Health"/);
+  assert.match(navigation, /title: "AI Usage"/);
 });
 
-test("header keeps navigation readable until the extra-large layout fits", () => {
+test("primary navigation swaps between a rail and a bottom bar without a gap", () => {
   const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
   const profile = source("src/components/ProfileMenu.tsx");
 
-  assert.match(layout, /xl: '"brand nav controls"'/);
-  assert.doesNotMatch(layout, /lg: '"brand nav controls"'/);
-  assert.match(layout, /flexShrink: 0,[\s\S]*minHeight: \{ xs: 44, xl: 36 \}/);
-  assert.match(layout, /justifyContent: \{ xs: "flex-start", xl: "flex-start" \}/);
-  assert.match(layout, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)\?\.scrollIntoView/);
+  // Operator destinations render only a sign-in wall without a session, so the
+  // rail must derive access from auth rather than the deployment flags alone.
+  assert.match(layout, /operatorAccess: auth\.status === "authenticated"/);
+  // Exactly one primary nav is visible at any width: the rail from md up, the
+  // bottom bar below it.
+  assert.match(rail, /display: \{ xs: "none", md: "flex" \}/);
+  assert.match(rail, /display: \{ xs: "flex", md: "none" \}/);
+  // The fixed bottom bar must not cover the end of the page.
+  assert.match(layout, /BOTTOM_BAR_HEIGHT\}px \+ env\(safe-area-inset-bottom\)/);
+  assert.match(rail, /pb: "env\(safe-area-inset-bottom\)"/);
   assert.match(layout, /href="#main-content"[\s\S]*Skip to main content/);
   assert.match(layout, /id="main-content"[\s\S]*tabIndex=\{-1\}/);
   assert.match(profile, /width: \{ xs: 44, sm: 36 \}/);
   assert.match(profile, /height: \{ xs: 44, sm: 36 \}/);
+});
+
+test("search and account controls are placed once, never mounted twice", () => {
+  const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+
+  // SearchBar owns a global Cmd+K listener, so two mounts would register two
+  // handlers and fight over focus. The breakpoint decides placement at render
+  // time instead of hiding a second copy with CSS.
+  assert.match(layout, /const railHostsControls = useMediaQuery\(theme\.breakpoints\.up\("md"\)\)/);
+  assert.match(layout, /search=\{railHostsControls \? <SearchBar variant="rail" \/> : undefined\}/);
+  assert.match(layout, /controls=\{railHostsControls \? controls : undefined\}/);
+  // The top bar exists only when the rail is not hosting those controls.
+  assert.match(layout, /\{!railHostsControls && \(\s*<AppBar/);
+  assert.equal(layout.match(/<SearchBar/g)?.length, 2);
+  assert.equal(layout.match(/<ProfileMenu /g)?.length, 1);
+  assert.equal(layout.match(/<FetchStatusControl /g)?.length, 1);
+  // The rail renders each slot once; the bottom bar must not repeat them.
+  assert.equal(rail.match(/\{search\}/g)?.length, 1);
+  assert.equal(rail.match(/\{controls\}/g)?.length, 1);
+});
+
+test("rail-hosted controls stay inside the 76px column", () => {
+  const layout = source("src/components/Layout.tsx");
+  const profile = source("src/components/ProfileMenu.tsx");
+  const fetchStatus = source("src/components/FetchStatus.tsx");
+
+  // At md+ these render their labelled desktop form, which overflows the rail.
+  assert.match(layout, /<FetchStatusControl response=\{fetchStatus\} iconOnly=\{railHostsControls\} \/>/);
+  assert.match(layout, /<ProfileMenu compact=\{railHostsControls\} \/>/);
+  assert.match(fetchStatus, /width: iconOnly \? 44 : \{ xs: 44, md: "auto" \}/);
+  assert.match(fetchStatus, /"& \.MuiButton-endIcon": \{ display: iconOnly \? "none"/);
+  // The status label is the widest part of the control and must be hidden too,
+  // or a 44px button still overflows the rail.
+  assert.match(fetchStatus, /display: iconOnly \? "none" : \{ xs: "none", md: "inline" \}/);
+  // Signed out, the labelled "Sign in" button becomes an icon button.
+  assert.match(profile, /if \(compact\) \{[\s\S]*?aria-label="Sign in"/);
+});
+
+test("the rail keeps every destination reachable on a short viewport", () => {
+  const rail = source("src/components/NavRail.tsx");
+
+  // The rail is pinned to 100vh. Search, five destinations, and the footer can
+  // exceed a short laptop viewport, so the destination list scrolls while the
+  // brand and footer stay put.
+  assert.match(rail, /height: "100vh"/);
+  assert.match(rail, /overflow: "hidden"/);
+  assert.match(rail, /flex: 1, minHeight: 0, overflowY: "auto"/);
+  // The rail root, brand, search, and footer must not shrink or the list would
+  // not be the element that scrolls.
+  assert.equal(rail.match(/flexShrink: 0/g)?.length, 4);
+});
+
+test("the deployment title identifies the instance on its home page", () => {
+  const dashboard = source("src/pages/DashboardPage.tsx");
+  const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+
+  // The rail only has room for the short name, so the full title lives in the
+  // overview header. It is a sibling of the h1, not a competing heading.
+  assert.match(dashboard, /component="p"[\s\S]*?\{manifest\.branding\.title\}/);
+  assert.match(dashboard, /component="h1"[\s\S]*?Test Health Overview/);
+  assert.doesNotMatch(dashboard, /component="h1"[^>]*>\s*\{manifest\.branding\.title\}/);
+  // short_name is optional, so the rail always has something to show.
+  assert.match(layout, /brandLabel=\{manifest\.short_name \?\? manifest\.name\}/);
+  // The accessible name must contain the visible short name (WCAG 2.5.3).
+  assert.match(rail, /aria-label=\{brandLabel \? `\$\{brandLabel\} home` : homeLabel\}/);
 });
 
 test("run history remains contained on narrow detail pages", () => {

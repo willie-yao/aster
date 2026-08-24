@@ -187,13 +187,18 @@ test("pull request routes receive route-specific page titles", () => {
 
 test("the pull request nav tab and routes are gated on the manifest", () => {
   const layout = source("src/components/Layout.tsx");
+  const navigation = source("src/lib/navigation.ts");
   const app = source("src/App.tsx");
 
   assert.match(layout, /manifest\.pull_requests\?\.enabled \?\? false/);
-  assert.match(layout, /\{pullRequestsEnabled && \(/);
-  assert.match(layout, /label="Pull Requests"/);
-  // The overview tab must not stay active while a pull request route is shown.
-  assert.match(layout, /overviewActive = !flakyActive && !pullRequestsActive/);
+  assert.match(navigation, /if \(pullRequestsEnabled\) \{/);
+  assert.match(navigation, /title: "Pull Requests"/);
+  // The overview destination must not stay active while a pull request route
+  // is shown.
+  assert.match(
+    navigation,
+    /active: !flakyActive && !pullRequestsActive && !healthActive && !usageActive/,
+  );
   assert.match(app, /path="pull-requests" element=\{<PullRequestsPage \/>\}/);
   assert.match(app, /path="pull-requests\/:number"/);
 });

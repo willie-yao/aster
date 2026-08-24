@@ -533,7 +533,7 @@ test("phase changes are announced politely without counter churn", () => {
   assert.match(fetchStatusSource, /component="ol"[\s\S]*aria-label="Refresh stages"/);
   assert.match(fetchStatusSource, /aria-label=\{`\$\{stage\.label\}: \$\{stage\.stateLabel\}`\}/);
   assert.match(fetchStatusSource, /\{stage\.stateLabel\}/);
-  assert.match(fetchStatusSource, /minWidth: \{ xs: 44, md: "auto" \}/);
+  assert.match(fetchStatusSource, /minWidth: iconOnly \? 44 : \{ xs: 44, md: "auto" \}/);
   assert.match(fetchStatusSource, /component="time"[\s\S]*dateTime=\{value\}[\s\S]*tabIndex=\{0\}/);
   assert.match(fetchStatusSource, /"&:focus-visible"/);
   assert.match(fetchStatusSource, /prefers-reduced-motion: reduce/);
