@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   COLLAPSE_THRESHOLD,
   MAX_RENDERED_CITATIONS,
+  citationArtifactURL,
   citationKey,
   citationSummary,
   formatCitationRange,
@@ -176,4 +177,65 @@ test("colon-separated truecolor codes are consumed whole", () => {
     citation({ quote: "\u001B[38:2::255:0:0mred failure\u001B[0m" }),
   ]);
   assert.equal(only.quote, "red failure");
+});
+
+test("a cited artifact resolves under the build's artifact root", () => {
+  const url = citationArtifactURL(
+    citation({ path: "artifacts/junit.e2e_suite.1.xml" }),
+    "https://gcsweb.example/gcs/bucket/logs/job/1234",
+  );
+  assert.equal(url, "https://gcsweb.example/gcs/bucket/logs/job/1234/artifacts/junit.e2e_suite.1.xml");
+});
+
+test("a trailing slash on the build URL does not double up", () => {
+  const url = citationArtifactURL(citation({ path: "build-log.txt" }), "https://example/build///");
+  assert.equal(url, "https://example/build/build-log.txt");
+});
+
+test("paths stay plain text when no build URL is available", () => {
+  assert.equal(citationArtifactURL(citation(), undefined), undefined);
+  assert.equal(citationArtifactURL(citation(), "   "), undefined);
+});
+
+test("a citation path cannot escape the build's artifact root", () => {
+  assert.equal(
+    citationArtifactURL(citation({ path: "../../other-build/secret.txt" }), "https://example/build"),
+    undefined,
+  );
+});
+
+test("a leading slash is treated as build-relative, not host-relative", () => {
+  assert.equal(
+    citationArtifactURL(citation({ path: "/build-log.txt" }), "https://example/build"),
+    "https://example/build/build-log.txt",
+  );
+});
+
+test("path separators survive encoding while unsafe characters do not", () => {
+  const url = citationArtifactURL(
+    citation({ path: "artifacts/my cluster/kube system.log" }),
+    "https://example/build",
+  );
+  assert.equal(url, "https://example/build/artifacts/my%20cluster/kube%20system.log");
+});
+
+test("a filename containing dots still links", () => {
+  // Only a traversal segment is unsafe; "results..old.log" is a real filename.
+  assert.equal(
+    citationArtifactURL(citation({ path: "artifacts/results..old.log" }), "https://example/build"),
+    "https://example/build/artifacts/results..old.log",
+  );
+});
+
+test("a traversal segment anywhere in the path is rejected", () => {
+  for (const path of ["../secret", "artifacts/../../secret", "artifacts/.."]) {
+    assert.equal(citationArtifactURL(citation({ path }), "https://example/build"), undefined, path);
+  }
+});
+
+test("a scheme-like path cannot redirect the link off the build", () => {
+  for (const path of ["javascript:alert(1)", "//evil.example/x", "https://evil.example/x"]) {
+    const url = citationArtifactURL(citation({ path }), "https://example/build");
+    assert.ok(url === undefined || url.startsWith("https://example/build/"), `${path} -> ${url}`);
+  }
 });

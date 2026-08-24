@@ -502,6 +502,7 @@ export function TestDetailPage() {
         <AiAnalysisPanel
           analysis={selectedTestCase.ai_analysis}
           fileCtx={selectedFileContext}
+          buildWebURL={selectedRun?.web_url}
           traceRef={traceRef}
           fixPatterns={fixPatterns}
           chatRef={{

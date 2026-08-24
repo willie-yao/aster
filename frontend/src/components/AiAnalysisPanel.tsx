@@ -46,6 +46,7 @@ function severityAccent(severity: string): "error" | "warning" | "primary" {
 export function AiAnalysisPanel({
   analysis,
   fileCtx,
+  buildWebURL,
   traceRef,
   chatRef,
   fixPatterns = [],
@@ -54,6 +55,9 @@ export function AiAnalysisPanel({
 }: {
   analysis: AIAnalysis;
   fileCtx: FileToUrlContext;
+  // Browsable artifact root for the build this analysis came from, used to link
+  // cited artifacts.
+  buildWebURL?: string;
   traceRef?: AnalysisTraceReference;
   chatRef?: AnalysisChatReference;
   fixPatterns?: PatternAnalysis[];
@@ -459,6 +463,7 @@ export function AiAnalysisPanel({
           citations no longer necessarily support what is displayed. */}
       <EvidenceCitations
         citations={correctionActive ? undefined : analysis.evidence_citations}
+        buildWebURL={buildWebURL}
         detailAppearance={detailAppearance}
       />
       {files}

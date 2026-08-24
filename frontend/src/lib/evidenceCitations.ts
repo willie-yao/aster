@@ -107,3 +107,26 @@ export function citationSummary(citations: EvidenceCitation[]): string {
   const artifactLabel = artifacts === 1 ? "artifact" : "artifacts";
   return `${citations.length} ${citationLabel} from ${artifacts} ${artifactLabel}`;
 }
+
+// citationArtifactURL builds a link to the cited artifact under a build's
+// browsable artifact root. Citation paths are build-relative, which is the same
+// basis the engine used when it read them.
+//
+// The URL addresses the file, not the cited lines: the artifact browser has no
+// line anchors. The quote remains the precise evidence, and the link is for
+// reading the surrounding context.
+export function citationArtifactURL(
+  citation: EvidenceCitation,
+  buildWebURL: string | undefined,
+): string | undefined {
+  if (!buildWebURL) return undefined;
+  const base = buildWebURL.trim().replace(/\/+$/u, "");
+  if (base === "") return undefined;
+  const path = citation.path.replace(/^\/+/u, "");
+  // Reject a traversal segment rather than any occurrence of "..", which would
+  // also drop legitimate names like "results..old.log". Per-segment encoding
+  // handles the rest, including encoded and protocol-relative forms.
+  const segments = path.split("/");
+  if (path === "" || segments.some((segment) => segment === "..")) return undefined;
+  return `${base}/${segments.map(encodeURIComponent).join("/")}`;
+}
