@@ -96,8 +96,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	bound := &boundSourceReader{reader: s.source, repository: input.InvestigationSource}
 	sourceFiles, err := bound.ListTree(ctx)
 	if err != nil {
-		_ = s.cache.RecordFailure(key, FailureSourceUnavailable, err)
-		return RunResult{}, fmt.Errorf("pinned investigation source is unavailable: %w", err)
+		return RunResult{}, s.recordFailure(key, FailureSourceUnavailable, err)
 	}
 	if !refresh {
 		entry, ok, err := s.cache.Lookup(key)
@@ -131,8 +130,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	if err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
-		_ = s.cache.RecordFailure(key, FailureInvalidInput, err)
-		return RunResult{}, err
+		return RunResult{}, s.recordFailure(key, FailureInvalidInput, err)
 	}
 	registry := tools.NewRegistry()
 	filesystem.Register(registry)
@@ -155,8 +153,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		outcome = aiusage.OutcomeError
 		finish()
 		err := fmt.Errorf("remediation investigation model does not support private conversation continuation")
-		_ = s.cache.RecordFailure(key, FailureProvider, err)
-		return RunResult{}, err
+		return RunResult{}, s.recordFailure(key, FailureProvider, err)
 	}
 	memo, continuation, runErr := conversationModel.ToolLoopWithContinuation(runCtx, evidenceSystemPrompt(input.ConsumerPrompt), evidencePrompt, registry, enabled, env, ai.ToolLoopOptions{
 		MaxIters: s.opts.MaxIters, SingleToolCall: true,
@@ -167,8 +164,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 		outcome = usageOutcomeForError(runErr)
 		usage := finish()
 		_ = usage
-		_ = s.cache.RecordFailure(key, failureCategory(runErr), runErr)
-		return RunResult{}, fmt.Errorf("remediation evidence phase failed: %w", runErr)
+		return RunResult{}, s.recordFailure(key, failureCategory(runErr), fmt.Errorf("remediation evidence phase failed: %w", runErr))
 	}
 	defer continuation.Discard()
 	if len(memo) > maxEvidenceMemoBytes {
@@ -179,8 +175,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	if err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
-		_ = s.cache.RecordFailure(key, FailureInvalidResult, err)
-		return RunResult{}, err
+		return RunResult{}, s.recordFailure(key, FailureInvalidResult, err)
 	}
 	result := Result{Version: ResultVersion}
 	repairCount := 0
@@ -287,8 +282,7 @@ func (s *Service) Investigate(ctx context.Context, input FrozenInput, browser ar
 	if err := s.verifyEvidence(runCtx, input, browser, catalog, &result); err != nil {
 		outcome = aiusage.OutcomeError
 		finish()
-		_ = s.cache.RecordFailure(key, FailureInvalidResult, err)
-		return RunResult{}, err
+		return RunResult{}, s.recordFailure(key, FailureInvalidResult, err)
 	}
 	usage := finish()
 	completed := s.opts.Now().UTC()
@@ -991,4 +985,10 @@ func verifyArtifactEvidence(ctx context.Context, browser artifacts.Browser, reco
 		return fmt.Errorf("artifact evidence content does not match %s", record.Artifact.Path)
 	}
 	return nil
+}
+
+// recordFailure records the bounded category and returns the error carrying it.
+func (s *Service) recordFailure(key string, category FailureCategory, err error) error {
+	_ = s.cache.RecordFailure(key, category, err)
+	return &categorizedError{category: category, err: err}
 }

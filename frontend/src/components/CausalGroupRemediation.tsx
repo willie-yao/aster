@@ -79,7 +79,10 @@ export function CausalGroupRemediation({
 
   const blocked = causalRemediationBlockedReason(group, view, operationAvailable, patternEligible);
   const presentation = patternRemediationPresentation(view);
-  const message = blocked ? blocked.message : presentation.message;
+  // The server's reason is the specific account of what happened; the state's
+  // own copy is the generic fallback for when there is none. Preferring the
+  // reason keeps the visible line the useful one instead of burying it.
+  const message = blocked ? blocked.message : presentation.detail ?? presentation.message;
   const active = activeStates.has(presentation.state);
   const addressable = Boolean(operationRef);
   // A blocked cause never polls: the server would reject the operation, so
@@ -150,8 +153,9 @@ export function CausalGroupRemediation({
     }
   };
 
-  // A blocked group never ran an operation, so it has nothing to disclose.
-  const details = blocked ? undefined : investigationDetails(view, error, message);
+  // A blocked cause never ran an operation, so it has nothing to disclose. The
+  // reason is not repeated here because it is already the visible message.
+  const details = blocked ? undefined : investigationDetails(view, error);
   const canStart = !blocked && operationAvailable &&
     (presentation.state === "not_investigated" || presentation.state === "failed") &&
     authStatus !== "loading";
@@ -250,10 +254,8 @@ export function CausalGroupRemediation({
 function investigationDetails(
   investigation?: PatternRemediationInvestigationSummary,
   localError?: string,
-  conciseMessage?: string,
 ): string | undefined {
   const details: string[] = [];
-  if (investigation?.reason && investigation.reason !== conciseMessage) details.push(investigation.reason);
   if (investigation?.target) details.push(formatTarget(investigation.target));
   if (investigation?.completed_at) details.push(`Completed: ${investigation.completed_at}`);
   if (localError) details.push(localError);

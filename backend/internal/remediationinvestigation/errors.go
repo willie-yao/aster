@@ -278,3 +278,26 @@ func safeResultErrorCause(err error) error {
 	}
 	return nil
 }
+
+// categorizedError carries the bounded failure category a run recorded. Recording
+// the category and returning the error are one step so the published reason and
+// the recorded telemetry can never describe different failures.
+type categorizedError struct {
+	category FailureCategory
+	err      error
+}
+
+func (e *categorizedError) Error() string { return string(e.category) + ": " + e.err.Error() }
+func (e *categorizedError) Unwrap() error { return e.err }
+
+// FailureCategoryOf returns the bounded category a failure was recorded under.
+func FailureCategoryOf(err error) (FailureCategory, bool) {
+	var categorized *categorizedError
+	if errors.As(err, &categorized) {
+		return categorized.category, true
+	}
+	if details, ok := FailureDetailsOf(err); ok {
+		return details.Category, true
+	}
+	return "", false
+}
