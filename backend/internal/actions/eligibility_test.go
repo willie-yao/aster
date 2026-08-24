@@ -262,7 +262,10 @@ func TestActionEligibilityStableReasonCodes(t *testing.T) {
 		{name: "verified fixed", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) {
 			p.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleVerifiedFixed}
 		}, want: ReasonVerifiedFixed},
-		{name: "retained", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true}, want: ReasonRetainedStale},
+		// A retained correlation is not itself a blocker: the subject is still the
+		// published one, so only its evidence decides.
+		{name: "retained with evidence", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true}, want: ReasonSourceVerificationInconclusive},
+		{name: "retained without evidence", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshRetained}, want: ReasonEvidenceUnavailable},
 		{name: "evidence unavailable", refresh: &models.PatternRefreshStatus{State: models.PatternRefreshCurrent, EvidenceAvailable: false}, want: ReasonEvidenceUnavailable},
 		{name: "non systemic", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) { p.Systemic = false }, want: ReasonNonSystemic},
 		{name: "contract failed", mutate: func(p *models.PatternAnalysis, _ *models.PatternRefreshStatus) { p.RemediationTargets = nil }, want: ReasonContractGenerationFailed},

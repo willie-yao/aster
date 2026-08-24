@@ -5,7 +5,6 @@ export type ActionReasonCode =
   | "recovered"
   | "observing"
   | "verified_fixed"
-  | "retained_stale"
   | "non_systemic"
   | "evidence_unavailable"
   | "investigation_required"

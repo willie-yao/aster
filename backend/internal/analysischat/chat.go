@@ -374,7 +374,6 @@ type resolvedAnalysis struct {
 	testCase       models.TestCase
 	patterns       []models.PatternAnalysis
 	pattern        *models.PatternAnalysis
-	patternFresh   bool
 	evidenceBuilds []ArtifactBuild
 }
 
@@ -974,7 +973,6 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
 		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
 		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &pattern,
-		patternFresh:   detail.PatternRefresh == nil || detail.PatternRefresh.State == models.PatternRefreshCurrent,
 		evidenceBuilds: cloneArtifactBuilds(builds),
 	}, nil
 }

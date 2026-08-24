@@ -15,7 +15,6 @@ const (
 	ReasonRecovered                      ReasonCode = "recovered"
 	ReasonObserving                      ReasonCode = "observing"
 	ReasonVerifiedFixed                  ReasonCode = "verified_fixed"
-	ReasonRetainedStale                  ReasonCode = "retained_stale"
 	ReasonNonSystemic                    ReasonCode = "non_systemic"
 	ReasonEvidenceUnavailable            ReasonCode = "evidence_unavailable"
 	ReasonInvestigationRequired          ReasonCode = "investigation_required"
@@ -36,7 +35,6 @@ var reasonCodeOrder = []ReasonCode{
 	ReasonRecovered,
 	ReasonObserving,
 	ReasonVerifiedFixed,
-	ReasonRetainedStale,
 	ReasonNonSystemic,
 	ReasonEvidenceUnavailable,
 	ReasonInvestigationRequired,
@@ -81,8 +79,6 @@ func ReasonMessage(code ReasonCode) string {
 		return "The remediation is present and the dashboard is observing later comparable runs."
 	case ReasonVerifiedFixed:
 		return "The remediation and multiple later passing runs have been verified at pinned source revisions."
-	case ReasonRetainedStale:
-		return "The displayed pattern is retained from an earlier successful correlation and cannot start an action."
 	case ReasonNonSystemic:
 		return "This result was classified as non-systemic and does not qualify for a recurring-pattern action."
 	case ReasonEvidenceUnavailable:

@@ -132,8 +132,14 @@ test("dismissal follows the same gates the server enforces", () => {
     render(causalGroupPattern(), admin, serverCapabilities, { state: "current", evidence_available: false }),
     /Dismiss pattern/,
   );
-  assert.doesNotMatch(
+  // A retained correlation still describes the published pattern, so dismissal
+  // stays available while its evidence is readable.
+  assert.match(
     render(causalGroupPattern(), admin, serverCapabilities, { state: "retained", evidence_available: true }),
+    /Dismiss pattern/,
+  );
+  assert.doesNotMatch(
+    render(causalGroupPattern(), admin, serverCapabilities, { state: "retained", evidence_available: false }),
     /Dismiss pattern/,
   );
 });

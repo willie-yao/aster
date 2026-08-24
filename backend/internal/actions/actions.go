@@ -331,19 +331,22 @@ func (s *Service) findPatternRecord(id string) (*models.PatternAnalysis, *models
 	return nil, nil, ErrNotFound
 }
 
+// patternRefreshReasonCode reports why a pattern's last correlation disqualifies
+// it from starting an action. Whether the correlation produced a fresh result
+// this pass is not itself disqualifying: a retained pattern is still the
+// published subject and its identity is checked by content hash, so what decides
+// is whether the evidence behind it is still readable.
 func patternRefreshReasonCode(refresh *models.PatternRefreshStatus) ReasonCode {
 	if refresh == nil {
 		return ""
 	}
 	switch refresh.State {
-	case models.PatternRefreshCurrent:
+	case models.PatternRefreshCurrent, models.PatternRefreshRetained, models.PatternRefreshUnavailable:
 		if !refresh.EvidenceAvailable {
 			return ReasonEvidenceUnavailable
 		}
 		return ""
-	case models.PatternRefreshRetained:
-		return ReasonRetainedStale
-	case models.PatternRefreshFailed, models.PatternRefreshUnavailable:
+	case models.PatternRefreshFailed:
 		return ReasonContractGenerationFailed
 	default:
 		return ReasonEvidenceUnavailable

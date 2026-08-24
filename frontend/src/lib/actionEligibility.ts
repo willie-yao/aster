@@ -15,7 +15,6 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   recovered: "Observed passing runs have recovered, but source verification has not proven a fix.",
   observing: "The remediation is present and the dashboard is observing later comparable runs.",
   verified_fixed: "The remediation and multiple later passing runs have been verified at pinned source revisions.",
-  retained_stale: "The displayed pattern is retained from an earlier successful correlation and cannot start an action.",
   non_systemic: "This result was classified as non-systemic and does not qualify for a recurring-pattern action.",
   evidence_unavailable: "Current published evidence is unavailable or no longer matches the selected action subject.",
   investigation_required: "The published remediation requires maintainer investigation before an issue or fix can be drafted.",
@@ -70,18 +69,45 @@ export function patternLifecycleActive(lifecycle: PatternLifecycle | undefined):
   return !lifecycle || lifecycle.state === "active";
 }
 
+// patternRefreshBlockingCode mirrors the server's patternRefreshReasonCode.
+// Whether the correlation produced a fresh result this pass is not itself
+// disqualifying: a retained pattern is still the published subject, so what
+// decides is whether the evidence behind it is readable. Kept as one predicate
+// because the hint, dismissal, and drafting checks all have to agree with the
+// server and with each other.
+function patternRefreshBlockingCode(
+  refreshStatus?: PatternRefreshStatus,
+): ActionReasonCode | null {
+  if (!refreshStatus) return null;
+  if (refreshStatus.state === "failed") return "contract_generation_failed";
+  if (
+    refreshStatus.state !== "current" &&
+    refreshStatus.state !== "retained" &&
+    refreshStatus.state !== "unavailable"
+  ) {
+    return "evidence_unavailable";
+  }
+  return refreshStatus.evidence_available ? null : "evidence_unavailable";
+}
+
+// patternActionRefreshBlocked reports whether a pattern's correlation state
+// blocks a pattern-scope action, mirroring the server.
+export function patternActionRefreshBlocked(refreshStatus?: PatternRefreshStatus): boolean {
+  return patternRefreshBlockingCode(refreshStatus) !== null;
+}
+
 // patternDismissible reports whether a maintainer can dismiss a pattern.
 // Dismissal acknowledges the whole pattern rather than starting a
 // remediation-contract action, so it deliberately ignores
 // recurrence_classification: causal-group results are dismissible too. The
-// remaining checks mirror the server, which needs a current refresh with
-// available evidence, a systemic and lifecycle-active pattern, and at least one
-// shared build to use as the recurrence watermark.
+// remaining checks mirror the server, which needs readable evidence, a systemic
+// and lifecycle-active pattern, and at least one shared build to use as the
+// recurrence watermark.
 export function patternDismissible(
   pattern: PatternAnalysis,
   refreshStatus?: PatternRefreshStatus,
 ): boolean {
-  if (refreshStatus && (refreshStatus.state !== "current" || !refreshStatus.evidence_available)) {
+  if (patternRefreshBlockingCode(refreshStatus)) {
     return false;
   }
   return Boolean(
@@ -106,7 +132,7 @@ export function patternDraftable(
 ): boolean {
   return Boolean(
     !pattern.recurrence_classification &&
-    (!refreshStatus || refreshStatus.state === "current") &&
+    !patternRefreshBlockingCode(refreshStatus) &&
     pattern.id &&
     pattern.systemic &&
     patternLifecycleActive(pattern.lifecycle),
@@ -144,9 +170,8 @@ export function patternActionEligibilityHint(
   systemic = true,
   refreshStatus?: PatternRefreshStatus,
 ): ActionEligibility | null {
-  if (refreshStatus?.state === "retained") return eligibilityForCode("retained_stale");
-  if (refreshStatus && refreshStatus.state !== "current") return eligibilityForCode("contract_generation_failed");
-  if (refreshStatus?.evidence_available === false) return eligibilityForCode("evidence_unavailable");
+  const refreshBlocked = patternRefreshBlockingCode(refreshStatus);
+  if (refreshBlocked) return eligibilityForCode(refreshBlocked);
   if (!systemic) return eligibilityForCode("non_systemic");
   if (!patternLifecycleActive(lifecycle)) {
     const code = lifecycle?.state === "recovered"
@@ -190,8 +215,6 @@ export function actionEligibilityTitle(eligibilityValue: ActionEligibility): str
       return "Observing verified remediation";
     case "verified_fixed":
       return "Verified fixed";
-    case "retained_stale":
-      return "Using a retained analysis";
     case "non_systemic":
       return "Not a recurring systemic pattern";
     case "evidence_unavailable":

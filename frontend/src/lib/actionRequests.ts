@@ -143,7 +143,6 @@ export function actionRequestReasonTitle(request: ActionRequest): string | null 
     case "recovered": return "Watching recovery";
     case "observing": return "Observing verified remediation";
     case "verified_fixed": return "Verified fixed";
-    case "retained_stale": return "Retained analysis cannot start an action";
     case "non_systemic": return "Not a recurring systemic pattern";
     case "evidence_unavailable": return "Current evidence unavailable";
     case "investigation_required": return "Source investigation required";

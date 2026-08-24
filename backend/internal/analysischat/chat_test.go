@@ -2173,3 +2173,40 @@ func TestServiceReportsValidationGateToTheCaller(t *testing.T) {
 		t.Fatalf("replayed error = %v gate = %q", replayErr, gate)
 	}
 }
+
+// A retained pattern is one the correlation did not refresh this pass. That says
+// nothing about the subject: its identity is still checked by content hash and
+// its evidence by the run selection, so a pattern chat opens on it while its
+// builds are readable and is refused once they are not.
+func TestServicePatternChatTurnsOnEvidenceNotRefreshState(t *testing.T) {
+	pattern := recurringPattern()
+	ref := AnalysisRef{
+		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}
+
+	dir := t.TempDir()
+	retained := patternDetail()
+	retained.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true}
+	writeJobDetail(t, dir, retained)
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
+		t.Fatalf("retained pattern with readable evidence: %v", err)
+	}
+
+	// The same pattern once the window has rolled past its correlated builds.
+	expiredDir := t.TempDir()
+	expired := patternDetail()
+	expired.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained}
+	expired.Runs = []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "999", JobName: "periodic-demo"}}}
+	writeJobDetail(t, expiredDir, expired)
+	expiredService, err := NewService(t.Context(), expiredDir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := expiredService.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrAnalysisNotFound) {
+		t.Fatalf("retained pattern with expired evidence err=%v", err)
+	}
+}

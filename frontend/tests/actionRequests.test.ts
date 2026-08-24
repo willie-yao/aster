@@ -327,7 +327,7 @@ test("request IDs are URL encoded for reads and cancellation", async () => {
 
 test("action request reason codes produce concise operator labels", () => {
   assert.equal(actionRequestReasonTitle(request("unsafe", "failed", { reason_code: "unsafe_remediation" })), "Unsafe remediation blocked");
-  assert.equal(actionRequestReasonTitle(request("stale", "failed", { reason_code: "retained_stale" })), "Retained analysis cannot start an action");
+  assert.equal(actionRequestReasonTitle(request("stale", "failed", { reason_code: "evidence_unavailable" })), "Current evidence unavailable");
   assert.equal(actionRequestReasonTitle(request("legacy", "failed")), null);
 });
 
