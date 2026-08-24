@@ -11,13 +11,13 @@ import { testRunPath } from "../lib/routes";
 import { overviewTypography } from "../theme/overview";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
 
-// CausalGroupFixRouting points one cause at a failed test that can actually
-// start a fix proposal, and says so plainly when no such test exists. The
-// visible label names the test it opens, so several causes on one briefing stay
-// tellable apart without reading the surrounding prose.
+// CausalGroupFixRouting opens the failure that represents one cause, which is
+// where a fix proposal can be started, and says so plainly when no such failure
+// exists. The label names the test it opens, so several causes on one briefing
+// stay tellable apart without reading the surrounding prose.
 //
-// Ownership is reported whether or not a Fix route exists. A cause owned by a
-// dependency still often has a project-side test that can start a Fix, and
+// Ownership is reported whether or not a route exists. A cause owned by a
+// dependency still often has a project-side test that can start a fix, and
 // hiding that ownership behind the button made an upstream cause look identical
 // to one the project can actually fix.
 export function CausalGroupFixRouting({
@@ -63,7 +63,9 @@ export function CausalGroupFixRouting({
   // One suffix backs both the accessible name and the optional visible segment,
   // so the visible label is always a literal prefix of the accessible name.
   const buildSuffix = ` in build ${target.buildID}`;
-  const actionLabel = stale ? "View affected failure" : "Fix";
+  // The button navigates, so one label covers both states. Staleness is carried
+  // by the variant and icon rather than by a second wording.
+  const actionLabel = "Open representative failure";
   const subject = `${actionLabel}: ${testName}${buildSuffix}`;
 
   return (

@@ -32,9 +32,7 @@ import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
-import { CausalGroupRemediation } from "./CausalGroupRemediation";
-import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
-import { CausalGroupReportedFix } from "./CausalGroupReportedFix";
+import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -357,35 +355,39 @@ export function PatternBanner({
                       </Link>
                     ))}
                   </Stack>
-                  {analysisOnly && (
-                    <CausalGroupRemediation
-                      group={group}
-                      investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
-                      jobID={jobID}
-                      patternID={pattern.id}
-                      patternHash={pattern.content_hash}
-                      patternEligible={remediationPatternEligible}
-                      chatAvailable={Boolean(chatRef)}
-                    />
-                  )}
-                  {fixCapable && (
-                    <CausalGroupFixRouting
-                      jobID={jobID}
-                      target={causalFixTargets[index]}
-                      showBuild={fixTargetNeedsBuild[index]}
-                      externalCause={externalCause(group.cause_location)}
-                      // A target exists only where the cause's build is still
-                      // readable, so the offer turns on the pattern's lifecycle
-                      // rather than on whether the correlation refreshed: a
-                      // recovered or verified-fixed cause is worth viewing but
-                      // not worth fixing.
-                      stale={!lifecycleActive}
-                      evidencePresent={causalEvidencePresent[index]}
-                    />
-                  )}
-                  {/* Published data, so this stays available where the Fix and
-                      remediation-investigation capabilities are not. */}
-                  <CausalGroupReportedFix remediation={group.remediation} fileCtx={patternFileCtx} />
+                  <CausalGroupNextStep
+                    group={group}
+                    jobID={jobID}
+                    fileCtx={patternFileCtx}
+                    investigation={
+                      analysisOnly
+                        ? {
+                            summary: group.content_hash ? remediationByHash.get(group.content_hash) : undefined,
+                            patternID: pattern.id,
+                            patternHash: pattern.content_hash,
+                            patternEligible: remediationPatternEligible,
+                            chatAvailable: Boolean(chatRef),
+                          }
+                        : undefined
+                    }
+                    routing={
+                      fixCapable
+                        ? {
+                            target: causalFixTargets[index],
+                            showBuild: fixTargetNeedsBuild[index],
+                            externalCause: externalCause(group.cause_location),
+                            // A target exists only where the cause's build is
+                            // still readable, so the offer turns on the
+                            // pattern's lifecycle rather than on whether the
+                            // correlation refreshed: a recovered or
+                            // verified-fixed cause is worth viewing but not
+                            // worth fixing.
+                            stale: !lifecycleActive,
+                            evidencePresent: causalEvidencePresent[index],
+                          }
+                        : undefined
+                    }
+                  />
                 </Box>
               </Box>
             ))}

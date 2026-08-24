@@ -169,8 +169,8 @@ export function CausalGroupRemediation({
   return (
     <Box aria-live="polite" sx={{ mt: 1.5 }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-        <Typography color="textSecondary" component="h5" sx={{ ...overviewTypography.eyebrow, m: 0 }}>
-          Verified fix investigation
+        <Typography color="textSecondary" component="h6" sx={{ ...overviewTypography.eyebrow, m: 0 }}>
+          Implementation target
         </Typography>
         <Chip
           label={blocked ? blocked.label : presentation.label}
@@ -202,7 +202,7 @@ export function CausalGroupRemediation({
           onClick={() => void start(presentation.state === "failed")}
           sx={{ mt: 1 }}
         >
-          {authStatus === "anonymous" ? "Sign in to investigate" : "Investigate possible fix"}
+          {authStatus === "anonymous" ? "Sign in to verify" : "Verify code target"}
         </Button>
       )}
       {canPreview && (
@@ -227,7 +227,7 @@ export function CausalGroupRemediation({
       {details && (
         <Accordion
           disableGutters
-          slotProps={{ heading: { component: "h5" } }}
+          slotProps={{ heading: { component: "h6" } }}
           elevation={0}
           sx={{
             mt: 1,
@@ -257,12 +257,7 @@ function investigationDetails(
 ): string | undefined {
   const details: string[] = [];
   if (investigation?.target) details.push(formatTarget(investigation.target));
-  if (investigation?.reason_code) details.push(`Outcome: ${investigation.reason_code}`);
-  // Naming each target the verifier turned down is what separates a run that
-  // proposed nothing from one whose proposals were rejected.
-  if (investigation?.rejected_reasons?.length) {
-    details.push(`Rejected targets: ${investigation.rejected_reasons.join(", ")}`);
-  }
+  // completed_at records when the run finished, not that it succeeded.
   if (investigation?.completed_at) details.push(`Attempted: ${investigation.completed_at}`);
   if (localError) details.push(localError);
   return details.length > 0 ? details.join("\n") : undefined;

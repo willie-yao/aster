@@ -171,7 +171,7 @@ test("a cause owned by a dependency reports it even when a Fix route exists", ()
   assert.match(html, /kubernetes\/kubernetes/);
   assert.match(html, /project-side mitigation/);
   // The action itself is unchanged and still opens the failing test.
-  assert.match(html, /aria-label="Fix: fails in build 208060"/i);
+  assert.match(html, /aria-label="Open representative failure: fails in build 208060"/i);
 
   const owned = render(
     createElement(CausalGroupFixRouting, {
@@ -180,11 +180,16 @@ test("a cause owned by a dependency reports it even when a Fix route exists", ()
       externalCause: null,
     }),
   );
-  assert.match(owned, /aria-label="Fix: fails in build 208060"/i);
+  assert.match(owned, /aria-label="Open representative failure: fails in build 208060"/i);
   assert.doesNotMatch(owned, /dependency/);
 });
 
-test("stale causes point to evidence without presenting a Fix action", () => {
+test("stale causes point to evidence without offering it as the live route", () => {
+  const live = render(createElement(CausalGroupFixRouting, {
+    jobID: "job",
+    target: fixTarget,
+    externalCause: null,
+  }));
   const html = render(createElement(CausalGroupFixRouting, {
     jobID: "job",
     target: fixTarget,
@@ -192,8 +197,12 @@ test("stale causes point to evidence without presenting a Fix action", () => {
     stale: true,
   }));
 
-  assert.match(html, /aria-label="View affected failure: fails in build 208060"/i);
-  assert.doesNotMatch(html, /aria-label="Fix: fails in build 208060"/i);
+  // The button navigates either way, so the wording does not change. The
+  // demotion is carried by the variant, which has to actually differ.
+  assert.match(html, /aria-label="Open representative failure: fails in build 208060"/i);
+  assert.match(live, /MuiButton-outlined/);
+  assert.doesNotMatch(html, /MuiButton-outlined/);
+  assert.match(html, /MuiButton-text/);
 });
 
 test("the pattern panel only points at a chat that is on the page", () => {

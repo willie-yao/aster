@@ -481,7 +481,7 @@ requests, tokens, cost coverage, latency, and repair counts.
 ## Current boundary
 
 Authenticated server deployments may explicitly enable the preview-only
-**Investigate possible fix** operation. It validates the exact current pattern,
+**Verify code target** operation. It validates the exact current pattern,
 causal group, lifecycle, builds, source revisions, provider identity, and
 destination policy before running the trusted read-only investigator. Only safe
 status, a fixed concise reason, optional verified target identity, completion

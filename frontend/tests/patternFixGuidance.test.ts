@@ -228,10 +228,15 @@ test("cause ownership does not change which failures can start a fix proposal", 
 
 test("fix routing sits with each cause and stays behind the chat capabilities", () => {
   const banner = source("src/components/PatternBanner.tsx");
+  const nextStep = source("src/components/CausalGroupNextStep.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   assert.match(banner, /const fixCapable = Boolean\(features\.analysis_chat && features\.junit_chat_fix\)/);
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupFixRouting[\s\S]*target=\{causalFixTargets\[index\]\}[\s\S]*externalCause=\{externalCause\(group\.cause_location\)\}/);
+  assert.match(
+    banner,
+    /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupNextStep[\s\S]*routing=\{[\s\S]*fixCapable[\s\S]*target: causalFixTargets\[index\][\s\S]*externalCause: externalCause\(group\.cause_location\)/,
+  );
+  assert.match(nextStep, /<CausalGroupFixRouting[\s\S]*target=\{routable\.target\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
 });
@@ -249,9 +254,11 @@ test("fix routing reads as an action and names the test it opens", () => {
 
   // The subject is in the visible label, not in a caption below it that reads
   // as if it belonged to the next cause, and it uses the same humanized title
-  // the test ledger shows rather than the raw JUnit name.
+  // the test ledger shows rather than the raw JUnit name. The label names the
+  // navigation it performs: "Fix" read as an action the button never took.
   assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
-  assert.match(routing, /const actionLabel = stale \? "View affected failure" : "Fix"/);
+  assert.match(routing, /const actionLabel = "Open representative failure"/);
+  assert.doesNotMatch(routing, /"View affected failure"|: "Fix"/);
   assert.match(routing, /\{actionLabel\}: \{testName\}/);
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
@@ -271,8 +278,8 @@ test("the build only joins the label where it is needed to tell two actions apar
   // on every action to cover that case is what made the label unreadable.
   assert.match(routing, /showBuild = false/);
   assert.match(routing, /\{showBuild && \(/);
-  assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
-  assert.match(banner, /stale=\{!lifecycleActive\}/);
+  assert.match(banner, /showBuild: fixTargetNeedsBuild\[index\]/);
+  assert.match(banner, /stale: !lifecycleActive/);
 
   // Counting the DISPLAYED label, not the canonical name: two canonical names
   // can humanize to one title, which would hide both builds and leave two

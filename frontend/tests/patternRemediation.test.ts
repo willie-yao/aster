@@ -183,20 +183,30 @@ test("an unrecognized state is blocked exactly like the default it renders as", 
 
 test("causal remediation renders per cause and keeps normal actions blocked", () => {
   const component = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
+  const nextStep = readFileSync(resolve(process.cwd(), "src/components/CausalGroupNextStep.tsx"), "utf8");
   const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
 
-  // The row names the mechanism it reports. A generic "Remediation" label made
-  // a block on this one operation read as if nothing could be done at all.
-  assert.match(component, />\s*Verified fix investigation\s*</);
+  // The row names what the operation produces. A generic "Remediation" label
+  // made a block on this one operation read as if nothing could be done at all,
+  // and "Verified fix investigation" promised a verdict the control cannot give.
+  assert.match(component, />\s*Implementation target\s*</);
   assert.doesNotMatch(component, />\s*Remediation\s*</);
+  assert.doesNotMatch(component, /Verified fix investigation/);
   assert.match(component, /aria-live="polite"/);
   assert.match(component, /Investigation details/);
-  assert.match(component, /Investigate possible fix/);
+  assert.match(component, /Verify code target/);
+  assert.match(component, /Sign in to verify/);
+  assert.doesNotMatch(component, /Investigate possible fix/);
   assert.match(component, /causal_remediation_investigation/);
   assert.match(component, /Preview Fix PR/);
   assert.match(component, /causal_remediation_fix_preview/);
   assert.match(component, /No GitHub PR will be created/);
   assert.doesNotMatch(component, /Create PR|Confirm PR/);
+
+  // completed_at records when the run finished, not that it succeeded, so the
+  // disclosure must not read as a success next to a failed verdict.
+  assert.match(component, /`Attempted: \$\{investigation\.completed_at\}`/);
+  assert.doesNotMatch(component, /Completed: \$\{/);
 
   // The blocked verdict replaces the control instead of sitting beside it.
   assert.match(component, /const canStart = !blocked &&/);
@@ -214,14 +224,17 @@ test("causal remediation renders per cause and keeps normal actions blocked", ()
   assert.match(component, /icon=\{capabilityBlocked \? <CloudOff aria-hidden \/> : undefined\}/);
   assert.match(component, /variant=\{capabilityBlocked \? "filled" : "outlined"\}/);
 
-  // Causes now carry their own h4 heading, so the remediation label sits one
-  // level below it rather than competing with it.
-  assert.match(component, /component="h5"[\s\S]*>\s*Verified fix investigation\s*</);
+  // The cause carries an h4 heading and the Next step section an h5, so both
+  // labels inside that section sit one level below it.
+  assert.match(component, /component="h6"[\s\S]*>\s*Implementation target\s*</);
+  assert.match(component, /slotProps=\{\{ heading: \{ component: "h6" \} \}\}/);
 
-  // Remediation is decided per cause, so it renders inside the causal group card.
-  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupRemediation/);
-  assert.equal(banner.match(/<CausalGroupRemediation/g)?.length, 1);
-  assert.doesNotMatch(banner, /<PatternRemediation/);
+  // Remediation is decided per cause, so it renders inside the causal group
+  // card, as one part of that cause's single Next step section.
+  assert.match(banner, /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupNextStep/);
+  assert.equal(banner.match(/<CausalGroupNextStep/g)?.length, 1);
+  assert.doesNotMatch(banner, /<CausalGroupRemediation|<PatternRemediation/);
+  assert.equal(nextStep.match(/<CausalGroupRemediation/g)?.length, 1);
 
   // The card is keyed by group identity, so a refreshed group cannot inherit a
   // previous group's in-flight status, preview, or idempotency key.
@@ -244,6 +257,7 @@ test("a cause in an unclassified pattern is reported instead of offered", () => 
 
 test("a blocked investigation names the path that stays open", () => {
   const component = readFileSync(resolve(process.cwd(), "src/components/CausalGroupRemediation.tsx"), "utf8");
+  const nextStep = readFileSync(resolve(process.cwd(), "src/components/CausalGroupNextStep.tsx"), "utf8");
   const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
 
   // The row reports one mechanism, so a block on it is not the end of the road.
@@ -251,6 +265,8 @@ test("a blocked investigation names the path that stays open", () => {
   assert.match(component, /ask about this cause in the pattern chat below/);
   // The chat picks its own evidence builds, so the copy must not claim parity.
   assert.doesNotMatch(component, /reads the same evidence/);
-  // Only promised where a chat session can actually run.
-  assert.match(banner, /chatAvailable=\{Boolean\(chatRef\)\}/);
+  // Only promised where a chat session can actually run, which takes the whole
+  // handoff from the banner through the Next step section to the row.
+  assert.match(banner, /chatAvailable: Boolean\(chatRef\)/);
+  assert.match(nextStep, /chatAvailable=\{investigation\.chatAvailable\}/);
 });
