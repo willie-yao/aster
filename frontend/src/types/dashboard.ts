@@ -72,6 +72,16 @@ export interface AnalysisCauseLocation {
   files?: string[];
 }
 
+// EvidenceCitation is a verified quote from a build artifact the analysis read.
+// The engine only publishes a citation whose quote actually occurs at the
+// claimed lines, so the quote itself is the verification and needs no fetch.
+export interface EvidenceCitation {
+  path: string;
+  line_start: number;
+  line_end: number;
+  quote: string;
+}
+
 export interface AIAnalysis {
   generated_at: string;
   model: string;
@@ -79,6 +89,10 @@ export interface AIAnalysis {
   severity: string;
   suggested_fix: string;
   relevant_files?: string[];
+  // Artifact evidence backing the analysis. Distinct from file_links, which
+  // links repository source. Absent on analyses cached before citations were
+  // rendered, and on analyses whose citations all failed validation.
+  evidence_citations?: EvidenceCitation[];
   disposition?: "preliminary" | "grounded";
   disposition_warnings?: string[];
   // Verified GitHub links for cited source files keyed by cleaned path. When

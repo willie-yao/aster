@@ -17,6 +17,8 @@ import "./securityMarkup.test.js";
 import "./spaRedirect.test.js";
 import "./search.test.js";
 import "./fetchStatus.test.js";
+import "./evidenceCitations.test.js";
+import "./evidenceCitationsPanel.test.js";
 import "./testResults.test.js";
 import "./resultsPerformance.test.js";
 import "./buildFailures.test.js";

@@ -17,6 +17,7 @@ import type { AnalysisChatReference } from "../types/analysisChat";
 import { RichText } from "./RichText";
 import { LabeledBlock } from "./LabeledBlock";
 import { BriefingSection } from "./BriefingSection";
+import { EvidenceCitations } from "./EvidenceCitations";
 import { AnalysisChat } from "./AnalysisChat";
 import { AnalysisTraceInspector, type AnalysisTraceReference } from "./AnalysisTraceInspector";
 import { UpstreamCauseNotice } from "./UpstreamCauseNotice";
@@ -454,6 +455,12 @@ export function AiAnalysisPanel({
       {rootCause}
       {suggestedFix}
       {upstream}
+      {/* A maintainer correction replaces the diagnosis, so the model's
+          citations no longer necessarily support what is displayed. */}
+      <EvidenceCitations
+        citations={correctionActive ? undefined : analysis.evidence_citations}
+        detailAppearance={detailAppearance}
+      />
       {files}
       {chat}
       {traceRef && (
