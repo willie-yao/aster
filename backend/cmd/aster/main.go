@@ -230,6 +230,8 @@ func runOnboard(args []string) {
 		return nil
 	})
 	fs.StringVar(&opts.ArtifactAccess, "artifact-access", "unknown", "artifact access: public, authenticated, private, or unknown")
+	fs.StringVar(&opts.K8sStorageClass, "k8s-storage-class", "", "ReadWriteMany storage class for Kubernetes mode")
+	fs.StringVar(&opts.K8sExistingClaim, "k8s-existing-claim", "", "existing ReadWriteMany PVC for Kubernetes mode")
 	fs.StringVar(&opts.ID, "id", "", "project id (default: derived from repository metadata)")
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from repository metadata)")
 	fs.StringVar(&opts.ShortName, "short-name", "", "short display name (optional)")

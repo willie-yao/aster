@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	"github.com/willie-yao/aster/backend/internal/storage"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 // k8sCILogsBucket is the default artifact bucket for Kubernetes TestGrid jobs.
@@ -165,6 +166,28 @@ func validateOptions(opts *Options) error {
 	default:
 		return fmt.Errorf("--mode must be %q or %q, got %q", modePages, modeK8s, opts.Mode)
 	}
+	opts.K8sStorageClass = strings.TrimSpace(opts.K8sStorageClass)
+	opts.K8sExistingClaim = strings.TrimSpace(opts.K8sExistingClaim)
+	if opts.K8sStorageClass != "" && opts.K8sExistingClaim != "" {
+		return fmt.Errorf("--k8s-storage-class and --k8s-existing-claim are mutually exclusive")
+	}
+	if opts.Mode != modeK8s && (opts.K8sStorageClass != "" || opts.K8sExistingClaim != "") {
+		return fmt.Errorf("--k8s-storage-class and --k8s-existing-claim apply only with --mode k8s")
+	}
+	if opts.Mode == modeK8s && !opts.allowK8sStoragePlaceholder && opts.K8sStorageClass == "" && opts.K8sExistingClaim == "" {
+		return fmt.Errorf("--mode k8s requires --k8s-storage-class or --k8s-existing-claim outside the interactive wizard")
+	}
+	for flagName, value := range map[string]string{
+		"--k8s-storage-class":  opts.K8sStorageClass,
+		"--k8s-existing-claim": opts.K8sExistingClaim,
+	} {
+		if value == "" {
+			continue
+		}
+		if errors := utilvalidation.IsDNS1123Subdomain(value); len(errors) > 0 {
+			return fmt.Errorf("%s %q is invalid: %s", flagName, value, strings.Join(errors, "; "))
+		}
+	}
 	opts.ArtifactAccess = effectiveArtifactAccess(*opts)
 	switch opts.ArtifactAccess {
 	case artifactAccessPublic, artifactAccessAuthenticated, artifactAccessPrivate, artifactAccessUnknown:
@@ -193,7 +216,7 @@ func validateCredentialSeparation(opts Options) error {
 	values := []string{
 		opts.TestGrid, opts.Bucket, opts.GCSWebBase, opts.DashboardRepo, opts.SourceRepo,
 		opts.ID, opts.Name, opts.ShortName, opts.EngineRef, opts.OutDir, opts.PlanOut, opts.ArtifactAccess,
-		strings.Join(opts.ModeReasons, ","),
+		opts.K8sStorageClass, opts.K8sExistingClaim, strings.Join(opts.ModeReasons, ","),
 		opts.AIAPI, opts.AIEndpoint, opts.AIModel,
 		opts.DeploymentAIAPI, opts.DeploymentAIEndpoint, opts.DeploymentAIModel,
 	}
@@ -386,6 +409,8 @@ func buildScaffoldData(opts Options, cats []project.CategoryRule) scaffoldData {
 		AIAPI:             aiAPI,
 		AIEndpoint:        aiEndpoint,
 		AIModel:           aiModel,
+		K8sStorageClass:   opts.K8sStorageClass,
+		K8sExistingClaim:  opts.K8sExistingClaim,
 		Namespace:         k8sName(derivedID(opts)),
 		DashboardName:     name,
 	}

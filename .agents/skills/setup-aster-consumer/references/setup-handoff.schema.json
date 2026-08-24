@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/willie-yao/aster/setup-handoff-v1.json",
+  "$id": "https://github.com/willie-yao/aster/setup-handoff-v2.json",
   "title": "Aster setup to diagnostic authoring handoff",
   "type": "object",
   "additionalProperties": false,
@@ -22,7 +22,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "enum": [
+        1,
+        2
+      ]
     },
     "plan_digest": {
       "$ref": "#/$defs/sha256"
@@ -192,6 +195,18 @@
         },
         "ai_enabled": {
           "type": "boolean"
+        },
+        "k8s_storage_class": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$"
+        },
+        "k8s_existing_claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$"
         }
       }
     },
@@ -528,5 +543,113 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "deployment": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "k8s_storage_class"
+                  ]
+                },
+                {
+                  "required": [
+                    "k8s_existing_claim"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "deployment": {
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "mode": {
+                      "const": "k8s"
+                    }
+                  },
+                  "required": [
+                    "mode"
+                  ]
+                },
+                "then": {
+                  "oneOf": [
+                    {
+                      "required": [
+                        "k8s_storage_class"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "k8s_existing_claim"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "mode": {
+                      "const": "pages"
+                    }
+                  },
+                  "required": [
+                    "mode"
+                  ]
+                },
+                "then": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "k8s_storage_class"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "k8s_existing_claim"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

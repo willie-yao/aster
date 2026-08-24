@@ -9,6 +9,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/huh/v2 v2.0.3
 	github.com/muesli/cancelreader v0.2.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.30.0

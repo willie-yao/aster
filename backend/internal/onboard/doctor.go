@@ -14,6 +14,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 	"gopkg.in/yaml.v3"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 // DoctorOptions selects an existing consumer scaffold to validate.
@@ -608,12 +609,26 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	}
 	profile.includePresubmits = values.Fetcher.IncludePresubmits
 	profile.readToken = kubernetesReadTokenSource(values)
-	if !placeholder(values.Persistence.ExistingClaim) {
-		add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
+	rawExistingClaim := values.Persistence.ExistingClaim
+	rawStorageClass := values.Persistence.StorageClass
+	existingClaim := strings.TrimSpace(rawExistingClaim)
+	storageClass := strings.TrimSpace(rawStorageClass)
+	if rawExistingClaim != existingClaim {
+		add("Kubernetes storage", DoctorFail, "persistence.existingClaim must not contain surrounding whitespace", "Set the exact existing ReadWriteMany PVC name without leading or trailing spaces.")
+	} else if existingClaim != "" {
+		if errors := utilvalidation.IsDNS1123Subdomain(existingClaim); len(errors) > 0 {
+			add("Kubernetes storage", DoctorFail, "persistence.existingClaim is invalid: "+strings.Join(errors, "; "), "Set a valid existing ReadWriteMany PVC name.")
+		} else {
+			add("Kubernetes storage", DoctorPass, "persistence.existingClaim is configured", "")
+		}
 	} else if values.Persistence.Enabled != nil && !*values.Persistence.Enabled {
 		add("Kubernetes storage", DoctorFail, "persistence is disabled without an existing claim", "Set persistence.existingClaim or enable persistence with a ReadWriteMany storage strategy.")
-	} else if placeholder(values.Persistence.StorageClass) {
+	} else if rawStorageClass != storageClass {
+		add("Kubernetes storage", DoctorFail, "persistence.storageClass must not contain surrounding whitespace", "Set the exact ReadWriteMany-capable storage class name without leading or trailing spaces.")
+	} else if storageClass == "" || storageClass == "<your-rwx-storage-class>" {
 		add("Kubernetes storage", DoctorFail, "neither persistence.existingClaim nor persistence.storageClass is configured", "Set an existing ReadWriteMany claim or a ReadWriteMany-capable storage class.")
+	} else if errors := utilvalidation.IsDNS1123Subdomain(storageClass); len(errors) > 0 {
+		add("Kubernetes storage", DoctorFail, "persistence.storageClass is invalid: "+strings.Join(errors, "; "), "Set a valid ReadWriteMany-capable storage class name.")
 	} else if mode := strings.TrimSpace(values.Persistence.AccessMode); mode != "" && mode != "ReadWriteMany" {
 		add("Kubernetes storage", DoctorFail, "persistence.accessMode is "+mode+", not ReadWriteMany", "Set persistence.accessMode to ReadWriteMany or use an existing ReadWriteMany claim.")
 	} else {
@@ -854,7 +869,7 @@ func doctorLabelSelectorRestricted(selector *doctorLabelSelector) bool {
 
 func placeholder(value string) bool {
 	value = strings.TrimSpace(value)
-	return value == "" || strings.Contains(value, "<") || strings.Contains(strings.ToLower(value), "your-")
+	return value == "" || strings.Contains(value, "<")
 }
 
 // WriteDoctorReport prints every check and returns output failures.

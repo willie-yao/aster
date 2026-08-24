@@ -49,7 +49,7 @@ func TestBuildPlan_DeferredAIDropsProviderCoordinates(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true, K8sStorageClass: "shared-rwx",
 		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://private.example/v1/responses", AIModel: "private-model",
 		deferDeploymentAI: true,
 	}
@@ -75,13 +75,19 @@ func TestBuildPlan_FlagDisabledAIPreservesProviderSeed(t *testing.T) {
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true,
 		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://provider.example/v1/responses", AIModel: "seed-model",
+		K8sStorageClass: "shared-rwx",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
 		t.Fatalf("buildPlan: %v", err)
 	}
-	if plan.Deployment.AIEnabled || plan.Deployment.AIAPI != "responses" || plan.Deployment.Endpoint != opts.AIEndpoint || plan.Deployment.Model != opts.AIModel {
-		t.Fatalf("flag-disabled deployment lost provider seed: %+v", plan.Deployment)
+	if plan.Deployment.AIEnabled || plan.Deployment.AIAPI != "responses" || plan.Deployment.Endpoint != opts.AIEndpoint || plan.Deployment.Model != opts.AIModel || plan.Deployment.K8sStorageClass != opts.K8sStorageClass {
+		t.Fatalf("flag-disabled deployment lost reviewed input: %+v", plan.Deployment)
+	}
+	var review strings.Builder
+	printReview(&review, plan)
+	if !strings.Contains(review.String(), "Kubernetes storage:   StorageClass shared-rwx") {
+		t.Fatalf("review omitted Kubernetes storage:\n%s", review.String())
 	}
 	values := plan.Files["deploy/values.yaml"]
 	for _, want := range []string{opts.AIEndpoint, opts.AIModel} {
@@ -374,5 +380,33 @@ func TestBuildPlanRecordsReproducibleHandoffInputs(t *testing.T) {
 	}
 	if plan.Prompt.BaselineStatus != promptBaselineSourceOnly || plan.Prompt.CandidateSHA256 != planArtifactDigest([]byte(plan.Files["prompts/system.md"])) {
 		t.Fatalf("prompt = %+v", plan.Prompt)
+	}
+}
+
+func TestValidatePlanRejectsUnreviewedK8sStoragePlaceholder(t *testing.T) {
+	deps, _, _, _ := wizardDependencies("")
+	disabled := false
+	opts := Options{
+		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
+		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true, AIEnabled: &disabled,
+		allowK8sStoragePlaceholder: true,
+	}
+	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.allowK8sStoragePlaceholder = false
+	if err := validatePlan(plan); err == nil || !strings.Contains(err.Error(), "requires a StorageClass or existing claim") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPrintReviewShowsInteractiveK8sStoragePlaceholder(t *testing.T) {
+	plan := &Plan{Deployment: DeploymentPlan{Mode: modeK8s, ArtifactAccess: artifactAccessUnknown}}
+	var review strings.Builder
+	printReview(&review, plan)
+	if !strings.Contains(review.String(), "Kubernetes storage:   unresolved placeholder <your-rwx-storage-class>") {
+		t.Fatalf("review omitted unresolved Kubernetes storage:\n%s", review.String())
 	}
 }

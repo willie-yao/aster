@@ -40,6 +40,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"go -C backend run ./cmd/aster", "onboard discover", "-json", "-dry-run", "-non-interactive",
 		"-prompt-mode handoff", "-plan-out", "-apply-plan", "-plan-digest",
 		"-result-out", "-handoff-out", "-artifact-smoke-builds", "-deployment-reason", "-artifact-access",
+		"-k8s-storage-class", "-k8s-existing-claim", "selected CLI's `onboard -h`", "ReadWriteMany storage coordinate",
 		"-replace-consumer-owned", "existing `prompts/system.md` and every existing skill file", "Existing `skills/*.yaml`",
 		"source-only baseline", "$author-aster-diagnostics", "setup-handoff.json", "setup-handoff.schema.json",
 		"onboard doctor", "After the user confirms the reviewed plan",
@@ -47,11 +48,11 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
 		"separate workspaces, plans, handoffs", "fetch the canonical", "stale or fork-only local engine", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
-		"@v0.9.0-rc.3", "<engine-ref>", "-engine-ref <engine-ref>",
+		"@v0.9.0-rc.9", "<engine-ref>", "-engine-ref <engine-ref>", "default for Pages setup", "predates the Kubernetes",
 		"exact release tag or full commit SHA", "<engine-repository> = willie-yao/aster",
 		"<engine-repository-url> = https://github.com/willie-yao/aster",
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml",
-		"commit is fork-only or local-only", "before a Pages plan", "fork-only or local-only",
+		"commit is fork-only or local-only", "Before any Pages", "fork-only or local-only",
 		"Pages workflow ends in `@<engine-ref>`", "never the mutable name `main`",
 		"<selected-commit>", "<module-selector>", "go mod download -json",
 		"Origin.Hash", "Origin.URL", "backend/v<version>", "paired tags",
@@ -65,7 +66,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest",
-		"-engine-ref v0.9.0-rc.3", "recorded engine revision is the commit resolved from that exact ref",
+		"-engine-ref v0.9.0-rc.9", "recorded engine revision is the commit resolved from that exact ref",
 		"configured Aster Git remote", "configured GitHub remote", "available on the configured GitHub remote",
 	} {
 		if strings.Contains(text, forbidden) {
@@ -120,6 +121,58 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	}
 }
 
+func TestConsumerSetupSkillCLIFlags(t *testing.T) {
+	root := onboardingRepoRoot(t)
+	backend := filepath.Join(root, "backend")
+	tests := []struct {
+		name     string
+		args     []string
+		required []string
+	}{
+		{
+			name: "onboard", args: []string{"onboard", "-h"},
+			required: []string{
+				"apply-plan", "artifact-access", "artifact-smoke-builds", "bucket", "dashboard-repo",
+				"deployment-reason", "dry-run", "engine-ref", "exact-job", "gcsweb-base", "handoff-out",
+				"include-presubmits", "k8s-existing-claim", "k8s-storage-class", "mode", "non-interactive",
+				"out", "plan-digest", "plan-out", "prompt-mode", "replace-consumer-owned", "result-out",
+				"source-repo", "testgrid", "update-existing",
+			},
+		},
+		{name: "discover", args: []string{"onboard", "discover", "-h"}, required: []string{"json", "source-repo"}},
+		{name: "doctor", args: []string{"onboard", "doctor", "-h"}, required: []string{"project-dir"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cmd := exec.Command("go", append([]string{"run", "./cmd/aster"}, test.args...)...)
+			cmd.Dir = backend
+			for _, value := range os.Environ() {
+				if strings.HasPrefix(value, "AI_TOKEN=") || strings.HasPrefix(value, "GITHUB_TOKEN=") {
+					continue
+				}
+				cmd.Env = append(cmd.Env, value)
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("CLI help: %v\n%s", err, output)
+			}
+			flags := map[string]bool{}
+			for _, line := range strings.Split(string(output), "\n") {
+				fields := strings.Fields(strings.TrimSpace(line))
+				if len(fields) == 0 || !strings.HasPrefix(fields[0], "-") {
+					continue
+				}
+				flags[strings.TrimPrefix(fields[0], "-")] = true
+			}
+			for _, name := range test.required {
+				if !flags[name] {
+					t.Errorf("CLI help missing -%s\n%s", name, output)
+				}
+			}
+		})
+	}
+}
+
 func TestConsumerSetupHandoffValidator(t *testing.T) {
 	root := onboardingRepoRoot(t)
 	skillDir := filepath.Join(root, ".agents", "skills", "setup-aster-consumer")
@@ -136,7 +189,7 @@ func TestConsumerSetupHandoffValidator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, anchor := range []string{`"plan_digest"`, `"source_only_candidate"`, `"artifact_smoke"`, `"artifact_location"`, `"test_infra"`, `"matches_reviewed_plan"`, `"preserve"`, `"next_phase"`} {
+	for _, anchor := range []string{`"plan_digest"`, `"source_only_candidate"`, `"artifact_smoke"`, `"artifact_location"`, `"test_infra"`, `"k8s_storage_class"`, `"k8s_existing_claim"`, `"matches_reviewed_plan"`, `"preserve"`, `"next_phase"`} {
 		if !strings.Contains(string(raw), anchor) {
 			t.Errorf("setup handoff schema missing %q", anchor)
 		}

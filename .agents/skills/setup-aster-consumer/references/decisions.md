@@ -37,6 +37,11 @@ persistent state, admin actions, and cluster-local endpoints. Do not select
 Kubernetes merely because the source project uses Kubernetes. Record unknowns
 instead of inferring them.
 
+For non-interactive Kubernetes setup, require exactly one reviewed ReadWriteMany
+storage coordinate: `-k8s-storage-class` for chart-provisioned storage or
+`-k8s-existing-claim` for a pre-provisioned PVC. Never infer it from provider or
+cluster type, and stop if the selected CLI does not advertise both flags.
+
 ## Discovery
 
 Use `-testgrid` for Kubernetes TestGrid dashboards. Use `-bucket` for an artifact

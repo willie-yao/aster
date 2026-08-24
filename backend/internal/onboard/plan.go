@@ -142,7 +142,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	}
 	deployment := DeploymentPlan{
 		Mode: opts.Mode, Reasons: deploymentReasons(opts), ArtifactAccess: effectiveArtifactAccess(opts),
-		AIEnabled: effectiveAIEnabled(opts),
+		AIEnabled: effectiveAIEnabled(opts), K8sStorageClass: opts.K8sStorageClass, K8sExistingClaim: opts.K8sExistingClaim,
 	}
 	if !opts.deferDeploymentAI {
 		deployment.AIAPI = deploymentAIAPI(opts)
@@ -187,8 +187,9 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 			OutDir: opts.OutDir, OpenPR: opts.OpenPR, UpdateExisting: opts.UpdateExisting,
 			ReplaceConsumerOwned: opts.ReplaceConsumerOwned,
 		},
-		Warnings: warnings,
-		Files:    files,
+		Warnings:                   warnings,
+		Files:                      files,
+		allowK8sStoragePlaceholder: opts.allowK8sStoragePlaceholder,
 		Provenance: map[string]Inferred[string]{
 			"source_repo":    {Value: sourceRepo.FullName, Source: "explicit input", Confidence: ConfidenceHigh},
 			"dashboard_repo": {Value: dashboardRepo.FullName, Source: "explicit or confirmed input", Confidence: ConfidenceHigh},

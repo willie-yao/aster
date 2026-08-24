@@ -386,6 +386,51 @@ func TestWizard_FinalConfirmationDefaultsToNo(t *testing.T) {
 	}
 }
 
+func TestWizard_K8sSavedPlanRequiresStorageBeforeRendering(t *testing.T) {
+	deps, out, writer, _ := wizardDependencies("\n2\n")
+	opts := Options{
+		SourceRepo: "example/project", EngineRef: "main", NoPrompt: true,
+		DryRun: true, PlanOut: filepath.Join(t.TempDir(), "plan.json"),
+	}
+	err := run(context.Background(), opts, deps)
+	if err == nil || !strings.Contains(err.Error(), "saved or open-PR Kubernetes onboarding requires") {
+		t.Fatalf("error = %v", err)
+	}
+	if writer.writes != 0 || strings.Contains(out.String(), "Dry run complete") {
+		t.Fatalf("writes=%d output=%q", writer.writes, out.String())
+	}
+}
+
+func TestWizard_K8sOpenPRRequiresStorageBeforeRendering(t *testing.T) {
+	deps, out, writer, _ := wizardDependencies("\n2\n")
+	pullRequests := deps.pullRequests.(*fakePullRequestWriter)
+	opts := Options{
+		SourceRepo: "example/project", EngineRef: "main", NoPrompt: true, OpenPR: true,
+	}
+	err := run(context.Background(), opts, deps)
+	if err == nil || !strings.Contains(err.Error(), "saved or open-PR Kubernetes onboarding requires") {
+		t.Fatalf("error = %v", err)
+	}
+	if writer.writes != 0 || pullRequests.calls != 0 || strings.Contains(out.String(), "Opening a scaffold pull request") {
+		t.Fatalf("writes=%d pull requests=%d output=%q", writer.writes, pullRequests.calls, out.String())
+	}
+}
+
+func TestWizard_K8sLocalScaffoldAllowsReviewedPlaceholder(t *testing.T) {
+	wizardInput := strings.Join([]string{"", "2", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
+	deps, out, writer, _ := wizardDependencies(wizardInput)
+	pullRequests := deps.pullRequests.(*fakePullRequestWriter)
+	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		t.Fatalf("wizard run: %v\n%s", err, out.String())
+	}
+	if writer.writes != 1 || pullRequests.calls != 0 {
+		t.Fatalf("writes=%d pull requests=%d", writer.writes, pullRequests.calls)
+	}
+	if !strings.Contains(writer.files["deploy/values.yaml"], `storageClass: "<your-rwx-storage-class>"`) {
+		t.Fatalf("interactive Kubernetes scaffold omitted storage placeholder:\n%s", writer.files["deploy/values.yaml"])
+	}
+}
+
 func TestWizard_DryRunPerformsNoWrites(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", ""}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
@@ -480,26 +525,35 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	}
 }
 
-func TestRun_K8sInteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
-	wizardInput := strings.Join([]string{"", "2", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
-	wizardDeps, _, wizardWriter, _ := wizardDependencies(wizardInput)
-	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, wizardDeps); err != nil {
-		t.Fatalf("wizard run: %v", err)
-	}
-
-	flaggedDeps, _, flaggedWriter, _ := wizardDependencies("")
-	flaggedDeps.terminal.Interactive = false
-	disabled := false
-	flagged := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, ID: "project", Name: "Project",
-		EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
-	}
-	if err := run(context.Background(), flagged, flaggedDeps); err != nil {
-		t.Fatalf("flagged run: %v", err)
-	}
-	if !reflect.DeepEqual(wizardWriter.files, flaggedWriter.files) {
-		t.Fatalf("wizard and flagged Kubernetes files differ\nwizard=%v\nflagged=%v", wizardWriter.files, flaggedWriter.files)
+func TestRun_K8sFlaggedInputsRequireStorage(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		dryRun bool
+		openPR bool
+	}{
+		{name: "direct apply"},
+		{name: "dry run", dryRun: true},
+		{name: "open PR", openPR: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			deps, _, writer, _ := wizardDependencies("")
+			pullRequests := deps.pullRequests.(*fakePullRequestWriter)
+			deps.terminal.Interactive = false
+			disabled := false
+			opts := Options{
+				TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
+				SourceRepo: "example/project", Mode: modeK8s, ID: "project", Name: "Project",
+				EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
+				DryRun: test.dryRun, OpenPR: test.openPR,
+			}
+			err := run(context.Background(), opts, deps)
+			if err == nil || !strings.Contains(err.Error(), "--k8s-storage-class or --k8s-existing-claim") {
+				t.Fatalf("error = %v", err)
+			}
+			if writer.writes != 0 || pullRequests.calls != 0 {
+				t.Fatalf("writes=%d pull requests=%d", writer.writes, pullRequests.calls)
+			}
+		})
 	}
 }
 

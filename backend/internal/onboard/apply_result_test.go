@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
@@ -52,10 +53,125 @@ func TestBuildApplyResultAndSetupHandoffValidate(t *testing.T) {
 		t.Fatalf("handoff mode = %o", info.Mode().Perm())
 	}
 	root := onboardingRepoRoot(t)
+	schemaPath := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "references", "setup-handoff.schema.json")
+	compiler := jsonschema.NewCompiler()
+	schema, err := compiler.Compile(schemaPath)
+	if err != nil {
+		t.Fatalf("compile setup handoff schema: %v", err)
+	}
+	schemaError := func(path string) error {
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		instance, err := jsonschema.UnmarshalJSON(file)
+		if err != nil {
+			return err
+		}
+		return schema.Validate(instance)
+	}
+	validateSchema := func(path string) {
+		t.Helper()
+		if err := schemaError(path); err != nil {
+			t.Fatalf("validate handoff schema: %v", err)
+		}
+	}
+	writeSchemaVersionVariant := func(source, from, to, name string) string {
+		t.Helper()
+		raw, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Replace(string(raw), from, to, 1)
+		if text == string(raw) {
+			t.Fatalf("schema version token %q not found", from)
+		}
+		variant := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(variant, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return variant
+	}
+	validateSchema(path)
 	script := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "scripts", "validate_setup_handoff.py")
 	output, err := exec.Command("python3", script, path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("validate handoff: %v\n%s", err, output)
+	}
+	legacy := handoff
+	legacy.SchemaVersion = 1
+	legacyPath := filepath.Join(t.TempDir(), "setup-handoff-v1-pages.json")
+	if err := writePrivateJSON(legacyPath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	validateSchema(legacyPath)
+	output, err = exec.Command("python3", script, legacyPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("validate release-compatible Pages handoff: %v\n%s", err, output)
+	}
+	for _, variant := range []string{
+		writeSchemaVersionVariant(legacyPath, `"schema_version": 1`, `"schema_version": 1.0`, "setup-handoff-v1-float.json"),
+		writeSchemaVersionVariant(path, `"schema_version": 2`, `"schema_version": 2.0`, "setup-handoff-v2-float.json"),
+	} {
+		validateSchema(variant)
+		output, err = exec.Command("python3", script, variant).CombinedOutput()
+		if err != nil {
+			t.Fatalf("validate integral numeric schema version: %v\n%s", err, output)
+		}
+	}
+	booleanVersion := writeSchemaVersionVariant(path, `"schema_version": 2`, `"schema_version": true`, "setup-handoff-boolean-version.json")
+	assertBothReject := func(variant, label string) {
+		t.Helper()
+		if err := schemaError(variant); err == nil {
+			t.Fatalf("JSON Schema accepted %s", label)
+		}
+		if output, err = exec.Command("python3", script, variant).CombinedOutput(); err == nil {
+			t.Fatalf("Python validator accepted %s: %s", label, output)
+		}
+	}
+	assertBothAccept := func(variant, label string) {
+		t.Helper()
+		validateSchema(variant)
+		if output, err = exec.Command("python3", script, variant).CombinedOutput(); err != nil {
+			t.Fatalf("Python validator rejected %s: %v\n%s", label, err, output)
+		}
+	}
+	assertBothReject(booleanVersion, "a boolean root schema version")
+	assertBothAccept(
+		writeSchemaVersionVariant(path, `    "schema_version": 1`, `    "schema_version": 1.0`, "setup-handoff-apply-version-float.json"),
+		"an integral apply-result schema version",
+	)
+	assertBothReject(
+		writeSchemaVersionVariant(path, `    "schema_version": 1`, `    "schema_version": true`, "setup-handoff-apply-version-boolean.json"),
+		"a boolean apply-result schema version",
+	)
+	assertBothAccept(
+		writeSchemaVersionVariant(path, `"builds_per_job": 0`, `"builds_per_job": 0.0`, "setup-handoff-smoke-builds-float.json"),
+		"an integral artifact-smoke build count",
+	)
+	assertBothReject(
+		writeSchemaVersionVariant(path, `"builds_per_job": 0`, `"builds_per_job": true`, "setup-handoff-smoke-builds-boolean.json"),
+		"a boolean artifact-smoke build count",
+	)
+	assertBothReject(
+		writeSchemaVersionVariant(path, `"engine": {`, `"engine": {\n    "modified": "false",`, "setup-handoff-engine-modified-string.json"),
+		"a non-boolean engine modified value",
+	)
+	assertBothReject(
+		writeSchemaVersionVariant(path, `"ai_enabled": false`, `"ai_enabled": "false"`, "setup-handoff-ai-enabled-string.json"),
+		"a non-boolean AI enabled value",
+	)
+	handoff.Deployment.Mode = modeK8s
+	handoff.Deployment.K8sStorageClass = "shared-rwx"
+	k8sPath := filepath.Join(t.TempDir(), "setup-handoff-k8s.json")
+	if err := writePrivateJSON(k8sPath, handoff); err != nil {
+		t.Fatal(err)
+	}
+	validateSchema(k8sPath)
+	output, err = exec.Command("python3", script, k8sPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("validate Kubernetes handoff: %v\n%s", err, output)
 	}
 }
 
@@ -162,6 +278,28 @@ func TestApplyReviewedWritesValidatedOutputs(t *testing.T) {
 		t.Fatalf("artifact/test-infra handoff = %+v %+v", handoff.ArtifactLocation, handoff.TestInfra)
 	}
 	root := onboardingRepoRoot(t)
+	schemaPath := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "references", "setup-handoff.schema.json")
+	compiler := jsonschema.NewCompiler()
+	schema, err := compiler.Compile(schemaPath)
+	if err != nil {
+		t.Fatalf("compile setup handoff schema: %v", err)
+	}
+	validateSchema := func(path string) {
+		t.Helper()
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		instance, err := jsonschema.UnmarshalJSON(file)
+		if err != nil {
+			t.Fatalf("decode handoff for schema validation: %v", err)
+		}
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("validate handoff schema: %v", err)
+		}
+	}
+	validateSchema(handoffPath)
 	script := filepath.Join(root, ".agents", "skills", "setup-aster-consumer", "scripts", "validate_setup_handoff.py")
 	output, err := exec.Command("python3", script, handoffPath).CombinedOutput()
 	if err != nil {

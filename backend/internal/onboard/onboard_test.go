@@ -240,6 +240,16 @@ func TestValidateOptions(t *testing.T) {
 		{"unsafe exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"../job"} }, "safe Prow job name"},
 		{"duplicate exact job", func(o *Options) { o.TestGrid = ""; o.Bucket = "b"; o.ExactJobs = []string{"job", "job"} }, "duplicates"},
 		{"update existing with open PR", func(o *Options) { o.UpdateExisting = true; o.OpenPR = true }, "cannot be combined"},
+		{"storage outside Kubernetes", func(o *Options) { o.K8sStorageClass = "shared-rwx" }, "apply only with --mode k8s"},
+		{"both Kubernetes storage inputs", func(o *Options) {
+			o.Mode = modeK8s
+			o.K8sStorageClass = "shared-rwx"
+			o.K8sExistingClaim = "shared-data"
+		}, "mutually exclusive"},
+		{"non-interactive Kubernetes storage missing", func(o *Options) { o.Mode = modeK8s; o.NonInteractive = true }, "requires --k8s-storage-class or --k8s-existing-claim"},
+		{"saved Kubernetes plan storage missing", func(o *Options) { o.Mode = modeK8s; o.DryRun = true; o.PlanOut = "plan.json" }, "requires --k8s-storage-class or --k8s-existing-claim"},
+		{"invalid Kubernetes storage class", func(o *Options) { o.Mode = modeK8s; o.K8sStorageClass = "INVALID_CLASS" }, "is invalid"},
+		{"invalid Kubernetes existing claim", func(o *Options) { o.Mode = modeK8s; o.K8sExistingClaim = "INVALID_CLAIM" }, "is invalid"},
 		{"plan out without dry run", func(o *Options) { o.PlanOut = "plan.json" }, "requires --dry-run"},
 		{"plan out with open PR", func(o *Options) { o.DryRun = true; o.PlanOut = "plan.json"; o.OpenPR = true }, "cannot be combined"},
 		{"endpoint userinfo", func(o *Options) { o.AIEndpoint = "https://user:fixture-secret@example.test/v1" }, "must not contain credentials"},
@@ -269,6 +279,31 @@ func TestValidateOptions_DefaultsOutDir(t *testing.T) {
 	}
 	if opts.EngineRef != "main" {
 		t.Errorf("EngineRef = %q, want main", opts.EngineRef)
+	}
+}
+
+func TestValidateOptions_KubernetesStorage(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		storageClass  string
+		existingClaim string
+	}{
+		{name: "storage class", storageClass: " shared-rwx "},
+		{name: "existing claim", existingClaim: " shared-data "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := testOpts()
+			opts.Mode = modeK8s
+			opts.NonInteractive = true
+			opts.K8sStorageClass = test.storageClass
+			opts.K8sExistingClaim = test.existingClaim
+			if err := validateOptions(&opts); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if opts.K8sStorageClass != strings.TrimSpace(test.storageClass) || opts.K8sExistingClaim != strings.TrimSpace(test.existingClaim) {
+				t.Fatalf("storage = %q, claim = %q", opts.K8sStorageClass, opts.K8sExistingClaim)
+			}
+		})
 	}
 }
 
@@ -389,6 +424,7 @@ func TestValidateOptions_Mode(t *testing.T) {
 	t.Run("k8s accepted", func(t *testing.T) {
 		opts := testOpts()
 		opts.Mode = modeK8s
+		opts.K8sStorageClass = "shared-rwx"
 		if err := validateOptions(&opts); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -408,6 +444,7 @@ func TestValidateOptions_Mode(t *testing.T) {
 func TestScaffold_K8sMode(t *testing.T) {
 	opts := testOpts()
 	opts.Mode = modeK8s
+	opts.K8sStorageClass = "shared-rwx"
 	opts.AIEndpoint = "http://model.ns.svc.cluster.local:8000/v1/chat/completions"
 	opts.AIModel = "some-model-id"
 	if err := validateOptions(&opts); err != nil {

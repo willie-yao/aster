@@ -39,8 +39,8 @@ From the source repository whose jobs you want to monitor, run the current
 release exactly:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
-  -engine-ref v0.9.0-rc.3
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard \
+  -engine-ref v0.9.0-rc.9
 ```
 
 The wizard discovers matching Prow and TestGrid jobs, asks for the deployment
@@ -75,7 +75,9 @@ The setup skill must use `aster onboard`, not hand-write the scaffold. It runs
 read-only discovery, prepares an exact dry-run plan, preserves consumer-owned
 prompt and skill files during updates, leaves source-only template placeholders
 for review, waits for confirmation before applying the reviewed plan, and
-validates the resulting consumer. Repository creation, pushes, pull requests,
+validates the resulting consumer. A non-interactive Kubernetes request must name
+an RWX StorageClass or existing PVC, and the skill stops if the selected CLI does
+not expose the required storage flags. Repository creation, pushes, pull requests,
 GitHub settings, Secret writes, and cluster writes remain separate confirmation-gated actions.
 
 After setup, use `$author-aster-diagnostics` to evaluate representative
@@ -99,8 +101,8 @@ Use the flagged CLI when all required inputs are known. This example creates a
 Pages consumer:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 onboard \
-  -engine-ref v0.9.0-rc.3 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard \
+  -engine-ref v0.9.0-rc.9 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -159,7 +161,7 @@ Do not copy engine code into the consumer repository.
 Run the read-only validator after generation and after meaningful edits:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.3 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

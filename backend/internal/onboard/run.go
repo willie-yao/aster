@@ -18,6 +18,8 @@ import (
 	"github.com/willie-yao/aster/backend/internal/onboard/promptauthor"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
 var ErrCancelled = errors.New("onboarding cancelled")
@@ -506,6 +508,69 @@ func validatePlan(planValue *Plan) error {
 	if !reflect.DeepEqual(*parsed, planValue.Project) {
 		return fmt.Errorf("onboarding plan project metadata does not match project.yaml")
 	}
+	if err := validateK8sPlanStorage(planValue); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateK8sPlanStorage(planValue *Plan) error {
+	storageClass := planValue.Deployment.K8sStorageClass
+	existingClaim := planValue.Deployment.K8sExistingClaim
+	if storageClass != "" && existingClaim != "" {
+		return fmt.Errorf("onboarding plan Kubernetes storage selects both a StorageClass and existing claim")
+	}
+	for label, value := range map[string]string{
+		"StorageClass":   storageClass,
+		"existing claim": existingClaim,
+	} {
+		if value == "" {
+			continue
+		}
+		if errors := utilvalidation.IsDNS1123Subdomain(value); len(errors) > 0 {
+			return fmt.Errorf("onboarding plan Kubernetes %s %q is invalid: %s", label, value, strings.Join(errors, "; "))
+		}
+	}
+	if planValue.Deployment.Mode != modeK8s {
+		if storageClass != "" || existingClaim != "" {
+			return fmt.Errorf("onboarding plan Pages deployment contains Kubernetes storage metadata")
+		}
+		return nil
+	}
+	var values struct {
+		Persistence struct {
+			ExistingClaim string `yaml:"existingClaim"`
+			StorageClass  string `yaml:"storageClass"`
+		} `yaml:"persistence"`
+	}
+	if err := yaml.Unmarshal([]byte(planValue.Files["deploy/values.yaml"]), &values); err != nil {
+		return fmt.Errorf("onboarding plan deploy/values.yaml failed validation: %w", err)
+	}
+	if existingClaim != "" {
+		if values.Persistence.ExistingClaim != existingClaim || values.Persistence.StorageClass != "" {
+			return fmt.Errorf("onboarding plan Kubernetes storage metadata does not match deploy/values.yaml")
+		}
+		return nil
+	}
+	if storageClass != "" {
+		if values.Persistence.StorageClass != storageClass || values.Persistence.ExistingClaim != "" {
+			return fmt.Errorf("onboarding plan Kubernetes storage metadata does not match deploy/values.yaml")
+		}
+		return nil
+	}
+	if !planValue.allowK8sStoragePlaceholder {
+		return fmt.Errorf("onboarding plan Kubernetes storage requires a StorageClass or existing claim")
+	}
+	if values.Persistence.ExistingClaim != "" || values.Persistence.StorageClass != "<your-rwx-storage-class>" {
+		return fmt.Errorf("onboarding plan interactive Kubernetes storage placeholder is invalid")
+	}
+	return nil
+}
+
+func requireReviewedK8sStorage(planValue *Plan) error {
+	if planValue.Deployment.Mode == modeK8s && planValue.Deployment.K8sStorageClass == "" && planValue.Deployment.K8sExistingClaim == "" {
+		return fmt.Errorf("reviewed Kubernetes plans require a StorageClass or existing claim")
+	}
 	return nil
 }
 
@@ -554,6 +619,13 @@ func printReview(out io.Writer, plan *Plan) {
 	fmt.Fprintf(out, "  Discovery digest:     %s\n", safeTerminal(plan.Discovery.Digest))
 	fmt.Fprintf(out, "  Deployment:           %s\n", deploymentLabel(plan.Deployment.Mode))
 	fmt.Fprintf(out, "  Artifact access:      %s\n", safeTerminal(plan.Deployment.ArtifactAccess))
+	if plan.Deployment.K8sExistingClaim != "" {
+		fmt.Fprintf(out, "  Kubernetes storage:   existing claim %s\n", safeTerminal(plan.Deployment.K8sExistingClaim))
+	} else if plan.Deployment.K8sStorageClass != "" {
+		fmt.Fprintf(out, "  Kubernetes storage:   StorageClass %s\n", safeTerminal(plan.Deployment.K8sStorageClass))
+	} else if plan.Deployment.Mode == modeK8s {
+		fmt.Fprintln(out, "  Kubernetes storage:   unresolved placeholder <your-rwx-storage-class>")
+	}
 	for _, reason := range plan.Deployment.Reasons {
 		fmt.Fprintf(out, "    Reason: %s\n", safeTerminal(reason))
 	}
@@ -645,8 +717,8 @@ func printDryRun(out io.Writer, plan *Plan) {
 }
 
 func finishDryRun(out io.Writer, plan *Plan, planOut string) error {
-	printDryRun(out, plan)
 	if planOut == "" {
+		printDryRun(out, plan)
 		return nil
 	}
 	canonicalPlanOut, err := canonicalPlanArtifactPath(planOut)
@@ -657,6 +729,7 @@ func finishDryRun(out io.Writer, plan *Plan, planOut string) error {
 	if err != nil {
 		return err
 	}
+	printDryRun(out, plan)
 	fmt.Fprintf(out, "Reviewed plan artifact: %s\n", safeTerminal(canonicalPlanOut))
 	fmt.Fprintf(out, "Reviewed plan digest: %s\n", digest)
 	return nil

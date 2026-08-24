@@ -533,6 +533,14 @@ func TestDoctor_KubernetesStorageStrategies(t *testing.T) {
 		wantStatus DoctorStatus
 	}{
 		{name: "existing claim", values: "persistence:\n  existingClaim: shared-rwx\n", wantStatus: DoctorPass},
+		{name: "your prefix existing claim", values: "persistence:\n  existingClaim: your-data\n", wantStatus: DoctorPass},
+		{name: "your prefix storage class", values: "persistence:\n  storageClass: your-rwx\n", wantStatus: DoctorPass},
+		{name: "invalid existing claim", values: "persistence:\n  existingClaim: INVALID_CLAIM\n", wantStatus: DoctorFail},
+		{name: "existing claim leading whitespace", values: "persistence:\n  existingClaim: \" your-data\"\n", wantStatus: DoctorFail},
+		{name: "existing claim trailing whitespace", values: "persistence:\n  existingClaim: \"your-data \"\n", wantStatus: DoctorFail},
+		{name: "invalid storage class", values: "persistence:\n  storageClass: INVALID_CLASS\n", wantStatus: DoctorFail},
+		{name: "storage class leading whitespace", values: "persistence:\n  storageClass: \" your-rwx\"\n", wantStatus: DoctorFail},
+		{name: "storage class trailing whitespace", values: "persistence:\n  storageClass: \"your-rwx \"\n", wantStatus: DoctorFail},
 		{name: "wrong access mode", values: "persistence:\n  storageClass: fast\n  accessMode: ReadWriteOnce\n", wantStatus: DoctorFail},
 		{name: "disabled without claim", values: "persistence:\n  enabled: false\n  storageClass: fast\n", wantStatus: DoctorFail},
 		{name: "chart defaults AI disabled", values: "persistence:\n  storageClass: fast\n", wantStatus: DoctorPass},
@@ -548,6 +556,45 @@ func TestDoctor_KubernetesStorageStrategies(t *testing.T) {
 			}
 			if test.name == "chart defaults AI disabled" && !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
 				t.Fatalf("missing ai.enabled did not inherit false: %+v", report.Checks)
+			}
+		})
+	}
+}
+
+func TestK8sYourPrefixStoragePlanApplyAndDoctor(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		storageClass  string
+		existingClaim string
+	}{
+		{name: "storage class", storageClass: "your-rwx"},
+		{name: "existing claim", existingClaim: "your-data"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			deps, _, _, _ := wizardDependencies("")
+			deps.files = localScaffoldWriter{}
+			disabled := false
+			opts := Options{
+				TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
+				SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
+				OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true, AIEnabled: &disabled,
+				K8sStorageClass: test.storageClass, K8sExistingClaim: test.existingClaim,
+			}
+			plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := applyPlan(context.Background(), plan, "", deps); err != nil {
+				t.Fatal(err)
+			}
+			values, err := os.ReadFile(filepath.Join(opts.OutDir, "deploy", "values.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := DoctorReport{}
+			checkKubernetes(&report, values, &plan.Project)
+			if !hasDoctorCheck(report, "Kubernetes storage", DoctorPass) {
+				t.Fatalf("checks = %+v", report.Checks)
 			}
 		})
 	}

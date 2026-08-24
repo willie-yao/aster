@@ -36,6 +36,11 @@ type Options struct {
 	// authenticated, private, or not yet established.
 	ArtifactAccess string
 
+	// K8sStorageClass and K8sExistingClaim select the shared ReadWriteMany
+	// storage used by a Kubernetes scaffold. They are mutually exclusive.
+	K8sStorageClass  string
+	K8sExistingClaim string
+
 	// ID, Name, and ShortName override the derived project identity. Optional.
 	ID        string
 	Name      string
@@ -105,4 +110,6 @@ type Options struct {
 	PlanOut string
 	// NonInteractive forbids terminal reads even when stdin is a TTY.
 	NonInteractive bool
+
+	allowK8sStoragePlaceholder bool
 }

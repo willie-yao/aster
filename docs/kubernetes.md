@@ -8,6 +8,9 @@ read-only dashboard that does not need a cluster.
 Start with `aster onboard` and select **Kubernetes with Helm**. The generated
 consumer repository contains `project.yaml`, `prompts/system.md`, optional
 skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`.
+Interactive onboarding leaves storage as a reviewed placeholder. For
+non-interactive onboarding, provide exactly one of `-k8s-storage-class` or
+`-k8s-existing-claim`; the CLI does not infer platform storage.
 
 This page is the canonical contributor install, verification, upgrade, and
 rollback procedure. Cluster administrators should prepare prerequisites with

@@ -34,7 +34,7 @@ mode: watch
 persistence:
   enabled: true
   existingClaim: ""
-  storageClass: "<your-rwx-storage-class>"
+  storageClass: "fixture-rwx"
   accessMode: ReadWriteMany
   size: 1Gi
   retain: true
