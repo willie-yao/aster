@@ -9,29 +9,39 @@ function source(path: string): string {
 
 test("mobile branding link keeps an accessible home name", () => {
   const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
+  const navigation = source("src/lib/navigation.ts");
 
-  assert.match(
-    layout,
-    /<MuiLink[\s\S]*?aria-label=\{`\$\{manifest\.branding\.title\} home`\}[\s\S]*?>/,
-  );
+  assert.match(layout, /<MuiLink[\s\S]*?aria-label=\{homeLabel\}[\s\S]*?>/);
   assert.match(
     layout,
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
-  assert.match(layout, /label="Failure Trends"/);
-  assert.match(layout, /label="Analysis Health"/);
-  assert.match(layout, /label="AI Usage"/);
+  // Both navs are rendered, so each must carry the full destination name as a
+  // description. The visible label stays the accessible name so speech control
+  // can target what it reads (WCAG 2.5.3).
+  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
+  assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
+  assert.match(navigation, /title: "Failure Trends"/);
+  assert.match(navigation, /title: "Analysis Health"/);
+  assert.match(navigation, /title: "AI Usage"/);
 });
 
-test("header keeps navigation readable until the extra-large layout fits", () => {
+test("primary navigation swaps between a rail and a bottom bar without a gap", () => {
   const layout = source("src/components/Layout.tsx");
+  const rail = source("src/components/NavRail.tsx");
   const profile = source("src/components/ProfileMenu.tsx");
 
-  assert.match(layout, /xl: '"brand nav controls"'/);
-  assert.doesNotMatch(layout, /lg: '"brand nav controls"'/);
-  assert.match(layout, /flexShrink: 0,[\s\S]*minHeight: \{ xs: 44, xl: 36 \}/);
-  assert.match(layout, /justifyContent: \{ xs: "flex-start", xl: "flex-start" \}/);
-  assert.match(layout, /querySelector<HTMLElement>\('\[aria-current="page"\]'\)\?\.scrollIntoView/);
+  // Operator destinations render only a sign-in wall without a session, so the
+  // rail must derive access from auth rather than the deployment flags alone.
+  assert.match(layout, /operatorAccess: auth\.status === "authenticated"/);
+  // Exactly one primary nav is visible at any width: the rail from md up, the
+  // bottom bar below it.
+  assert.match(rail, /display: \{ xs: "none", md: "flex" \}/);
+  assert.match(rail, /display: \{ xs: "flex", md: "none" \}/);
+  // The fixed bottom bar must not cover the end of the page.
+  assert.match(layout, /BOTTOM_BAR_HEIGHT\}px \+ env\(safe-area-inset-bottom\)/);
+  assert.match(rail, /pb: "env\(safe-area-inset-bottom\)"/);
   assert.match(layout, /href="#main-content"[\s\S]*Skip to main content/);
   assert.match(layout, /id="main-content"[\s\S]*tabIndex=\{-1\}/);
   assert.match(profile, /width: \{ xs: 44, sm: 36 \}/);
