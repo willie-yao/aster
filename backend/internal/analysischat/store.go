@@ -81,6 +81,7 @@ type persistedRequest struct {
 	FailureKind  string `json:"failure_kind,omitempty"`
 	FailureGate  string `json:"failure_gate,omitempty"`
 	Turn         int    `json:"turn,omitempty"`
+	Prepared     bool   `json:"prepared,omitempty"`
 	CreatedAt    string `json:"created_at,omitempty"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
 }
@@ -291,7 +292,7 @@ func migrateRequestSummaries(state *persistedState) bool {
 			if !ok {
 				continue
 			}
-			if request.Turn == 0 {
+			if request.Turn == 0 && !request.Prepared {
 				request.Turn = turns[requestID]
 				changed = true
 			}
@@ -320,7 +321,7 @@ func migrateRequestSummaries(state *persistedState) bool {
 			request.Question = session.Active.Question
 			changed = true
 		}
-		if request.Turn == 0 && session.Turns > 0 {
+		if request.Turn == 0 && !request.Prepared && session.Turns > 0 {
 			request.Turn = session.Turns
 			changed = true
 		}

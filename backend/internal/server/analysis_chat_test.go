@@ -60,6 +60,10 @@ func (f *fakeAnalysisChatRunner) Create(ref analysischat.AnalysisRef, owner, req
 	return analysischat.SessionView{ID: "session-1", Analysis: ref, Messages: []analysischat.Message{}, TurnsUsed: 2, MaxTurns: 10}, nil
 }
 
+func (f *fakeAnalysisChatRunner) CreatePrepared(ref analysischat.AnalysisRef, owner, requestID string) (analysischat.SessionView, error) {
+	return f.Create(ref, owner, requestID)
+}
+
 func (f *fakeAnalysisChatRunner) Get(id, owner string) (analysischat.SessionView, error) {
 	f.gotID, f.gotOwner = id, owner
 	if f.getErr != nil {

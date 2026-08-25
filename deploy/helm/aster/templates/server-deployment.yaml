@@ -155,6 +155,10 @@ spec:
               value: "true"
             {{- end }}
             {{- if $interactive }}
+            {{- if gt (int .Values.ai.maxOutputTokens) 0 }}
+            - name: AI_MAX_OUTPUT_TOKENS
+              value: {{ .Values.ai.maxOutputTokens | quote }}
+            {{- end }}
             {{- if $actions }}
             - name: ACTIONS_ENABLED
               value: "true"

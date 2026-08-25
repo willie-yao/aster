@@ -83,6 +83,9 @@ spec:
                 {{- if .Values.ai.enabled }}
                 - -ai
                 {{- end }}
+                {{- if .Values.server.chat.enabled }}
+                - -prepare-cause-findings
+                {{- end }}
                 {{- if gt (int .Values.ai.maxOutputTokens) 0 }}
                 - -ai-max-output-tokens={{ .Values.ai.maxOutputTokens }}
                 {{- end }}

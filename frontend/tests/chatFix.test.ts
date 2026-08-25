@@ -67,6 +67,17 @@ test("cause chat fixes use a representative failure and replace the global patte
   assert.match(dialog, /representative failed JUnit target for this cause/);
 });
 
+
+test("prepared cause findings are labeled and remain immediately fix-eligible", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  const types = source("src/types/analysisChat.ts");
+  assert.match(types, /prepared\?: boolean/);
+  assert.match(chat, /message\.prepared \? "Prepared finding" : "Analysis agent"/);
+  assert.match(chat, /Generated during the scheduled analysis run/);
+  assert.match(chat, /void createPreparedSession\(\)/);
+  assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
+});
+
 test("chat fix grounding accumulates validated citations across the conversation", () => {
   const answer = (requestID: string, cited: boolean): AnalysisChatMessage => ({
     role: "assistant", request_id: requestID, content: "answer", created_at: "2026-08-17T00:00:00Z",

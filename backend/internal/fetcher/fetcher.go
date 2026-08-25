@@ -90,9 +90,10 @@ type Options struct {
 	CausalCritic    CausalCriticOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// The project discovery policy and this direct CLI override are combined.
-	IncludePresubmits bool
-	EnableAI          bool
-	AIMaxOutputTokens int
+	IncludePresubmits    bool
+	EnableAI             bool
+	PrepareCauseFindings bool
+	AIMaxOutputTokens    int
 	// SkipSideEffects writes dashboard data without notifications or GitHub writes.
 	SkipSideEffects bool
 	// Version is the engine version embedded at build time, logged at startup.
@@ -270,18 +271,21 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		return nil, err
 	}
 	p.runPullRequestPass(fetchCtx, res)
-	defer p.runShadowAnalysis(ctx, res)
-	defer p.runCausalCritic(fetchCtx, res)
 	if p.opts.SkipSideEffects {
 		p.skipProgressSideEffects()
-		return jobs, nil
+	} else {
+		p.startProgressPhase(fetchprogress.PhaseSideEffects)
+		if err := p.runSideEffects(fetchCtx, res); err != nil {
+			p.invalidateAnalysisRuntime()
+			return nil, err
+		}
+		p.completeProgressPhase()
 	}
-	p.startProgressPhase(fetchprogress.PhaseSideEffects)
-	if err := p.runSideEffects(fetchCtx, res); err != nil {
-		p.invalidateAnalysisRuntime()
-		return nil, err
-	}
-	p.completeProgressPhase()
+	p.runCausalCritic(fetchCtx, res)
+	p.runShadowAnalysis(ctx, res)
+	prepareCtx, prepareCancel := context.WithTimeout(ctx, 10*time.Minute)
+	p.prepareCauseFindings(prepareCtx, res.details)
+	prepareCancel()
 	return jobs, nil
 }
 

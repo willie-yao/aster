@@ -235,6 +235,9 @@ export function analysisChatHistory(session: AnalysisChatSession): AnalysisChatH
     });
   });
   entries.sort((left, right) => {
+    const leftPrepared = left.entry.kind === "message" && Boolean(left.entry.message.prepared);
+    const rightPrepared = right.entry.kind === "message" && Boolean(right.entry.message.prepared);
+    if (leftPrepared !== rightPrepared) return leftPrepared ? -1 : 1;
     const leftHasTurn = left.turn > 0;
     const rightHasTurn = right.turn > 0;
     if (leftHasTurn !== rightHasTurn) return leftHasTurn ? -1 : 1;
@@ -297,6 +300,21 @@ async function apiError(response: Response): Promise<AnalysisChatAPIError> {
 async function parseResponse(response: Response): Promise<AnalysisChatSession> {
   if (!response.ok) throw await apiError(response);
   return response.json() as Promise<AnalysisChatSession>;
+}
+
+
+export async function createPreparedAnalysisChatSession(
+  analysis: AnalysisChatReference,
+  requestID: string,
+  signal?: AbortSignal,
+): Promise<AnalysisChatSession | null> {
+  const response = await fetch(`${API_BASE}api/analysis-chat/sessions?prepared=1`, {
+    method: "POST", credentials: "same-origin", cache: "no-store", signal,
+    headers: { "Content-Type": "application/json", "Idempotency-Key": requestID },
+    body: JSON.stringify(analysis),
+  });
+  if (response.status === 204) return null;
+  return parseResponse(response);
 }
 
 export async function createAnalysisChatSession(

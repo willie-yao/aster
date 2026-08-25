@@ -375,7 +375,8 @@ jobs:
         run: |
           d=engine/frontend/dist/data
           [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/ai_traces.json \
-            "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/issue_state.json \
+            "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/prepared_cause_findings.json \
+            "$d"/issue_state.json \
             "$d"/fix_pr_state.json "$d"/fix_previews.json \
             "$d"/notification_state.json "$d"/remediation_state.json \
             "$d"/pr_comment_state.json "$d"/pr_comment_state.json.lock \

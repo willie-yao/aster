@@ -3,6 +3,9 @@ package analysisruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -200,6 +203,28 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		UsageRecorder:       opts.UsageRecorder,
 		UsageOrigin:         opts.UsageOrigin,
 	}, nil
+}
+
+// AnalysisChatContractFingerprint identifies the effective prepared-finding runtime.
+func (r *Runtime) AnalysisChatContractFingerprint() string {
+	effective := r.Project.Config.AI.EffectiveAgentic()
+	maxIters := min(effective.MaxIters, analysisChatMaxIters)
+	if maxIters <= 0 {
+		maxIters = analysisChatMaxIters
+	}
+	payload, _ := json.Marshal(struct {
+		API, Endpoint, Model, Reasoning, CacheGeneration, Prompt, SkillHash string
+		Tools                                                               []string
+		ModelBytes, ContextBytes, MaxOutputTokens, MaxIters                 int
+		SingleToolCall                                                      bool
+		ContractVersion                                                     int
+	}{
+		r.Project.Provider.API, r.Project.Provider.Endpoint, r.Project.Provider.Model, string(r.Project.Provider.ReasoningEffort),
+		r.Project.CacheGenerationFingerprint, ai.ComposeAnalysisChatSystemPrompt(r.Project.ConsumerPrompt), r.Project.SkillSet.Hash(), append([]string(nil), r.EnabledTools...),
+		r.ModelByteBudget, r.ContextByteBudget, r.MaxOutputTokens, maxIters, effective.SingleToolCall, 1,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 // resolveContextBudgets prefers an operator-provided total window over

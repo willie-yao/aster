@@ -50,6 +50,7 @@ import {
   cancelAnalysisChatRequest,
   clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
+  createPreparedAnalysisChatSession,
   deleteAnalysisChatSession,
   findAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
@@ -291,7 +292,7 @@ function AssistantMessage({
       >
         <AutoAwesome sx={{ color: "primary.main", fontSize: 17 }} />
         <Typography variant="label" sx={{ fontWeight: 700, color: "text.primary" }}>
-          Analysis agent
+          {message.prepared ? "Prepared finding" : "Analysis agent"}
         </Typography>
         <Chip
           size="small"
@@ -311,6 +312,11 @@ function AssistantMessage({
         />
       </Stack>
       <Stack spacing={1.5} sx={{ p: 1.5 }}>
+        {message.prepared && (
+          <Typography variant="caption" color="textSecondary">
+            Generated during the scheduled analysis run. Review or challenge it before opening a Fix proposal.
+          </Typography>
+        )}
         {unverified && (
           <Box>
             <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 650 }}>
@@ -596,6 +602,10 @@ export function AnalysisChat({
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
+  const preparedLookupIdentityRef = useRef("");
+  const createPreparedSessionRef = useRef<() => void>(() => {});
+  const preparedRetryTimerRef = useRef<number | null>(null);
+  const [preparedRetryNonce, setPreparedRetryNonce] = useState(0);
   const restoreControllerRef = useRef<AbortController | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
@@ -643,6 +653,12 @@ export function AnalysisChat({
   );
   analysisRefRef.current = analysisRef;
   identityRef.current = identity;
+
+  useEffect(() => {
+    preparedLookupIdentityRef.current = "";
+    if (preparedRetryTimerRef.current !== null) window.clearTimeout(preparedRetryTimerRef.current);
+    preparedRetryTimerRef.current = null;
+  }, [identity]);
 
   useEffect(() => {
     restoreControllerRef.current?.abort();
@@ -834,6 +850,12 @@ export function AnalysisChat({
     correctionControllerRef.current?.abort();
     resetControllerRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (features.analysis_chat && causeScope && expanded && authStatus === "authenticated" && !session && !restoring && preparedLookupIdentityRef.current !== identity) {
+      createPreparedSessionRef.current();
+    }
+  }, [authStatus, causeScope, expanded, features.analysis_chat, identity, preparedRetryNonce, restoring, session]);
 
   if (!features.analysis_chat) return null;
 
@@ -1170,12 +1192,63 @@ export function AnalysisChat({
     setFixOpen(true);
   }
 
+
+  function schedulePreparedRetry() {
+    if (preparedRetryTimerRef.current !== null) window.clearTimeout(preparedRetryTimerRef.current);
+    preparedRetryTimerRef.current = window.setTimeout(() => {
+      preparedRetryTimerRef.current = null;
+      preparedLookupIdentityRef.current = "";
+      setPreparedRetryNonce((value) => value + 1);
+    }, 30_000);
+  }
+
+  async function createPreparedSession() {
+    if (session || restoring || authStatus !== "authenticated" || preparedLookupIdentityRef.current === identity) return;
+    preparedLookupIdentityRef.current = identity;
+    const controller = new AbortController();
+    restoreControllerRef.current?.abort();
+    restoreControllerRef.current = controller;
+    setRestoring(true);
+    setError(null);
+    try {
+      const created = await createPreparedAnalysisChatSession(analysisRef, createRequestIDRef.current, controller.signal);
+      if (restoreControllerRef.current === controller) {
+        if (created) setSession(created);
+        else schedulePreparedRetry();
+      }
+    } catch (createError) {
+      if (createError instanceof Error && createError.name === "AbortError") {
+        preparedLookupIdentityRef.current = "";
+        return;
+      }
+      if (restoreControllerRef.current === controller) {
+        setError(readableError(createError));
+        schedulePreparedRetry();
+      }
+    } finally {
+      if (restoreControllerRef.current === controller) {
+        restoreControllerRef.current = null;
+        setRestoring(false);
+      }
+    }
+  }
+
+  createPreparedSessionRef.current = () => { void createPreparedSession(); };
+
   function toggleChat() {
     if (authStatus === "anonymous") {
       signIn();
       return;
     }
-    setExpanded((value) => !value);
+    if (expanded) {
+      setExpanded(false);
+      preparedLookupIdentityRef.current = "";
+      if (preparedRetryTimerRef.current !== null) window.clearTimeout(preparedRetryTimerRef.current);
+      preparedRetryTimerRef.current = null;
+      return;
+    }
+    setExpanded(true);
+    if (causeScope && !session && !restoring) void createPreparedSession();
   }
 
   return (
