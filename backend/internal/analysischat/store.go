@@ -424,6 +424,9 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 			SuggestedFix:  clampPersistedText(analysis.SuggestedFix, 16<<10),
 			RelevantFiles: boundedPersistedFiles(analysis.RelevantFiles),
 			Disposition:   analysis.Disposition,
+			// The warnings qualify the disposition, so dropping them would make a
+			// contested diagnosis look usable to the session snapshot.
+			DispositionWarnings: slices.Clone(analysis.DispositionWarnings),
 		}
 	}
 	if source, ok := resolveBuildSourceRepository(resolved.build, sourceRepo); ok {
