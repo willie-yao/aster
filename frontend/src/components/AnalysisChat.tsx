@@ -270,14 +270,16 @@ function AssistantMessage({
     ? assessmentConfig[message.assessment]
     : assessmentConfig.explains;
   const unverified = Boolean(message.unverified);
-  const accent = unverified ? "warning" : assessment.color === "default" ? "primary" : assessment.color;
+  const partiallyVerified = !unverified && Boolean(message.evidence_warnings?.length);
+  const evidenceWarning = unverified || partiallyVerified;
+  const accent = evidenceWarning ? "warning" : assessment.color === "default" ? "primary" : assessment.color;
   return (
     <Box
       sx={{
-        border: unverified ? "2px dashed" : "1px solid",
-        borderColor: (theme) => soft(theme, accent, unverified ? 0.55 : 0.24),
+        border: evidenceWarning ? "2px dashed" : "1px solid",
+        borderColor: (theme) => soft(theme, accent, evidenceWarning ? 0.55 : 0.24),
         borderRadius: 1,
-        bgcolor: (theme) => soft(theme, accent, unverified ? 0.09 : 0.045),
+        bgcolor: (theme) => soft(theme, accent, evidenceWarning ? 0.09 : 0.045),
         overflow: "hidden",
       }}
     >
@@ -292,15 +294,15 @@ function AssistantMessage({
         </Typography>
         <Chip
           size="small"
-          icon={unverified ? <ReportProblemOutlined /> : undefined}
-          label={unverified ? "Unverified" : assessment.label}
+          icon={evidenceWarning ? <ReportProblemOutlined /> : undefined}
+          label={unverified ? "Unverified" : partiallyVerified ? "Partially verified" : assessment.label}
           sx={(theme) => ({
             ml: "auto",
             height: 22,
             fontSize: "0.68rem",
             // A verdict is a label, not a control, so it is tinted rather than
-            // outlined. Only an unverified answer keeps a filled chip's weight.
-            ...(unverified
+            // outlined. Evidence warnings keep a filled chip's weight.
+            ...(evidenceWarning
               ? { bgcolor: "warning.main", color: "warning.contrastText", fontWeight: 750 }
               : { fontWeight: 600, ...softChipSx(theme, accent) }),
             "& .MuiChip-icon": { color: "inherit", fontSize: 15 },
@@ -309,11 +311,30 @@ function AssistantMessage({
       </Stack>
       <Stack spacing={1.5} sx={{ p: 1.5 }}>
         {unverified && (
-          <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 650 }}>
-            {message.unverified_reason ? unverifiedReasonDetail[message.unverified_reason] : ""}
-            {" "}
-            Treat this answer as unproven and read the artifacts before acting on it.
-          </Typography>
+          <Box>
+            <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 650 }}>
+              {message.unverified_reason ? unverifiedReasonDetail[message.unverified_reason] : ""}
+              {" "}
+              Treat this answer as unproven and read the artifacts before acting on it.
+            </Typography>
+            {message.evidence_warnings?.map((warning) => (
+              <Typography key={warning} variant="caption" component="div" color="textSecondary">
+                {warning}
+              </Typography>
+            ))}
+          </Box>
+        )}
+        {partiallyVerified && (
+          <Alert severity="warning" variant="outlined" sx={{ py: 0.25 }}>
+            <Typography variant="caption" sx={{ display: "block", fontWeight: 650 }}>
+              Some citations were omitted or could not be verified. The evidence shown below is verified.
+            </Typography>
+            {message.evidence_warnings?.map((warning) => (
+              <Typography key={warning} variant="caption" component="div" color="textSecondary">
+                {warning}
+              </Typography>
+            ))}
+          </Alert>
         )}
         <Typography variant="body2" sx={{ whiteSpace: "pre-line", lineHeight: 1.65 }}>
           <RichText text={message.content} steps fileCtx={fileCtx} />
@@ -329,7 +350,7 @@ function AssistantMessage({
             {message.validation_retries ? (
               <Box component="span" sx={{ color: "warning.main" }}>
                 {(message.elapsed_ms || message.provider_ms) ? " · " : ""}
-                {`${message.validation_retries} response-contract repair`}
+                {`${message.validation_retries} validation repair${message.validation_retries === 1 ? "" : "s"}`}
               </Box>
             ) : null}
           </Typography>
@@ -434,7 +455,7 @@ function AssistantMessage({
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />
             </Typography>
-            {correctionEnabled && !unverified && message.request_id && (
+            {correctionEnabled && !unverified && !partiallyVerified && message.request_id && (
               <Button
                 size="small"
                 variant="text"
@@ -477,7 +498,7 @@ const progressLabels: Record<AnalysisChatProgressPhase, { title: string; detail:
   reading_evidence: { title: "Validating evidence", detail: "Reading the artifacts needed for this answer." },
   evaluating: { title: "Investigating", detail: "Comparing the evidence with the published conclusion." },
   finalizing: { title: "Finalizing", detail: "Checking the response and its citations." },
-  validation_retrying: { title: "Validating evidence", detail: "The response contract was rejected and is being retried." },
+  validation_retrying: { title: "Validating evidence", detail: "The response or its evidence did not pass validation and is being retried." },
   cancelling: { title: "Cancelling", detail: "Stopping the active analysis turn." },
 };
 

@@ -56,6 +56,26 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	}
 }
 
+func TestGenerateAnalysisPreviewQualifiesPartialEvidence(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.EvidenceWarnings = []string{"citation 2 line range was not returned"}
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"EvidenceWarnings", "citation 2 line range was not returned", "partially verified", "only the retained artifact citations are verified evidence"} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	if !strings.Contains(fix.Description, "Evidence qualification") || !strings.Contains(fix.Description, "only retained artifact citations were verified") {
+		t.Fatalf("description = %s", fix.Description)
+	}
+}
+
 func TestGenerateAnalysisPreviewAllowsEmptyOriginalSuggestedFix(t *testing.T) {
 	failure := validAnalysisFailure()
 	failure.SuggestedFix = ""

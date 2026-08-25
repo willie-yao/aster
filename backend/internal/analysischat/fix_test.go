@@ -374,6 +374,64 @@ func TestServiceFixCandidateRejectsUnverifiedOnlyConversation(t *testing.T) {
 	}
 }
 
+func TestServiceFixCandidateAllowsPartiallyVerifiedAnswer(t *testing.T) {
+	service, session, requestID := fixCandidateReadyService(t)
+	ctx, cancel := service.store.context()
+	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		answer := assistantResponse(state.Sessions[session.ID].View.Messages, requestID)
+		answer.EvidenceWarnings = []string{"citation 2 line range was not returned by the cited artifact read"}
+		return true, nil
+	})
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern := fixCandidatePattern()
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidate.ArtifactCitations) != 1 || !slices.Equal(candidate.EvidenceWarnings, []string{"citation 2 line range was not returned by the cited artifact read"}) {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("partial correction error = %v", err)
+	}
+}
+
+func TestServiceFixCandidateAccumulatesEarlierEvidenceWarnings(t *testing.T) {
+	service, session, firstRequestID := fixCandidateReadyService(t)
+	ctx, cancel := service.store.context()
+	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		answer := assistantResponse(state.Sessions[session.ID].View.Messages, firstRequestID)
+		answer.EvidenceWarnings = []string{"citation 2 quote did not match"}
+		return true, nil
+	})
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := service.runner.(*fakeRunner)
+	runner.mu.Lock()
+	runner.reply = Reply{
+		Answer: "The later answer uses the retained evidence.", Assessment: "supports",
+		Citations: []Citation{{Path: "controller.log", LineStart: 7, LineEnd: 7, Quote: "terminal branch"}},
+	}
+	runner.mu.Unlock()
+	secondRequestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "What follows from that evidence?"); err != nil {
+		t.Fatal(err)
+	}
+	pattern := fixCandidatePattern()
+	candidate, err := service.FixCandidate(session.ID, "Alice", secondRequestID, pattern.ID, pattern.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidate.ArtifactCitations) != 2 || !slices.Equal(candidate.EvidenceWarnings, []string{"citation 2 quote did not match"}) {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+}
+
 // Conversation-scoped citations must not launder an unverified answer into a fix.
 func TestServiceFixCandidateRejectsUnverifiedAnswerAfterCitedTurn(t *testing.T) {
 	service, session, _ := fixCandidateReadyService(t)

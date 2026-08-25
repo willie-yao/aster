@@ -72,6 +72,7 @@ type AnalysisFixInput struct {
 	AssistantAnswer          string
 	ProposedRevision         *fixpr.RevisionContext
 	ArtifactCitations        []fixpr.Evidence
+	EvidenceWarnings         []string
 }
 
 // AnalysisPreviewBinding preserves the exact analysis, chat, and source identities.
@@ -119,12 +120,13 @@ type analysisSourceCompatibility struct {
 }
 
 const (
-	analysisWarningCritique     = "The original analysis critique did not pass."
-	analysisWarningSuggestedFix = "The original analysis has no suggested fix."
-	analysisWarningRootCause    = "The original analysis root cause is incomplete."
-	analysisWarningTransient    = "The original analysis is marked transient."
-	analysisWarningProse        = "The model-authored remediation prose is incomplete."
-	analysisWarningPolicy       = "The model-authored prose triggered a text-only remediation-policy concern."
+	analysisWarningCritique        = "The original analysis critique did not pass."
+	analysisWarningSuggestedFix    = "The original analysis has no suggested fix."
+	analysisWarningRootCause       = "The original analysis root cause is incomplete."
+	analysisWarningTransient       = "The original analysis is marked transient."
+	analysisWarningProse           = "The model-authored remediation prose is incomplete."
+	analysisWarningPolicy          = "The model-authored prose triggered a text-only remediation-policy concern."
+	analysisWarningPartialEvidence = "The selected chat finding is partially verified; only retained artifact citations are authoritative."
 )
 
 // ConfigureAnalysisPreviewValidator binds exact chat state to later confirmation.
@@ -491,9 +493,10 @@ func (s *Service) PreviewAnalysisFix(
 		AnalysisHash: subject.ContentHash, RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix,
 		AssistantAnswer: input.AssistantAnswer, ChatResponseHash: input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
 		ProposedRevision:  input.ProposedRevision,
-		ArtifactCitations: slices.Clone(input.ArtifactCitations), SourceRepository: repository.Owner + "/" + repository.Name,
-		SourceBranch:    targetBranch,
-		FailureRevision: repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
+		ArtifactCitations: slices.Clone(input.ArtifactCitations), EvidenceWarnings: slices.Clone(input.EvidenceWarnings),
+		SourceRepository: repository.Owner + "/" + repository.Name,
+		SourceBranch:     targetBranch,
+		FailureRevision:  repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
 		VerifiedSourceFileHashes: cloneStringMap(compatibility.VerifiedSourceFileHashes),
 		SourceFiles:              slices.Clone(sourceFiles), SourceVerification: verification,
 		FindingVerification: compatibility.FindingVerification,
@@ -655,6 +658,9 @@ func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput
 	if input.ProposedRevision != nil && (strings.TrimSpace(input.ProposedRevision.RootCause) == "" || strings.TrimSpace(input.ProposedRevision.SuggestedFix) == "") {
 		warnings = append(warnings, analysisWarningProse)
 	}
+	if len(input.EvidenceWarnings) > 0 {
+		warnings = append(warnings, analysisWarningPartialEvidence)
+	}
 	return warnings
 }
 
@@ -721,8 +727,13 @@ func validateAnalysisFixInput(input AnalysisFixInput) error {
 	if strings.TrimSpace(input.ChatSessionID) == "" || strings.TrimSpace(input.ChatRequestID) == "" ||
 		strings.TrimSpace(input.ChatResponseHash) == "" || strings.TrimSpace(input.PreviewRequestHash) == "" || strings.TrimSpace(input.AnalysisContentHash) == "" ||
 		strings.TrimSpace(input.AssistantAnswer) == "" || sourceinvestigation.ValidateRepository(input.SourceRepository) != nil ||
-		len(input.ArtifactCitations) == 0 || len(input.ArtifactCitations) > maxAnalysisFixCitations {
+		len(input.ArtifactCitations) == 0 || len(input.ArtifactCitations) > maxAnalysisFixCitations || len(input.EvidenceWarnings) > 20 {
 		return fmt.Errorf("invalid exact analysis fix request")
+	}
+	for _, warning := range input.EvidenceWarnings {
+		if strings.TrimSpace(warning) == "" || len(warning) > 512 {
+			return fmt.Errorf("invalid exact analysis Fix evidence warning")
+		}
 	}
 	hasPreflight := strings.TrimSpace(input.FailureRevision) != "" || strings.TrimSpace(input.GenerationBaseRevision) != "" || len(input.VerifiedSourceFileHashes) != 0
 	if hasPreflight && (strings.TrimSpace(input.FailureRevision) == "" || strings.TrimSpace(input.GenerationBaseRevision) == "" || len(input.VerifiedSourceFileHashes) == 0) {

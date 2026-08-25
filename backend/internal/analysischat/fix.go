@@ -40,6 +40,7 @@ type FixCandidate struct {
 	AssistantAnswer          string
 	ProposedRevision         *Revision
 	ArtifactCitations        []Citation
+	EvidenceWarnings         []string
 	Pattern                  models.PatternAnalysis
 	ResponseHash             string
 	AnalysisContentHash      string
@@ -91,6 +92,7 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis,
 			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
 			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: citations,
+			EvidenceWarnings:    conversationEvidenceWarnings(current.View.Messages, requestID),
 			AnalysisContentHash: current.Resolved.AnalysisHash, SourceRepositorySnapshot: current.Resolved.Source,
 		}
 		if binding, ok := current.FixSources[requestID]; ok {
@@ -150,6 +152,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		AssistantAnswer                         string
 		ProposedRevision                        *Revision
 		ArtifactCitations                       []Citation
+		EvidenceWarnings                        []string
 		AnalysisContentHash                     string
 		SourceRepository                        sourceinvestigation.Repository
 		FailureRevision, GenerationBaseRevision string
@@ -158,7 +161,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		SourceBranchKnown                       bool
 	}{
 		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.Original, candidate.AssistantAnswer,
-		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
+		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.EvidenceWarnings, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
 		candidate.FailureRevision, candidate.GenerationBaseRevision, candidate.VerifiedSourceFileHashes,
 		candidate.SourceBranch, candidate.SourceBranchKnown,
 	})
@@ -218,6 +221,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			AssistantAnswer:   strings.TrimSpace(answer.Content),
 			ProposedRevision:  cloneRevision(answer.ProposedRevision),
 			ArtifactCitations: citations,
+			EvidenceWarnings:  conversationEvidenceWarnings(current.View.Messages, requestID),
 		}
 		return changed, nil
 	})
@@ -285,6 +289,44 @@ func assistantResponseIndex(messages []Message, requestID string) int {
 		}
 	}
 	return -1
+}
+
+// conversationEvidenceWarnings preserves citation qualifications over the same
+// bounded history that contributes Fix evidence.
+func conversationEvidenceWarnings(messages []Message, requestID string) []string {
+	index := assistantResponseIndex(messages, requestID)
+	if index < 0 {
+		return nil
+	}
+	const maxWarnings = 20
+	seen := make(map[string]struct{}, maxWarnings)
+	warnings := make([]string, 0, maxWarnings)
+	collect := func(message *Message) {
+		for _, warning := range message.EvidenceWarnings {
+			warning = strings.TrimSpace(warning)
+			if warning == "" {
+				continue
+			}
+			if _, ok := seen[warning]; ok {
+				continue
+			}
+			seen[warning] = struct{}{}
+			warnings = append(warnings, warning)
+			if len(warnings) == maxWarnings {
+				return
+			}
+		}
+	}
+	collect(&messages[index])
+	for i := index - 1; i >= 0 && len(warnings) < maxWarnings; i-- {
+		if messages[i].Role == "assistant" {
+			collect(&messages[i])
+		}
+	}
+	if len(warnings) == 0 {
+		return nil
+	}
+	return warnings
 }
 
 // conversationCitations returns the validated citations accumulated by the

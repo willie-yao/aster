@@ -57,7 +57,7 @@ func (s *Service) CorrectionCandidate(id, owner, requestID string) (CorrectionCa
 				}
 			}
 		}
-		if answer == nil || answer.Assessment != "challenges" || answer.ProposedRevision == nil || len(answer.Citations) == 0 {
+		if answer == nil || answer.Unverified || len(answer.EvidenceWarnings) > 0 || answer.Assessment != "challenges" || answer.ProposedRevision == nil || len(answer.Citations) == 0 {
 			return changed, fmt.Errorf("%w: request has no evidence-backed proposed revision", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis

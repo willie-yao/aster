@@ -3,6 +3,7 @@ package chatfix
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -236,6 +237,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		},
 		AssistantAnswer:   "The artifact supports changing the terminal branch.",
 		ArtifactCitations: []analysischat.Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+		EvidenceWarnings:  []string{"citation 2 was omitted"},
 		ProposedRevision:  &analysischat.Revision{RootCause: "terminal branch omits Ready", SuggestedFix: "record Ready"},
 	}}
 	fixes := &fakeFixPreviewer{}
@@ -254,7 +256,8 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		input.GenerationBaseRevision != "fedcba9876543210fedcba9876543210fedcba98" ||
 		input.VerifiedSourceFileHashes["pkg/controller.go"] != strings.Repeat("d", 64) ||
 		input.SourceBranch != "main" ||
-		len(input.ArtifactCitations) != 1 || input.ProposedRevision == nil || fixes.userToken != "write-token" {
+		len(input.ArtifactCitations) != 1 || !slices.Equal(input.EvidenceWarnings, []string{"citation 2 was omitted"}) ||
+		input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)
 	}
 }

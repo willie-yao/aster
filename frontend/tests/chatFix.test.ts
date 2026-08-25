@@ -30,6 +30,19 @@ test("exact JUnit chat fix requires conversation evidence and verified source pa
   assert.match(chat, /no verified immutable source path/);
 });
 
+test("partially verified chat findings keep validated evidence fix-eligible", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  assert.match(chat, /Partially verified/);
+  assert.match(chat, /Some citations were omitted or could not be verified/);
+  assert.match(chat, /The evidence shown below is verified/);
+  assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
+  assert.match(chat, /correctionEnabled && !unverified && !partiallyVerified/);
+  assert.match(chat, /validation repair/);
+  assert.doesNotMatch(chat, /response-contract repair/);
+  assert.doesNotMatch(chat, /The response contract was rejected/);
+  assert.match(chat, /The response or its evidence did not pass validation/);
+});
+
 test("permanent source ineligibility is reported before the per-response citation reason", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /fixSourceUnavailable = exactFixEnabled/);

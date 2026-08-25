@@ -529,10 +529,11 @@ func TestAnalysisQualityWarnings(t *testing.T) {
 	warnings := analysisQualityWarnings(analysis, AnalysisFixInput{
 		AssistantAnswer:  "The cited finding is nonempty.",
 		ProposedRevision: &fixpr.RevisionContext{RootCause: "", SuggestedFix: ""},
+		EvidenceWarnings: []string{"citation 2 was omitted"},
 	})
 	for _, warning := range []string{
 		analysisWarningCritique, analysisWarningSuggestedFix, analysisWarningRootCause,
-		analysisWarningTransient, analysisWarningProse,
+		analysisWarningTransient, analysisWarningProse, analysisWarningPartialEvidence,
 	} {
 		if !slices.Contains(warnings, warning) {
 			t.Fatalf("warnings = %v, missing %q", warnings, warning)

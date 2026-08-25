@@ -137,8 +137,9 @@ func TestServiceCreateAndSend(t *testing.T) {
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit_01.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{reply: Reply{
 		Answer: "The timeout follows the controller exit.", Assessment: "supports",
-		Citations: []Citation{{Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller exited"}},
-		ToolCalls: 2, GCSBytes: 1024, ElapsedMs: 50,
+		Citations:        []Citation{{Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller exited"}},
+		EvidenceWarnings: []string{"citation 2 quote did not match"},
+		ToolCalls:        2, GCSBytes: 1024, ElapsedMs: 50,
 	}}
 	now := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	service, err := NewService(t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
@@ -170,8 +171,14 @@ func TestServiceCreateAndSend(t *testing.T) {
 		t.Fatalf("successful attempt = %+v", attempt)
 	}
 	assistant := got.Messages[1]
-	if assistant.Assessment != "supports" || assistant.ToolCalls != 2 || len(assistant.Citations) != 1 {
+	if assistant.Assessment != "supports" || assistant.ToolCalls != 2 || len(assistant.Citations) != 1 ||
+		!slices.Equal(assistant.EvidenceWarnings, []string{"citation 2 quote did not match"}) {
 		t.Fatalf("assistant = %+v", assistant)
+	}
+	got.Messages[1].EvidenceWarnings[0] = "mutated response"
+	restored, err := service.Get(created.ID, "alice")
+	if err != nil || !slices.Equal(restored.Messages[1].EvidenceWarnings, []string{"citation 2 quote did not match"}) {
+		t.Fatalf("restored evidence warnings = %v err=%v", restored.Messages[1].EvidenceWarnings, err)
 	}
 
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "What should I check next?"); err != nil {

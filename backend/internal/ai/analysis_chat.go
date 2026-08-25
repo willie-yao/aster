@@ -83,6 +83,7 @@ const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysi
 
 const (
 	analysisChatEvidenceNoContent  = "artifact_no_content"
+	analysisChatEvidencePartial    = "partial"
 	analysisChatEvidenceUnverified = "unverified"
 )
 
@@ -350,7 +351,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				return toolLoopCorrect(analysisChatRepairPrompt(answer.Content, stats, validationErr, detail)).granting()
 			}
 			if validationErr == nil {
-				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceUnverified, stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
+				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceStatus(reply), stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
 				accepted = &reply
 				return toolLoopAccept()
 			}
@@ -449,8 +450,12 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		return analysischat.Reply{}, analysisChatSafeValidationCategory(stats.Category)
 	}
-	if reply.Unverified {
-		recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceUnverified, reply.UnverifiedReason, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
+	if status := analysisChatEvidenceStatus(reply); status != "" {
+		outcome := reply.UnverifiedReason
+		if outcome == "" {
+			outcome = stats.EvidenceGate
+		}
+		recordAnalysisChatEvidenceStatus(loopCtx, status, outcome, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
 	}
 	recordAnalysisChatStructuredResponse(loopCtx, "success", "finalize", modelCalls, providerAttempts, structured, stats, "")
 	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
@@ -721,6 +726,16 @@ func recordAnalysisChatResponseTelemetryWithAttempt(
 	})
 }
 
+func analysisChatEvidenceStatus(reply analysischat.Reply) string {
+	if reply.Unverified {
+		return analysisChatEvidenceUnverified
+	}
+	if len(reply.EvidenceWarnings) > 0 {
+		return analysisChatEvidencePartial
+	}
+	return ""
+}
+
 func recordAnalysisChatEvidenceStatus(
 	ctx context.Context,
 	status, outcome, tool string,
@@ -806,6 +821,13 @@ func analysisChatAssistantHistory(message analysischat.Message) (string, error) 
 		citations[i].Path = clampAnalysisChatText(citations[i].Path, 1024)
 		citations[i].Quote = clampAnalysisChatText(citations[i].Quote, 500)
 	}
+	warnings := slices.Clone(message.EvidenceWarnings)
+	if len(warnings) > 8 {
+		warnings = warnings[:8]
+	}
+	for i := range warnings {
+		warnings[i] = clampAnalysisChatText(warnings[i], 500)
+	}
 	var revision *analysischat.Revision
 	if message.ProposedRevision != nil {
 		revision = &analysischat.Revision{
@@ -813,13 +835,26 @@ func analysisChatAssistantHistory(message analysischat.Message) (string, error) 
 			SuggestedFix: clampAnalysisChatText(message.ProposedRevision.SuggestedFix, 4<<10),
 		}
 	}
+	const historyAnswerBytes = 12 << 10
+	note := ""
+	if len(warnings) > 0 {
+		note = clampAnalysisChatText("Engine evidence note: some citations in this answer were omitted. Treat the warned claims and proposed revision as hypotheses. "+strings.Join(warnings, " "), 2<<10)
+	}
+	answerBudget := historyAnswerBytes
+	if note != "" {
+		answerBudget -= len(note) + 2
+	}
+	answer := clampAnalysisChatText(message.Content, answerBudget)
+	if note != "" {
+		answer += "\n\n" + note
+	}
 	payload := struct {
 		Answer           string                  `json:"answer"`
 		Assessment       string                  `json:"assessment,omitempty"`
 		Citations        []analysischat.Citation `json:"citations,omitempty"`
 		ProposedRevision *analysischat.Revision  `json:"proposed_revision,omitempty"`
 	}{
-		Answer:           clampAnalysisChatText(message.Content, 12<<10),
+		Answer:           answer,
 		Assessment:       strings.TrimSpace(message.Assessment),
 		Citations:        citations,
 		ProposedRevision: revision,
