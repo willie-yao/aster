@@ -211,23 +211,19 @@ func (c *Client) completeStructuredMessagesWithMetadata(
 	}
 
 	for index, request := range requests {
-		attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: structuredAttemptPath(index)}
-		response, err := c.callModelRequest(ctx, request)
-		result.Response = response
-		setStructuredProviderAttempts(&attempt, response)
-		if response != nil {
-			attempt.ProviderStatus = response.HTTPStatus
-		}
-		if err != nil {
-			attempt.Outcome = StructuredOutcomeProviderError
-			attempt.ProviderCategory = traceErrorCode(err)
-			if provider, ok := SafeProviderErrorMetadata(err); ok {
-				attempt.ProviderStatus = provider.StatusCode
-				if provider.Category != "" {
-					attempt.ProviderCategory = provider.Category
+		attemptValidate := validate
+		if request.ToolChoice != nil {
+			attemptValidate = func(raw string) structuredValidationResult {
+				if strings.TrimSpace(raw) == "" {
+					return structuredValidationResult{outcome: StructuredOutcomeEmptyResponse, err: fmt.Errorf("structured response is empty")}
 				}
+				return validate(raw)
 			}
-			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
+		}
+		response, attempt, err := c.runStructuredAttempt(ctx, request, structuredAttemptPath(index), attemptValidate)
+		result.Response = response
+		result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
+		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return result, err
 			}
@@ -236,43 +232,57 @@ func (c *Client) completeStructuredMessagesWithMetadata(
 			}
 			return result, newStructuredCompletionError("provider request failed", result.Metadata, err)
 		}
-		if request.ToolChoice != nil {
-			if response == nil || !response.HasMessage || len(response.Message.ToolCalls) != 1 || response.Message.ToolCalls[0].Function.Name != format.Name {
-				attempt.Outcome = StructuredOutcomeMissingForcedFunction
-				result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
-				continue
-			}
-			raw := response.Message.ToolCalls[0].Function.Arguments
-			if strings.TrimSpace(raw) == "" {
-				attempt.Outcome = StructuredOutcomeEmptyResponse
-				result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
-				continue
-			}
-			validation := validate(raw)
-			attempt.Outcome = validation.outcome
-			attempt.ValidatorCalled = validation.validatorCalled
-			attempt.ValidationCode = validation.validationCode
-			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
-			if validation.err == nil {
-				return result, nil
-			}
-			continue
-		}
-		if response == nil || !response.HasMessage || response.Message.Content == nil || strings.TrimSpace(*response.Message.Content) == "" {
-			attempt.Outcome = StructuredOutcomeEmptyResponse
-			result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
-			continue
-		}
-		validation := validate(*response.Message.Content)
-		attempt.Outcome = validation.outcome
-		attempt.ValidatorCalled = validation.validatorCalled
-		attempt.ValidationCode = validation.validationCode
-		result.Metadata = appendStructuredAttempt(ctx, result.Metadata, attempt)
-		if validation.err == nil {
+		if attempt.Outcome == StructuredOutcomeAccepted {
 			return result, nil
 		}
 	}
 	return result, newStructuredCompletionError("no valid structured response", result.Metadata, nil)
+}
+
+func (c *Client) runStructuredAttempt(
+	ctx context.Context,
+	request modelRequest,
+	path StructuredAttemptPath,
+	validate structuredContentValidator,
+) (*modelResponse, StructuredAttemptMetadata, error) {
+	attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: path}
+	response, err := c.callModelRequest(ctx, request)
+	setStructuredProviderAttempts(&attempt, response)
+	if response != nil {
+		attempt.ProviderStatus = response.HTTPStatus
+	}
+	if err != nil {
+		attempt.Outcome = StructuredOutcomeProviderError
+		attempt.ProviderCategory = traceErrorCode(err)
+		if provider, ok := SafeProviderErrorMetadata(err); ok {
+			attempt.ProviderStatus = provider.StatusCode
+			if provider.Category != "" {
+				attempt.ProviderCategory = provider.Category
+			}
+		}
+		return response, attempt, err
+	}
+	if request.ToolChoice != nil {
+		if response == nil || !response.HasMessage || len(response.Message.ToolCalls) != 1 ||
+			response.Message.ToolCalls[0].Function.Name != request.ToolChoice.Name {
+			attempt.Outcome = StructuredOutcomeMissingForcedFunction
+			return response, attempt, nil
+		}
+		validation := validate(response.Message.ToolCalls[0].Function.Arguments)
+		attempt.Outcome = validation.outcome
+		attempt.ValidatorCalled = validation.validatorCalled
+		attempt.ValidationCode = validation.validationCode
+		return response, attempt, nil
+	}
+	if response == nil || !response.HasMessage || response.Message.Content == nil || strings.TrimSpace(*response.Message.Content) == "" {
+		attempt.Outcome = StructuredOutcomeEmptyResponse
+		return response, attempt, nil
+	}
+	validation := validate(*response.Message.Content)
+	attempt.Outcome = validation.outcome
+	attempt.ValidatorCalled = validation.validatorCalled
+	attempt.ValidationCode = validation.validationCode
+	return response, attempt, nil
 }
 
 // completeForcedFunction accepts only one call to the exact named function.
@@ -300,46 +310,39 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 		MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
 	}
-	attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: StructuredAttemptForcedFunction}
-	resp, err := c.callModelRequest(ctx, request)
-	setStructuredProviderAttempts(&attempt, resp)
-	if err != nil {
-		attempt.Outcome = StructuredOutcomeProviderError
-		attempt.ProviderCategory = traceErrorCode(err)
-		if provider, ok := SafeProviderErrorMetadata(err); ok {
-			attempt.ProviderStatus = provider.StatusCode
-			if provider.Category != "" {
-				attempt.ProviderCategory = provider.Category
+	strictValidate := func(raw string) structuredValidationResult {
+		data := json.RawMessage(raw)
+		if !json.Valid(data) {
+			return structuredValidationResult{outcome: StructuredOutcomeInvalidJSON, err: fmt.Errorf("forced function arguments are invalid JSON")}
+		}
+		if err := validate(data); err != nil {
+			return structuredValidationResult{
+				outcome: StructuredOutcomeValidatorRejected, validatorCalled: true,
+				validationCode: structuredValidationCode(err), err: err,
 			}
 		}
-		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+		return structuredValidationResult{outcome: StructuredOutcomeAccepted, validatorCalled: true}
+	}
+	_, attempt, err := c.runStructuredAttempt(ctx, request, StructuredAttemptForcedFunction, strictValidate)
+	if err == nil {
+		// Single forced-function attempts expose provider status only for provider errors.
+		attempt.ProviderStatus = 0
+	}
+	metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		return newStructuredCompletionError("provider request failed", metadata, err)
 	}
-	if resp == nil || !resp.HasMessage || len(resp.Message.ToolCalls) != 1 ||
-		resp.Message.ToolCalls[0].Function.Name != format.Name {
-		attempt.Outcome = StructuredOutcomeMissingForcedFunction
-		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+	switch attempt.Outcome {
+	case StructuredOutcomeAccepted:
+		return nil
+	case StructuredOutcomeMissingForcedFunction:
 		return newStructuredCompletionError("exact forced function was not returned", metadata, nil)
-	}
-	raw := json.RawMessage(resp.Message.ToolCalls[0].Function.Arguments)
-	if !json.Valid(raw) {
-		attempt.Outcome = StructuredOutcomeInvalidJSON
-		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
+	default:
 		return newStructuredCompletionError("forced function arguments failed validation", metadata, nil)
 	}
-	attempt.ValidatorCalled = true
-	if err := validate(raw); err != nil {
-		attempt.Outcome = StructuredOutcomeValidatorRejected
-		attempt.ValidationCode = structuredValidationCode(err)
-		metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
-		return newStructuredCompletionError("forced function arguments failed validation", metadata, nil)
-	}
-	attempt.Outcome = StructuredOutcomeAccepted
-	appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
-	return nil
 }
 
 func structuredFallbackAllowed(err error) bool {
