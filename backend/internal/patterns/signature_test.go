@@ -21,7 +21,7 @@ func signatureJob(jobID string, builds ...failedBuild) models.JobDetail {
 			TestCases: []models.TestCase{{
 				Name: build.testName, Status: "failed", FailureMessage: build.message,
 				AISummary:  &models.AISummary{Summary: "failure"},
-				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded},
 			}},
 		})
 	}
@@ -217,7 +217,7 @@ func TestCausalGroupSignatureTreatsNumbersAsLoadBearing(t *testing.T) {
 func TestCausalGroupSignatureDeclinesBuildLevelStandIns(t *testing.T) {
 	standIn := models.NewProwJobExecutionFailure(12)
 	standIn.AISummary = &models.AISummary{Summary: "failure"}
-	standIn.AIAnalysis = &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"}
+	standIn.AIAnalysis = &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded}
 	detail := models.JobDetail{Name: "job-1", JobID: "job-1", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{BuildID: "10", Result: "FAILURE"},
 		TestCases: []models.TestCase{standIn},
@@ -361,7 +361,7 @@ func TestBuildRecurrenceSignatureSeparatesDistinctFailures(t *testing.T) {
 func TestBuildRecurrenceSignatureSkipsFailuresWithoutEvidence(t *testing.T) {
 	standIn := models.NewProwJobExecutionFailure(12)
 	standIn.AISummary = &models.AISummary{Summary: "failure"}
-	standIn.AIAnalysis = &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"}
+	standIn.AIAnalysis = &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded}
 
 	for name, run := range map[string]models.BuildResult{
 		"build level stand in": {
@@ -376,7 +376,7 @@ func TestBuildRecurrenceSignatureSkipsFailuresWithoutEvidence(t *testing.T) {
 			BuildInfo: models.BuildInfo{BuildID: "12", Result: "FAILURE"},
 			TestCases: []models.TestCase{{
 				Name: "TestReconcile", Status: "failed",
-				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded},
 			}},
 		},
 	} {

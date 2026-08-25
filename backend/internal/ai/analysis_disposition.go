@@ -81,20 +81,11 @@ func StampAnalysisDisposition(analysis *models.AIAnalysis) bool {
 	return true
 }
 
-// IsGroundedAnalysis reports whether an analysis is grounded under the current contract.
+// IsGroundedAnalysis reports whether an analysis is grounded under the current
+// contract. An unstamped or unrecognized disposition is not grounded, so an
+// analysis must be refreshed and stamped before it regains action eligibility.
 func IsGroundedAnalysis(analysis *models.AIAnalysis) bool {
-	if analysis == nil {
-		return false
-	}
-	switch analysis.Disposition {
-	case models.AnalysisDispositionGrounded:
-		return true
-	case models.AnalysisDispositionPreliminary:
-		return false
-	}
-	// Analyses written before dispositions were introduced retain their prior
-	// publication behavior until they are refreshed and stamped.
-	return true
+	return analysis != nil && analysis.Disposition == models.AnalysisDispositionGrounded
 }
 
 func safeStructuredAnalysis(analysis *models.AIAnalysis) bool {

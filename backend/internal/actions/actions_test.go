@@ -906,8 +906,9 @@ func TestPreviewStateV5FailsClosedForLegacyRollback(t *testing.T) {
 func analyzedBuildDetail(withSource bool) models.JobDetail {
 	analysis := &models.AIAnalysis{
 		GeneratedAt: "2026-07-30T12:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
-		RootCause: "K8sVersionNotSupported rejected Kubernetes 1.33.2 because AKS requires Long-Term Support.",
-		Severity:  "High", SuggestedFix: "Update the repository version selection or enable AKS LTS.",
+		Disposition: models.AnalysisDispositionGrounded,
+		RootCause:   "K8sVersionNotSupported rejected Kubernetes 1.33.2 because AKS requires Long-Term Support.",
+		Severity:    "High", SuggestedFix: "Update the repository version selection or enable AKS LTS.",
 		RelevantFiles: []string{"templates/aks.yaml"}, FileLinks: map[string]string{},
 	}
 	if withSource {

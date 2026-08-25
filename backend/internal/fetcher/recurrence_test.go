@@ -138,7 +138,7 @@ func failingDetail(jobID, buildID, testName, message string) models.JobDetail {
 		TestCases: []models.TestCase{{
 			Name: testName, Status: "failed", FailureMessage: message,
 			AISummary:  &models.AISummary{Summary: "failure"},
-			AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+			AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded},
 		}},
 	}}}
 }
