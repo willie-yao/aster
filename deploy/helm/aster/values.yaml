@@ -463,15 +463,6 @@ server:
     # Allows OAuth cookies over local HTTP. This also acknowledges local HTTP
     # and must never be enabled on a deployed dashboard.
     allowInsecureCookies: false
-  # Explicit authenticated read-only causal remediation investigation.
-  # This does not enable File Issue or Fix PR actions.
-  remediationInvestigation:
-    enabled: false
-    timeout: 10m
-    maxOperations: 256
-    fixPreview:
-      # Experimental preview only. Never creates or confirms a GitHub PR.
-      enabled: false
   # Admin-gated on-demand analysis of a pull request failure the deterministic
   # triage pass could not explain. Requires ai.enabled, pull_requests.enabled in
   # project.yaml, and the authentication settings under actions. It does not

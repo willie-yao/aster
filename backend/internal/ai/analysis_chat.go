@@ -64,21 +64,19 @@ the answer. For recurring-pattern builds, preserve the full builds/<build-id>/
 prefix in every citation.`
 
 const (
-	analysisChatFallbackContextBytes             = 192 << 10
-	analysisChatHistoryTargetPct                 = 65
-	analysisChatMaxQuestionBytes                 = 4096
-	analysisChatMaxBuildIDBytes                  = 256
-	analysisChatMaxResponseBytes                 = 1 << 20
-	analysisChatMaxCandidates                    = 256
-	analysisChatMaxCandidateSpanBytes            = 4 * analysisChatMaxResponseBytes
-	analysisChatMaxPatternCausalGroups           = 10
-	analysisChatMaxPatternBuildsPerGroup         = 10
-	analysisChatMaxPatternUnclassifiedBuilds     = 10
-	analysisChatMaxPatternRemediationSummaries   = 10
-	analysisChatMaxPatternRootCauseBytes         = 8 << 10
-	analysisChatMaxPatternRemediationReasonBytes = 4 << 10
-	analysisChatMaxPatternLifecycleReasonBytes   = 4 << 10
-	analysisChatMaxPatternContextBytes           = 128 << 10
+	analysisChatFallbackContextBytes           = 192 << 10
+	analysisChatHistoryTargetPct               = 65
+	analysisChatMaxQuestionBytes               = 4096
+	analysisChatMaxBuildIDBytes                = 256
+	analysisChatMaxResponseBytes               = 1 << 20
+	analysisChatMaxCandidates                  = 256
+	analysisChatMaxCandidateSpanBytes          = 4 * analysisChatMaxResponseBytes
+	analysisChatMaxPatternCausalGroups         = 10
+	analysisChatMaxPatternBuildsPerGroup       = 10
+	analysisChatMaxPatternUnclassifiedBuilds   = 10
+	analysisChatMaxPatternRootCauseBytes       = 8 << 10
+	analysisChatMaxPatternLifecycleReasonBytes = 4 << 10
+	analysisChatMaxPatternContextBytes         = 128 << 10
 )
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
@@ -250,13 +248,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if turn.Pattern != nil {
 		enabledTools = patternAnalysisChatTools(enabledTools)
 		if !hasAnalysisChatContentReader(enabledTools) {
-			return analysischat.Reply{}, fmt.Errorf("analysis chat pattern sessions require filesystem content tools")
+			return analysischat.Reply{}, fmt.Errorf("analysis chat multi-build sessions require filesystem content tools")
 		}
 		factory, ok := a.browserFactory.(interface {
 			ForBuilds([]analysischat.ArtifactBuild) artifacts.Browser
 		})
 		if !ok || len(turn.EvidenceBuilds) == 0 {
-			return analysischat.Reply{}, fmt.Errorf("analysis chat pattern evidence browser is unavailable")
+			return analysischat.Reply{}, fmt.Errorf("analysis chat multi-build evidence browser is unavailable")
 		}
 		browser = factory.ForBuilds(turn.EvidenceBuilds)
 	} else {
@@ -836,20 +834,13 @@ func analysisChatAssistantHistory(message analysischat.Message) (string, error) 
 	return string(encoded), nil
 }
 
-type analysisChatPatternRemediation struct {
-	State       models.PatternRemediationInvestigationState `json:"state"`
-	Reason      string                                      `json:"reason,omitempty"`
-	CompletedAt string                                      `json:"completed_at,omitempty"`
-}
-
 type analysisChatPatternCausalGroup struct {
-	ID             string                          `json:"id,omitempty"`
-	ContentHash    string                          `json:"content_hash,omitempty"`
-	Builds         []string                        `json:"builds"`
-	RootCause      string                          `json:"root_cause"`
-	Confidence     string                          `json:"confidence"`
-	ArtifactBuilds []string                        `json:"artifact_builds"`
-	Remediation    *analysisChatPatternRemediation `json:"remediation_investigation,omitempty"`
+	ID             string   `json:"id,omitempty"`
+	ContentHash    string   `json:"content_hash,omitempty"`
+	Builds         []string `json:"builds"`
+	RootCause      string   `json:"root_cause"`
+	Confidence     string   `json:"confidence"`
+	ArtifactBuilds []string `json:"artifact_builds"`
 }
 
 type analysisChatPatternLifecycle struct {
@@ -901,9 +892,6 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 	if len(pattern.UnclassifiedBuilds) > analysisChatMaxPatternUnclassifiedBuilds {
 		return nil, fmt.Errorf("pattern chat context has %d unclassified builds, maximum %d", len(pattern.UnclassifiedBuilds), analysisChatMaxPatternUnclassifiedBuilds)
 	}
-	if len(pattern.RemediationInvestigations) > analysisChatMaxPatternRemediationSummaries {
-		return nil, fmt.Errorf("pattern chat context has %d remediation summaries, maximum %d", len(pattern.RemediationInvestigations), analysisChatMaxPatternRemediationSummaries)
-	}
 
 	artifactBuilds := make([]string, 0, len(turn.EvidenceBuilds))
 	artifactSet := make(map[string]struct{}, len(turn.EvidenceBuilds))
@@ -919,12 +907,6 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 		artifactBuilds = append(artifactBuilds, buildID)
 	}
 
-	remediationByHash := make(map[string]models.PatternRemediationInvestigationSummary, len(pattern.RemediationInvestigations))
-	for _, summary := range pattern.RemediationInvestigations {
-		if summary.CausalGroupHash != "" {
-			remediationByHash[summary.CausalGroupHash] = summary
-		}
-	}
 	groups := make([]analysisChatPatternCausalGroup, 0, len(pattern.CausalGroups))
 	for _, group := range pattern.CausalGroups {
 		if len(group.Builds) > analysisChatMaxPatternBuildsPerGroup {
@@ -941,13 +923,6 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 			ID: clampAnalysisChatPatternText(group.ID, 512), ContentHash: clampAnalysisChatPatternText(group.ContentHash, 128),
 			Builds: builds, RootCause: clampAnalysisChatPatternText(group.RootCause, analysisChatMaxPatternRootCauseBytes),
 			Confidence: clampAnalysisChatPatternText(group.Confidence, 32), ArtifactBuilds: available,
-		}
-		if summary, ok := remediationByHash[group.ContentHash]; ok && (summary.CausalGroupID == "" || group.ID == "" || summary.CausalGroupID == group.ID) {
-			contextGroup.Remediation = &analysisChatPatternRemediation{
-				State:       summary.State,
-				Reason:      clampAnalysisChatPatternText(summary.Reason, analysisChatMaxPatternRemediationReasonBytes),
-				CompletedAt: clampAnalysisChatPatternText(summary.CompletedAt, 128),
-			}
 		}
 		groups = append(groups, contextGroup)
 	}
@@ -984,6 +959,10 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		encoded, err := encodeAnalysisChatPatternContext(turn)
 		if err != nil {
 			return "", err
+		}
+		if turn.Scope == analysischat.ScopeCause {
+			return "Selected published causal-group analysis:\n\n" + string(encoded) +
+				"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. The single causal group's artifact_builds field lists its available builds. Answer only about this cause and its listed builds.", nil
 		}
 		return "Selected published recurring-pattern analysis:\n\n" + string(encoded) +
 			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Each causal group's artifact_builds field lists which selected builds have artifact access. Answer only about this recurring pattern and its listed builds.", nil

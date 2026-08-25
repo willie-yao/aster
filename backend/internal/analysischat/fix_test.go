@@ -275,6 +275,38 @@ func TestServicePatternFixCandidateUsesBoundPattern(t *testing.T) {
 	}
 }
 
+func TestServiceCauseFixCandidateIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{
+		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
+	}}, nil)
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dir, causalPatternDetail(pattern, "2", "1"))
+	runner := &fakeRunner{reply: Reply{
+		Answer: "The same cause appears in both builds.", Assessment: "supports",
+		Citations: []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := pattern.CausalGroups[0]
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("cause fix candidate error = %v", err)
+	}
+}
+
 func TestServicePatternFixCandidateRejectsDifferentPattern(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, patternDetail())

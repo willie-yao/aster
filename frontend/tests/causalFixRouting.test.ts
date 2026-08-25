@@ -124,6 +124,8 @@ function decode(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
+const actionPrefix = "Open representative failure:";
+
 interface FixAction {
   visible: string;
   accessible: string;
@@ -133,7 +135,7 @@ function fixActions(html: string): FixAction[] {
   const actions: FixAction[] = [];
   for (const match of html.matchAll(/<a\b[^>]*aria-label="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gu)) {
     const accessible = decode(match[1]);
-    if (!accessible.startsWith("Fix:")) continue;
+    if (!accessible.startsWith(actionPrefix)) continue;
     // Emotion inlines a <style> block inside the first rendered anchor, so its
     // CSS text has to go before tags are stripped or it lands in the label.
     const body = match[2].replace(/<style\b[\s\S]*?<\/style>/gu, "");
@@ -142,7 +144,7 @@ function fixActions(html: string): FixAction[] {
   return actions;
 }
 
-test("every Fix action renders a visible label that is a literal prefix of its accessible name", () => {
+test("every routing action renders a visible label that is a literal prefix of its accessible name", () => {
   const actions = fixActions(render());
 
   assert.equal(actions.length, 3);
@@ -157,7 +159,7 @@ test("every Fix action renders a visible label that is a literal prefix of its a
   }
 });
 
-test("Fix actions stay distinguishable when two causes humanize to one title", () => {
+test("routing actions stay distinguishable when two causes humanize to one title", () => {
   const actions = fixActions(render());
   const visible = actions.map((action) => action.visible);
 
@@ -170,13 +172,15 @@ test("Fix actions stay distinguishable when two causes humanize to one title", (
     visible.map((label) => label.includes(" in build ")),
     [true, true, false],
   );
-  assert.ok(visible[0].startsWith("Fix: Highly available cluster in build 100"));
-  assert.ok(visible[1].startsWith("Fix: Highly available cluster in build 250"));  assert.equal(visible[2], "Fix: Conformance tests should pass");
+  assert.ok(visible[0].startsWith(`${actionPrefix} Highly available cluster in build 100`));
+  assert.ok(visible[1].startsWith(`${actionPrefix} Highly available cluster in build 250`));
+  assert.equal(visible[2], `${actionPrefix} Conformance tests should pass`);
 });
 
-test("the Fix action names the test the way the rest of the page does", () => {
+test("the routing action names the test the way the rest of the page does", () => {
   const actions = fixActions(render());
 
+  assert.equal(actions.length, 3);
   // The raw JUnit name and its suite prefix never reach the label.
   for (const action of actions) {
     assert.doesNotMatch(action.visible, /\[It\]/);

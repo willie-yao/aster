@@ -19,6 +19,8 @@ export interface JUnitAnalysisChatReference extends AnalysisChatReferenceBase {
   analysis_generated_at?: string;
   pattern_id?: never;
   pattern_hash?: never;
+  causal_group_id?: never;
+  causal_group_hash?: never;
 }
 
 export interface BuildAnalysisChatReference extends AnalysisChatReferenceBase {
@@ -32,6 +34,8 @@ export interface BuildAnalysisChatReference extends AnalysisChatReferenceBase {
   analysis_generated_at?: string;
   pattern_id?: never;
   pattern_hash?: never;
+  causal_group_id?: never;
+  causal_group_hash?: never;
 }
 
 export type TestAnalysisChatReference = JUnitAnalysisChatReference | BuildAnalysisChatReference;
@@ -47,9 +51,29 @@ export interface PatternAnalysisChatReference extends AnalysisChatReferenceBase 
   class_name?: never;
   junit_file?: never;
   analysis_generated_at?: never;
+  causal_group_id?: never;
+  causal_group_hash?: never;
 }
 
-export type AnalysisChatReference = TestAnalysisChatReference | PatternAnalysisChatReference;
+export interface CauseAnalysisChatReference extends AnalysisChatReferenceBase {
+  scope: "cause";
+  pattern_id: string;
+  pattern_hash: string;
+  causal_group_id: string;
+  causal_group_hash: string;
+  build_id?: never;
+  test_name?: never;
+  source?: never;
+  suite_name?: never;
+  class_name?: never;
+  junit_file?: never;
+  analysis_generated_at?: never;
+}
+
+export type AnalysisChatReference =
+  | TestAnalysisChatReference
+  | PatternAnalysisChatReference
+  | CauseAnalysisChatReference;
 
 export interface AnalysisChatCitation {
   path: string;

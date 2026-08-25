@@ -195,7 +195,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		result = startTurnResult{
 			LeaseID: leaseID, Started: true, Pending: true,
 			Turn: Turn{
-				SessionID: current.View.ID, JobID: resolved.jobID,
+				SessionID: current.View.ID, Scope: resolved.ref.Scope, JobID: resolved.jobID,
 				BuildPrefix: resolved.buildPrefix, Build: cloneBuildInfo(resolved.build),
 				TestCase: cloneTestCase(resolved.testCase), Pattern: clonePattern(resolved.pattern),
 				EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),

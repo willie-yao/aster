@@ -1803,6 +1803,39 @@ func TestPatternChatCannotPromoteTestCorrection(t *testing.T) {
 	}
 }
 
+func TestCauseChatCannotPromoteTestCorrection(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{
+		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
+	}}, nil)
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dir, causalPatternDetail(pattern, "2", "1"))
+	runner := &fakeRunner{reply: Reply{
+		Answer: "The cause should be revised.", Assessment: "challenges",
+		Citations:        []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
+		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := pattern.CausalGroups[0]
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Is this conclusion wrong?"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("correction error = %v", err)
+	}
+}
+
 func TestPatternChatSnapshotPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, patternDetail())
@@ -1843,6 +1876,9 @@ func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
 		{Scope: ScopePattern, JobID: "job", PatternID: "pattern"},
 		{Scope: ScopePattern, JobID: "job", BuildID: "123", PatternID: "pattern", PatternHash: "hash"},
 		{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash", TestName: "test"},
+		{Scope: ScopePattern, JobID: "job", PatternID: "pattern", PatternHash: "hash", CausalGroupID: "cause", CausalGroupHash: "cause-hash"},
+		{Scope: ScopeCause, JobID: "job", PatternID: "pattern", PatternHash: "hash", CausalGroupID: "cause"},
+		{Scope: ScopeCause, JobID: "job", PatternID: "pattern", PatternHash: "hash", CausalGroupID: "cause", CausalGroupHash: "cause-hash", BuildID: "123"},
 		{Scope: "other", JobID: "job", PatternID: "pattern", PatternHash: "hash"},
 	} {
 		if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrInvalidRequest) {
@@ -2062,11 +2098,6 @@ func TestServicePatternChatPersistsCurrentCausalContext(t *testing.T) {
 		{ID: "singleton", Builds: []string{"102"}, RootCause: "outlier", Confidence: "low"},
 		{ID: "group-b", Builds: []string{"101", "100"}, RootCause: "cause b", Confidence: "medium"},
 	}, []string{"99"})
-	pattern.RemediationInvestigations = []models.PatternRemediationInvestigationSummary{{
-		CausalGroupID: "group-a", CausalGroupHash: pattern.CausalGroups[0].ContentHash,
-		State: models.PatternRemediationActionable, Reason: "verified target", CompletedAt: "2026-08-12T13:00:00Z",
-		Target: &models.PatternRemediationTargetSummary{Path: "private/target.go", Repository: "private/repo", Revision: "private-revision"},
-	}}
 	pattern.ContentHash = models.PatternHash(pattern)
 	writeJobDetail(t, dir, causalPatternDetail(pattern, "104", "103", "102", "101", "100", "99"))
 	stateDir := filepath.Join(dir, ".causal-pattern-chat")
@@ -2093,23 +2124,112 @@ func TestServicePatternChatPersistsCurrentCausalContext(t *testing.T) {
 		!slices.Equal(turn.Pattern.UnclassifiedBuilds, []string{"99"}) || turn.Pattern.Lifecycle == nil || turn.Pattern.Lifecycle.State != models.PatternLifecycleObserving {
 		t.Fatalf("restored pattern = %+v", turn.Pattern)
 	}
-	// One summary per cause now, including the single-build one, with the
-	// investigated verdict preserved on the cause it belongs to.
-	if len(turn.Pattern.RemediationInvestigations) != 3 || turn.Pattern.RemediationInvestigations[0].State != models.PatternRemediationActionable ||
-		turn.Pattern.RemediationInvestigations[1].State != models.PatternRemediationNotInvestigated {
-		t.Fatalf("restored remediation = %+v", turn.Pattern.RemediationInvestigations)
-	}
-	for _, summary := range turn.Pattern.RemediationInvestigations {
-		if summary.Target != nil {
-			t.Fatalf("restored private target = %+v", summary.Target)
-		}
-	}
 	gotBuilds := make([]string, 0, len(turn.EvidenceBuilds))
 	for _, build := range turn.EvidenceBuilds {
 		gotBuilds = append(gotBuilds, build.Build.BuildID)
 	}
 	if !slices.Equal(gotBuilds, []string{"103", "100", "101"}) {
 		t.Fatalf("evidence builds = %v", gotBuilds)
+	}
+}
+
+func TestServiceCauseChatUsesOnlySelectedGroupBuilds(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{
+		{ID: "other", Builds: []string{"103"}, RootCause: "different cause", Confidence: "low"},
+		{
+			ID: "selected", Builds: []string{"101", "102"}, RootCause: "shared selected cause", Confidence: "high",
+			CauseLocation: &models.AnalysisCauseLocation{Repository: "example/repo", Files: []string{"pkg/cause.go"}},
+			Remediation:   &models.PatternCausalGroupRemediation{SuggestedFix: "change the selected cause", BuildID: "102"},
+		},
+	}, nil)
+	pattern.Systemic = false
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dir, causalPatternDetail(pattern, "101", "102", "103", "outside"))
+	runner := &fakeRunner{reply: Reply{Answer: "The selected cause spans two builds.", Assessment: "explains"}}
+	service, err := NewService(t.Context(), dir, runner, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := pattern.CausalGroups[1]
+	created, err := service.Create(AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Analysis.Scope != ScopeCause || created.Analysis.CausalGroupID != group.ID || created.Analysis.BuildID != "" {
+		t.Fatalf("created cause session = %+v", created.Analysis)
+	}
+	if _, err := service.Send(t.Context(), created.ID, "alice", testRequestID(t), "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	turn := runner.turns[0]
+	runner.mu.Unlock()
+	if turn.Scope != ScopeCause || turn.Pattern == nil || len(turn.Pattern.CausalGroups) != 1 || turn.Pattern.CausalGroups[0].ID != group.ID {
+		t.Fatalf("cause turn = %+v", turn)
+	}
+	if turn.Pattern.Systemic || turn.TestCase.AIAnalysis == nil || turn.TestCase.AIAnalysis.RootCause != group.RootCause ||
+		turn.TestCase.AIAnalysis.SuggestedFix != group.Remediation.SuggestedFix ||
+		!slices.Equal(turn.TestCase.AIAnalysis.RelevantFiles, []string{"pkg/cause.go"}) {
+		t.Fatalf("cause analysis = %+v pattern=%+v", turn.TestCase.AIAnalysis, turn.Pattern)
+	}
+	gotBuilds := make([]string, 0, len(turn.EvidenceBuilds))
+	for _, build := range turn.EvidenceBuilds {
+		gotBuilds = append(gotBuilds, build.Build.BuildID)
+	}
+	if !slices.Equal(gotBuilds, []string{"102", "101"}) {
+		t.Fatalf("cause evidence builds = %v", gotBuilds)
+	}
+}
+
+func TestServiceCauseChatRejectsChangedIdentityAndMissingEvidence(t *testing.T) {
+	pattern := causalPatternForChat([]models.PatternCausalGroup{
+		{Builds: []string{"2", "1"}, RootCause: "original", Confidence: "high"},
+		{Builds: []string{"3"}, RootCause: "other", Confidence: "low"},
+	}, nil)
+	models.AssignPatternIdentity(&pattern)
+	group := pattern.CausalGroups[0]
+	ref := AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}
+	for _, testCase := range []struct {
+		name string
+		edit func(*models.JobDetail, *AnalysisRef)
+		want error
+	}{
+		{name: "parent changed", edit: func(detail *models.JobDetail, _ *AnalysisRef) {
+			detail.PatternAnalyses[0].CausalGroups[1].RootCause = "changed other cause"
+			detail.PatternAnalyses[0].ContentHash = models.PatternHash(detail.PatternAnalyses[0])
+		}, want: ErrPatternChanged},
+		{name: "cause hash changed", edit: func(_ *models.JobDetail, ref *AnalysisRef) {
+			ref.CausalGroupHash = strings.Repeat("f", 64)
+		}, want: ErrCauseChanged},
+		{name: "cause missing", edit: func(detail *models.JobDetail, ref *AnalysisRef) {
+			ref.CausalGroupID = "missing"
+		}, want: ErrCauseNotFound},
+		{name: "build missing", edit: func(detail *models.JobDetail, _ *AnalysisRef) {
+			detail.Runs = detail.Runs[:1]
+		}, want: ErrAnalysisNotFound},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			patternCopy := clonePatternAnalyses([]models.PatternAnalysis{pattern})[0]
+			detail := causalPatternDetail(patternCopy, "2", "1", "3")
+			caseRef := ref
+			testCase.edit(&detail, &caseRef)
+			dir := t.TempDir()
+			writeJobDetail(t, dir, detail)
+			service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Create(caseRef, "alice", testRequestID(t)); !errors.Is(err, testCase.want) {
+				t.Fatalf("error = %v, want %v", err, testCase.want)
+			}
+		})
 	}
 }
 

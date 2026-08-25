@@ -8,30 +8,6 @@ import (
 	"strings"
 )
 
-const patternRemediationNotInvestigatedReason = "No source-grounded implementation target has been verified for this cause."
-
-// ValidPatternRemediationInvestigationState reports whether state is public-safe.
-func ValidPatternRemediationInvestigationState(state PatternRemediationInvestigationState) bool {
-	switch state {
-	case PatternRemediationNotInvestigated,
-		PatternRemediationQueued,
-		PatternRemediationInvestigating,
-		PatternRemediationVerifying,
-		PatternRemediationActionable,
-		PatternRemediationAlreadyFixed,
-		PatternRemediationExternalDependency,
-		PatternRemediationEnvironmentOrInfrastructure,
-		PatternRemediationMitigationOnly,
-		PatternRemediationInsufficientEvidence,
-		PatternRemediationInvestigationFailed,
-		PatternRemediationStale,
-		PatternRemediationEvidenceExpired:
-		return true
-	default:
-		return false
-	}
-}
-
 // PatternCausalGroupHash identifies the causal-group content shown to the maintainer.
 func PatternCausalGroupHash(group PatternCausalGroup) string {
 	builds := append([]string(nil), group.Builds...)
@@ -79,42 +55,6 @@ func assignPatternCausalGroupIdentities(pattern *PatternAnalysis) bool {
 	return changed
 }
 
-// WithDefaultPatternRemediationInvestigations returns a public projection with
-// explicit defaults for repeated causal groups. The input remains unchanged.
-func WithDefaultPatternRemediationInvestigations(patterns []PatternAnalysis) []PatternAnalysis {
-	if patterns == nil {
-		return nil
-	}
-	out := clonePatternAnalyses(patterns)
-	for patternIndex := range out {
-		pattern := &out[patternIndex]
-		if PatternAllowsActions(*pattern) {
-			continue
-		}
-		existing := make(map[string]PatternRemediationInvestigationSummary, len(pattern.RemediationInvestigations))
-		for _, summary := range pattern.RemediationInvestigations {
-			if summary.CausalGroupHash != "" && ValidPatternRemediationInvestigationState(summary.State) {
-				existing[summary.CausalGroupHash] = summary
-			}
-		}
-		summaries := make([]PatternRemediationInvestigationSummary, 0, len(pattern.CausalGroups))
-		for _, group := range pattern.CausalGroups {
-			summary, ok := existing[group.ContentHash]
-			if !ok {
-				summary = PatternRemediationInvestigationSummary{
-					State:  PatternRemediationNotInvestigated,
-					Reason: patternRemediationNotInvestigatedReason,
-				}
-			}
-			summary.CausalGroupID = group.ID
-			summary.CausalGroupHash = group.ContentHash
-			summaries = append(summaries, summary)
-		}
-		pattern.RemediationInvestigations = summaries
-	}
-	return out
-}
-
 // ClonePatternAnalyses deep copies the slices a caller may mutate, so writing to
 // one copy's causal groups never reaches another's backing array.
 func ClonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
@@ -133,7 +73,6 @@ func clonePatternAnalyses(patterns []PatternAnalysis) []PatternAnalysis {
 				out[index].CausalGroups[groupIndex].Remediation = &clone
 			}
 		}
-		out[index].RemediationInvestigations = append([]PatternRemediationInvestigationSummary(nil), patterns[index].RemediationInvestigations...)
 	}
 	return out
 }

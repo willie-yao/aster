@@ -61,3 +61,15 @@ test("pattern chat suggested questions remain useful for causal groups", () => {
   assert.match(source, /unclassified or outliers/);
   assert.doesNotMatch(source, /What would disprove this shared root cause/);
 });
+
+test("cause chat uses multi-build evidence without inheriting pattern fix authority", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  assert.match(source, /const causeScope = analysisRef\.scope === "cause"/);
+  assert.match(source, /const multiBuildScope = patternScope \|\| causeScope/);
+  assert.match(source, /exactJUnitAnalysis = !multiBuildScope/);
+  assert.match(source, /legacyFixEligible = patternScope/);
+  assert.match(source, /chatTitle = causeScope \? "Investigate cause"/);
+  assert.match(source, /What evidence supports this cause across its builds/);
+  assert.match(source, /What concrete change follows from this cause/);
+  assert.match(source, /Interrogate this cause across its builds/);
+});

@@ -2118,47 +2118,6 @@
           "required": [
             "enabled"
           ]
-        },
-        "remediationInvestigation": {
-          "type": "object",
-          "description": "Authenticated on-demand causal remediation investigation settings.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable the authenticated read-only causal remediation operation."
-            },
-            "timeout": {
-              "type": "string",
-              "description": "Overall investigation timeout.",
-              "pattern": "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h)((([0-9]+([.][0-9]+)?)|([.][0-9]+))(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
-            },
-            "maxOperations": {
-              "type": "integer",
-              "description": "Maximum retained in-memory safe operation states.",
-              "minimum": 1
-            },
-            "fixPreview": {
-              "type": "object",
-              "description": "Experimental preview-only causal fix generation.",
-              "properties": {
-                "enabled": {
-                  "type": "boolean",
-                  "description": "Enable preview generation without any GitHub write or confirmation capability."
-                }
-              },
-              "additionalProperties": false,
-              "required": [
-                "enabled"
-              ]
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "enabled",
-            "timeout",
-            "maxOperations",
-            "fixPreview"
-          ]
         }
       },
       "additionalProperties": false,
@@ -2169,7 +2128,6 @@
         "extraEnv",
         "security",
         "development",
-        "remediationInvestigation",
         "pullRequestEscalation",
         "chat",
         "actions",

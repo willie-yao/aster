@@ -190,6 +190,9 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
+		if current.View.Analysis.Scope == ScopeCause {
+			return changed, fmt.Errorf("%w: cause-scoped conversations cannot create fixes", ErrInvalidRequest)
+		}
 		if current.View.Analysis.Scope == ScopePattern &&
 			(patternID != current.View.Analysis.PatternID || patternHash != current.View.Analysis.PatternHash) {
 			return changed, fmt.Errorf("%w: requested pattern does not match the conversation", ErrInvalidRequest)

@@ -35,8 +35,8 @@ func (s *Service) CorrectionCandidate(id, owner, requestID string) (CorrectionCa
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		if current.View.Analysis.Scope == ScopePattern {
-			return changed, fmt.Errorf("%w: recurring-pattern conversations cannot promote test-analysis corrections", ErrInvalidRequest)
+		if current.View.Analysis.Scope != ScopeTest {
+			return changed, fmt.Errorf("%w: only test-scoped conversations can promote test-analysis corrections", ErrInvalidRequest)
 		}
 		request, ok := current.Requests[requestID]
 		if !ok || request.Status != requestSucceeded {

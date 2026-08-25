@@ -32,9 +32,7 @@ import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
-import { CausalGroupRemediation } from "./CausalGroupRemediation";
-import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
-import { CausalGroupReportedFix } from "./CausalGroupReportedFix";
+import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -60,11 +58,6 @@ export function PatternBanner({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
-  // Mirrors the resolver's pattern-level gate: the investigation runs only on a
-  // pattern the engine classified as recurring and systemic.
-  const remediationPatternEligible =
-    pattern.systemic &&
-    (pattern.recurrence_classification === "shared_cause" || pattern.recurrence_classification === "mixed_causes");
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
@@ -73,6 +66,20 @@ export function PatternBanner({
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
   const causalEvidencePresent = causalGroups.map((group) => causalGroupEvidencePresent(group, runs));
+  const availableBuildIDs = new Set(runs.map((run) => run.build_id));
+  const causeChatRefs = causalGroups.map((group) =>
+    features.analysis_chat && jobID && pattern.id && pattern.content_hash && group.id && group.content_hash &&
+      group.builds.length > 0 && group.builds.every((buildID) => availableBuildIDs.has(buildID))
+      ? {
+          scope: "cause" as const,
+          job_id: jobID,
+          pattern_id: pattern.id,
+          pattern_hash: pattern.content_hash,
+          causal_group_id: group.id,
+          causal_group_hash: group.content_hash,
+        }
+      : null,
+  );
   // Correlation only ever sees the current window, so a cause it reports as new
   // may have been failing for months.
   const causalRecurrence = causalGroups.map((group) =>
@@ -91,9 +98,6 @@ export function PatternBanner({
   }, new Map<string, number>());
   const fixTargetNeedsBuild = fixTargetLabels.map(
     (label) => label !== null && (fixTargetLabelCounts.get(label) ?? 0) > 1,
-  );
-  const remediationByHash = new Map(
-    (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
   const patternUpstreamCause = patternExternalCause(pattern);
@@ -357,35 +361,43 @@ export function PatternBanner({
                       </Link>
                     ))}
                   </Stack>
-                  {analysisOnly && (
-                    <CausalGroupRemediation
-                      group={group}
-                      investigation={group.content_hash ? remediationByHash.get(group.content_hash) : undefined}
-                      jobID={jobID}
-                      patternID={pattern.id}
-                      patternHash={pattern.content_hash}
-                      patternEligible={remediationPatternEligible}
-                      chatAvailable={Boolean(chatRef)}
-                    />
-                  )}
-                  {fixCapable && (
-                    <CausalGroupFixRouting
-                      jobID={jobID}
-                      target={causalFixTargets[index]}
-                      showBuild={fixTargetNeedsBuild[index]}
-                      externalCause={externalCause(group.cause_location)}
-                      // A target exists only where the cause's build is still
-                      // readable, so the offer turns on the pattern's lifecycle
-                      // rather than on whether the correlation refreshed: a
-                      // recovered or verified-fixed cause is worth viewing but
-                      // not worth fixing.
-                      stale={!lifecycleActive}
-                      evidencePresent={causalEvidencePresent[index]}
-                    />
-                  )}
-                  {/* Published data, so this stays available where the Fix and
-                      remediation-investigation capabilities are not. */}
-                  <CausalGroupReportedFix remediation={group.remediation} fileCtx={patternFileCtx} />
+                  <CausalGroupNextStep
+                    group={group}
+                    jobID={jobID}
+                    fileCtx={patternFileCtx}
+                    chat={
+                      causeChatRefs[index]
+                        ? {
+                            ref: causeChatRefs[index],
+                            fileCtx: {
+                              builds: Object.fromEntries(
+                                group.builds.flatMap((buildID) =>
+                                  buildContexts[buildID] ? [[buildID, buildContexts[buildID]]] : [],
+                                ),
+                              ),
+                              fileLinks: pattern.file_links,
+                            },
+                          }
+                        : undefined
+                    }
+                    routing={
+                      fixCapable
+                        ? {
+                            target: causalFixTargets[index],
+                            showBuild: fixTargetNeedsBuild[index],
+                            externalCause: externalCause(group.cause_location),
+                            // A target exists only where the cause's build is
+                            // still readable, so the offer turns on the
+                            // pattern's lifecycle rather than on whether the
+                            // correlation refreshed: a recovered or
+                            // verified-fixed cause is worth viewing but not
+                            // worth fixing.
+                            stale: !lifecycleActive,
+                            evidencePresent: causalEvidencePresent[index],
+                          }
+                        : undefined
+                    }
+                  />
                 </Box>
               </Box>
             ))}

@@ -1,5 +1,0 @@
-[
-  {"build_id":"1521900787930763264","elapsed":2399,"pr":"2051","result":"FAILURE","started":1651684416,"tests_failed":0,"tests_run":0},
-  {"build_id":"1521932837094166528","elapsed":1443,"pr":"2051","result":"FAILURE","started":1651692051,"tests_failed":0,"tests_run":0},
-  {"build_id":"1521965516254613504","elapsed":2172,"pr":"2051","result":"FAILURE","started":1651699841,"tests_failed":0,"tests_run":0}
-]

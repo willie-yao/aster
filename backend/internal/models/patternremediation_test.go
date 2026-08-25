@@ -16,66 +16,17 @@ func causalPattern() PatternAnalysis {
 	return pattern
 }
 
-// TestWithDefaultPatternRemediationInvestigationsDefaultsEveryCausalGroup
-// verifies every cause gets a summary, including a single-build one. A cause
-// observed once can still resolve to a real defect, so eligibility follows the
-// cause rather than how many builds happened to hit it.
-func TestWithDefaultPatternRemediationInvestigationsDefaultsEveryCausalGroup(t *testing.T) {
-	pattern := causalPattern()
-	out := WithDefaultPatternRemediationInvestigations([]PatternAnalysis{pattern})
-	if len(out[0].RemediationInvestigations) != len(out[0].CausalGroups) {
-		t.Fatalf("summaries=%+v", out[0].RemediationInvestigations)
-	}
-	for index, summary := range out[0].RemediationInvestigations {
-		group := out[0].CausalGroups[index]
-		if group.ID == "" || group.ContentHash == "" {
-			t.Fatalf("group identity=%+v", group)
-		}
-		if summary.CausalGroupID != group.ID || summary.CausalGroupHash != group.ContentHash {
-			t.Fatalf("summary=%+v group=%+v", summary, group)
-		}
-		if summary.State != PatternRemediationNotInvestigated || summary.Reason != patternRemediationNotInvestigatedReason {
-			t.Fatalf("summary=%+v", summary)
-		}
-	}
-	// The single-build cause is the one this used to skip entirely.
-	if got := len(out[0].CausalGroups[1].Builds); got != 1 {
-		t.Fatalf("expected a single-build cause in the fixture, got %d builds", got)
-	}
-	if len(pattern.RemediationInvestigations) != 0 || pattern.CausalGroups[0].Builds[0] != "2" {
-		t.Fatalf("input mutated: %+v", pattern)
-	}
-}
-
-func TestWithDefaultPatternRemediationInvestigationsPreservesMatchingState(t *testing.T) {
-	pattern := causalPattern()
-	group := pattern.CausalGroups[0]
-	pattern.RemediationInvestigations = []PatternRemediationInvestigationSummary{{
-		CausalGroupID:   group.ID,
-		CausalGroupHash: group.ContentHash,
-		State:           PatternRemediationAlreadyFixed,
-		Reason:          "current source contains the fix",
-	}}
-	out := WithDefaultPatternRemediationInvestigations([]PatternAnalysis{pattern})
-	if got := out[0].RemediationInvestigations[0].State; got != PatternRemediationAlreadyFixed {
-		t.Fatalf("state=%q", got)
-	}
-}
-
-func TestRemediationStateDoesNotChangeCausalHashes(t *testing.T) {
+func TestCausalIdentityFieldsDoNotChangeHashes(t *testing.T) {
 	pattern := causalPattern()
 	groupHash := PatternCausalGroupHash(pattern.CausalGroups[0])
 	patternHash := PatternHash(pattern)
 	pattern.CausalGroups[0].ID = "different"
 	pattern.CausalGroups[0].ContentHash = "different"
-	pattern.RemediationInvestigations = []PatternRemediationInvestigationSummary{{
-		CausalGroupID: "different", CausalGroupHash: "different", State: PatternRemediationActionable, Reason: "verified",
-	}}
 	if after := PatternCausalGroupHash(pattern.CausalGroups[0]); after != groupHash {
-		t.Fatalf("remediation state changed group hash: before=%s after=%s", groupHash, after)
+		t.Fatalf("identity fields changed group hash: before=%s after=%s", groupHash, after)
 	}
 	if after := PatternHash(pattern); after != patternHash {
-		t.Fatalf("remediation state changed pattern hash: before=%s after=%s", patternHash, after)
+		t.Fatalf("identity fields changed pattern hash: before=%s after=%s", patternHash, after)
 	}
 }
 
@@ -117,31 +68,6 @@ func TestSignatureDoesNotChangeCausalHashesOrIdentity(t *testing.T) {
 	}
 	if pattern.CausalGroups[0].Signature != "0123456789abcdef" {
 		t.Fatal("assigning identity dropped the signature")
-	}
-}
-
-func TestValidPatternRemediationInvestigationState(t *testing.T) {
-	states := []PatternRemediationInvestigationState{
-		PatternRemediationNotInvestigated,
-		PatternRemediationQueued,
-		PatternRemediationInvestigating,
-		PatternRemediationVerifying,
-		PatternRemediationActionable,
-		PatternRemediationAlreadyFixed,
-		PatternRemediationExternalDependency,
-		PatternRemediationEnvironmentOrInfrastructure,
-		PatternRemediationMitigationOnly,
-		PatternRemediationInsufficientEvidence,
-		PatternRemediationInvestigationFailed,
-		PatternRemediationStale,
-	}
-	for _, state := range states {
-		if !ValidPatternRemediationInvestigationState(state) {
-			t.Fatalf("state %q is not valid", state)
-		}
-	}
-	if ValidPatternRemediationInvestigationState("unknown") {
-		t.Fatal("unknown state accepted")
 	}
 }
 

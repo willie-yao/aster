@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -537,7 +536,7 @@ func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 	}
 }
 
-func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T) {
+func TestPublicPatternOutputBackfillsCausalGroupIdentity(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{
 		JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
@@ -571,21 +570,12 @@ func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T)
 	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
 		t.Fatal(err)
 	}
-	jobPattern := writtenDetail.PatternAnalyses[0]
-	reportPattern := writtenReport.RecurringPatterns[0]
-	if len(jobPattern.RemediationInvestigations) != len(jobPattern.CausalGroups) ||
-		len(reportPattern.RemediationInvestigations) != len(reportPattern.CausalGroups) {
-		t.Fatalf("job summaries=%+v report summaries=%+v", jobPattern.RemediationInvestigations, reportPattern.RemediationInvestigations)
+	jobGroup := writtenDetail.PatternAnalyses[0].CausalGroups[0]
+	reportGroup := writtenReport.RecurringPatterns[0].CausalGroups[0]
+	if jobGroup.ID == "" || jobGroup.ContentHash == "" || jobGroup.ID != reportGroup.ID || jobGroup.ContentHash != reportGroup.ContentHash {
+		t.Fatalf("job group=%+v report group=%+v", jobGroup, reportGroup)
 	}
-	jobSummary := jobPattern.RemediationInvestigations[0]
-	reportSummary := reportPattern.RemediationInvestigations[0]
-	if !reflect.DeepEqual(jobSummary, reportSummary) || jobSummary.State != models.PatternRemediationNotInvestigated {
-		t.Fatalf("job summary=%+v report summary=%+v", jobSummary, reportSummary)
-	}
-	if jobSummary.CausalGroupID != jobPattern.CausalGroups[0].ID || jobSummary.CausalGroupHash != jobPattern.CausalGroups[0].ContentHash {
-		t.Fatalf("summary=%+v group=%+v", jobSummary, jobPattern.CausalGroups[0])
-	}
-	if len(pattern.RemediationInvestigations) != 0 || pattern.CausalGroups[0].ID != "" || pattern.CausalGroups[0].Builds[0] != "2" {
+	if pattern.CausalGroups[0].ID != "" || pattern.CausalGroups[0].Builds[0] != "2" {
 		t.Fatalf("input pattern mutated: %+v", pattern)
 	}
 }

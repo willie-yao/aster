@@ -204,6 +204,7 @@ removed_or_moved_docs = [
     Path("docs/architecture/analysis-runtime-evaluation.md"),
     Path("docs/agent-sandbox-opencode-analyzer.md"),
     Path("docs/remediation-investigation.md"),
+    Path("docs/maintainer/remediation-investigation.md"),
 ]
 removed_historical_plans = [
     Path("plan/design-overview-operator-console-1.md"),

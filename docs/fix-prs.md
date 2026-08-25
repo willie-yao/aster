@@ -10,10 +10,11 @@ failed build analysis, or exact-JUnit chat finding, then present a draft pull
 request for explicit human confirmation. It is the highest-risk optional feature
 because it writes source code.
 
-Causal-group patterns remain analysis-only. A remediation investigation may
-publish a safe status, but it does not make a causal group eligible for File
-Issue or Fix PR. Dismissing a pattern is a maintainer acknowledgement rather
-than a remediation-contract action, so it stays available for causal groups.
+Causal-group patterns remain analysis-only. A cause-scoped chat can inspect the
+member builds, but Fix PR generation starts from the representative exact JUnit
+failure linked from that cause. Dismissing a pattern is a maintainer
+acknowledgement rather than a remediation-contract action, so it stays available
+for causal groups.
 
 ## Supported workflow
 

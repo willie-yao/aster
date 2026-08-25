@@ -36,6 +36,10 @@ var (
 	ErrPatternNotFound = errors.New("recurring pattern not found")
 	// ErrPatternChanged means the selected recurring pattern was replaced.
 	ErrPatternChanged = errors.New("recurring pattern changed")
+	// ErrCauseNotFound means the selected causal group is absent.
+	ErrCauseNotFound = errors.New("causal group not found")
+	// ErrCauseChanged means the selected causal group was replaced.
+	ErrCauseChanged = errors.New("causal group changed")
 	// ErrSessionNotFound means the session is absent, expired, or owned by another user.
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
@@ -121,26 +125,28 @@ func ValidationGateOf(err error) (string, bool) {
 const (
 	ScopeTest    = "test"
 	ScopePattern = "pattern"
+	ScopeCause   = "cause"
 
-	maxJobDetailBytes                  = 64 << 20
-	maxJobIDBytes                      = 1024
-	maxBuildIDBytes                    = 256
-	maxTestNameBytes                   = 4096
-	maxSuiteNameBytes                  = 4096
-	maxClassNameBytes                  = 4096
-	maxJUnitFileBytes                  = 1024
-	maxTimestampBytes                  = 128
-	maxRequestIDBytes                  = 128
-	maxPatternIDBytes                  = 512
-	maxPatternHashBytes                = 128
-	maxPatternEvidenceBuilds           = 3
-	maxPatternChatCausalGroups         = 10
-	maxPatternChatBuildsPerGroup       = 10
-	maxPatternChatUnclassifiedBuilds   = 10
-	maxPatternChatRemediationSummaries = 10
+	maxJobDetailBytes                = 64 << 20
+	maxJobIDBytes                    = 1024
+	maxBuildIDBytes                  = 256
+	maxTestNameBytes                 = 4096
+	maxSuiteNameBytes                = 4096
+	maxClassNameBytes                = 4096
+	maxJUnitFileBytes                = 1024
+	maxTimestampBytes                = 128
+	maxRequestIDBytes                = 128
+	maxPatternIDBytes                = 512
+	maxPatternHashBytes              = 128
+	maxCausalGroupIDBytes            = 512
+	maxCausalGroupHashBytes          = 128
+	maxPatternEvidenceBuilds         = 3
+	maxPatternChatCausalGroups       = 10
+	maxPatternChatBuildsPerGroup     = 10
+	maxPatternChatUnclassifiedBuilds = 10
 )
 
-// AnalysisRef addresses one published test or recurring-pattern analysis.
+// AnalysisRef addresses one published test, recurring pattern, or causal group analysis.
 type AnalysisRef struct {
 	Scope               string `json:"scope,omitempty"`
 	JobID               string `json:"job_id"`
@@ -153,6 +159,8 @@ type AnalysisRef struct {
 	AnalysisGeneratedAt string `json:"analysis_generated_at,omitempty"`
 	PatternID           string `json:"pattern_id,omitempty"`
 	PatternHash         string `json:"pattern_hash,omitempty"`
+	CausalGroupID       string `json:"causal_group_id,omitempty"`
+	CausalGroupHash     string `json:"causal_group_hash,omitempty"`
 }
 
 // Citation identifies artifact evidence used in one answer.
@@ -264,6 +272,7 @@ const (
 // Turn is the immutable analysis snapshot and transcript for one model call.
 type Turn struct {
 	SessionID      string
+	Scope          string
 	JobID          string
 	BuildPrefix    string
 	Build          models.BuildInfo
@@ -854,8 +863,11 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 	if detail.JobID != "" && detail.JobID != ref.JobID {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
-	if ref.Scope == ScopePattern {
+	switch ref.Scope {
+	case ScopePattern:
 		return resolvePatternAnalysis(ref, detail)
+	case ScopeCause:
+		return resolveCauseAnalysis(ref, detail)
 	}
 
 	var run *models.BuildResult
@@ -953,15 +965,7 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 	}
 	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
 	ref.PatternHash = models.PatternHash(pattern)
-	severity := "Unknown"
-	switch strings.ToLower(strings.TrimSpace(pattern.Confidence)) {
-	case "high":
-		severity = "High"
-	case "medium":
-		severity = "Medium"
-	case "low":
-		severity = "Low"
-	}
+	severity := severityFromConfidence(pattern.Confidence)
 	testCase := models.TestCase{
 		Name: pattern.Subject,
 		AIAnalysis: &models.AIAnalysis{
@@ -977,6 +981,137 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 	}, nil
 }
 
+func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAnalysis, error) {
+	var selected *models.PatternAnalysis
+	for i := range detail.PatternAnalyses {
+		pattern := &detail.PatternAnalyses[i]
+		if pattern.ID == ref.PatternID {
+			selected = pattern
+			break
+		}
+	}
+	if selected == nil {
+		return resolvedAnalysis{}, ErrPatternNotFound
+	}
+	if models.PatternHash(*selected) != ref.PatternHash {
+		return resolvedAnalysis{}, ErrPatternChanged
+	}
+	var selectedGroup *models.PatternCausalGroup
+	for i := range selected.CausalGroups {
+		group := &selected.CausalGroups[i]
+		if group.ID == ref.CausalGroupID {
+			selectedGroup = group
+			break
+		}
+	}
+	if selectedGroup == nil {
+		return resolvedAnalysis{}, ErrCauseNotFound
+	}
+	if models.PatternCausalGroupHash(*selectedGroup) != ref.CausalGroupHash {
+		return resolvedAnalysis{}, ErrCauseChanged
+	}
+	if len(selectedGroup.Builds) == 0 || len(selectedGroup.Builds) > maxPatternChatBuildsPerGroup {
+		return resolvedAnalysis{}, fmt.Errorf("%w: causal group has %d builds, maximum %d", ErrInvalidRequest, len(selectedGroup.Builds), maxPatternChatBuildsPerGroup)
+	}
+
+	selectedRuns, availableCount, eligibleCount := selectCauseEvidenceRuns(*selectedGroup, detail.Runs)
+	if availableCount != eligibleCount {
+		return resolvedAnalysis{}, ErrAnalysisNotFound
+	}
+	builds := make([]ArtifactBuild, 0, len(selectedRuns))
+	for _, run := range selectedRuns {
+		build, err := artifactBuildFor(detail, run)
+		if err != nil {
+			return resolvedAnalysis{}, err
+		}
+		builds = append(builds, build)
+	}
+	if len(builds) == 0 {
+		return resolvedAnalysis{}, ErrAnalysisNotFound
+	}
+
+	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
+	var group models.PatternCausalGroup
+	for i := range pattern.CausalGroups {
+		if pattern.CausalGroups[i].ID == ref.CausalGroupID {
+			group = pattern.CausalGroups[i]
+			break
+		}
+	}
+	ref.PatternHash = models.PatternHash(pattern)
+	ref.CausalGroupHash = models.PatternCausalGroupHash(group)
+	suggestedFix := ""
+	if group.Remediation != nil {
+		suggestedFix = group.Remediation.SuggestedFix
+	}
+	relevantFiles := []string(nil)
+	if group.CauseLocation != nil {
+		relevantFiles = slices.Clone(group.CauseLocation.Files)
+	}
+	causePattern := pattern
+	causePattern.BuildsAnalyzed = len(group.Builds)
+	causePattern.Confidence = group.Confidence
+	causePattern.CausalGroups = []models.PatternCausalGroup{group}
+	causePattern.UnclassifiedBuilds = nil
+	causePattern.SharedRootCause = group.RootCause
+	causePattern.SharedBuilds = slices.Clone(group.Builds)
+	causePattern.SuggestedFix = suggestedFix
+	causePattern.RelevantFiles = slices.Clone(relevantFiles)
+	causePattern.RemediationTargets = nil
+	causePattern.Lifecycle = nil
+	causePattern.Summary = group.RootCause
+	testCase := models.TestCase{
+		Name: pattern.Subject,
+		AIAnalysis: &models.AIAnalysis{
+			GeneratedAt: pattern.GeneratedAt, RootCause: group.RootCause,
+			Severity: severityFromConfidence(group.Confidence), SuggestedFix: suggestedFix,
+			RelevantFiles: slices.Clone(relevantFiles),
+		},
+	}
+	return resolvedAnalysis{
+		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
+		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
+		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &causePattern,
+		evidenceBuilds: cloneArtifactBuilds(builds),
+	}, nil
+}
+
+func selectCauseEvidenceRuns(group models.PatternCausalGroup, runs []models.BuildResult) ([]models.BuildResult, int, int) {
+	eligible := make(map[string]struct{}, len(group.Builds))
+	for _, buildID := range group.Builds {
+		if buildID = strings.TrimSpace(buildID); buildID != "" {
+			eligible[buildID] = struct{}{}
+		}
+	}
+	matchingRuns := make([]models.BuildResult, 0, len(eligible))
+	seenRuns := make(map[string]struct{}, len(eligible))
+	for _, run := range runs {
+		if _, ok := eligible[run.BuildID]; !ok {
+			continue
+		}
+		if _, duplicate := seenRuns[run.BuildID]; duplicate {
+			continue
+		}
+		seenRuns[run.BuildID] = struct{}{}
+		matchingRuns = append(matchingRuns, run)
+	}
+	sortPatternEvidenceRuns(matchingRuns)
+	return matchingRuns, len(matchingRuns), len(eligible)
+}
+
+func severityFromConfidence(confidence string) string {
+	switch strings.ToLower(strings.TrimSpace(confidence)) {
+	case "high":
+		return "High"
+	case "medium":
+		return "Medium"
+	case "low":
+		return "Low"
+	default:
+		return "Unknown"
+	}
+}
+
 func validatePatternChatBounds(pattern models.PatternAnalysis) error {
 	if len(pattern.CausalGroups) > maxPatternChatCausalGroups {
 		return fmt.Errorf("%w: pattern has %d causal groups, maximum %d", ErrInvalidRequest, len(pattern.CausalGroups), maxPatternChatCausalGroups)
@@ -988,9 +1123,6 @@ func validatePatternChatBounds(pattern models.PatternAnalysis) error {
 	}
 	if len(pattern.UnclassifiedBuilds) > maxPatternChatUnclassifiedBuilds {
 		return fmt.Errorf("%w: pattern has %d unclassified builds, maximum %d", ErrInvalidRequest, len(pattern.UnclassifiedBuilds), maxPatternChatUnclassifiedBuilds)
-	}
-	if len(pattern.RemediationInvestigations) > maxPatternChatRemediationSummaries {
-		return fmt.Errorf("%w: pattern has %d remediation summaries, maximum %d", ErrInvalidRequest, len(pattern.RemediationInvestigations), maxPatternChatRemediationSummaries)
 	}
 	return nil
 }
@@ -1128,10 +1260,13 @@ func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAna
 		for groupIndex := range out[i].CausalGroups {
 			out[i].CausalGroups[groupIndex].Builds = slices.Clone(patterns[i].CausalGroups[groupIndex].Builds)
 			out[i].CausalGroups[groupIndex].CauseLocation = patterns[i].CausalGroups[groupIndex].CauseLocation.Clone()
+			if patterns[i].CausalGroups[groupIndex].Remediation != nil {
+				remediation := *patterns[i].CausalGroups[groupIndex].Remediation
+				out[i].CausalGroups[groupIndex].Remediation = &remediation
+			}
 		}
 		out[i].UnclassifiedBuilds = slices.Clone(patterns[i].UnclassifiedBuilds)
 		out[i].RemediationTargets = slices.Clone(patterns[i].RemediationTargets)
-		out[i].RemediationInvestigations = slices.Clone(patterns[i].RemediationInvestigations)
 		out[i].RelevantFiles = slices.Clone(patterns[i].RelevantFiles)
 		out[i].FileLinks = maps.Clone(patterns[i].FileLinks)
 		if patterns[i].Lifecycle != nil {
@@ -1198,8 +1333,12 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 	ref.AnalysisGeneratedAt = strings.TrimSpace(ref.AnalysisGeneratedAt)
 	ref.PatternID = strings.TrimSpace(ref.PatternID)
 	ref.PatternHash = strings.TrimSpace(ref.PatternHash)
+	ref.CausalGroupID = strings.TrimSpace(ref.CausalGroupID)
+	ref.CausalGroupHash = strings.TrimSpace(ref.CausalGroupHash)
 	if ref.Scope == "" {
-		if ref.PatternID != "" || ref.PatternHash != "" {
+		if ref.CausalGroupID != "" || ref.CausalGroupHash != "" {
+			ref.Scope = ScopeCause
+		} else if ref.PatternID != "" || ref.PatternHash != "" {
 			ref.Scope = ScopePattern
 		} else {
 			ref.Scope = ScopeTest
@@ -1210,7 +1349,7 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 	}
 	switch ref.Scope {
 	case ScopeTest:
-		if ref.BuildID == "" || ref.TestName == "" || ref.PatternID != "" || ref.PatternHash != "" {
+		if ref.BuildID == "" || ref.TestName == "" || ref.PatternID != "" || ref.PatternHash != "" || ref.CausalGroupID != "" || ref.CausalGroupHash != "" {
 			return AnalysisRef{}, fmt.Errorf("%w: test scope requires build_id and test_name only", ErrInvalidRequest)
 		}
 		if ref.Source != "" && ref.Source != models.TestCaseSourceBuild {
@@ -1220,8 +1359,12 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 			return AnalysisRef{}, fmt.Errorf("%w: build source must not include junit_file", ErrInvalidRequest)
 		}
 	case ScopePattern:
-		if ref.PatternID == "" || ref.PatternHash == "" || ref.BuildID != "" || ref.TestName != "" || ref.Source != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
+		if ref.PatternID == "" || ref.PatternHash == "" || ref.CausalGroupID != "" || ref.CausalGroupHash != "" || ref.BuildID != "" || ref.TestName != "" || ref.Source != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
 			return AnalysisRef{}, fmt.Errorf("%w: pattern scope requires pattern_id and pattern_hash only", ErrInvalidRequest)
+		}
+	case ScopeCause:
+		if ref.PatternID == "" || ref.PatternHash == "" || ref.CausalGroupID == "" || ref.CausalGroupHash == "" || ref.BuildID != "" || ref.TestName != "" || ref.Source != "" || ref.SuiteName != "" || ref.ClassName != "" || ref.JUnitFile != "" || ref.AnalysisGeneratedAt != "" {
+			return AnalysisRef{}, fmt.Errorf("%w: cause scope requires pattern_id, pattern_hash, causal_group_id, and causal_group_hash only", ErrInvalidRequest)
 		}
 	default:
 		return AnalysisRef{}, fmt.Errorf("%w: unsupported analysis scope %q", ErrInvalidRequest, ref.Scope)
@@ -1229,7 +1372,8 @@ func normalizeAnalysisRef(ref AnalysisRef) (AnalysisRef, error) {
 	if len(ref.JobID) > maxJobIDBytes || len(ref.BuildID) > maxBuildIDBytes || len(ref.TestName) > maxTestNameBytes ||
 		len(ref.SuiteName) > maxSuiteNameBytes || len(ref.ClassName) > maxClassNameBytes ||
 		len(ref.JUnitFile) > maxJUnitFileBytes || len(ref.AnalysisGeneratedAt) > maxTimestampBytes ||
-		len(ref.PatternID) > maxPatternIDBytes || len(ref.PatternHash) > maxPatternHashBytes {
+		len(ref.PatternID) > maxPatternIDBytes || len(ref.PatternHash) > maxPatternHashBytes ||
+		len(ref.CausalGroupID) > maxCausalGroupIDBytes || len(ref.CausalGroupHash) > maxCausalGroupHashBytes {
 		return AnalysisRef{}, fmt.Errorf("%w: analysis reference field exceeds its size limit", ErrInvalidRequest)
 	}
 	return ref, nil
@@ -1266,7 +1410,7 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns
 	view.MaxTurns = s.opts.MaxTurns
-	if view.Analysis.Scope != ScopePattern {
+	if view.Analysis.Scope == ScopeTest {
 		if repo, ok := persistedBuildSourceRepository(current.Resolved, s.sourceRepo); ok {
 			view.SourceRepository = &repo
 		}

@@ -452,7 +452,7 @@ server:
 The chart renders `PULL_REQUEST_ESCALATION_ENABLED` from that value and refuses
 to install when `ai.enabled` is not set. Setting the raw variable through
 `server.extraEnv` is rejected. Escalation also needs the `server.actions.mode`
-authentication settings, exactly like chat and remediation investigation, and
+authentication settings, exactly like chat, and
 it neither enables writes nor requires `BOT_TOKEN`. Set
 `ai.githubReadTokenSecretName` so changed files are read authenticated rather
 than at the anonymous rate limit. Outside the chart the server reads the

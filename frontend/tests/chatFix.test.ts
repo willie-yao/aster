@@ -37,7 +37,7 @@ test("permanent source ineligibility is reported before the per-response citatio
   assert.match(chat, /exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence/);
   // Ineligibility is reported without gating a mode, and the one question set
   // leads with an artifact-grounded prompt so answers can become fix-eligible.
-  assert.match(chat, /questions = patternScope \? patternSuggestedQuestions : suggestedQuestions/);
+  assert.match(chat, /questions = causeScope \? causeSuggestedQuestions : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
   assert.match(chat, /"What does the build log show at the failure\?"/);
 });
 

@@ -487,9 +487,6 @@ type doctorKubernetesValues struct {
 		Chat     struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"chat"`
-		RemediationInvestigation struct {
-			Enabled bool `yaml:"enabled"`
-		} `yaml:"remediationInvestigation"`
 		PullRequestEscalation struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"pullRequestEscalation"`
@@ -740,8 +737,7 @@ func checkKubernetesPullRequestEscalation(add func(string, DoctorStatus, string,
 }
 
 func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {
-	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled &&
-		!values.Server.RemediationInvestigation.Enabled && !values.Server.PullRequestEscalation.Enabled {
+	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled && !values.Server.PullRequestEscalation.Enabled {
 		add("Kubernetes origin security", DoctorPass, "authenticated server features are disabled", "")
 		return
 	}

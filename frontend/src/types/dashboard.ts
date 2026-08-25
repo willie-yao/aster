@@ -251,9 +251,8 @@ export interface PatternCausalGroup {
   // for its own recurrence memory; the UI does not render it.
   signature?: string;
   cause_location?: AnalysisCauseLocation;
-  // The action this cause's own member analyses reported. A suggestion, not a
-  // verified target: acting on a cause still goes through the remediation
-  // investigation, which verifies deterministically.
+  // The action this cause's own member analyses reported. It is a suggestion;
+  // maintainers can question the cause or open a representative failure.
   remediation?: PatternCausalGroupRemediation;
 }
 
@@ -264,45 +263,6 @@ export interface PatternCausalGroupRemediation {
 
 export type PatternRecurrence =
   "shared_cause" | "mixed_causes" | "unrelated" | "insufficient_evidence";
-
-export type PatternRemediationInvestigationState =
-  | "not_investigated"
-  | "queued"
-  | "investigating"
-  | "verifying"
-  | "actionable"
-  | "already_fixed"
-  | "external_dependency"
-  | "environment_or_infrastructure"
-  | "mitigation_only"
-  | "insufficient_evidence"
-  | "failed"
-  | "stale"
-  | "evidence_expired";
-
-export interface PatternRemediationTargetSummary {
-  kind: string;
-  repository: string;
-  revision: string;
-  path: string;
-  symbol?: string;
-  required_call?: string;
-  job?: string;
-  container?: string;
-  name?: string;
-  value?: string;
-}
-
-export interface PatternRemediationInvestigationSummary {
-  causal_group_id: string;
-  causal_group_hash: string;
-  state: PatternRemediationInvestigationState;
-  reason?: string;
-  reason_code?: string;
-  rejected_reasons?: string[];
-  target?: PatternRemediationTargetSummary;
-  completed_at?: string;
-}
 
 export interface PatternAnalysis {
   id?: string;
@@ -324,7 +284,6 @@ export interface PatternAnalysis {
   file_links?: Record<string, string>;
   source_ref?: string;
   remediation_verification?: PatternRemediationVerification;
-  remediation_investigations?: PatternRemediationInvestigationSummary[];
   lifecycle?: PatternLifecycle;
   summary: string;
 }

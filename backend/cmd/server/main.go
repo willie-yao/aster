@@ -34,21 +34,16 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
-	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/auth"
-	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	"github.com/willie-yao/aster/backend/internal/corrections"
 	"github.com/willie-yao/aster/backend/internal/credentialenv"
-	"github.com/willie-yao/aster/backend/internal/fixruntime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
-	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/server"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
@@ -152,13 +147,6 @@ func main() {
 			log.Printf("server: waiting for shared failure escalations: %v", err)
 		}
 	}
-	if waiter, ok := opts.CausalRemediationInvestigation.(interface{ Wait(context.Context) error }); ok {
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer waitCancel()
-		if err := waiter.Wait(waitCtx); err != nil {
-			log.Printf("server: waiting for causal remediation investigations: %v", err)
-		}
-	}
 	if waiter, ok := opts.Actions.(interface{ Wait(context.Context) error }); ok {
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), 35*time.Second)
 		defer waitCancel()
@@ -230,16 +218,6 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			return err
 		}
 	}
-	if features.CausalRemediationInvestigation {
-		if err := enableCausalRemediationInvestigation(ctx, opts, cfg, projectDir, dataDir, usageRecorder); err != nil {
-			return err
-		}
-	}
-	if features.CausalRemediationFixPreview {
-		if err := enableCausalRemediationFixPreview(opts, cfg); err != nil {
-			return err
-		}
-	}
 	if features.PullRequestEscalation {
 		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir); err != nil {
 			return err
@@ -297,12 +275,10 @@ func fixActionsEnabled(fixConfig project.FixPRs, authMode string) (bool, error) 
 }
 
 type interactiveFeatures struct {
-	Actions                        bool
-	AnalysisChat                   bool
-	AnalysisCorrections            bool
-	CausalRemediationInvestigation bool
-	CausalRemediationFixPreview    bool
-	PullRequestEscalation          bool
+	Actions               bool
+	AnalysisChat          bool
+	AnalysisCorrections   bool
+	PullRequestEscalation bool
 }
 
 func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
@@ -317,28 +293,16 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	if correctionsEnabled && !chat {
 		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_CORRECTIONS_ENABLED requires ANALYSIS_CHAT_ENABLED")
 	}
-	causalRemediation, err := optionalBoolEnv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", false)
-	if err != nil {
-		return interactiveFeatures{}, err
-	}
 	pullRequestEscalation, err := optionalBoolEnv("PULL_REQUEST_ESCALATION_ENABLED", false)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
-	causalPreview, err := optionalBoolEnv("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED", false)
-	if err != nil {
-		return interactiveFeatures{}, err
-	}
-	if causalPreview && !causalRemediation {
-		return interactiveFeatures{}, fmt.Errorf("CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED requires CAUSAL_REMEDIATION_INVESTIGATION_ENABLED")
-	}
-	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !causalRemediation && !pullRequestEscalation)
+	actions, err := optionalBoolEnv("ACTIONS_ENABLED", !chat && !pullRequestEscalation)
 	if err != nil {
 		return interactiveFeatures{}, err
 	}
 	return interactiveFeatures{
 		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
-		CausalRemediationInvestigation: causalRemediation, CausalRemediationFixPreview: causalPreview,
 		PullRequestEscalation: pullRequestEscalation,
 	}, nil
 }
@@ -496,139 +460,6 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	opts.AnalysisChatTimeout = timeout
 	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
 	return service, nil
-}
-
-func enableCausalRemediationInvestigation(
-	ctx context.Context,
-	opts *server.Options,
-	cfg *project.Config,
-	projectDir, dataDir string,
-	usageRecorder *aiusage.Recorder,
-) error {
-	timeout, err := causalRemediationTimeoutFromEnv()
-	if err != nil {
-		return err
-	}
-	token := os.Getenv("AI_TOKEN")
-	if token == "" {
-		return fmt.Errorf("causal remediation investigation requires AI_TOKEN")
-	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
-	if err := project.ValidateAIProvider(provider); err != nil {
-		return err
-	}
-	if strings.TrimSpace(provider.Endpoint) == "" || strings.TrimSpace(provider.Model) == "" {
-		return fmt.Errorf("causal remediation investigation requires an AI endpoint and model")
-	}
-	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
-		API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: string(provider.ReasoningEffort),
-		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
-	})
-	if err != nil {
-		return fmt.Errorf("loading causal remediation project: %w", err)
-	}
-	client := ai.NewClientWithOptions(ai.Options{
-		Token: token, API: provider.API, Endpoint: provider.Endpoint, Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ExtraHeaders: provider.Headers,
-	})
-	cache, err := remediationinvestigation.NewCache(filepath.Join(dataDir, remediationinvestigation.CacheRelativePath), remediationinvestigation.CacheOptions{})
-	if err != nil {
-		return fmt.Errorf("configuring remediation investigation cache: %w", err)
-	}
-	backend, err := storage.New(cfg.StorageConfig(), &http.Client{Timeout: 30 * time.Second})
-	if err != nil {
-		return fmt.Errorf("configuring remediation investigation storage: %w", err)
-	}
-	sourceToken := os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN")
-	resolver, err := remediationinvestigation.NewPublishedResolver(remediationinvestigation.PublishedResolverOptions{
-		DataDir: dataDir, Config: cfg, ConsumerPrompt: loaded.ConsumerPrompt,
-		SkillHash: loaded.SkillSet.Hash(), ProviderFingerprint: client.ModelFingerprint(),
-		Artifacts: artifacts.NewBackendFactory(backend, cfg.Storage.Bucket),
-		Source:    remediationinvestigation.NewGitHubSourceAccess(sourceToken),
-	})
-	if err != nil {
-		return fmt.Errorf("configuring remediation investigation resolver: %w", err)
-	}
-	maxOperations, err := positiveIntEnv("CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS", 256)
-	if err != nil {
-		return err
-	}
-	service, err := remediationinvestigation.NewOperationService(ctx, client, cache, resolver, remediationinvestigation.OperationOptions{
-		Timeout: timeout, MaxOperations: maxOperations, UsageRecorder: usageRecorder,
-		Ledger: recurrenceMemory{store: recurrenceledger.NewStore(dataDir)},
-	})
-	if err != nil {
-		return fmt.Errorf("configuring remediation investigation operation: %w", err)
-	}
-	opts.CausalRemediationInvestigation = service
-	opts.CausalRemediationRequestTimeout = 45 * time.Second
-	log.Printf("🔎 causal remediation investigation enabled (timeout=%s max_operations=%d)", timeout, maxOperations)
-	return nil
-}
-
-// recurrenceMemory adapts the recurrence ledger to the investigation service's
-// seam. The adapter lives here so the ledger stays a small state package and does
-// not depend on the analysis stack.
-type recurrenceMemory struct{ store *recurrenceledger.Store }
-
-func (m recurrenceMemory) ClaimReuse(signature string) (remediationinvestigation.RecurrenceVerdict, bool, error) {
-	verdict, ok, err := m.store.ClaimReuse(signature)
-	if err != nil || !ok {
-		return remediationinvestigation.RecurrenceVerdict{}, false, err
-	}
-	return remediationinvestigation.RecurrenceVerdict{
-		State: verdict.State, Reason: verdict.Reason, RecordedAt: verdict.RecordedAt,
-	}, true, nil
-}
-
-func (m recurrenceMemory) RecordVerdict(signature string, verdict remediationinvestigation.RecurrenceVerdict) error {
-	return m.store.RecordVerdict(signature, recurrenceledger.Verdict{
-		State: verdict.State, Reason: verdict.Reason, RecordedAt: verdict.RecordedAt,
-	})
-}
-
-func enableCausalRemediationFixPreview(opts *server.Options, cfg *project.Config) error {
-	operation, ok := opts.CausalRemediationInvestigation.(*remediationinvestigation.OperationService)
-	if !ok || opts.Auth == nil {
-		return fmt.Errorf("causal remediation fix preview requires authenticated remediation investigation")
-	}
-	fixConfig := cfg.EffectiveFixPRs()
-	if fixConfig.AgentRuntime == nil || fixConfig.AgentRuntime.Type != "agent-sandbox" {
-		return fmt.Errorf("causal remediation fix preview requires the Agent Sandbox fix runtime")
-	}
-	agentRuntime, err := fixruntime.New(fixConfig.AgentRuntime)
-	if err != nil {
-		return err
-	}
-	identity := ""
-	if identified, ok := agentRuntime.(interface{ RuntimeIdentity() string }); ok {
-		identity = identified.RuntimeIdentity()
-	}
-	preview, err := causalfixpreview.New(operation, causalfixpreview.Options{
-		Runtime: agentRuntime, ModelProvider: fixConfig.AgentRuntime.ModelProvider.RuntimeConfig(),
-		Timeout: fixConfig.AgentRuntime.ParsedTimeout(), MaxSteps: fixConfig.AgentRuntime.MaxTurns, OutputLimitBytes: fixConfig.AgentRuntime.OutputLimitBytes, RuntimeIdentity: identity,
-	})
-	if err != nil {
-		return fmt.Errorf("configuring causal remediation fix preview: %w", err)
-	}
-	opts.CausalFixPreview = preview
-	log.Printf("🧪 causal remediation fix preview enabled (preview only, no GitHub write)")
-	return nil
-}
-
-func causalRemediationTimeoutFromEnv() (time.Duration, error) {
-	const maxTimeout = 30 * time.Minute
-	timeout := 10 * time.Minute
-	if value := strings.TrimSpace(os.Getenv("CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT")); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil {
-			return 0, fmt.Errorf("invalid CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT %q: %w", value, err)
-		}
-		timeout = parsed
-	}
-	if timeout <= 0 || timeout > maxTimeout {
-		return 0, fmt.Errorf("CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT must be greater than zero and at most %s", maxTimeout)
-	}
-	return timeout, nil
 }
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {

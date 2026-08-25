@@ -105,8 +105,6 @@ backend/                         Go 1.25
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output
     sourceinvestigation/         Read-only source verification helpers
-    remediationinvestigation/    Frozen causal-group remediation investigation + private cache
-    causalfixpreview/            Preview-only causal-group patch generation, reconstruction, and validation
     aitest/                      Record/replay chat-completions server for tests
 
     -- write actions (issues, fix PRs, resolution) --
@@ -419,7 +417,6 @@ live deploy.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
 - `docs/architecture/in-process-analyzer.md` - authoritative analyzer architecture and contributor map.
 - `docs/agentic.md` - authoritative analysis loop, quality gates, cache, and operations.
-- `docs/maintainer/remediation-investigation.md` - private causal-group investigation contracts, cache, and benchmark.
 - `docs/skills.md` - consumer-side recipe registry format + hashing.
 - `docs/writing-prompts.md` - how `prompts/system.md` slots into the
   composed prompt and what makes a good project addendum.

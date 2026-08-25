@@ -124,6 +124,7 @@ test("job detail separates current observation from rolling reliability", () => 
 test("job detail uses the approved shared detail composition", () => {
   const page = source("src/pages/JobDetailPage.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
+  const nextStep = source("src/components/CausalGroupNextStep.tsx");
   const briefing = source("src/components/AnalysisBriefing.tsx");
   const buildFailure = source("src/components/BuildFailurePanel.tsx");
   const identity = source("src/components/TechnicalIdentity.tsx");
@@ -161,10 +162,13 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /label="Source grounding"/);
   assert.match(pattern, /label="Affected builds"/);
   assert.match(pattern, /label="Related files"/);
-  assert.match(pattern, /<CausalGroupRemediation/);
-  assert.match(pattern, /investigation=\{group\.content_hash \? remediationByHash\.get\(group\.content_hash\) : undefined\}/);
-  assert.match(pattern, /patternID=\{pattern\.id\}/);
-  assert.match(pattern, /patternHash=\{pattern\.content_hash\}/);
+  assert.match(pattern, /<CausalGroupNextStep/);
+  assert.match(nextStep, /<AnalysisChat/);
+  assert.match(pattern, /scope: "cause" as const/);
+  assert.match(pattern, /pattern_id: pattern\.id/);
+  assert.match(pattern, /pattern_hash: pattern\.content_hash/);
+  assert.match(pattern, /causal_group_id: group\.id/);
+  assert.match(pattern, /causal_group_hash: group\.content_hash/);
   assert.match(pattern, /Remediation present, verifying the fix/);
   assert.match(pattern, /Watching recovery/);
   assert.match(pattern, /Observed passing runs:/);
