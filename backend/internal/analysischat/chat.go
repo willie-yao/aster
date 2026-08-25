@@ -43,6 +43,8 @@ var (
 	ErrCauseNotFound = errors.New("causal group not found")
 	// ErrCauseChanged means the selected causal group was replaced.
 	ErrCauseChanged = errors.New("causal group changed")
+	// ErrPreparedFindingNotFound means no engine-prepared cause answer is available.
+	ErrPreparedFindingNotFound = errors.New("prepared cause finding not found")
 	// ErrSessionNotFound means the session is absent, expired, or owned by another user.
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
@@ -207,6 +209,7 @@ type Message struct {
 	Unverified        bool       `json:"unverified,omitempty"`
 	UnverifiedReason  string     `json:"unverified_reason,omitempty"`
 	EvidenceWarnings  []string   `json:"evidence_warnings,omitempty"`
+	Prepared          bool       `json:"prepared,omitempty"`
 	ToolCalls         int        `json:"tool_calls,omitempty"`
 	GCSBytes          int        `json:"gcs_bytes,omitempty"`
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
@@ -400,18 +403,19 @@ type resolvedAnalysis struct {
 
 // Service resolves published analyses and owns durable chat sessions.
 type Service struct {
-	dataDir          string
-	runner           Runner
-	testFixPreflight func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error)
-	sourceRepo       sourceinvestigation.Repository
-	opts             Options
-	store            *sessionStore
-	lifecycle        context.Context
-	activeMu         sync.Mutex
-	active           map[string]context.CancelFunc
-	activeWG         sync.WaitGroup
-	notifyMu         sync.Mutex
-	notify           map[string]map[chan struct{}]struct{}
+	dataDir            string
+	runner             Runner
+	testFixPreflight   func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error)
+	sourceRepo         sourceinvestigation.Repository
+	opts               Options
+	store              *sessionStore
+	preparedGeneration string
+	lifecycle          context.Context
+	activeMu           sync.Mutex
+	active             map[string]context.CancelFunc
+	activeWG           sync.WaitGroup
+	notifyMu           sync.Mutex
+	notify             map[string]map[chan struct{}]struct{}
 }
 
 // NewService creates a durable analysis chat service.
@@ -472,8 +476,46 @@ func (s *Service) cleanupPersisted() error {
 	})
 }
 
+// ConfigurePreparedCauseFindings enables engine-prepared first answers.
+func (s *Service) ConfigurePreparedCauseFindings(generation string) error {
+	generation = strings.TrimSpace(generation)
+	if generation == "" {
+		return fmt.Errorf("prepared cause finding generation is required")
+	}
+	s.preparedGeneration = generation
+	return nil
+}
+
+// CreatePrepared starts a cause session only when a prepared finding is ready.
+func (s *Service) CreatePrepared(ref AnalysisRef, owner, requestID string) (SessionView, error) {
+	return s.create(ref, owner, requestID, true)
+}
+
+func (s *Service) preparedFinding(ref AnalysisRef) (PreparedCauseFinding, string, bool) {
+	if ref.Scope != ScopeCause || s.preparedGeneration == "" {
+		return PreparedCauseFinding{}, "", false
+	}
+	key, err := PreparedCauseKey(ref)
+	if err != nil {
+		return PreparedCauseFinding{}, "", false
+	}
+	prepared, err := LoadPreparedCauseFindings(preparedFindingPath(s.dataDir), s.preparedGeneration)
+	if err != nil {
+		return PreparedCauseFinding{}, "", false
+	}
+	finding, ok := prepared.Findings[key]
+	if !ok || finding.Ref != ref || finding.Reply.Unverified || len(finding.Reply.Citations) == 0 {
+		return PreparedCauseFinding{}, "", false
+	}
+	return finding, key, true
+}
+
 // Create resolves an analysis snapshot and starts an owner-bound session.
 func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView, error) {
+	return s.create(ref, owner, requestID, false)
+}
+
+func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly bool) (SessionView, error) {
 	owner = normalizeOwner(owner)
 	if owner == "" {
 		return SessionView{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
@@ -523,6 +565,15 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 	if err != nil {
 		return SessionView{}, err
 	}
+	seedMessages := []Message{}
+	seedRequests := map[string]persistedRequest{}
+	if finding, key, ok := s.preparedFinding(ref); ok {
+		message, request := preparedMessage(finding, key, now)
+		seedMessages = append(seedMessages, message)
+		seedRequests[message.RequestID] = request
+	} else if preparedOnly {
+		return SessionView{}, ErrPreparedFindingNotFound
+	}
 	id, err := newSessionID()
 	if err != nil {
 		return SessionView{}, fmt.Errorf("creating analysis chat session: %w", err)
@@ -535,14 +586,14 @@ func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView,
 		CreateRequestID:      requestID,
 		CreateRequestHash:    requestHash,
 		CreateRequestVersion: createVersion,
-		Requests:             map[string]persistedRequest{},
+		Requests:             seedRequests,
 		View: SessionView{
 			ID:        id,
 			Analysis:  resolved.ref,
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
 			ExpiresAt: expires.Format(time.RFC3339),
-			Messages:  []Message{},
+			Messages:  seedMessages,
 		},
 	}
 

@@ -61,6 +61,7 @@ func parseOptions(args []string) (fetcher.Options, time.Duration, time.Duration,
 	fs.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "per-pass fetch timeout")
 	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics")
 	fs.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
+	fs.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	fs.DurationVar(&watchInterval, "watch-interval", 5*time.Minute, "how often to refresh data reusing the cached job list")
 	fs.DurationVar(&reconcileInterval, "reconcile-interval", time.Hour, "how often to rediscover jobs and run a full pass")
 	fetcher.BindAnalysisRuntimeFlags(fs, &opts)

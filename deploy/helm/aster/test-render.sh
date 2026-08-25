@@ -149,6 +149,27 @@ if grep -Fq 'name: BOT_TOKEN' "$tmp/chat.yaml" || grep -Fq 'name: ACTIONS_ENABLE
   exit 1
 fi
 
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=cron \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --show-only templates/fetcher-cronjob.yaml > "$tmp/chat-fetcher.yaml"
+grep -Fq -- '- -prepare-cause-findings' "$tmp/chat-fetcher.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set mode=watch \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.chat.enabled=true \
+  --set server.actions.mode=proxy \
+  --show-only templates/worker-deployment.yaml > "$tmp/chat-worker.yaml"
+grep -Fq -- '- -prepare-cause-findings' "$tmp/chat-worker.yaml"
+
 # Escalation alone must render every prerequisite the feature needs: the project
 # mount, an auth mode, the model credential, and an authenticated GitHub read.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \

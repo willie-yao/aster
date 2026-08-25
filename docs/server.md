@@ -143,9 +143,19 @@ that only announces the model's next step is
 not an answer: the engine asks the model to take that step or conclude, and the
 turn fails if it does neither.
 
+After each initial or reconciliation AI publication, the fetcher prepares up to three active,
+Fix-eligible causal groups that do not already have a current finding. These
+best-effort findings use the same cause-scoped artifact tools and citation
+validation as interactive chat. They are cached by cause, model, prompt, and AI
+cache generation. A prepared finding seeds a new cause conversation without
+using one of the maintainer's admitted turns. Preparation failures never fail or
+roll back dashboard publication, and the remaining causes are retried on later
+runs.
+
 A proposed correction or Fix finding is still inert model output. Corrections
-require their own preview and confirmation. Exact-JUnit Fix handoff requires the
-separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
+require their own preview and confirmation. Source compatibility, patch
+generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff
+requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
 Sessions are stored in private owner-bound state, have bounded admitted turns,
 and expire after inactivity. The state contains transcripts and selected failure
@@ -199,7 +209,7 @@ private operational data and does not rewrite the authoritative analysis cache.
 Public `/data/*` serving uses an allowlist and rejects private files and hidden
 directories. Private state includes:
 
-- analysis chat transcripts and locks;
+- analysis chat transcripts, prepared cause findings, and locks;
 - action requests, preview state, and write audit;
 - correction overlays;
 - analysis traces and pattern diagnostics;

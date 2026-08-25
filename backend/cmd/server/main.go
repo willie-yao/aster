@@ -434,8 +434,15 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	if err != nil {
 		return nil, fmt.Errorf("loading analysis chat project: %w", err)
 	}
+	maxOutputTokens := 0
+	if raw := strings.TrimSpace(os.Getenv("AI_MAX_OUTPUT_TOKENS")); raw != "" {
+		maxOutputTokens, err = strconv.Atoi(raw)
+		if err != nil || maxOutputTokens < 0 {
+			return nil, fmt.Errorf("AI_MAX_OUTPUT_TOKENS must be a non-negative integer")
+		}
+	}
 	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
-		Token: token, DataDir: dataDir, Project: projectRuntime,
+		Token: token, DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configuring analysis chat runtime: %w", err)
@@ -455,6 +462,10 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	sourceRepo := cfg.EffectiveAnalysisSourceRepo()
 	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: sourceRepo.Owner, Name: sourceRepo.Name}); err != nil {
 		return nil, fmt.Errorf("configuring analysis chat source repository: %w", err)
+	}
+	preparedGeneration := analysischat.PreparedCauseGeneration(runtime.AnalysisChatContractFingerprint())
+	if err := service.ConfigurePreparedCauseFindings(preparedGeneration); err != nil {
+		return nil, fmt.Errorf("configuring prepared cause findings: %w", err)
 	}
 	opts.AnalysisChat = service
 	opts.AnalysisChatTimeout = timeout

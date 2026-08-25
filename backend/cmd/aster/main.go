@@ -64,6 +64,7 @@ func main() {
 	flag.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "overall fetch timeout")
 	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to project.yaml discovery policy")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
+	flag.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issue recovery, or pull request comments")
 	fetcher.BindAnalysisRuntimeFlags(flag.CommandLine, &opts)
 	flag.Parse()

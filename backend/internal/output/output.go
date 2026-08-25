@@ -33,6 +33,7 @@ var NonPublishedFiles = []string{
 	AITraceFilename,
 	AIUsageFetcherFilename,
 	AIUsageServerFilename,
+	"prepared_cause_findings.json",
 	"issue_state.json",
 	"fix_pr_state.json",
 	"fix_previews.json",

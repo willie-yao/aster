@@ -21,6 +21,7 @@ import (
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type AnalysisChatRunner interface {
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
+	CreatePrepared(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Find(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
 	Get(string, string) (analysischat.SessionView, error)
 	Delete(string, string) error
@@ -81,7 +82,18 @@ func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			http.Error(w, "missing idempotency key", http.StatusBadRequest)
 			return
 		}
-		session, err := run.Create(ref, identity.Login, requestID)
+		var session analysischat.SessionView
+		var err error
+		if r.URL.Query().Get("prepared") == "1" {
+			session, err = run.CreatePrepared(ref, identity.Login, requestID)
+		} else {
+			session, err = run.Create(ref, identity.Login, requestID)
+		}
+		if errors.Is(err, analysischat.ErrPreparedFindingNotFound) {
+			auth.SetPrivateResponseHeaders(w.Header())
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if err != nil {
 			writeAnalysisChatError(w, "create", identity.Login, err)
 			return
