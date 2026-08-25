@@ -247,8 +247,10 @@ export interface PatternCausalGroup {
   builds: string[];
   root_cause: string;
   confidence: "high" | "medium" | "low";
-  // Durable identity of this cause across build windows. Written by the engine
-  // for its own recurrence memory; the UI does not render it.
+  // Durable identity of this cause across build windows. It is the key a
+  // per-cause resolution is recorded under, because it survives builds joining
+  // or ageing out of the group. A cause without one cannot be resolved on its
+  // own.
   signature?: string;
   cause_location?: AnalysisCauseLocation;
   // The action this cause's own member analyses reported. It is a suggestion;
@@ -383,8 +385,13 @@ export interface ResolvedEntry {
   note?: string;
   watermark: string;
   subject?: string;
+  // cause is set only on cause-scoped entries and excerpts the root cause, so a
+  // resolved cause stays identifiable once its pattern no longer shows it.
+  cause?: string;
 }
 
 export interface ResolvedState {
+  // resolved is keyed by pattern id, causes by causal-group signature.
   resolved: Record<string, ResolvedEntry>;
+  causes: Record<string, ResolvedEntry>;
 }

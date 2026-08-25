@@ -530,21 +530,27 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 
 	p.startProgressPhase(fetchprogress.PhasePublication)
-	// Auto-reopen resolved patterns that have recurred past their watermark, so
-	// a fixed-then-flaked failure returns to the active view. The server may
-	// also write resolved.json on an admin action; both use atomic writes, and a
-	// rare lost update self-heals on the next pass (same trade-off as the other
-	// *_state.json files).
-	stagedReopened := map[string]resolve.Entry{}
-	if rs := resolve.Load(opts.OutDir); len(rs.Resolved) > 0 {
+	// Auto-reopen resolved patterns and causes that have recurred past their
+	// watermark, so a fixed-then-flaked failure returns to the active view. The
+	// server may also write resolved.json on an admin action; both use atomic
+	// writes, and a rare lost update self-heals on the next pass (same trade-off
+	// as the other *_state.json files).
+	stagedReopened := &resolve.State{Resolved: map[string]resolve.Entry{}, Causes: map[string]resolve.Entry{}}
+	if rs := resolve.Load(opts.OutDir); len(rs.Resolved) > 0 || len(rs.Causes) > 0 {
 		if pruned, changed := rs.Prune(patterns.CurrentRecurring(details)); changed {
 			for id := range rs.Resolved {
 				if _, kept := pruned.Resolved[id]; !kept {
-					stagedReopened[id] = rs.Resolved[id]
+					stagedReopened.Resolved[id] = rs.Resolved[id]
+				}
+			}
+			for signature := range rs.Causes {
+				if _, kept := pruned.Causes[signature]; !kept {
+					stagedReopened.Causes[signature] = rs.Causes[signature]
 				}
 			}
 		}
 	}
+	reopenedCount := len(stagedReopened.Resolved) + len(stagedReopened.Causes)
 
 	log.Printf("Writing output to %s/ (%d jobs)", opts.OutDir, len(dashboard.Jobs))
 	err = patternstate.WithLock(opts.OutDir, func() error {
@@ -554,11 +560,11 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		if err := writeAllOutput(opts.OutDir, cfg, dashboard, details, flakinessReport, searchIndex); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
-		if len(stagedReopened) > 0 {
+		if reopenedCount > 0 {
 			if err := resolve.RemoveMatching(opts.OutDir, stagedReopened); err != nil {
 				log.Printf("Warning: failed to save resolved state after publication: %v", err)
 			} else {
-				log.Printf("↩ re-opened %d resolved pattern(s) after recurrence", len(stagedReopened))
+				log.Printf("↩ re-opened %d resolved failure(s) after recurrence", reopenedCount)
 			}
 		}
 		return nil

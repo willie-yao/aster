@@ -12,9 +12,10 @@ because it writes source code.
 
 Causal-group patterns remain analysis-only. A cause-scoped chat can inspect the
 member builds, but Fix PR generation starts from the representative exact JUnit
-failure linked from that cause. Dismissing a pattern is a maintainer
+failure linked from that cause. Resolving a failure is a maintainer
 acknowledgement rather than a remediation-contract action, so it stays available
-for causal groups.
+for causal groups, and is offered per cause so acknowledging one cause leaves
+the others active.
 
 ## Supported workflow
 

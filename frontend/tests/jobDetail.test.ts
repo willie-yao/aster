@@ -153,8 +153,8 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(pattern, /icon=\{<AutoAwesome/);
   assert.match(pattern, /mobileNotice=\{mobileNotice\}/);
   assert.match(pattern, /Last successful refresh ·/);
-  assert.match(pattern, /label="Dismissed"/);
-  assert.match(pattern, /Dismissed by/);
+  assert.match(pattern, /label="Resolved"/);
+  assert.match(pattern, /Resolved by/);
   assert.match(pattern, /<AnalysisChat[\s\S]*appearance="detail"/);
   assert.match(pattern, /<FailureActions[\s\S]*appearance="detail"/);
   assert.match(pattern, /label="Root cause"/);

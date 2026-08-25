@@ -13,7 +13,7 @@ func TestRemoveMatchingPreservesConcurrentEntries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveMatching(dir, map[string]Entry{"old": {Watermark: "1"}}); err != nil {
+	if err := RemoveMatching(dir, &State{Resolved: map[string]Entry{"old": {Watermark: "1"}}}); err != nil {
 		t.Fatal(err)
 	}
 	state := Load(dir)
@@ -34,7 +34,7 @@ func TestRemoveMatchingPreservesSameIDReplacement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveMatching(dir, map[string]Entry{"pattern": original}); err != nil {
+	if err := RemoveMatching(dir, &State{Resolved: map[string]Entry{"pattern": original}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := Load(dir).Resolved["pattern"]; got.ResolvedBy != "admin" || got.Watermark != "2" {

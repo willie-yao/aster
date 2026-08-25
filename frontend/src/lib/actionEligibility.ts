@@ -1,5 +1,5 @@
 import type { ActionEligibility, ActionReasonCode } from "../types/actions";
-import type { AIAnalysis, PatternAnalysis, PatternLifecycle, PatternRefreshStatus, RemediationTarget } from "../types/dashboard";
+import type { AIAnalysis, PatternAnalysis, PatternCausalGroup, PatternLifecycle, PatternRefreshStatus, RemediationTarget } from "../types/dashboard";
 import { buildActionsReady } from "./buildFailures.js";
 
 const stateCode: Record<ActionEligibility["state"], ActionReasonCode> = {
@@ -96,14 +96,14 @@ export function patternActionRefreshBlocked(refreshStatus?: PatternRefreshStatus
   return patternRefreshBlockingCode(refreshStatus) !== null;
 }
 
-// patternDismissible reports whether a maintainer can dismiss a pattern.
-// Dismissal acknowledges the whole pattern rather than starting a
+// patternResolvable reports whether a maintainer can resolve a whole pattern.
+// Resolution acknowledges every cause at once rather than starting a
 // remediation-contract action, so it deliberately ignores
-// recurrence_classification: causal-group results are dismissible too. The
+// recurrence_classification: causal-group results are resolvable too. The
 // remaining checks mirror the server, which needs readable evidence, a systemic
 // and lifecycle-active pattern, and at least one shared build to use as the
 // recurrence watermark.
-export function patternDismissible(
+export function patternResolvable(
   pattern: PatternAnalysis,
   refreshStatus?: PatternRefreshStatus,
 ): boolean {
@@ -121,10 +121,45 @@ export function patternDismissible(
   );
 }
 
+// causeResolvable reports whether a maintainer can resolve one cause on its own.
+// It mirrors patternResolvable's server checks, then adds the signature
+// requirement: a per-cause resolution is keyed by the causal group's signature,
+// so a group the engine could not sign has no durable identity to record one
+// under and is covered by the pattern-level acknowledgement instead.
+export function causeResolvable(
+  pattern: PatternAnalysis,
+  group: PatternCausalGroup,
+  refreshStatus?: PatternRefreshStatus,
+): boolean {
+  if (patternRefreshBlockingCode(refreshStatus)) {
+    return false;
+  }
+  return Boolean(
+    group.signature?.trim() &&
+    pattern.systemic &&
+    patternLifecycleActive(pattern.lifecycle) &&
+    // resolve.CauseWatermark parses build ids as decimal integers, matching the
+    // stricter read patternResolvable takes for the same reason.
+    group.builds?.some((buildID) => /^\d+$/.test(buildID.trim())),
+  );
+}
+
+// patternResolutionCovered reports whether every cause of a pattern can be
+// resolved individually, which is when the pattern-level control is redundant
+// and stands down in favour of the per-cause ones. A pattern with no causal
+// groups is never covered, so it keeps the pattern-level control.
+export function patternResolutionCovered(
+  pattern: PatternAnalysis,
+  refreshStatus?: PatternRefreshStatus,
+): boolean {
+  const groups = pattern.causal_groups ?? [];
+  return groups.length > 0 && groups.every((group) => causeResolvable(pattern, group, refreshStatus));
+}
+
 // patternDraftable reports whether pattern-level issue and fix-PR drafting
 // applies. Causal-group results publish per-cause remediation instead of a
 // pattern-level remediation contract, so they never qualify. This is
-// independent of patternDismissible: a pattern can be draftable but not
+// independent of patternResolvable: a pattern can be draftable but not
 // dismissible, or the reverse.
 export function patternDraftable(
   pattern: PatternAnalysis,

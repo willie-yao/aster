@@ -22,7 +22,9 @@ import {
   passRateSummary,
   persistOverviewHistoryState,
   readOverviewHistoryState,
-  unlistedDismissals,
+  patternFullyResolved,
+  unlistedCauseResolutions,
+  unlistedPatternResolutions,
   type AttentionGroup,
 } from "../lib/dashboardOverview";
 import { jobPath, testPath, testRunPath } from "../lib/routes";
@@ -39,6 +41,8 @@ import type {
   TestFlakiness,
 } from "../types/dashboard";
 import { FailureActions } from "./FailureActions";
+import { CauseResolution } from "./CauseResolution";
+import type { ResolutionScope } from "../lib/resolution";
 import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
@@ -534,30 +538,36 @@ export function AttentionRow({
   );
 }
 
-// UnlistedDismissalRow renders a dismissal whose pattern has left the active
-// recurring set. The marker is retained deliberately, but the overview stops
-// showing the pattern, so this is the overview's restore path for it. It is the
-// only one for a pattern that aged out entirely.
+// UnlistedResolutionRow renders a resolution whose subject has left the active
+// recurring set: a pattern dismissal whose pattern is gone, or a resolved cause
+// no published pattern still shows. The marker is retained deliberately, but the
+// overview stops showing the subject, so this is the overview's reopen path for
+// it. It is the only one for a subject that aged out entirely.
 //
 // The row does not navigate: resolved.json records no job, and the overview
-// cannot tell whether the pattern is still published on a job page, so it has
+// cannot tell whether the subject is still published on a job page, so it has
 // no destination it can promise. That also keeps it out of AttentionRow, which
 // wraps the whole row in a link and would nest a button inside one.
-export function UnlistedDismissalRow({
-  failureID,
+export function UnlistedResolutionRow({
+  scope,
+  id,
   entry,
   filePrefix,
   onRestored,
 }: {
-  failureID: string;
+  scope: ResolutionScope;
+  id: string;
   entry: ResolvedEntry;
   filePrefix: string;
   onRestored: () => void;
 }) {
-  const subject = entry.subject ? shortJobName(entry.subject, filePrefix) : failureID;
+  const subject = entry.subject ? shortJobName(entry.subject, filePrefix) : id;
   const attribution = entry.resolved_by
-    ? `Dismissed by ${entry.resolved_by}`
-    : "Dismissed";
+    ? `Resolved by ${entry.resolved_by}`
+    : "Resolved";
+  const context = scope === "cause"
+    ? "Its cause is no longer among the active recurring failures."
+    : "Its pattern is no longer among the active recurring failures.";
   return (
     <Box
       sx={{
@@ -604,8 +614,26 @@ export function UnlistedDismissalRow({
           component="span"
           sx={{ display: "block", opacity: 0.72, ...overviewTypography.secondaryBody }}
         >
-          {attribution}. Its pattern is no longer among the active recurring failures.
+          {attribution}. {context}
         </Typography>
+        {entry.cause && (
+          <Typography
+            variant="caption"
+            component="span"
+            color="textSecondary"
+            title={entry.cause}
+            sx={{
+              display: "block",
+              mt: 0.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              ...overviewTypography.description,
+            }}
+          >
+            {entry.cause}
+          </Typography>
+        )}
         {entry.note && (
           <Typography
             variant="caption"
@@ -632,13 +660,23 @@ export function UnlistedDismissalRow({
           [attentionDesktopBreakpoint]: { justifyContent: "flex-end" },
         }}
       >
-        <FailureActions
-          failureID={failureID}
-          draftable={false}
-          dismissible={false}
-          isResolved
-          onResolvedChange={onRestored}
-        />
+        {scope === "cause" ? (
+          <CauseResolution
+            signature={id}
+            resolvedEntry={entry}
+            resolvable={false}
+            appearance="inline"
+            onResolvedChange={onRestored}
+          />
+        ) : (
+          <FailureActions
+            failureID={id}
+            draftable={false}
+            canResolve={false}
+            isResolved
+            onResolvedChange={onRestored}
+          />
+        )}
       </Box>
     </Box>
   );
@@ -655,7 +693,7 @@ export function NeedsAttention({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const { status } = useAuth();
-  const canRestoreDismissals = Boolean(features.actions) && status === "authenticated";
+  const canReopen = Boolean(features.actions) && status === "authenticated";
   const location = useLocation();
   const [additionalOpen, setAdditionalOpen] = useState(
     () => readOverviewHistoryState(typeof window === "undefined" ? undefined : window.history.state).additionalOpen,
@@ -678,7 +716,7 @@ export function NeedsAttention({
           (pattern) =>
             pattern.job_id &&
             patternLifecycleActive(pattern.lifecycle) &&
-            !(pattern.id && resolved.resolved[pattern.id]),
+            !patternFullyResolved(pattern, resolved),
         )
         .slice(0, MAX_OVERVIEW_PATTERNS),
     [report, resolved],
@@ -690,16 +728,22 @@ export function NeedsAttention({
         (pattern) =>
           pattern.job_id &&
           patternLifecycleActive(pattern.lifecycle) &&
-          pattern.id && resolved.resolved[pattern.id],
+          patternFullyResolved(pattern, resolved),
       ),
     [report, resolved],
   );
 
-  // Dismissals whose pattern has left the active recurring set. The overview
-  // stops showing them, so without this it offers no way to restore one.
+  // Dismissals whose pattern has left the active recurring set, and resolved
+  // causes no published pattern still shows. The overview stops showing both, so
+  // without this it offers no way to reopen one.
   const unlisted = useMemo(
-    () => unlistedDismissals(report, resolved, canRestoreDismissals),
-    [canRestoreDismissals, report, resolved],
+    () => unlistedPatternResolutions(report, resolved, canReopen),
+    [canReopen, report, resolved],
+  );
+
+  const unlistedCauses = useMemo(
+    () => unlistedCauseResolutions(report, resolved, canReopen),
+    [canReopen, report, resolved],
   );
 
   const groups = useMemo<AttentionGroup[]>(
@@ -952,40 +996,54 @@ export function NeedsAttention({
         </>
       )}
 
-      {report && (resolvedPatterns.length > 0 || unlisted.length > 0) && (
+      {report && (resolvedPatterns.length > 0 || unlisted.length > 0 || unlistedCauses.length > 0) && (
         <Box component="section">
           <DisclosureButton
             label={disclosureLabel(
               resolvedOpen,
-              resolvedPatterns.length + unlisted.length,
-              "dismissed pattern",
-              "dismissed patterns",
+              resolvedPatterns.length + unlisted.length + unlistedCauses.length,
+              "resolved failure",
+              "resolved failures",
             )}
             open={resolvedOpen}
-            controls="dismissed-patterns"
+            controls="resolved-failures"
             onClick={() => setResolvedOpen((open) => !open)}
           />
-          <Collapse id="dismissed-patterns" in={resolvedOpen} timeout="auto" unmountOnExit>
+          <Collapse id="resolved-failures" in={resolvedOpen} timeout="auto" unmountOnExit>
             {resolvedPatterns.map((pattern) => {
+              // A pattern reaches this list either through a pattern-scope
+              // resolution or by having every cause resolved, so the note is
+              // only there to show in the first case.
               const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
               const subject = shortJobName(pattern.subject, filePrefix);
               return (
                 <AttentionRow
                   key={pattern.id ?? pattern.job_id ?? pattern.subject}
                   to={jobPath(pattern.job_id ?? "")}
-                  destinationLabel={`View dismissed analysis for ${subject}`}
+                  destinationLabel={`View resolved analysis for ${subject}`}
                   subject={subject}
                   summary={pattern.shared_root_cause || pattern.summary}
                   detail={entry?.note}
-                  signal="Dismissed"
+                  signal="Resolved"
                   muted
                 />
               );
             })}
             {unlisted.map(([id, entry]) => (
-              <UnlistedDismissalRow
-                key={id}
-                failureID={id}
+              <UnlistedResolutionRow
+                key={`pattern:${id}`}
+                scope="pattern"
+                id={id}
+                entry={entry}
+                filePrefix={filePrefix}
+                onRestored={refetchResolved}
+              />
+            ))}
+            {unlistedCauses.map(([signature, entry]) => (
+              <UnlistedResolutionRow
+                key={`cause:${signature}`}
+                scope="cause"
+                id={signature}
                 entry={entry}
                 filePrefix={filePrefix}
                 onRestored={refetchResolved}

@@ -26,13 +26,15 @@ import { FailureActions } from "./FailureActions";
 import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useAuth } from "../hooks/useAuth";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
-import { patternActionEligibilityHint, patternActionRefreshBlocked, patternDismissible, patternDraftable, patternLifecycleActive } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternActionRefreshBlocked, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
+import { CauseResolution } from "./CauseResolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -57,6 +59,7 @@ export function PatternBanner({
 }) {
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
+  const { status: authStatus } = useAuth();
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
@@ -135,15 +138,30 @@ export function PatternBanner({
   } satisfies FileToUrlContext;
   const lifecycle = pattern.lifecycle;
   const lifecycleActive = patternLifecycleActive(lifecycle);
-  // Dismissal acknowledges the whole pattern, so it is available even where the
-  // pattern-level remediation contract is not.
-  const dismissible = patternDismissible(pattern, refreshStatus);
+  const causeResolutions = causalGroups.map((group) =>
+    group.signature ? resolved.causes[group.signature] : undefined,
+  );
+  const causeResolvableFlags = causalGroups.map((group) =>
+    causeResolvable(pattern, group, refreshStatus),
+  );
+  // Per-cause resolution replaces the pattern-level control wherever it covers
+  // every cause, so a maintainer is never offered two acknowledgements with
+  // different blast radii for the same pattern.
+  const causeResolutionCovers = patternResolutionCovered(pattern, refreshStatus);
+  const canResolve = patternResolvable(pattern, refreshStatus) && !causeResolutionCovers;
   // Drafting follows the remediation contract alone: the two gates are
   // independent, so one must never suppress the other.
   const draftable = patternDraftable(pattern, refreshStatus);
-  // A dismissed pattern always offers Restore, even where a fresh dismissal
+  // A resolved pattern always offers Reopen, even where a fresh resolution
   // would now be refused: clearing an acknowledgement only un-hides a pattern.
-  const showFailureActions = draftable || dismissible || Boolean(resolvedEntry);
+  // An anonymous viewer keeps the block wherever per-cause controls would
+  // render for a signed-in one, because it carries the sign-in prompt. That
+  // covers causes that are already resolved as well as freshly resolvable ones,
+  // since a resolved cause still offers Reopen after it stops qualifying.
+  const causeControlsPresent = causeResolutionCovers || causeResolutions.some(Boolean);
+  const showFailureActions =
+    draftable || canResolve || Boolean(resolvedEntry) ||
+    (authStatus === "anonymous" && causeControlsPresent);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
     lifecycle,
@@ -244,7 +262,7 @@ export function PatternBanner({
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
           <Chip
             size="small"
-            label="Dismissed"
+            label="Resolved"
             sx={{
               borderRadius: "4px",
               fontWeight: 650,
@@ -257,7 +275,7 @@ export function PatternBanner({
 
       {resolvedEntry && (
         <Typography color="textSecondary" sx={overviewTypography.description}>
-          Dismissed by {resolvedEntry.resolved_by}
+          Resolved by {resolvedEntry.resolved_by}
           {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}. It returns to the active view automatically if it recurs.
         </Typography>
       )}
@@ -301,12 +319,27 @@ export function PatternBanner({
                     boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
                   }}
                 >
-                  <Typography
-                    component="h4"
-                    sx={{ gridArea: "cause", minWidth: 0, ...overviewTypography.subsectionHeading }}
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ gridArea: "cause", minWidth: 0, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}
                   >
-                    {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
-                  </Typography>
+                    <Typography component="h4" sx={{ minWidth: 0, ...overviewTypography.subsectionHeading }}>
+                      {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
+                    </Typography>
+                    {causeResolutions[index] && (
+                      <Chip
+                        size="small"
+                        label="Resolved"
+                        sx={{
+                          borderRadius: "4px",
+                          fontWeight: 650,
+                          bgcolor: "action.selected",
+                          color: "text.secondary",
+                        }}
+                      />
+                    )}
+                  </Stack>
                   <Typography
                     component="div"
                     color="textSecondary"
@@ -397,6 +430,12 @@ export function PatternBanner({
                           }
                         : undefined
                     }
+                  />
+                  <CauseResolution
+                    signature={group.signature}
+                    resolvedEntry={causeResolutions[index]}
+                    resolvable={causeResolvableFlags[index]}
+                    onResolvedChange={refetchResolved}
                   />
                 </Box>
               </Box>
@@ -519,7 +558,7 @@ export function PatternBanner({
       {showFailureActions && pattern.id && (
         <FailureActions
           failureID={pattern.id}
-          dismissible={dismissible}
+          canResolve={canResolve}
           isResolved={Boolean(resolvedEntry)}
           draftable={draftable}
           eligibilityHint={draftable ? actionEligibility : null}

@@ -411,12 +411,12 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /jobPath\(pattern\.job_id/);
   assert.match(attention, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
   assert.match(attention, /"additional recurring pattern"/);
-  assert.match(attention, /"dismissed patterns"/);
+  assert.match(attention, /"resolved failures"/);
   assert.match(attention, /No active test alerts/);
   assert.match(attention, /No published test-level or recurring-pattern alerts need attention/);
   assert.match(attention, /const hasActiveItems = recurring\.length > 0 \|\| groups\.length > 0/);
   assert.match(attention, /const noActiveAlerts = Boolean\(report && !hasActiveItems\)/);
-  assert.match(attention, /report && \(resolvedPatterns\.length > 0 \|\| unlisted\.length > 0\)/);
+  assert.match(attention, /report && \(resolvedPatterns\.length > 0 \|\| unlisted\.length > 0 \|\| unlistedCauses\.length > 0\)/);
   assert.doesNotMatch(attention, /const allClear/);
   assert.doesNotMatch(attention, /New regressions/);
   assert.match(attention, /color: lead \? "error\.main" : "text\.secondary"/);

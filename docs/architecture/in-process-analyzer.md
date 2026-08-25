@@ -278,10 +278,14 @@ data-serving path.
   subjects with independent lifecycle and quality gates. File Issue and Fix PR
   use preview-confirm workflows. Resolve is a direct lifecycle state change
   gated on a current, systemic, lifecycle-active pattern with a usable build
-  watermark rather than on the remediation contract, so a maintainer can dismiss
-  a causal-group pattern. Unresolve only revokes an existing acknowledgement, so
+  watermark rather than on the remediation contract, so a maintainer can resolve
+  a causal-group failure. It has two scopes: a pattern resolution keyed by
+  pattern id, and a cause resolution keyed by the causal group's artifact-derived
+  signature, which acknowledges one cause and leaves its siblings active. A group
+  without a signature has no durable key and is covered by the pattern scope
+  instead. Unresolve only revokes an existing acknowledgement at either scope, so
   it requires nothing beyond an entry in `resolved.json` and never strands a
-  dismissal whose pattern went stale or aged out. Asynchronous action requests
+  resolution whose subject went stale or aged out. Asynchronous action requests
   have their own request, confirmation, cancellation, and result state.
   Causal-group patterns remain categorically ineligible for File Issue and Fix
   PR through `models.PatternAllowsActions`, even after a remediation

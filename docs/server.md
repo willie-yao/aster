@@ -43,7 +43,9 @@ schema.
 | `POST /api/action-requests/{id}/cancel` | Cancel a pending or ready request. |
 | `POST /api/actions/confirm` | Confirm a short-lived synchronous preview token. |
 | `POST /api/failures/{id}/resolve` | Mark an eligible recurring pattern resolved at its current watermark. |
-| `POST /api/failures/{id}/unresolve` | Remove the resolved marker. Requires only an existing marker, so a dismissal never strands. |
+| `POST /api/failures/{id}/unresolve` | Remove the resolved marker. Requires only an existing marker, so a resolution never strands. |
+| `POST /api/causes/{signature}/resolve` | Mark one cause of a recurring pattern resolved at that cause's watermark, leaving its siblings active. |
+| `POST /api/causes/{signature}/unresolve` | Remove a cause's resolved marker. Requires only an existing marker. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed analysis correction. |
 | `POST /api/analysis-corrections/confirm` | Confirm and publish the correction overlay. |
 | `POST /api/analysis-corrections/{id}/revoke` | Revoke the overlay and restore the original analysis. |

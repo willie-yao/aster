@@ -21,7 +21,7 @@ import {
   Build,
   GitHub,
   Replay,
-  VisibilityOffOutlined,
+  TaskAltOutlined,
 } from "@mui/icons-material";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
@@ -54,6 +54,7 @@ import {
   syncStoredActionRequest,
 } from "../lib/actionRequests";
 import { actionEligibilityTitle, eligibilityForState, selectActionEligibility } from "../lib/actionEligibility";
+import { reopenFailure, resolveFailure } from "../lib/resolution";
 
 function requestedAction(value: string | null): Action | null {
   return value === "create-issue" || value === "propose-fix" ? value : null;
@@ -76,7 +77,7 @@ const API_BASE = import.meta.env.BASE_URL;
 export function FailureActions({
   failureID,
   resolvable = true,
-  dismissible = true,
+  canResolve = true,
   isResolved = false,
   draftable = true,
   eligibilityHint = null,
@@ -85,10 +86,10 @@ export function FailureActions({
 }: {
   failureID: string;
   resolvable?: boolean;
-  // dismissible gates starting a NEW dismissal. Restoring stays available
-  // whenever the pattern reads as dismissed, so a pattern cannot be stranded in
-  // the dismissed state once it no longer qualifies for a fresh dismissal.
-  dismissible?: boolean;
+  // canResolve gates starting a NEW resolution. Reopening stays available
+  // whenever the pattern reads as resolved, so a pattern cannot be stranded in
+  // the resolved state once it no longer qualifies for a fresh resolution.
+  canResolve?: boolean;
   // isResolved and onResolvedChange come from the owner, which holds the single
   // copy of resolved state. Reading it here too would let the two views
   // disagree when their independent fetches diverge.
@@ -103,7 +104,7 @@ export function FailureActions({
   const detailAppearance = appearance === "detail";
   // Drafting covers issue and fix-PR generation. draftable is false where the
   // pattern-level remediation contract does not apply (causal-group results),
-  // leaving dismissal as the only action.
+  // leaving resolution as the only action.
   const drafting = draftable && features.action_requests;
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
@@ -619,7 +620,7 @@ export function FailureActions({
     setError(null);
   }
 
-  // A dismissal write outlives the pattern it started on, so its result is
+  // A resolution write outlives the pattern it started on, so its result is
   // applied only while this component still shows that failure. The refresh
   // itself always runs: the write landed regardless of where the user now is.
   async function submitResolve() {
@@ -627,18 +628,7 @@ export function FailureActions({
     setResolveBusy(true);
     setResolveError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}api/failures/${encodeURIComponent(startedFailureID)}/resolve`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ note: note.trim() }),
-        },
-      );
-      if (!res.ok) {
-        throw new Error(await actionErrorMessage(res));
-      }
+      await resolveFailure("pattern", startedFailureID, note);
       onResolvedChange?.();
       if (activeFailureID.current !== startedFailureID) return;
       setResolveOpen(false);
@@ -656,13 +646,7 @@ export function FailureActions({
     setResolveBusy(true);
     setResolveError(null);
     try {
-      const res = await fetch(
-        `${API_BASE}api/failures/${encodeURIComponent(startedFailureID)}/unresolve`,
-        { method: "POST", credentials: "same-origin" },
-      );
-      if (!res.ok) {
-        throw new Error(await actionErrorMessage(res));
-      }
+      await reopenFailure("pattern", startedFailureID);
       onResolvedChange?.();
     } catch (e) {
       if (activeFailureID.current !== startedFailureID) return;
@@ -737,21 +721,21 @@ export function FailureActions({
             disabled={resolveBusy}
             onClick={unresolve}
           >
-            Restore pattern
+            Reopen pattern
           </Button>
-        ) : dismissible && (
+        ) : canResolve && (
           <Button
             size="small"
             variant={detailAppearance ? "text" : "outlined"}
             color="primary"
-            startIcon={<VisibilityOffOutlined sx={{ fontSize: 18 }} />}
+            startIcon={<TaskAltOutlined sx={{ fontSize: 18 }} />}
             disabled={resolveBusy}
             onClick={() => {
               setResolveError(null);
               setResolveOpen(true);
             }}
           >
-            Dismiss pattern
+            Resolve pattern
           </Button>
         ))}
       </Stack>
@@ -831,20 +815,21 @@ export function FailureActions({
       </Dialog>
 
       <Dialog
-        open={resolvable && dismissible && resolveOpen}
+        open={resolvable && canResolve && resolveOpen}
         onClose={resolveBusy ? undefined : () => setResolveOpen(false)}
         maxWidth="sm"
         fullWidth
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
         <DialogHeader
-          icon={<VisibilityOffOutlined sx={{ fontSize: 18 }} />}
+          icon={<TaskAltOutlined sx={{ fontSize: 18 }} />}
           accent="primary"
-          title="Dismiss pattern"
+          title="Resolve pattern"
         />
         <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Hides this recurring pattern from the active view. It reappears
+            Records that a maintainer has handled every cause of this recurring
+            pattern and hides it from the active view. It reappears
             automatically if a newer failing build recurs.
           </Typography>
           <TextField
@@ -879,7 +864,7 @@ export function FailureActions({
             }
             onClick={submitResolve}
           >
-            Dismiss pattern
+            Resolve pattern
           </Button>
         </DialogActions>
       </Dialog>

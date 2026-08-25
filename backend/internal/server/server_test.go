@@ -789,9 +789,11 @@ func (fakeAuth) Authenticate(ctx context.Context, r *http.Request) (*auth.Identi
 // fakeRunner records calls and returns canned drafts/URLs, or a not-found error
 // for the "missing" id/token.
 type fakeRunner struct {
-	gotID, gotOwner, gotToken, gotInstruction, gotConfirmToken string
-	gotResolveID, gotResolveLogin, gotResolveNote              string
-	gotUnresolveID                                             string
+	gotID, gotOwner, gotToken, gotInstruction, gotConfirmToken   string
+	gotResolveID, gotResolveLogin, gotResolveNote                string
+	gotUnresolveID                                               string
+	gotResolveCauseID, gotResolveCauseLogin, gotResolveCauseNote string
+	gotUnresolveCauseID                                          string
 }
 
 func (f *fakeRunner) PreviewIssue(ctx context.Context, id, owner, token, instruction string) (actions.PreviewResult, error) {
@@ -824,6 +826,20 @@ func (f *fakeRunner) Unresolve(id string) error {
 		return actions.ErrNotFound
 	}
 	f.gotUnresolveID = id
+	return nil
+}
+func (f *fakeRunner) ResolveCause(signature, login, note string) error {
+	if signature == "missing" {
+		return actions.ErrNotFound
+	}
+	f.gotResolveCauseID, f.gotResolveCauseLogin, f.gotResolveCauseNote = signature, login, note
+	return nil
+}
+func (f *fakeRunner) UnresolveCause(signature string) error {
+	if signature == "missing" {
+		return actions.ErrNotFound
+	}
+	f.gotUnresolveCauseID = signature
 	return nil
 }
 func (f *fakeRunner) ActionEligibility(_ context.Context, id string) (actions.Eligibility, error) {
@@ -873,6 +889,8 @@ var writeEndpoints = []string{
 	"/api/actions/confirm",
 	"/api/failures/abc/resolve",
 	"/api/failures/abc/unresolve",
+	"/api/causes/cni409/resolve",
+	"/api/causes/cni409/unresolve",
 }
 
 // TestHandler_WriteEndpointsRejectUnauthorized verifies every write endpoint
@@ -1045,6 +1063,26 @@ func TestHandler_ActionsEnabled(t *testing.T) {
 	}
 	if runner.gotUnresolveID != "abc" {
 		t.Errorf("unresolve got id=%q, want abc", runner.gotUnresolveID)
+	}
+	// Cause scope is addressed by causal-group signature and routed to the
+	// cause-scoped runner methods, never the pattern-scoped ones.
+	if r := do("/api/causes/cni409/resolve", "ok", `{"note":"fixed by test-infra #99"}`); r.StatusCode != http.StatusNoContent {
+		t.Errorf("cause resolve status = %d, want 204", r.StatusCode)
+	}
+	if runner.gotResolveCauseID != "cni409" || runner.gotResolveCauseLogin != "alice" || runner.gotResolveCauseNote != "fixed by test-infra #99" {
+		t.Errorf("cause resolve got id=%q login=%q note=%q", runner.gotResolveCauseID, runner.gotResolveCauseLogin, runner.gotResolveCauseNote)
+	}
+	if runner.gotResolveID != "abc" {
+		t.Errorf("cause resolve leaked into pattern scope: id=%q", runner.gotResolveID)
+	}
+	if r := do("/api/causes/missing/resolve", "ok", `{}`); r.StatusCode != http.StatusNotFound {
+		t.Errorf("cause resolve not-found status = %d, want 404", r.StatusCode)
+	}
+	if r := do("/api/causes/cni409/unresolve", "ok", ``); r.StatusCode != http.StatusNoContent {
+		t.Errorf("cause unresolve status = %d, want 204", r.StatusCode)
+	}
+	if runner.gotUnresolveCauseID != "cni409" {
+		t.Errorf("cause unresolve got id=%q, want cni409", runner.gotUnresolveCauseID)
 	}
 }
 
