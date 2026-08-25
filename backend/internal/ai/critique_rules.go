@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // CritiqueRuleID is a stable, privacy-safe deterministic critique identifier.
@@ -49,6 +50,49 @@ const (
 	CritiqueRuleStructuredInvalid       CritiqueRuleID = "structured.invalid"
 	CritiqueRuleSourceUnverified        CritiqueRuleID = "source.unverified"
 )
+
+// critiqueRuleEffect is the publication effect of one critique finding.
+type critiqueRuleEffect int
+
+const (
+	// critiqueEffectWithhold makes the whole analysis unavailable.
+	critiqueEffectWithhold critiqueRuleEffect = iota
+	// critiqueEffectDegrade publishes the analysis as preliminary.
+	critiqueEffectDegrade
+	// critiqueEffectWarn records a warning without changing grounding.
+	critiqueEffectWarn
+)
+
+// critiqueRuleDescriptor is the engine-owned contract for one critique rule.
+// Severity drives cache enforcement; Effect and Warning drive publication.
+// The two are deliberately independent: a hard finding can still publish a
+// preliminary result, and a soft finding can still block a strict cache.
+type critiqueRuleDescriptor struct {
+	Severity CritiqueRuleSeverity
+	Effect   critiqueRuleEffect
+	Warning  string
+}
+
+// critiqueRuleDescriptors is the single registry of critique rules. Every
+// CritiqueRuleID constant must appear here; TestCritiqueRuleDescriptorsAreExhaustive
+// enforces that against the declared constants.
+var critiqueRuleDescriptors = map[CritiqueRuleID]critiqueRuleDescriptor{
+	CritiqueRulePathUnsafe:        {Severity: CritiqueRuleHard, Effect: critiqueEffectWithhold},
+	CritiqueRuleStructuredInvalid: {Severity: CritiqueRuleHard, Effect: critiqueEffectWithhold},
+
+	CritiqueRuleCitationInvalidRange:  {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningArtifactGrounding},
+	CritiqueRuleCitationQuoteMismatch: {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningArtifactGrounding},
+	CritiqueRuleCitationUnread:        {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningArtifactGrounding},
+	CritiqueRuleCitationMissing:       {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningArtifactGrounding},
+	CritiqueRuleClaimUncitedLine:      {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningArtifactGrounding},
+	CritiqueRuleSourceUnverified:      {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningSourceGrounding},
+	CritiqueRuleTransientConflict:     {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningClassification},
+	CritiqueRuleRerunOnlyRemediation:  {Severity: CritiqueRuleHard, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningRemediation},
+
+	CritiqueRuleEvidenceAvailableUnread: {Severity: CritiqueRuleSoft, Effect: critiqueEffectDegrade, Warning: models.AnalysisWarningInvestigation},
+	CritiqueRuleEvidenceUnavailable:     {Severity: CritiqueRuleSoft, Effect: critiqueEffectWarn, Warning: models.AnalysisWarningInvestigation},
+	CritiqueRuleRemediationPunt:         {Severity: CritiqueRuleSoft, Effect: critiqueEffectWarn, Warning: models.AnalysisWarningRemediation},
+}
 
 func (o critiqueOutcome) RuleIDs() []CritiqueRuleID {
 	rules := map[CritiqueRuleID]bool{}
@@ -99,12 +143,10 @@ func effectiveCritiqueCachePolicy(policy CritiqueCachePolicy, maxRetries int) Cr
 }
 
 func critiqueRuleSeverity(rule CritiqueRuleID) CritiqueRuleSeverity {
-	switch rule {
-	case CritiqueRuleEvidenceAvailableUnread, CritiqueRuleEvidenceUnavailable, CritiqueRuleRemediationPunt:
-		return CritiqueRuleSoft
-	default:
-		return CritiqueRuleHard
+	if descriptor, ok := critiqueRuleDescriptors[rule]; ok {
+		return descriptor.Severity
 	}
+	return CritiqueRuleHard
 }
 
 func validCritiqueRuleClassification(hard, soft []string) bool {
@@ -128,18 +170,8 @@ func validCritiqueRuleClassification(hard, soft []string) bool {
 }
 
 func knownCritiqueRule(rule CritiqueRuleID) bool {
-	switch rule {
-	case CritiqueRulePathUnsafe, CritiqueRuleCitationInvalidRange,
-		CritiqueRuleCitationQuoteMismatch, CritiqueRuleCitationUnread,
-		CritiqueRuleCitationMissing, CritiqueRuleClaimUncitedLine, CritiqueRuleEvidenceAvailableUnread,
-		CritiqueRuleEvidenceUnavailable, CritiqueRuleRemediationPunt,
-		CritiqueRuleTransientConflict, CritiqueRuleRerunOnlyRemediation,
-		CritiqueRuleStructuredInvalid,
-		CritiqueRuleSourceUnverified:
-		return true
-	default:
-		return false
-	}
+	_, ok := critiqueRuleDescriptors[rule]
+	return ok
 }
 
 func (o critiqueOutcome) HardRuleIDs() []CritiqueRuleID {

@@ -19,38 +19,23 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 	if !grounded {
 		warnings[models.AnalysisWarningArtifactGrounding] = true
 	}
-	for _, rule := range analysis.CritiqueHardFailures {
-		switch CritiqueRuleID(rule) {
-		case CritiqueRulePathUnsafe, CritiqueRuleStructuredInvalid:
-			return "", nil
-		case CritiqueRuleCitationInvalidRange, CritiqueRuleCitationQuoteMismatch,
-			CritiqueRuleCitationUnread, CritiqueRuleCitationMissing, CritiqueRuleClaimUncitedLine:
+	for _, rule := range slices.Concat(analysis.CritiqueHardFailures, analysis.CritiqueSoftWarnings) {
+		descriptor, ok := critiqueRuleDescriptors[CritiqueRuleID(rule)]
+		if !ok {
+			// safeStructuredAnalysis already rejected unregistered rules, so this
+			// degrades rather than discarding an otherwise usable diagnosis.
 			grounded = false
-			warnings[models.AnalysisWarningArtifactGrounding] = true
-		case CritiqueRuleSourceUnverified:
-			grounded = false
-			warnings[models.AnalysisWarningSourceGrounding] = true
-		case CritiqueRuleTransientConflict:
-			grounded = false
-			warnings[models.AnalysisWarningClassification] = true
-		case CritiqueRuleRerunOnlyRemediation:
-			grounded = false
-			warnings[models.AnalysisWarningRemediation] = true
-		default:
+			warnings[models.AnalysisWarningInvestigation] = true
+			continue
+		}
+		if descriptor.Effect == critiqueEffectWithhold {
 			return "", nil
 		}
-	}
-	for _, rule := range analysis.CritiqueSoftWarnings {
-		switch CritiqueRuleID(rule) {
-		case CritiqueRuleEvidenceAvailableUnread:
+		if descriptor.Effect == critiqueEffectDegrade {
 			grounded = false
-			warnings[models.AnalysisWarningInvestigation] = true
-		case CritiqueRuleEvidenceUnavailable:
-			warnings[models.AnalysisWarningInvestigation] = true
-		case CritiqueRuleRemediationPunt:
-			warnings[models.AnalysisWarningRemediation] = true
-		default:
-			return "", nil
+		}
+		if descriptor.Warning != "" {
+			warnings[descriptor.Warning] = true
 		}
 	}
 	if analysis.BudgetExhausted {
