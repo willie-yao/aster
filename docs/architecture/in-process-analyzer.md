@@ -336,7 +336,8 @@ data-serving path.
 | Public and cache analysis projection | `backend/internal/ai/analysis_record.go`, `backend/internal/models/models.go`, `backend/internal/output/` |
 | Private trace and usage output | `backend/internal/ai/trace.go`, `backend/internal/ai/trace_store.go`, `backend/internal/aiusage/` |
 | Recurring patterns | `backend/internal/patterns/`, `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, `backend/internal/ai/pattern_verification.go` |
-| Analysis chat and actions | `backend/internal/analysischat/`, `backend/internal/actions/` |
+| Analysis chat and published-analysis resolution | `backend/internal/analysischat/chat.go`, `backend/internal/analysischat/resolution.go` |
+| Confirmed action requests | `backend/internal/actions/` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
 | Scheduled analysis shadows | `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/agentanalysis/workspace*.go`, `backend/internal/analysispublisher/`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
 | Agent Sandbox analyzer benchmark | `backend/benchmarks/agent_sandbox_analyzer_benchmark_test.go`, `hack/compare-agent-sandbox-analyzer-benchmark.py` |
