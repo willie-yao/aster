@@ -661,26 +661,30 @@ ai:
   single_tool_call: false
   critique:
     max_retries: 0
-    cache_policy: advisory
+    cache_policy: hard
 ```
 
 `critique.max_retries` controls provider repair attempts only. `0` evaluates
 critique without making a critique repair request. `critique.cache_policy`
-independently controls cache reuse:
+independently controls cache reuse. The two settings are unrelated: changing
+`max_retries` never changes which findings block reuse.
 
 - `strict`: actionable hard failures and soft warnings block reuse.
 - `hard`: only hard safety, grounding, and correctness failures block reuse.
 - `advisory`: critique findings never block reuse.
 
-One grounding rule also controls immediate publication: when readable artifact
-evidence exists but the selected causal draft has no validated artifact citation,
-`strict` and `hard` publish an unavailable result rather than the unsupported
-diagnosis. `advisory` records `citation.missing` without blocking publication.
+If `cache_policy` is omitted it defaults to `hard`, whatever `max_retries` is.
+Evidence that is deterministically unavailable remains a warning under every
+policy. Structural validation, publication sanitization, and critique-version
+validation remain mandatory.
 
-If `cache_policy` is omitted, existing behavior is preserved. Zero retries use
-`advisory`; positive retries use `strict`. Evidence that is deterministically
-unavailable remains a warning under every policy. Structural validation,
-publication sanitization, and critique-version validation remain mandatory.
+Publication disposition is separate from cache policy. A draft whose causal claim
+has no validated artifact citation is published as `preliminary` with an
+`artifact_grounding_incomplete` warning under every policy, and a preliminary
+result cannot feed patterns, corrections, remediation, actions, or Fix. Cache
+policy can still change which draft is published: it gates whether a draft
+reaches post-loop semantic review, and a policy-unaccepted semantic revision
+cannot replace the selected draft.
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need

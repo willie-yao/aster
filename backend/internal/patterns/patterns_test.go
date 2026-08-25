@@ -85,7 +85,7 @@ func eligibleJob(jobID string) models.JobDetail {
 			TestCases: []models.TestCase{{
 				Name: "failed test", Status: "failed",
 				AISummary:  &models.AISummary{Summary: "failure"},
-				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic"},
+				AIAnalysis: &models.AIAnalysis{RootCause: "cause", Severity: "High", Mode: "agentic", Disposition: models.AnalysisDispositionGrounded},
 			}},
 		})
 	}

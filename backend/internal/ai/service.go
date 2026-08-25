@@ -513,7 +513,13 @@ func (s *Service) reanalysisRequired(tc *models.TestCase, promptHash string, pre
 	if tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
-	preliminary := tc.AIAnalysis.Disposition == models.AnalysisDispositionPreliminary
+	disposition := tc.AIAnalysis.Disposition
+	if disposition != models.AnalysisDispositionGrounded && disposition != models.AnalysisDispositionPreliminary {
+		// An unstamped or unrecognized disposition is never grounded, so it must
+		// be reanalyzed to regain a usable publication state.
+		return true
+	}
+	preliminary := disposition == models.AnalysisDispositionPreliminary
 	reason := s.agenticRejection(tc, promptHash)
 	if reason == CacheAccepted {
 		return preliminary && !preliminaryBudgetSpent

@@ -614,7 +614,7 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": []byte("the error\n")},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1}
+	opts := AgenticOptions{MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory}
 
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:nudge1", "sys", "user")
 	if err != nil {
@@ -662,7 +662,7 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 
 	client := newAgenticTestClient(t, srv.URL)
 	browser := &fakeBrowser{dirs: map[string][]string{"": {"artifacts"}}}
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 2}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 2, CritiqueCachePolicy: CritiqueCachePolicyAdvisory}
 
 	summary, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:notreused", "sys", "user")
 	if err != nil {
@@ -735,7 +735,7 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 		files: map[string][]byte{"build-log.txt": bigPayload(30_000)},
 		dirs:  map[string][]string{"": {"artifacts"}},
 	}
-	opts := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, Timeout: 30 * time.Second, MinGCSBytes: 15_000}
+	opts := AgenticOptions{MaxIters: 6, ModelByteBudget: 200_000, GCSByteBudget: 200_000, Timeout: 30 * time.Second, MinGCSBytes: 15_000, CritiqueCachePolicy: CritiqueCachePolicyAdvisory}
 
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:gcsnudge", "sys", "user")
 	if err != nil {
@@ -1470,7 +1470,7 @@ func TestAgentic_CritiqueRetryCannotReplaceDiagnosisWithoutEvidence(t *testing.T
 	selected := 0
 	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict,
 	})
 	in.DraftSelectionObserver = func(attempt int) { selected = attempt }
 	key := "agentic:test:preserve-providerid-diagnosis"
@@ -2051,11 +2051,12 @@ func TestAgentic_Critique_ExhaustedAcceptedNotCached(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{
-		MaxIters:           5,
-		ModelByteBudget:    100_000,
-		GCSByteBudget:      100_000,
-		Timeout:            30 * time.Second,
-		CritiqueMaxRetries: 2,
+		MaxIters:            5,
+		ModelByteBudget:     100_000,
+		GCSByteBudget:       100_000,
+		Timeout:             30 * time.Second,
+		CritiqueMaxRetries:  2,
+		CritiqueCachePolicy: CritiqueCachePolicyStrict,
 	}
 	summary, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, opts),
@@ -2104,7 +2105,7 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 				newTestAgenticInputs(t, tc.browser, AgenticOptions{
 					MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-					Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
+					Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory,
 				}), key, "sys", "user")
 			if err != nil {
 				t.Fatalf("doAnalyzeAgentic: %v", err)
@@ -2122,7 +2123,7 @@ func TestAgentic_CritiqueZeroRetriesMakesNoRepairRequest(t *testing.T) {
 			_, cached, err := client.doAnalyzeAgentic(context.Background(),
 				newTestAgenticInputs(t, tc.browser, AgenticOptions{
 					MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-					Timeout: 30 * time.Second, CritiqueMaxRetries: 0,
+					Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory,
 				}), key, "sys", "user")
 			if err != nil {
 				t.Fatalf("cached doAnalyzeAgentic: %v", err)
@@ -2432,7 +2433,7 @@ func TestAgentic_UnparseableInLoopRepairCannotExceedBudget(t *testing.T) {
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict,
 		}), key, "sys", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
@@ -2460,7 +2461,7 @@ func TestAgentic_BlankInLoopRepairCannotExceedBudget(t *testing.T) {
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict,
 		}), key, "sys", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)
@@ -2489,7 +2490,7 @@ func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 2,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 2, CritiqueCachePolicy: CritiqueCachePolicyStrict,
 		}), key, "sys", "user")
 	if err != nil {
 		t.Fatalf("doAnalyzeAgentic: %v", err)

@@ -1092,7 +1092,7 @@ type AgenticCritique struct {
 	MaxRetries *int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 
 	// CachePolicy controls which deterministic critique findings block reuse.
-	// Empty preserves the legacy max_retries behavior.
+	// Empty defaults to hard, independent of MaxRetries.
 	CachePolicy CritiqueCachePolicy `yaml:"cache_policy,omitempty" json:"cache_policy,omitempty"`
 }
 
@@ -1105,16 +1105,13 @@ const (
 	CritiqueCachePolicyAdvisory CritiqueCachePolicy = "advisory"
 )
 
-// EffectiveCachePolicy resolves an explicit policy or preserves the legacy
-// behavior for existing configurations.
+// EffectiveCachePolicy resolves an explicit policy, defaulting to hard so that
+// grounding and correctness failures block reuse while quality warnings do not.
 func (c AgenticCritique) EffectiveCachePolicy() CritiqueCachePolicy {
 	if c.CachePolicy != "" {
 		return c.CachePolicy
 	}
-	if c.MaxRetries != nil && *c.MaxRetries > 0 {
-		return CritiqueCachePolicyStrict
-	}
-	return CritiqueCachePolicyAdvisory
+	return CritiqueCachePolicyHard
 }
 
 // MarshalJSON omits zero retry values from the published manifest.

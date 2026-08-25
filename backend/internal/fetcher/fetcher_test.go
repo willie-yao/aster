@@ -193,7 +193,7 @@ func TestGatherPatternFailures_SeedsFailingTestLocation(t *testing.T) {
 				Name:            "[It] upgrade test",
 				Status:          "failed",
 				FailureLocation: "test/e2e/azure_apiversion_upgrade_test.go:88",
-				AIAnalysis:      &models.AIAnalysis{Severity: "high", RelevantFiles: []string{"test/e2e/config/azure-dev.yaml"}},
+				AIAnalysis:      &models.AIAnalysis{Severity: "high", RelevantFiles: []string{"test/e2e/config/azure-dev.yaml"}, Disposition: models.AnalysisDispositionGrounded},
 			}},
 		}},
 	}
