@@ -263,9 +263,14 @@ data-serving path.
   newly accepted or a prior real result preserved when reanalysis is
   unavailable. Correlation does not rewrite the per-build diagnosis, and
   `patterns.MergeLastGood` isolates per-job correlation failures before public
-  output.
+  output. Correlation is intentionally tool-free: `submit_causal_groups` is a
+  terminal structured response contract, not an executable evidence tool.
+  Pattern verdicts and bounded repairs use the shared forced-structured attempt
+  machinery in `backend/internal/ai/structured.go`.
 - **Analysis chat** resolves a published test, pattern, or causal group into a
-  bounded private session under `backend/internal/analysischat`. Cause scope
+  bounded private session under `backend/internal/analysischat`. Evidence
+  gathering uses the shared bounded tool loop, and finalization uses the shared
+  structured-completion machinery. Cause scope
   exposes exactly the selected group's member builds. Chat replies do not change
   job JSON. A separately enabled, explicitly confirmed correction workflow can
   publish an overlay without mutating fetcher output.
@@ -317,7 +322,7 @@ data-serving path.
 | Per-failure contract | `backend/internal/ai/runner.go`, `backend/internal/ai/service.go` |
 | Provider wire format | `backend/internal/ai/transport.go`, `backend/internal/ai/transport_chat.go`, `backend/internal/ai/transport_responses.go` |
 | Authoritative provider loop | `backend/internal/ai/agentic.go`, `backend/internal/ai/tools/` |
-| Generic downstream tool loop | `backend/internal/ai/toolloop.go` |
+| Shared downstream tool and structured execution | `backend/internal/ai/toolloopcore.go`, `backend/internal/ai/structured.go` |
 | Prompt composition | `backend/internal/ai/compose.go`, `backend/internal/ai/baseprompt.go`, `backend/internal/ai/responseformat.go`, `backend/internal/ai/modules/universal/` |
 | Evidence planning and skill coverage | `backend/internal/ai/evidenceplan/`, `backend/internal/ai/skills/`, `backend/internal/ai/agentic.go` |
 | Deterministic critique | `backend/internal/ai/critique.go`, `backend/internal/ai/critique_rules.go` |
