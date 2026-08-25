@@ -758,10 +758,11 @@ type FixAgentRuntime struct {
 	// Agent Sandbox requires it to be false.
 	AllowBash *bool `yaml:"allow_bash,omitempty" json:"allow_bash,omitempty"`
 	// AllowedCommands are exact argv commands run after one-shot generation.
+	// Empty runs the mandatory staged-diff check only.
 	AllowedCommands []FixAgentCommand `yaml:"allowed_commands,omitempty" json:"allowed_commands,omitempty"`
 	// ModelProvider is non-secret configuration for the Agent Sandbox provider.
 	ModelProvider FixModelProvider `yaml:"model_provider,omitempty" json:"model_provider,omitempty"`
-	// OutputLimitBytes bounds the structured executor result.
+	// OutputLimitBytes bounds the structured executor result. Defaults to 512 KiB.
 	OutputLimitBytes int64 `yaml:"output_limit_bytes,omitempty" json:"output_limit_bytes,omitempty"`
 	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
 	// default.
@@ -967,6 +968,11 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	}
 	out.AgentRuntime.AllowedCommands = commands
 	if out.AgentRuntime.Type == "agent-sandbox" {
+		if len(out.AgentRuntime.AllowedCommands) == 0 {
+			out.AgentRuntime.AllowedCommands = []FixAgentCommand{{
+				Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m",
+			}}
+		}
 		zero := 0
 		out.CritiqueRetries = &zero
 		if strings.TrimSpace(out.AgentRuntime.Timeout) == "" {
@@ -1600,11 +1606,8 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].path_prefixes contains invalid prefix %q", index, prefix)
 				}
 			}
-			if f.AgentRuntime != nil && strings.TrimSpace(f.AgentRuntime.Type) == "agent-sandbox" {
-				if len(repo.AllowedCommands) == 0 {
-					return fmt.Errorf("ai.fix_prs.allowed_repositories[%d].allowed_commands is required for agent-sandbox", index)
-				}
-				copyRuntime := *f.AgentRuntime
+			if f.AgentRuntime != nil && len(repo.AllowedCommands) > 0 {
+				copyRuntime := *c.EffectiveFixPRs().AgentRuntime
 				copyRuntime.AllowedCommands = repo.AllowedCommands
 				commands, err := copyRuntime.RuntimeCommands(copyRuntime.ParsedTimeout())
 				if err != nil {
@@ -1651,24 +1654,19 @@ func (c *Config) Validate() error {
 			if ar.AllowBash != nil && *ar.AllowBash {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.allow_bash must be false for the agent-sandbox runtime")
 			}
-			if len(ar.AllowedCommands) == 0 {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands requires at least one exact command for the agent-sandbox runtime")
-			}
-			overall := timeout
-			if !hasTimeout {
-				overall = 10 * time.Minute
-			}
-			commands, err := ar.RuntimeCommands(overall)
+			effectiveRuntime := c.EffectiveFixPRs().AgentRuntime
+			overall := effectiveRuntime.ParsedTimeout()
+			commands, err := effectiveRuntime.RuntimeCommands(overall)
 			if err != nil {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands: %w", err)
 			}
 			if last := commands[len(commands)-1].Argv; !equalArgv(last, []string{"git", "diff", "--cached", "--check"}) {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]")
 			}
-			if err := validateAgentSandboxModelProvider(ar.ModelProvider); err != nil {
+			if err := validateAgentSandboxModelProvider(effectiveRuntime.ModelProvider); err != nil {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.model_provider: %w", err)
 			}
-			if ar.OutputLimitBytes < 4<<10 || ar.OutputLimitBytes > 1<<20 {
+			if effectiveRuntime.OutputLimitBytes < 4<<10 || effectiveRuntime.OutputLimitBytes > 1<<20 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576")
 			}
 			if ar.MaxTurns > 1000 {

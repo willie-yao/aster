@@ -3,6 +3,7 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1274,8 +1275,11 @@ branding:
 func TestEffectiveFixPRsAgentSandboxDefaults(t *testing.T) {
 	c := &Config{AI: &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "agent-sandbox"}}}}
 	got := c.EffectiveFixPRs().AgentRuntime
-	if got.Timeout != "10m" || got.MaxTurns != 30 {
+	if got.Timeout != "10m" || got.MaxTurns != 30 || got.OutputLimitBytes != 512<<10 {
 		t.Fatalf("agent-sandbox defaults = %+v", got)
+	}
+	if len(got.AllowedCommands) != 1 || !slices.Equal(got.AllowedCommands[0].Argv, []string{"git", "diff", "--cached", "--check"}) || got.AllowedCommands[0].Timeout != "1m" {
+		t.Fatalf("agent-sandbox command defaults = %+v", got.AllowedCommands)
 	}
 	if got.AllowBash == nil || *got.AllowBash {
 		t.Fatalf("agent-sandbox allow_bash default = %v, want false", got.AllowBash)
@@ -1312,10 +1316,12 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 	}
 	c.AI.FixPRs.AgentRuntime.AllowBash = &no
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = nil
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "allowed_commands") {
-		t.Fatalf("agent-sandbox command policy error = %v", err)
+	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 0
+	if err := c.Validate(); err != nil {
+		t.Fatalf("agent-sandbox defaults rejected: %v", err)
 	}
 	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
+	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 131072
 	c.AI.FixPRs.AgentRuntime.ModelProvider.API = "responses"
 	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
 	if err := c.Validate(); err != nil {

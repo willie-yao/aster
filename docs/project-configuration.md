@@ -791,20 +791,18 @@ python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs'
 
 ### Experimental Agent Sandbox fix runtime
 
-`ai.fix_prs.agent_runtime.type` accepts only `agent-sandbox`, which is also the
-default. It selects the bounded OpenCode executor described in
+The Fix runtime is the bounded Agent Sandbox OpenCode executor described in
 [Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor). Agent Sandbox
 remains disabled by default. Once explicitly enabled, direct provider access is
 the default credential mode. The project owns generation bounds and the
 non-secret provider contract:
 
-- `max_turns`: total execution step budget;
-- `allow_bash`: defaults to `false` and must be `false`;
-- `timeout`: positive and at most 30 minutes;
-- `output_limit_bytes`: 4096 through 1048576;
-- `allowed_commands`: structured post-generation validators with exact `argv`
-  arrays and explicit timeouts, ending with `argv: [git, diff, --cached,
-  --check]`;
+- `max_turns`: total execution step budget, defaulting to 30;
+- `timeout`: positive and at most 30 minutes, defaulting to 10 minutes;
+- `output_limit_bytes`: 4096 through 1048576, defaulting to 524288;
+- `allowed_commands`: optional additional post-generation validators with exact
+  `argv` arrays and explicit timeouts. Aster uses only the mandatory staged-diff
+  check when the list is omitted;
 - `model_provider.credential_mode`: `direct` by default or explicit `gateway`;
 - `model_provider.api`: `chat_completions` or `responses`;
 - `model_provider.endpoint` and `model`;
