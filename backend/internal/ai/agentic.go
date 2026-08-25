@@ -656,7 +656,6 @@ type agenticCacheData struct {
 	JudgeRan               bool   `json:"judge_ran,omitempty"`
 	JudgeObjected          bool   `json:"judge_objected,omitempty"`
 	JudgeRevised           bool   `json:"judge_revised,omitempty"`
-	JudgeResolutionKnown   bool   `json:"judge_resolution_known,omitempty"`
 	JudgeRevisionRejected  bool   `json:"judge_revision_rejected,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
@@ -943,7 +942,6 @@ func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode 
 		analysis.JudgeRan = state.judgeRan
 		analysis.JudgeObjected = state.judgeObjected
 		analysis.JudgeRevised = state.judgeRevised
-		analysis.JudgeResolutionKnown = true
 		analysis.JudgeRevisionRejected = state.judgeRevisionRejected
 	}
 }
@@ -2948,7 +2946,6 @@ func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, par
 		JudgeRan:               state.judgeRan,
 		JudgeObjected:          state.judgeObjected,
 		JudgeRevised:           state.judgeRevised,
-		JudgeResolutionKnown:   true,
 		JudgeRevisionRejected:  state.judgeRevisionRejected,
 		CritiquePassed:         state.critiquePassed,
 		CritiqueHardFailures:   append([]string(nil), state.critiqueHardFailures...),
@@ -2982,7 +2979,7 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
 		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
-		JudgeResolutionKnown: true, JudgeRevisionRejected: state.judgeRevisionRejected,
+		JudgeRevisionRejected: state.judgeRevisionRejected,
 	}
 	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
 	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {
