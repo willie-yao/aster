@@ -257,7 +257,13 @@ function investigationDetails(
 ): string | undefined {
   const details: string[] = [];
   if (investigation?.target) details.push(formatTarget(investigation.target));
-  if (investigation?.completed_at) details.push(`Completed: ${investigation.completed_at}`);
+  if (investigation?.reason_code) details.push(`Outcome: ${investigation.reason_code}`);
+  // Naming each target the verifier turned down is what separates a run that
+  // proposed nothing from one whose proposals were rejected.
+  if (investigation?.rejected_reasons?.length) {
+    details.push(`Rejected targets: ${investigation.rejected_reasons.join(", ")}`);
+  }
+  if (investigation?.completed_at) details.push(`Attempted: ${investigation.completed_at}`);
   if (localError) details.push(localError);
   return details.length > 0 ? details.join("\n") : undefined;
 }

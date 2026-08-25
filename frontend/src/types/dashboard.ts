@@ -298,6 +298,8 @@ export interface PatternRemediationInvestigationSummary {
   causal_group_hash: string;
   state: PatternRemediationInvestigationState;
   reason?: string;
+  reason_code?: string;
+  rejected_reasons?: string[];
   target?: PatternRemediationTargetSummary;
   completed_at?: string;
 }

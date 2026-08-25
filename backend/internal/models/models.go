@@ -590,8 +590,15 @@ type PatternRemediationInvestigationSummary struct {
 	CausalGroupHash string                               `json:"causal_group_hash"`
 	State           PatternRemediationInvestigationState `json:"state"`
 	Reason          string                               `json:"reason,omitempty"`
-	Target          *PatternRemediationTargetSummary     `json:"target,omitempty"`
-	CompletedAt     string                               `json:"completed_at,omitempty"`
+	// ReasonCode names the specific outcome behind State. Several outcomes share
+	// the insufficient-evidence state and ask different things of a maintainer.
+	ReasonCode string `json:"reason_code,omitempty"`
+	// RejectedReasons lists why the verifier turned down each proposed target,
+	// which separates a run that proposed nothing from one whose proposals were
+	// rejected.
+	RejectedReasons []string                         `json:"rejected_reasons,omitempty"`
+	Target          *PatternRemediationTargetSummary `json:"target,omitempty"`
+	CompletedAt     string                           `json:"completed_at,omitempty"`
 }
 
 // PatternRemediationTargetSummary is the safe public identity of one verified target.

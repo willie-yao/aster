@@ -669,9 +669,14 @@ func safeOperationView(ref OperationRef, result VerifiedResult, completedAt stri
 	case ClassificationAmbiguous:
 		reason = "Multiple distinct implementation targets passed deterministic verification, so no action is eligible."
 	}
+	if detail := insufficientEvidenceDetail(result); detail != "" {
+		reason = detail
+	}
 	view := models.PatternRemediationInvestigationSummary{
 		CausalGroupID: ref.CausalGroupID, CausalGroupHash: ref.CausalGroupHash,
-		State: state, Reason: reason, CompletedAt: completedAt,
+		State: state, Reason: reason, ReasonCode: string(result.ReasonCode),
+		RejectedReasons: verdictReasonStrings(result.RejectedReasons),
+		CompletedAt:     completedAt,
 	}
 	if state == models.PatternRemediationActionable && result.Proposal != nil {
 		target := result.Proposal.Target
@@ -745,4 +750,36 @@ func (s *OperationService) ResolveActionable(ctx context.Context, ref OperationR
 		return ActionableSubject{}, err
 	}
 	return ActionableSubject{Input: resolved.Input, ResultDigest: entry.ResultDigest, Proposal: *verified.Proposal, Evidence: evidence, EvidenceCatalogDigest: entry.EvidenceCatalogDigest, Source: resolved.Source}, nil
+}
+
+// insufficientEvidenceDetail names which outcome produced an insufficient-evidence
+// verdict. The engine rejecting every proposed target and the investigation
+// proposing none are opposite situations, and reporting one sentence for both
+// tells a maintainer nothing about which one they are looking at.
+func insufficientEvidenceDetail(result VerifiedResult) string {
+	if result.Classification != ClassificationInsufficientEvidence {
+		return ""
+	}
+	switch result.ReasonCode {
+	case VerdictNoHypothesisProposed:
+		return "The investigation read this cause's evidence but proposed no implementation target to verify."
+	case VerdictNoHypothesisPassed:
+		return "The investigation proposed implementation targets, but none passed deterministic source verification."
+	case VerdictEvidenceReverifyFailed:
+		return "The evidence this cause was investigated from could not be read back unchanged, so no verdict is published."
+	case VerdictModelAssessment:
+		return "The investigation reported that this cause has no verifiable implementation target."
+	}
+	return ""
+}
+
+func verdictReasonStrings(codes []VerdictReason) []string {
+	if len(codes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		out = append(out, string(code))
+	}
+	return out
 }
