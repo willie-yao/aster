@@ -22,6 +22,35 @@ import (
 	"github.com/willie-yao/aster/backend/internal/redact"
 )
 
+// ServiceConfig holds the complete construction-time configuration for one project analyzer.
+type ServiceConfig struct {
+	Client              *Client
+	Module              Module
+	SystemPrompt        string
+	ConsecutiveFailures map[string]int
+	CacheGeneration     string
+
+	AgenticOptions AgenticOptions
+	BrowserFactory artifacts.Factory
+	ToolRegistry   *tools.Registry
+	EnabledTools   []string
+	Skills         *skills.Set
+
+	SourceRepoOwner       string
+	SourceRepoName        string
+	GitHubReadToken       string
+	AnalysisSourceCatalog *tools.SourceCatalog
+	PatternRepoReader     tools.RepoReader
+	LinkVerificationStore LinkVerificationStore
+
+	TraceStore             *TraceStore
+	UsageRecorder          *aiusage.Recorder
+	UsageOrigin            aiusage.Origin
+	DraftObserver          DraftObserver
+	DraftSelectionObserver DraftSelectionObserver
+	SourceEvidenceObserver SourceEvidenceObserver
+}
+
 // Service orchestrates AI analysis for a single project. It composes a generic
 // API Client with the universal prompt builder, the composed system prompt, and
 // a snapshot of consecutive failure counts. Every failure is analyzed by the
@@ -33,18 +62,11 @@ type Service struct {
 	consecutiveMap  map[string]int
 	cacheGeneration string
 
-	// agenticOpts is the resolved agentic config.
-	agenticOpts AgenticOptions
-
-	// browserFactory provides per-build Browser instances.
+	agenticOpts    AgenticOptions
 	browserFactory artifacts.Factory
-
-	// registry + enabledTools define which tools the agentic loop can call.
-	registry     *tools.Registry
-	enabledTools []string
-
-	// skillSet is the merged engine and consumer recipe set.
-	skillSet *skills.Set
+	registry       *tools.Registry
+	enabledTools   []string
+	skillSet       *skills.Set
 
 	// toolCaches memoizes a *tools.Cache per buildPrefix so all failures
 	// of one build share expensive tier-2 discovery results.
@@ -56,25 +78,17 @@ type Service struct {
 	// function-calling.
 	toolsUnsupported atomic.Bool
 
-	// sourceRepoOwner/Name identify the configured analysis GitHub repo for resolving
-	// repo-relative file citations. Empty until SetSourceRepo.
 	sourceRepoOwner       string
 	sourceRepoName        string
 	githubReadToken       string
 	analysisSourceCatalog *tools.SourceCatalog
-
-	// patternRepo supports source verification for legacy remediation contracts.
-	patternRepo tools.RepoReader
+	patternRepo           tools.RepoReader
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by the probe URL.
 	linkVerifyCache sync.Map
-
-	// linkVerifyStore persists definite file-existence checks at immutable
-	// revisions across runs. Nil falls back to the client's analysis cache.
 	linkVerifyStore LinkVerificationStore
 
-	// traceStore collects private, sanitized per-analysis control flow.
 	traceStore *TraceStore
 
 	usageRecorder *aiusage.Recorder
@@ -83,81 +97,49 @@ type Service struct {
 	patternNow             func() time.Time
 	patternFailureCooldown time.Duration
 
-	// draftObserver is an optional in-memory hook used only by the quality
-	// benchmark to compare parseable drafts from the same investigation.
-	draftObserver DraftObserver
-
-	// draftSelectionObserver reports which parseable attempt production selected.
+	draftObserver          DraftObserver
 	draftSelectionObserver DraftSelectionObserver
 	sourceEvidenceObserver SourceEvidenceObserver
 }
 
-// NewService constructs a Service. systemPrompt is the full composed prompt and
-// must be non-empty. consecutiveMap is keyed by consecutiveKey and may be nil.
-func NewService(client *Client, module Module, systemPrompt string, consecutiveMap map[string]int) *Service {
-	if consecutiveMap == nil {
-		consecutiveMap = map[string]int{}
+// NewService constructs a fully configured project analyzer.
+func NewService(config ServiceConfig) *Service {
+	consecutiveFailures := config.ConsecutiveFailures
+	if consecutiveFailures == nil {
+		consecutiveFailures = map[string]int{}
 	}
 	return &Service{
-		client:                 client,
-		module:                 module,
-		systemPrompt:           systemPrompt,
-		consecutiveMap:         consecutiveMap,
+		client:                 config.Client,
+		module:                 config.Module,
+		systemPrompt:           config.SystemPrompt,
+		consecutiveMap:         consecutiveFailures,
+		cacheGeneration:        config.CacheGeneration,
+		agenticOpts:            config.AgenticOptions,
+		browserFactory:         config.BrowserFactory,
+		registry:               config.ToolRegistry,
+		enabledTools:           config.EnabledTools,
+		skillSet:               config.Skills,
+		sourceRepoOwner:        config.SourceRepoOwner,
+		sourceRepoName:         config.SourceRepoName,
+		githubReadToken:        config.GitHubReadToken,
+		analysisSourceCatalog:  config.AnalysisSourceCatalog,
+		patternRepo:            config.PatternRepoReader,
+		linkVerifyStore:        config.LinkVerificationStore,
+		traceStore:             config.TraceStore,
+		usageRecorder:          config.UsageRecorder,
+		usageOrigin:            config.UsageOrigin,
+		draftObserver:          config.DraftObserver,
+		draftSelectionObserver: config.DraftSelectionObserver,
+		sourceEvidenceObserver: config.SourceEvidenceObserver,
 		patternNow:             time.Now,
 		patternFailureCooldown: defaultPatternFailureCooldown,
 	}
-}
-
-// SetCacheGeneration installs the safe generation fingerprint used in cache keys.
-func (s *Service) SetCacheGeneration(fingerprint string) {
-	s.cacheGeneration = fingerprint
-}
-
-// EnableAgentic installs the agentic loop's runtime dependencies: resolved
-// options, per-build browser factory, tool registry, and enabled tool set.
-// Must be called once at fetcher startup before Analyze.
-//
-// Safe to call once at Service construction; not safe for concurrent use.
-func (s *Service) EnableAgentic(opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabledTools []string) {
-	s.agenticOpts = opts
-	s.browserFactory = factory
-	s.registry = registry
-	s.enabledTools = enabledTools
-}
-
-// SetSkills installs the merged diagnostic recipe set. Safe to call once
-// during fetcher startup, after EnableAgentic. The agentic loop honors the
-// set only when critique is enabled, because recipes feed the critique gate.
-func (s *Service) SetSkills(set *skills.Set) {
-	s.skillSet = set
-}
-
-// SetSourceRepo records the analysis source repo for resolving repo-relative file
-// citations. Safe to call once at fetcher startup.
-func (s *Service) SetSourceRepo(owner, name string) {
-	s.sourceRepoOwner = owner
-	s.sourceRepoName = name
-}
-
-// SetAnalysisSourceCatalog installs an exact multi-source catalog for internal callers.
-// The primary source remains authoritative for project-owned paths.
-func (s *Service) SetAnalysisSourceCatalog(catalog *tools.SourceCatalog) {
-	s.analysisSourceCatalog = catalog
 }
 
 // SourceRepo returns the configured analysis source repository. It is part of
 // the effective prompt identity, so scheduling and publication must agree on it.
 func (s *Service) SourceRepo() (owner, name string) {
 	return s.sourceRepoOwner, s.sourceRepoName
-}
-
-// SetGitHubReadToken installs the optional read-only source credential.
-func (s *Service) SetGitHubReadToken(token string) { s.githubReadToken = token }
-
-// SetLinkVerificationStore installs the durable store for file-existence checks
-// at immutable revisions. Defaults to the client's analysis cache.
-func (s *Service) SetLinkVerificationStore(store LinkVerificationStore) {
-	s.linkVerifyStore = store
 }
 
 // linkVerifications returns the durable link-verification store, or nil when
@@ -170,37 +152,6 @@ func (s *Service) linkVerifications() LinkVerificationStore {
 		return s.client.cache
 	}
 	return nil
-}
-
-// SetPatternRepoReader installs the source-tree reader used by legacy
-// remediation verification. Safe to call once at fetcher startup.
-func (s *Service) SetPatternRepoReader(reader tools.RepoReader) {
-	s.patternRepo = reader
-}
-
-// SetTraceStore enables private per-analysis trace collection.
-func (s *Service) SetTraceStore(store *TraceStore) {
-	s.traceStore = store
-}
-
-// SetUsageRecorder enables private usage accounting for this service.
-func (s *Service) SetUsageRecorder(recorder *aiusage.Recorder, origin aiusage.Origin) {
-	s.usageRecorder = recorder
-	s.usageOrigin = origin
-}
-
-// SetDraftObserver installs the optional in-memory quality benchmark hook.
-func (s *Service) SetDraftObserver(observer DraftObserver) {
-	s.draftObserver = observer
-}
-
-// SetDraftSelectionObserver installs the optional benchmark selection hook.
-func (s *Service) SetDraftSelectionObserver(observer DraftSelectionObserver) {
-	s.draftSelectionObserver = observer
-}
-
-func (s *Service) SetSourceEvidenceObserver(observer SourceEvidenceObserver) {
-	s.sourceEvidenceObserver = observer
 }
 
 // Analyze fills tc.AISummary and tc.AIAnalysis for a single failed test case

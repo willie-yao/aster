@@ -20,8 +20,8 @@ func TestServiceAnalyzeFailureReturnsResult(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	}, &fakeFactory{}, registry, enabled)
 	request := FailureAnalysisRequest{
@@ -59,7 +59,7 @@ func TestServiceAnalyzeFailureReturnsResult(t *testing.T) {
 }
 
 func TestServiceAnalyzeFailureReturnsUnavailableError(t *testing.T) {
-	service := NewService(&Client{}, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	service := NewService(ServiceConfig{Client: &Client{}, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	request := FailureAnalysisRequest{
 		JobID:       "job",
 		BuildPrefix: "logs/job/1/",
@@ -84,8 +84,8 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	}, &fakeFactory{}, registry, enabled)
 
@@ -259,7 +259,7 @@ func (m *contractProbeModule) AnalysisPrompt(_ context.Context, _ *http.Client, 
 
 func TestServiceAnalyzeFailureCopiesRequestAndUsesConsecutiveCount(t *testing.T) {
 	module := &contractProbeModule{}
-	service := NewService(&Client{}, module, "sys", nil)
+	service := NewService(ServiceConfig{Client: &Client{}, Module: module, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	request := FailureAnalysisRequest{
 		JobID:       "job",
 		BuildPrefix: "logs/job/1/",
@@ -282,7 +282,7 @@ func TestServiceAnalyzeFailureCopiesRequestAndUsesConsecutiveCount(t *testing.T)
 	}
 
 	module = &contractProbeModule{}
-	service = NewService(&Client{}, module, "sys", nil)
+	service = NewService(ServiceConfig{Client: &Client{}, Module: module, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	request.ConsecutiveFailures = 0
 	_, _ = service.AnalyzeFailure(context.Background(), &http.Client{}, request)
 	if module.consecutive != 1 {

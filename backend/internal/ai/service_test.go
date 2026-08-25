@@ -61,6 +61,34 @@ func TestAnalysisPromptHashIncludesAgenticToolGuidance(t *testing.T) {
 	}
 }
 
+func TestNewServiceAppliesConfig(t *testing.T) {
+	client := &Client{}
+	module := &stubModule{name: "kubernetes"}
+	consecutive := map[string]int{"job::test": 2}
+	factory := &fakeFactory{}
+	registry := tools.NewRegistry()
+	enabled := []string{"read_artifact"}
+	traces := NewTraceStore()
+
+	service := NewService(ServiceConfig{
+		Client: client, Module: module, SystemPrompt: "sys",
+		ConsecutiveFailures: consecutive, CacheGeneration: "generation",
+		AgenticOptions: AgenticOptions{MaxIters: 3}, BrowserFactory: factory,
+		ToolRegistry: registry, EnabledTools: enabled,
+		SourceRepoOwner: "owner", SourceRepoName: "repo", GitHubReadToken: "token",
+		TraceStore: traces,
+	})
+
+	if service.client != client || service.module != module || service.systemPrompt != "sys" ||
+		service.consecutiveMap["job::test"] != 2 || service.cacheGeneration != "generation" ||
+		service.agenticOpts.MaxIters != 3 || service.browserFactory != factory || service.registry != registry ||
+		len(service.enabledTools) != 1 || service.enabledTools[0] != "read_artifact" ||
+		service.sourceRepoOwner != "owner" || service.sourceRepoName != "repo" || service.githubReadToken != "token" ||
+		service.traceStore != traces || service.patternNow == nil || service.patternFailureCooldown != defaultPatternFailureCooldown {
+		t.Fatalf("service config was not applied: %+v", service)
+	}
+}
+
 func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -69,8 +97,8 @@ func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 	tc := newFailedTC("Test A", "failure msg")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -92,8 +120,8 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{Summary: "stale summary"}
@@ -115,15 +143,15 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 	traces := NewTraceStore()
-	s.SetTraceStore(traces)
+	s.traceStore = traces
 	usage, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.SetUsageRecorder(usage, aiusage.OriginFetcher)
+	s.usageRecorder, s.usageOrigin = usage, aiusage.OriginFetcher
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "cached"}
@@ -153,8 +181,8 @@ func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
 	consec := map[string]int{"j::Test A": transientPersistThreshold}
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", consec)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: consec})
+	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "flaky", IsTransient: true}
@@ -195,12 +223,12 @@ func TestService_CacheKeyShape(t *testing.T) {
 	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
 		t.Errorf("critique retry budget changed cache key: %q vs %q", a1, got)
 	}
-	s.SetCacheGeneration("0123456789abcdef")
+	s.cacheGeneration = "0123456789abcdef"
 	generated := s.agenticCacheKey("job1", "build1", "Test A", "boom")
 	if generated == a1 || !strings.HasPrefix(generated, "agentic:kubernetes:g:0123456789abcdef:job1:build1:") {
 		t.Fatalf("generated cache key = %q", generated)
 	}
-	s.SetCacheGeneration("")
+	s.cacheGeneration = ""
 	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
 		t.Fatalf("returning to empty generation changed key: %q vs %q", got, a1)
 	}
@@ -209,7 +237,7 @@ func TestService_CacheKeyShape(t *testing.T) {
 func TestService_ShouldReanalyze_IgnoresProvenanceChanges(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	client := newAgenticTestClient(t, srv.URL)
-	s := NewService(client, &stubModule{name: "kubernetes"}, "engine base + my prompt", nil)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes"}, SystemPrompt: "engine base + my prompt", ConsecutiveFailures: nil})
 	base := models.AIAnalysis{
 		Mode: AgenticMode, SkillSetHash: "old-skills", ModelHash: "old-model", PromptHash: "old-prompt",
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
@@ -292,8 +320,8 @@ func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
 	tc1 := newFailedTC("Test A", "msg-a")
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc1)
@@ -511,8 +539,8 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	s.EnableAgentic(
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(s,
 		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1},
 		&fakeFactory{}, registry, enabled,
 	)
@@ -677,8 +705,8 @@ func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 	module := &stubModule{name: "universal", prompt: "use the build log"}
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	service := NewService(client, module, "sys", nil)
-	service.EnableAgentic(AgenticOptions{
+	service := NewService(ServiceConfig{Client: client, Module: module, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	}, &fakeFactory{}, registry, enabled)
 	run := newRun("job", "1")
@@ -703,7 +731,7 @@ func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 
 func TestService_ShouldReanalyze_CacheGeneration(t *testing.T) {
 	s := &Service{systemPrompt: "sys"}
-	s.SetCacheGeneration("0123456789abcdef")
+	s.cacheGeneration = "0123456789abcdef"
 	analysis := &models.AIAnalysis{
 		Mode: AgenticMode, RootCause: "root", CritiquePassed: true,
 		CritiqueVersion: currentCritiqueVersion, CacheGeneration: "fedcba9876543210",
@@ -725,9 +753,9 @@ func TestService_MissingCitationReanalysisReplacesStaleAnalysis(t *testing.T) {
 
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	s := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
+	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	factory := &serviceFixedBrowserFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}}
-	s.EnableAgentic(AgenticOptions{
+	configureAgenticTestService(s, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
 	}, factory, registry, enabled)
@@ -762,8 +790,8 @@ func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 		Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
 	}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
@@ -882,8 +910,8 @@ func TestPreliminaryRetryBudgetStopsUncachedReanalysis(t *testing.T) {
 	}
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newServiceTestRegistry(t)
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
 		Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
 	}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
@@ -995,8 +1023,8 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 
 func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model"})
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
 	run := newRun("job", "1")
 	tc := newFailedTC("Test A", "failure")
 	zero := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 0)
@@ -1034,7 +1062,7 @@ func TestSourceCatalogForBuildUsesConfiguredMultiSourceCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := &Service{}
-	service.SetAnalysisSourceCatalog(catalog)
+	service.analysisSourceCatalog = catalog
 	got, err := service.sourceCatalogForBuild(nil)
 	if err != nil {
 		t.Fatal(err)

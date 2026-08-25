@@ -82,7 +82,7 @@ func TestResolveFileLinks_GenericResolution(t *testing.T) {
 	withStub(t, srv)
 
 	s := &Service{}
-	s.SetSourceRepo("kubernetes-sigs", "cluster-api-provider-azure")
+	s.sourceRepoOwner, s.sourceRepoName = "kubernetes-sigs", "cluster-api-provider-azure"
 
 	tc := &models.TestCase{
 		AISummary: &models.AISummary{Summary: "noise calico-system/calico-kube-controllers v1.34.8"},
@@ -140,7 +140,7 @@ func TestResolveFileLinks_CachesChecks(t *testing.T) {
 	withStub(t, srv)
 
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 	var headCalls int32
 	client := srv.Client()
 
@@ -266,8 +266,8 @@ func TestVerifyGitHubFileAtRef_OnlyDefiniteAnswersArePersisted(t *testing.T) {
 
 			store := NewCache("")
 			s := &Service{}
-			s.SetSourceRepo("o", "r")
-			s.SetLinkVerificationStore(store)
+			s.sourceRepoOwner, s.sourceRepoName = "o", "r"
+			s.linkVerifyStore = store
 
 			for range 2 {
 				if got := s.verifyGitHubFileAtRef(t.Context(), srv.Client(), "o", "r", sha, "test/e2e/cni.go"); got != tc.want {
@@ -297,7 +297,7 @@ func TestVerifyGitHubFileAtRef_TransportErrorIsUnverified(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	store := NewCache("")
 	s := &Service{}
-	s.SetLinkVerificationStore(store)
+	s.linkVerifyStore = store
 	if got := s.verifyGitHubFileAtRef(t.Context(), client, "o", "r", sha, "test/e2e/cni.go"); got != linkUnverified {
 		t.Fatalf("verification = %v, want linkUnverified", got)
 	}
@@ -452,8 +452,8 @@ func TestResolveFileLinksAtRef_DoesNotPersistMutableRefs(t *testing.T) {
 
 	store := NewCache("")
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
-	s.SetLinkVerificationStore(store)
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
+	s.linkVerifyStore = store
 	if links := s.resolveFileLinks(t.Context(), srv.Client(), linkTestCase("test/x.go")); len(links) != 1 {
 		t.Fatalf("links = %v, want the HEAD path resolved", links)
 	}
@@ -479,7 +479,7 @@ func TestResolveFileLinks_DependencyStringsNeverResolveAgainstTheProject(t *test
 	withStub(t, srv)
 
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
 		RelevantFiles: []string{"pkg/project_owned.go"},
 		RootCause:     "the dependency nats-io/nats.go mishandles test/e2e/framework/pod.go",
@@ -520,7 +520,7 @@ func TestResolveFileLinks_DependencyExclusionSurvivesEquivalentSpellings(t *test
 
 	for _, spelling := range []string{shared, "./" + shared, "Test/E2E/Framework/Pod.go"} {
 		s := &Service{}
-		s.SetSourceRepo("o", "r")
+		s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 		tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
 			RelevantFiles: []string{spelling},
 			CauseLocation: &models.AnalysisCauseLocation{
@@ -534,7 +534,7 @@ func TestResolveFileLinks_DependencyExclusionSurvivesEquivalentSpellings(t *test
 
 	// The same resolver still links a genuine project path in the same analysis.
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
 		RelevantFiles: []string{"pkg/project_owned.go"},
 		CauseLocation: &models.AnalysisCauseLocation{
@@ -565,7 +565,7 @@ func TestResolveFileLinks_VerifiedProjectPathOutranksAnExternalHint(t *testing.T
 	}, "o", "r", []string{shared})
 
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
 		RelevantFiles: []string{shared}, CauseLocation: location,
 	}}
@@ -586,7 +586,7 @@ func TestResolveFileLinks_ProjectCauseKeepsItsLinks(t *testing.T) {
 	withStub(t, srv)
 
 	s := &Service{}
-	s.SetSourceRepo("o", "r")
+	s.sourceRepoOwner, s.sourceRepoName = "o", "r"
 	tc := &models.TestCase{AIAnalysis: &models.AIAnalysis{
 		RelevantFiles: []string{"pkg/project_owned.go"},
 		CauseLocation: &models.AnalysisCauseLocation{

@@ -795,10 +795,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		consecutiveMap = map[string]int{jobID + "::" + bc.testName: bc.consecutiveFailures}
 	}
 
-	service := ai.NewService(client, universal.New(), effectivePrompt, consecutiveMap)
-	service.SetCacheGeneration(cacheGeneration)
-	service.SetSkills(projectSkills)
-	service.SetSourceRepo(bc.sourceRepo[0], bc.sourceRepo[1])
+	serviceConfig := ai.ServiceConfig{
+		Client: client, Module: universal.New(), SystemPrompt: effectivePrompt,
+		ConsecutiveFailures: consecutiveMap, CacheGeneration: cacheGeneration,
+		Skills: projectSkills, SourceRepoOwner: bc.sourceRepo[0], SourceRepoName: bc.sourceRepo[1],
+	}
 	if len(bc.sourceRefs) > 0 {
 		sources := make([]tools.RepoSource, 0, len(bc.sourceRefs))
 		for _, ref := range bc.sourceRefs {
@@ -812,28 +813,28 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		if err != nil {
 			t.Fatal(err)
 		}
-		service.SetAnalysisSourceCatalog(catalog)
+		serviceConfig.AnalysisSourceCatalog = catalog
 	}
 	traceStore := ai.NewTraceStore()
-	service.SetTraceStore(traceStore)
+	serviceConfig.TraceStore = traceStore
 	var draftObservations []benchmarkDraftObservation
 	selectedAttempt := 0
-	service.SetDraftObserver(func(observation ai.DraftObservation) {
+	serviceConfig.DraftObserver = func(observation ai.DraftObservation) {
 		draftObservations = append(draftObservations, benchmarkDraftObservation{
 			DraftObservation: observation,
 			observedAt:       time.Now(),
 		})
-	})
-	service.SetDraftSelectionObserver(func(attempt int) { selectedAttempt = attempt })
+	}
+	serviceConfig.DraftSelectionObserver = func(attempt int) { selectedAttempt = attempt }
 	var sourceObservations []ai.SourceEvidenceObservation
-	service.SetSourceEvidenceObserver(func(observation ai.SourceEvidenceObservation) {
+	serviceConfig.SourceEvidenceObserver = func(observation ai.SourceEvidenceObservation) {
 		sourceObservations = append(sourceObservations, observation)
-	})
+	}
 
 	// Scored comparisons use the exact frozen model window. Unscored local runs
 	// retain endpoint detection and the bounded fallback.
 	budgets := benchBudgets(t, client, identity.ModelContextTokens)
-	service.EnableAgentic(ai.AgenticOptions{
+	serviceConfig.AgenticOptions = ai.AgenticOptions{
 		MaxIters:            agentic.MaxIters,
 		ModelByteBudget:     budgets.ModelByteBudget,
 		GCSByteBudget:       benchGCSByteBudget,
@@ -847,7 +848,11 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		CritiqueCachePolicy: ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy()),
 		SingleToolCall:      agentic.SingleToolCall,
 		SemanticJudge:       true,
-	}, factory, registry, enabled)
+	}
+	serviceConfig.BrowserFactory = factory
+	serviceConfig.ToolRegistry = registry
+	serviceConfig.EnabledTools = enabled
+	service := ai.NewService(serviceConfig)
 
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{
 		BuildID: bc.buildID, JobName: bc.jobName, PullNumber: bc.pullNumber, WebURL: bc.webURL,
@@ -2124,9 +2129,10 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 		name: "cache-case", stableID: "0123456789abcdef0123", jobType: "periodic", jobName: "example", buildID: "123", testName: "failed test",
 		failureMsg: "failed", sourceRepo: [2]string{"example", "project"},
 	}
-	service := ai.NewService(client, universal.New(), "sys", nil)
-	service.SetCacheGeneration(generation)
-	service.EnableAgentic(ai.AgenticOptions{MinToolCalls: 1, MinGCSBytes: 50, CritiqueMaxRetries: 1}, nil, nil, nil)
+	service := ai.NewService(ai.ServiceConfig{
+		Client: client, Module: universal.New(), SystemPrompt: "sys", CacheGeneration: generation,
+		AgenticOptions: ai.AgenticOptions{MinToolCalls: 1, MinGCSBytes: 50, CritiqueMaxRetries: 1},
+	})
 	now := time.Now().UTC()
 	result := ai.FailureAnalysisResult{
 		Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
@@ -2158,9 +2164,10 @@ func TestVerifyBenchmarkCacheReusePreservesPolicyRejection(t *testing.T) {
 	cacheDir := t.TempDir()
 	clientOptions := ai.Options{API: ai.APIChatCompletions, Endpoint: "https://example.invalid/v1/chat/completions", Model: "model", CacheDir: cacheDir}
 	client := ai.NewClientWithOptions(clientOptions)
-	service := ai.NewService(client, universal.New(), "sys", nil)
-	service.SetCacheGeneration("generation")
-	service.EnableAgentic(ai.AgenticOptions{CritiqueCachePolicy: ai.CritiqueCachePolicyStrict}, nil, nil, nil)
+	service := ai.NewService(ai.ServiceConfig{
+		Client: client, Module: universal.New(), SystemPrompt: "sys", CacheGeneration: "generation",
+		AgenticOptions: ai.AgenticOptions{CritiqueCachePolicy: ai.CritiqueCachePolicyStrict},
+	})
 	bc := benchCase{name: "case", stableID: "0123456789abcdef0123", jobName: "job", buildID: "1", testName: "test", failureMsg: "failed"}
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
 	analysis := &models.AIAnalysis{CachePolicyRejectionReason: string(ai.CacheRejectedCritiqueStrictWarning)}

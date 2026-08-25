@@ -14,7 +14,7 @@ import (
 func newPatternTestService(t *testing.T, serverURL string) *Service {
 	t.Helper()
 	client := newAgenticTestClient(t, serverURL)
-	return NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+	return NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 }
 
 func patternFailures(n int) []PatternFailure {
