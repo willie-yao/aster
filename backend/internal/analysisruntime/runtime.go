@@ -27,7 +27,7 @@ const (
 	gcsByteBudget              = 1_000_000_000
 	analysisChatGCSByteBudget  = 128 << 20
 	analysisChatMaxIters       = 8
-	analysisChatDefaultTimeout = 2 * time.Minute
+	analysisChatDefaultTimeout = analysischat.DefaultTurnTimeout
 )
 
 // ProviderFallbacks are used when project.yaml omits provider fields.

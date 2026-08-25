@@ -306,7 +306,7 @@ func TestAnalysisChatTimeoutFromEnv(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
 		t.Setenv("ANALYSIS_CHAT_TIMEOUT", "")
 		got, err := analysisChatTimeoutFromEnv()
-		if err != nil || got != 2*time.Minute {
+		if err != nil || got != 10*time.Minute {
 			t.Fatalf("timeout=%v err=%v", got, err)
 		}
 	})

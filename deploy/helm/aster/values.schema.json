@@ -1829,7 +1829,7 @@
             },
             "timeout": {
               "type": "string",
-              "description": "Per-turn model timeout."
+              "description": "Per-turn model timeout. Defaults to 10m and accepts values up to 30m."
             },
             "correctionsEnabled": {
               "type": "boolean",

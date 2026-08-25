@@ -12,6 +12,7 @@
 {{- $extraOAuthScope := false -}}
 {{- $extraOAuthPrivateRepositories := false -}}
 {{- $extraEscalation := false -}}
+{{- $extraChatTimeout := false -}}
 {{- range .Values.server.extraEnv -}}
 {{- if eq (default "" .name) "HSTS_ENABLED" -}}
 {{- $extraHSTS = true -}}
@@ -27,6 +28,9 @@
 {{- end -}}
 {{- if eq (default "" .name) "PULL_REQUEST_ESCALATION_ENABLED" -}}
 {{- $extraEscalation = true -}}
+{{- end -}}
+{{- if eq (default "" .name) "ANALYSIS_CHAT_TIMEOUT" -}}
+{{- $extraChatTimeout = true -}}
 {{- end -}}
 {{- end -}}
 {{- if $extraHSTS -}}
@@ -46,6 +50,9 @@
 {{- end -}}
 {{- if $extraEscalation -}}
 {{- fail "server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED; use server.pullRequestEscalation.enabled" -}}
+{{- end -}}
+{{- if $extraChatTimeout -}}
+{{- fail "server.extraEnv must not set ANALYSIS_CHAT_TIMEOUT; use server.chat.timeout" -}}
 {{- end -}}
 {{- if and (not .Values.server.security.hsts.enabled) (not (or .Values.server.development.allowInsecureHTTP .Values.server.development.allowInsecureCookies)) -}}
 {{- fail "server.security.hsts.enabled=false requires explicit local HTTP acknowledgement through server.development.allowInsecureHTTP=true" -}}

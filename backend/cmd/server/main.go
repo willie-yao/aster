@@ -464,7 +464,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 
 func analysisChatTimeoutFromEnv() (time.Duration, error) {
 	const maxTimeout = 30 * time.Minute
-	timeout := 2 * time.Minute
+	timeout := analysischat.DefaultTurnTimeout
 	if value := os.Getenv("ANALYSIS_CHAT_TIMEOUT"); value != "" {
 		parsed, err := time.ParseDuration(value)
 		if err != nil {

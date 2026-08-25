@@ -110,7 +110,8 @@ Tokens are never returned to the browser or written to logs.
 
 Enable chat only with authentication, the normal provider configuration, and a
 private state directory. Chat is read-only and does not require `BOT_TOKEN`.
-Static Pages deployments do not serve it.
+Static Pages deployments do not serve it. Each model turn defaults to 10 minutes;
+operators can set `server.chat.timeout` to a value up to 30 minutes.
 
 A session is bound to the signed-in owner and one exact current analysis
 identity. Test, recurring-pattern, and causal-group scopes are supported. A

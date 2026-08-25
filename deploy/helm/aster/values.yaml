@@ -476,9 +476,8 @@ server:
   # replicas can serve the same conversation.
   chat:
     enabled: false
-    # Per-turn model timeout. Slow local models may need 10m or more.
-    # The server accepts values up to 30m.
-    timeout: 2m
+    # Per-turn model timeout. The server accepts values up to 30m.
+    timeout: 10m
     # Enables explicit review/confirmation of evidence-backed chat revisions.
     correctionsEnabled: false
     sessionTTL: 2h

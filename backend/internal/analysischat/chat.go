@@ -27,6 +27,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
+// DefaultTurnTimeout is the default budget for one analysis chat turn.
+const DefaultTurnTimeout = 10 * time.Minute
+
 var (
 	// ErrAnalysisNotFound means the published data has no matching analysis.
 	ErrAnalysisNotFound = errors.New("analysis not found")
@@ -342,8 +345,11 @@ func (o Options) normalized(dataDir string) Options {
 	if o.MaxQuestionBytes <= 0 {
 		o.MaxQuestionBytes = 4096
 	}
-	if o.TurnLeaseTTL <= 0 {
-		o.TurnLeaseTTL = 3 * time.Minute
+	if o.TurnTimeout <= 0 {
+		o.TurnTimeout = DefaultTurnTimeout
+	}
+	if o.TurnLeaseTTL <= o.TurnTimeout {
+		o.TurnLeaseTTL = o.TurnTimeout + 30*time.Second
 	}
 	if o.StoreLockTimeout <= 0 {
 		o.StoreLockTimeout = 5 * time.Second
@@ -356,9 +362,6 @@ func (o Options) normalized(dataDir string) Options {
 		if o.CleanupInterval < time.Second {
 			o.CleanupInterval = time.Second
 		}
-	}
-	if o.TurnTimeout <= 0 {
-		o.TurnTimeout = 2 * time.Minute
 	}
 	if o.PollInterval <= 0 {
 		o.PollInterval = 2 * time.Second

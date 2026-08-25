@@ -59,7 +59,7 @@ const (
 	analysisChatIdempotencyHeader     = "Idempotency-Key"
 	analysisChatOutcomeHeader         = "X-Analysis-Chat-Outcome"
 	analysisChatReasonHeader          = "X-Analysis-Chat-Reason"
-	defaultAnalysisChatTimeout        = 2 * time.Minute
+	defaultAnalysisChatTimeout        = analysischat.DefaultTurnTimeout
 	maxAnalysisChatReferenceBodyBytes = 128 << 10
 	maxAnalysisChatMessageBodyBytes   = 32 << 10
 )

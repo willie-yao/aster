@@ -188,7 +188,7 @@ func (o AnalysisChatOptions) normalized() AnalysisChatOptions {
 		o.ContextByteBudget = analysisChatFallbackContextBytes
 	}
 	if o.Timeout <= 0 {
-		o.Timeout = 2 * time.Minute
+		o.Timeout = analysischat.DefaultTurnTimeout
 	}
 	return o
 }

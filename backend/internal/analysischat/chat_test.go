@@ -22,6 +22,29 @@ import (
 
 var testRequestCounter atomic.Int64
 
+func TestOptionsNormalizedTurnBudget(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    Options
+		timeout time.Duration
+		lease   time.Duration
+	}{
+		{name: "defaults", timeout: DefaultTurnTimeout, lease: DefaultTurnTimeout + 30*time.Second},
+		{name: "short lease", opts: Options{TurnLeaseTTL: time.Minute}, timeout: DefaultTurnTimeout, lease: DefaultTurnTimeout + 30*time.Second},
+		{name: "equal lease", opts: Options{TurnLeaseTTL: DefaultTurnTimeout}, timeout: DefaultTurnTimeout, lease: DefaultTurnTimeout + 30*time.Second},
+		{name: "long lease", opts: Options{TurnLeaseTTL: 11 * time.Minute}, timeout: DefaultTurnTimeout, lease: 11 * time.Minute},
+		{name: "custom timeout", opts: Options{TurnTimeout: time.Minute}, timeout: time.Minute, lease: 90 * time.Second},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts := test.opts.normalized("/data")
+			if opts.TurnTimeout != test.timeout || opts.TurnLeaseTTL != test.lease {
+				t.Fatalf("turn budget = timeout %s lease %s", opts.TurnTimeout, opts.TurnLeaseTTL)
+			}
+		})
+	}
+}
+
 func testRequestID(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("test-%d", testRequestCounter.Add(1))
@@ -1086,7 +1109,7 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	opts := Options{Now: now, SessionTTL: time.Minute, TurnLeaseTTL: time.Minute}
+	opts := Options{Now: now, SessionTTL: time.Minute, TurnTimeout: 30 * time.Second, TurnLeaseTTL: time.Minute}
 	first, err := NewService(t.Context(), dir, runner, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -1153,7 +1176,7 @@ func TestServiceExpiredCancelledTurnRestoresCancellation(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreContext: true,
 	}
-	opts := Options{Now: now, SessionTTL: time.Minute, TurnLeaseTTL: time.Minute, PollInterval: 10 * time.Millisecond}
+	opts := Options{Now: now, SessionTTL: time.Minute, TurnTimeout: 30 * time.Second, TurnLeaseTTL: time.Minute, PollInterval: 10 * time.Millisecond}
 	first, err := NewService(t.Context(), dir, runner, opts)
 	if err != nil {
 		t.Fatal(err)
