@@ -45,6 +45,7 @@ function failedTest(name: string): TestCase {
       root_cause: "cause",
       severity: "high",
       suggested_fix: "fix",
+      disposition: "grounded",
       file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
     },
   };

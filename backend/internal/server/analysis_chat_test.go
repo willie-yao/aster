@@ -101,7 +101,7 @@ func (f *fakeAnalysisChatRunner) Stream(
 	return f.Send(ctx, id, owner, requestID, message)
 }
 
-func (f *fakeAnalysisChatRunner) PreflightTestFix(_ context.Context, _, _, _ string) error {
+func (f *fakeAnalysisChatRunner) PreflightAnalysisFix(_ context.Context, _, _, _ string) error {
 	f.preflightCalls++
 	return f.preflightErr
 }

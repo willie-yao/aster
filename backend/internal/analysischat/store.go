@@ -57,6 +57,15 @@ type persistedResolvedAnalysis struct {
 	TestCase       models.TestCase                `json:"test_case"`
 	Pattern        *models.PatternAnalysis        `json:"pattern,omitempty"`
 	EvidenceBuilds []persistedArtifactBuild       `json:"evidence_builds,omitempty"`
+	FixTarget      *persistedResolvedFixTarget    `json:"fix_target,omitempty"`
+}
+
+type persistedResolvedFixTarget struct {
+	Ref          AnalysisRef                    `json:"ref"`
+	AnalysisHash string                         `json:"analysis_hash"`
+	Source       sourceinvestigation.Repository `json:"source"`
+	Build        models.BuildInfo               `json:"build"`
+	TestCase     models.TestCase                `json:"test_case"`
 }
 
 type persistedArtifactBuild struct {
@@ -77,6 +86,7 @@ type persistedRequest struct {
 }
 
 type persistedTestFixSource struct {
+	TargetRef                AnalysisRef       `json:"target_ref"`
 	FailureRevision          string            `json:"failure_revision"`
 	GenerationBaseRevision   string            `json:"generation_base_revision"`
 	VerifiedSourceFileHashes map[string]string `json:"verified_source_file_hashes"`
@@ -439,6 +449,23 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 		JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: build, TestCase: testCase, Pattern: boundedPersistedPattern(resolved.pattern),
 		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
+		FixTarget:      persistResolvedFixTarget(resolved.fixTarget, sourceRepo),
+	}
+}
+
+func persistResolvedFixTarget(target *resolvedFixTarget, sourceRepo sourceinvestigation.Repository) *persistedResolvedFixTarget {
+	if target == nil {
+		return nil
+	}
+	persisted := persistResolved(resolvedAnalysis{
+		ref: target.ref, build: target.build, testCase: target.testCase,
+	}, sourceRepo)
+	if sourceinvestigation.ValidateRepository(persisted.Source) != nil || persisted.AnalysisHash == "" {
+		return nil
+	}
+	return &persistedResolvedFixTarget{
+		Ref: persisted.Ref, AnalysisHash: persisted.AnalysisHash, Source: persisted.Source,
+		Build: persisted.Build, TestCase: persisted.TestCase,
 	}
 }
 
@@ -595,6 +622,16 @@ func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
 		testCase:       cloneTestCase(resolved.TestCase),
 		pattern:        clonePattern(resolved.Pattern),
 		evidenceBuilds: restoreArtifactBuilds(resolved.EvidenceBuilds),
+		fixTarget:      restoreResolvedFixTarget(resolved.FixTarget),
+	}
+}
+
+func restoreResolvedFixTarget(target *persistedResolvedFixTarget) *resolvedFixTarget {
+	if target == nil {
+		return nil
+	}
+	return &resolvedFixTarget{
+		ref: target.Ref, build: cloneBuildInfo(target.Build), testCase: cloneTestCase(target.TestCase),
 	}
 }
 

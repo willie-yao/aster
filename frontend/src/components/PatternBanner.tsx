@@ -115,7 +115,7 @@ export function PatternBanner({
     Boolean(features.analysis_chat),
   );
   const chatRef: AnalysisChatReference | null =
-    chatAvailability === "ready" && pattern.id && pattern.content_hash && jobID
+    causalGroups.length === 0 && chatAvailability === "ready" && pattern.id && pattern.content_hash && jobID
       ? {
           scope: "pattern",
           job_id: jobID,

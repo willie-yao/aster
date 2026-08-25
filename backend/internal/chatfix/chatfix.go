@@ -16,8 +16,8 @@ import (
 
 type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error)
-	TestFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
-	PreflightTestFix(ctx context.Context, sessionID, owner, requestID string) error
+	AnalysisFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
+	PreflightAnalysisFix(ctx context.Context, sessionID, owner, requestID string) error
 }
 
 type fixPreviewer interface {
@@ -101,10 +101,10 @@ func (s *Service) CreateAnalysisFixRequest(
 	}
 	// Pin the source the patch will be generated against. Chat turns do not do
 	// this, so that asking a question never depends on source verification.
-	if err := s.chat.PreflightTestFix(ctx, sessionID, owner, requestID); err != nil {
+	if err := s.chat.PreflightAnalysisFix(ctx, sessionID, owner, requestID); err != nil {
 		return actions.ActionRequestView{}, err
 	}
-	candidate, err := s.chat.TestFixCandidate(sessionID, owner, requestID)
+	candidate, err := s.chat.AnalysisFixCandidate(sessionID, owner, requestID)
 	if err != nil {
 		return actions.ActionRequestView{}, err
 	}
@@ -115,9 +115,9 @@ func (s *Service) CreateAnalysisFixRequest(
 func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {
 	input := actions.AnalysisFixInput{
 		Identity: actions.AnalysisIdentity{
-			JobID: candidate.Analysis.JobID, BuildID: candidate.Analysis.BuildID, TestName: candidate.Analysis.TestName,
-			Source: candidate.Analysis.Source, SuiteName: candidate.Analysis.SuiteName, ClassName: candidate.Analysis.ClassName,
-			JUnitFile: candidate.Analysis.JUnitFile, AnalysisGeneratedAt: candidate.Analysis.AnalysisGeneratedAt,
+			JobID: candidate.FixTarget.JobID, BuildID: candidate.FixTarget.BuildID, TestName: candidate.FixTarget.TestName,
+			Source: candidate.FixTarget.Source, SuiteName: candidate.FixTarget.SuiteName, ClassName: candidate.FixTarget.ClassName,
+			JUnitFile: candidate.FixTarget.JUnitFile, AnalysisGeneratedAt: candidate.FixTarget.AnalysisGeneratedAt,
 		},
 		ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
 		PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
@@ -166,13 +166,14 @@ func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction st
 
 // ValidateAnalysisPreview rechecks the exact owner-bound chat response.
 func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, binding actions.AnalysisPreviewBinding) error {
-	candidate, err := s.chat.TestFixCandidate(binding.ChatSessionID, owner, binding.ChatRequestID)
+	candidate, err := s.chat.AnalysisFixCandidate(binding.ChatSessionID, owner, binding.ChatRequestID)
 	if err != nil {
 		return err
 	}
-	ref := candidate.Analysis
+	ref := candidate.FixTarget
 	identity := binding.Identity
-	if candidate.ResponseHash != binding.ChatResponseHash || ref.Scope != analysischat.ScopeTest ||
+	if candidate.ResponseHash != binding.ChatResponseHash ||
+		(candidate.Analysis.Scope != analysischat.ScopeTest && candidate.Analysis.Scope != analysischat.ScopeCause) || ref.Scope != analysischat.ScopeTest ||
 		candidate.AnalysisContentHash == "" || candidate.AnalysisContentHash != binding.AnalysisContentHash ||
 		candidate.SourceRepositorySnapshot != binding.SourceRepository ||
 		ref.JobID != identity.JobID || ref.BuildID != identity.BuildID || ref.TestName != identity.TestName ||

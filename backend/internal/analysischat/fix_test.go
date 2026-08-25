@@ -303,7 +303,10 @@ func TestServiceCauseFixCandidateIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("cause fix candidate error = %v", err)
+		t.Fatalf("pattern fix candidate error = %v", err)
+	}
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("inactive cause fix candidate error = %v", err)
 	}
 }
 

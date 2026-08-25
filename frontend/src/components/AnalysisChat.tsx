@@ -82,6 +82,7 @@ import { RichText } from "./RichText";
 import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
 import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
+import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import { ChatFixDialog } from "./ChatFixDialog";
 import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
 
@@ -558,12 +559,14 @@ export function AnalysisChat({
   analysisRef,
   fileCtx,
   fixPatterns = [],
+  fixTarget,
   onCorrectionChanged,
   appearance = "default",
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
+  fixTarget?: CausalGroupFixTarget;
   onCorrectionChanged?: () => void;
   appearance?: "default" | "detail";
 }) {
@@ -838,11 +841,12 @@ export function AnalysisChat({
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
   const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
-  const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
+  const causeFixEnabled = causeScope && Boolean(fixTarget);
+  const exactFixEnabled = Boolean(features.junit_chat_fix) && (exactJUnitAnalysis || causeFixEnabled);
   const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(fileCtx.fileLinks, session?.source_repository).length > 0;
   // No published file link means no verified source path can exist, which is
   // conclusive before a session resolves the source repository.
-  const fixSourceUnavailable = exactFixEnabled &&
+  const fixSourceUnavailable = Boolean(features.junit_chat_fix) && exactJUnitAnalysis &&
     (session ? !hasVerifiedSourcePaths : Object.keys(fileCtx.fileLinks ?? {}).length === 0);
 
   async function submit(nextQuestion?: string) {
@@ -1385,11 +1389,12 @@ export function AnalysisChat({
                 const hasArtifactEvidence = message.request_id
                   ? groundedRequestIDs.has(message.request_id)
                   : Boolean(message.citations?.length);
-                const exactFixEligible = exactFixEnabled && hasArtifactEvidence && hasVerifiedSourcePaths;
+                const exactFixEligible = exactFixEnabled && hasArtifactEvidence &&
+                  (causeFixEnabled || hasVerifiedSourcePaths);
                 const legacyFixEligible = patternScope && Boolean(features.chat_fix) && hasArtifactEvidence &&
                   Boolean(fixPatterns.length);
                 let fixIneligibleReason: string | undefined;
-                if (exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence) {
+                if (exactFixEnabled && (causeFixEnabled || hasVerifiedSourcePaths) && !hasArtifactEvidence) {
                   fixIneligibleReason = "Fix preview is not possible yet: no answer in this conversation carries a validated artifact citation. " +
                     "Ask something that requires reading an artifact, for example what the build log or JUnit file shows at the failure.";
                 }
@@ -1542,7 +1547,8 @@ export function AnalysisChat({
         sessionID={session?.id ?? ""}
         message={fixMessage}
         patterns={fixPatterns}
-        exactAnalysis={!multiBuildScope}
+        exactAnalysis={!patternScope}
+        causeScope={causeScope}
         onClose={() => setFixOpen(false)}
       />
       <Dialog open={resetOpen} onClose={resetting ? undefined : () => setResetOpen(false)} fullWidth maxWidth="xs">

@@ -81,12 +81,22 @@ function rank(severity: string | undefined): number {
 function representativeAnalyzedFailure(testCases: TestCase[]): TestCase | null {
   let representative: TestCase | null = null;
   for (const testCase of testCases) {
-    if (testCase.status !== "failed" || !testCase.ai_analysis) continue;
-    if (!representative || rank(testCase.ai_analysis.severity) > rank(representative.ai_analysis?.severity)) {
+    const analysis = testCase.ai_analysis;
+    if (testCase.status !== "failed" || !analysisHasUsableDiagnosis(analysis)) continue;
+    if (!representative || rank(analysis.severity) > rank(representative.ai_analysis?.severity)) {
       representative = testCase;
     }
   }
   return representative;
+}
+
+function analysisHasUsableDiagnosis(
+  analysis: TestCase["ai_analysis"],
+): analysis is NonNullable<TestCase["ai_analysis"]> {
+  if (!analysis) return false;
+  if (analysis.disposition === "grounded") return true;
+  return analysis.disposition === "preliminary" &&
+    !analysis.disposition_warnings?.includes("semantic_review_unresolved");
 }
 
 // fixInvestigationEligible applies the part of the server Fix gate that is

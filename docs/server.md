@@ -35,7 +35,7 @@ schema.
 | `GET /api/failures/{id}/eligibility` | Run deterministic action eligibility and pinned-source preflight without generating a draft. |
 | `POST /api/failures/{id}/create-issue/preview` | Preview an issue without filing it. |
 | `POST /api/failures/{id}/propose-fix/preview` | Preview a Fix PR without opening it. Registered only when Fix is enabled. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit an exact-JUnit chat finding for asynchronous Fix preview generation. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit a test- or cause-scoped chat finding, anchored to one exact JUnit failure, for asynchronous Fix preview generation. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Legacy synchronous pattern chat-to-fix preview. |
 | `POST /api/failures/{id}/{action}/requests` | Create a persistent asynchronous issue or Fix draft request. |
 | `GET /api/action-requests/{id}` | Read the owner's pending, ready, failed, cancelled, or confirmed request. |

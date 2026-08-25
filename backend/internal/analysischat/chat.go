@@ -380,6 +380,12 @@ func (o Options) normalized(dataDir string) Options {
 	return o
 }
 
+type resolvedFixTarget struct {
+	ref      AnalysisRef
+	build    models.BuildInfo
+	testCase models.TestCase
+}
+
 type resolvedAnalysis struct {
 	ref            AnalysisRef
 	jobID          string
@@ -389,6 +395,7 @@ type resolvedAnalysis struct {
 	patterns       []models.PatternAnalysis
 	pattern        *models.PatternAnalysis
 	evidenceBuilds []ArtifactBuild
+	fixTarget      *resolvedFixTarget
 }
 
 // Service resolves published analyses and owns durable chat sessions.
@@ -1065,6 +1072,10 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 	causePattern.RemediationTargets = nil
 	causePattern.Lifecycle = nil
 	causePattern.Summary = group.RootCause
+	var fixTarget *resolvedFixTarget
+	if models.PatternIsActive(pattern) {
+		fixTarget = selectCauseFixTarget(ref.JobID, group, detail.Runs)
+	}
 	testCase := models.TestCase{
 		Name: pattern.Subject,
 		AIAnalysis: &models.AIAnalysis{
@@ -1077,8 +1088,79 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
 		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
 		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &causePattern,
-		evidenceBuilds: cloneArtifactBuilds(builds),
+		evidenceBuilds: cloneArtifactBuilds(builds), fixTarget: fixTarget,
 	}, nil
+}
+
+func selectCauseFixTarget(jobID string, group models.PatternCausalGroup, runs []models.BuildResult) *resolvedFixTarget {
+	affected := make(map[string]struct{}, len(group.Builds))
+	for _, buildID := range group.Builds {
+		if buildID = strings.TrimSpace(buildID); buildID != "" {
+			affected[buildID] = struct{}{}
+		}
+	}
+	selectRun := func(run models.BuildResult) *resolvedFixTarget {
+		if _, ok := affected[run.BuildID]; !ok {
+			return nil
+		}
+		testCase := representativeCauseFailure(run.TestCases)
+		if testCase == nil || testCase.Source == models.TestCaseSourceBuild || strings.TrimSpace(testCase.JUnitFile) == "" || len(testCase.AIAnalysis.FileLinks) == 0 {
+			return nil
+		}
+		for i := range run.TestCases {
+			if run.TestCases[i].Name == testCase.Name {
+				if &run.TestCases[i] != testCase {
+					return nil
+				}
+				break
+			}
+		}
+		return &resolvedFixTarget{
+			ref: AnalysisRef{
+				Scope: ScopeTest, JobID: jobID, BuildID: run.BuildID, TestName: testCase.Name,
+				Source: testCase.Source, SuiteName: testCase.SuiteName, ClassName: testCase.ClassName,
+				JUnitFile: testCase.JUnitFile, AnalysisGeneratedAt: testCase.AIAnalysis.GeneratedAt,
+			},
+			build: cloneBuildInfo(run.BuildInfo), testCase: cloneTestCase(*testCase),
+		}
+	}
+	preferred := ""
+	if group.Remediation != nil {
+		preferred = strings.TrimSpace(group.Remediation.BuildID)
+	}
+	if preferred != "" {
+		for _, run := range runs {
+			if run.BuildID == preferred {
+				if target := selectRun(run); target != nil {
+					return target
+				}
+				break
+			}
+		}
+	}
+	for _, run := range runs {
+		if run.BuildID == preferred {
+			continue
+		}
+		if target := selectRun(run); target != nil {
+			return target
+		}
+	}
+	return nil
+}
+
+func representativeCauseFailure(testCases []models.TestCase) *models.TestCase {
+	var representative *models.TestCase
+	for i := range testCases {
+		testCase := &testCases[i]
+		if testCase.Status != "failed" || !models.AnalysisHasUsableDiagnosis(testCase.AIAnalysis) {
+			continue
+		}
+		if representative == nil || models.SeverityRank(testCase.AIAnalysis.Severity) > models.SeverityRank(representative.AIAnalysis.Severity) {
+			representative = testCase
+		}
+	}
+	return representative
 }
 
 func selectCauseEvidenceRuns(group models.PatternCausalGroup, runs []models.BuildResult) ([]models.BuildResult, int, int) {
