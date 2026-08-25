@@ -47,79 +47,74 @@ type AgenticCachePolicy struct {
 
 // LookupAgenticCache evaluates one private entry without mutating the cache.
 func LookupAgenticCache(cache *Cache, key string, policy AgenticCachePolicy) (FailureAnalysisResult, CacheRejectionReason) {
+	record, reason := lookupAgenticCacheRecord(cache, key, policy)
+	if reason != CacheAccepted {
+		return FailureAnalysisResult{}, reason
+	}
+	return projectFailureAnalysis(record), CacheAccepted
+}
+
+func lookupAgenticCacheRecord(cache *Cache, key string, policy AgenticCachePolicy) (analysisRecord, CacheRejectionReason) {
 	if cache == nil {
-		return FailureAnalysisResult{}, CacheRejectedLookupMissing
+		return analysisRecord{}, CacheRejectedLookupMissing
 	}
 	entry, ok := cache.Lookup(key)
 	if !ok {
-		return FailureAnalysisResult{}, CacheRejectedLookupMissing
+		return analysisRecord{}, CacheRejectedLookupMissing
 	}
-	return AcceptAgenticCacheEntry(entry, key, policy)
+	return acceptAgenticCacheRecord(entry, key, policy)
 }
 
 // AcceptAgenticCacheEntry validates and reconstructs one private cache entry.
 func AcceptAgenticCacheEntry(entry CacheEntry, expectedKey string, policy AgenticCachePolicy) (FailureAnalysisResult, CacheRejectionReason) {
+	record, reason := acceptAgenticCacheRecord(entry, expectedKey, policy)
+	if reason != CacheAccepted {
+		return FailureAnalysisResult{}, reason
+	}
+	return projectFailureAnalysis(record), CacheAccepted
+}
+
+func acceptAgenticCacheRecord(entry CacheEntry, expectedKey string, policy AgenticCachePolicy) (analysisRecord, CacheRejectionReason) {
 	now := policy.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
 	if entry.Key != expectedKey || expectedKey == "" || !json.Valid(entry.Data) {
-		return FailureAnalysisResult{}, CacheRejectedMalformed
+		return analysisRecord{}, CacheRejectedMalformed
 	}
 	if !validCacheEntryTime(now, entry.CreatedAt) {
-		return FailureAnalysisResult{}, CacheRejectedExpired
+		return analysisRecord{}, CacheRejectedExpired
 	}
 
 	var cached agenticCacheData
 	if err := json.Unmarshal(entry.Data, &cached); err != nil || (cached.RootCause == "" && cached.Summary == "") {
-		return FailureAnalysisResult{}, CacheRejectedMalformed
+		return analysisRecord{}, CacheRejectedMalformed
 	}
 	if !validCritiqueRuleClassification(cached.CritiqueHardFailures, cached.CritiqueSoftWarnings) {
-		return FailureAnalysisResult{}, CacheRejectedMalformed
+		return analysisRecord{}, CacheRejectedMalformed
 	}
 	if !validSemanticResolution(cached.JudgeObjected, cached.JudgeRevised, cached.JudgeRevisionRejected) {
-		return FailureAnalysisResult{}, CacheRejectedMalformed
+		return analysisRecord{}, CacheRejectedMalformed
 	}
 	generatedAt := entry.CreatedAt
 	if cached.GeneratedAt != "" {
 		parsedGeneratedAt, err := time.Parse(time.RFC3339, cached.GeneratedAt)
 		if err != nil {
-			return FailureAnalysisResult{}, CacheRejectedMalformed
+			return analysisRecord{}, CacheRejectedMalformed
 		}
 		if !validCacheEntryTime(now, parsedGeneratedAt) {
-			return FailureAnalysisResult{}, CacheRejectedExpired
+			return analysisRecord{}, CacheRejectedExpired
 		}
 		generatedAt = parsedGeneratedAt
 	}
-	summary, analysis := buildOutputs(cached.analysisResponse, cached.Model, cached.ModelHash, generatedAt)
-	analysis.Mode = AgenticMode
-	analysis.CacheHit = true
-	analysis.ToolCalls = cached.ToolCalls
-	analysis.ContextBytes = cached.ModelBytes
-	analysis.GCSBytes = cached.GCSBytes
-	analysis.EvidencePlanCovered = cached.EvidencePlanCovered
-	analysis.GCSFloorRetryExhausted = cached.GCSFloorRetryExhausted
-	analysis.BudgetExhausted = cached.BudgetExhausted
-	analysis.SameFailureReuse = cached.SameFailureReuse
-	analysis.JudgeRan = cached.JudgeRan
-	analysis.JudgeObjected = cached.JudgeObjected
-	analysis.JudgeRevised = cached.JudgeRevised
-	analysis.JudgeRevisionRejected = cached.JudgeRevisionRejected
-	analysis.CritiquePassed = cached.CritiquePassed
-	analysis.CritiqueHardFailures = append([]string(nil), cached.CritiqueHardFailures...)
-	analysis.CritiqueSoftWarnings = append([]string(nil), cached.CritiqueSoftWarnings...)
-	analysis.CritiqueVersion = cached.CritiqueVersion
-	analysis.SkillSetHash = cached.SkillSetHash
-	analysis.ModelHash = cached.ModelHash
-	analysis.PromptHash = cached.PromptHash
-	analysis.CacheGeneration = policy.CacheGeneration
-	result := FailureAnalysisResult{Summary: summary, Analysis: analysis}
+	record := analysisRecordFromCache(cached, generatedAt.UTC().Format(time.RFC3339), policy.CacheGeneration)
+	result := projectFailureAnalysis(record)
 	policy.Now = now
 	policy.entryTimeValidated = true
 	if reason := AgenticResultRejection(result, policy); reason != CacheAccepted {
-		return FailureAnalysisResult{}, reason
+		return analysisRecord{}, reason
 	}
-	return result, CacheAccepted
+	return record, CacheAccepted
 }
 
 // AgenticResultRejection evaluates the reusable quality contract for an analysis.
@@ -188,39 +183,8 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	} else if _, err := time.Parse(time.RFC3339, generatedAt); err != nil {
 		return CacheEntry{}, fmt.Errorf("agentic analysis generation time is invalid: %w", err)
 	}
-	data := agenticCacheData{
-		analysisResponse: analysisResponse{
-			Summary:           result.Summary.Summary,
-			IsTransient:       result.Summary.IsTransient,
-			RootCause:         result.Analysis.RootCause,
-			Severity:          result.Analysis.Severity,
-			SuggestedFix:      result.Analysis.SuggestedFix,
-			RelevantFiles:     append([]string(nil), result.Analysis.RelevantFiles...),
-			SearchSuggestions: append([]string(nil), result.Analysis.SearchSuggestions...),
-			CauseLocation:     result.Analysis.CauseLocation.Clone(),
-			EvidenceCitations: append([]models.EvidenceCitation(nil), result.Analysis.EvidenceCitations...),
-		},
-		GeneratedAt:            generatedAt,
-		Model:                  result.Analysis.Model,
-		ToolCalls:              result.Analysis.ToolCalls,
-		ModelBytes:             result.Analysis.ContextBytes,
-		GCSBytes:               result.Analysis.GCSBytes,
-		EvidencePlanCovered:    result.Analysis.EvidencePlanCovered,
-		GCSFloorRetryExhausted: result.Analysis.GCSFloorRetryExhausted,
-		BudgetExhausted:        result.Analysis.BudgetExhausted,
-		SameFailureReuse:       result.Analysis.SameFailureReuse,
-		JudgeRan:               result.Analysis.JudgeRan,
-		JudgeObjected:          result.Analysis.JudgeObjected,
-		JudgeRevised:           result.Analysis.JudgeRevised,
-		JudgeRevisionRejected:  result.Analysis.JudgeRevisionRejected,
-		CritiquePassed:         result.Analysis.CritiquePassed,
-		CritiqueHardFailures:   append([]string(nil), result.Analysis.CritiqueHardFailures...),
-		CritiqueSoftWarnings:   append([]string(nil), result.Analysis.CritiqueSoftWarnings...),
-		CritiqueVersion:        result.Analysis.CritiqueVersion,
-		SkillSetHash:           result.Analysis.SkillSetHash,
-		ModelHash:              result.Analysis.ModelHash,
-		PromptHash:             result.Analysis.PromptHash,
-	}
+	record := analysisRecordFromResult(result, generatedAt)
+	data := projectAgenticCacheData(record)
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return CacheEntry{}, fmt.Errorf("encode agentic cache entry: %w", err)
