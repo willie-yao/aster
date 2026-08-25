@@ -8,9 +8,48 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
+
+func TestRunRecordProjectsAnalysisTrace(t *testing.T) {
+	started := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	recorded := started.Add(2 * time.Second)
+	record := newRunRecord(TraceMetadata{
+		JobID: "job", BuildID: "1", TestName: "test https://secret.example",
+		APIMode: APIResponses, Model: "model", ReasoningEffort: " HIGH ",
+	}, started)
+	record.append(TraceEvent{Kind: "model_request", Outcome: "success"})
+	record.complete("success", nil, recorded)
+
+	got := record.analysisTrace()
+	if got.JobID != "job" || got.BuildID != "1" || !strings.Contains(got.TestName, "[redacted-url]") ||
+		got.APIMode != APIResponses || got.Model != "model" || got.ReasoningEffort != "high" ||
+		got.StartedAt != started.Format(time.RFC3339Nano) || got.RecordedAt != recorded.Format(time.RFC3339Nano) ||
+		got.ElapsedMs != 2000 || got.Outcome != "success" || len(got.Events) != 1 || got.Events[0].Sequence != 1 {
+		t.Fatalf("analysis trace projection = %+v", got)
+	}
+	got.Events[0].Kind = "changed"
+	if record.events[0].Kind != "model_request" {
+		t.Fatal("trace projection aliases the run record event slice")
+	}
+}
+
+func TestTraceSessionProjectsRunRecordOnFinish(t *testing.T) {
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job"})
+	trace.Record(TraceEvent{Kind: "model_request", Outcome: "success"})
+	if len(trace.record.events) != 1 || len(store.Snapshot().Traces) != 0 {
+		t.Fatal("run record was projected before the run finished")
+	}
+	trace.Finish("success", nil)
+
+	got := store.Snapshot().Traces[0]
+	if len(got.Events) != 1 || got.Events[0].Sequence != 1 || got.Events[0].Kind != "model_request" || got.Events[0].ElapsedMs < 0 || got.Events[0].ElapsedMs > 60_000 {
+		t.Fatalf("projected run record = %+v", got.Events)
+	}
+}
 
 func TestTraceStoreBoundsAndRedacts(t *testing.T) {
 	store := NewTraceStore()

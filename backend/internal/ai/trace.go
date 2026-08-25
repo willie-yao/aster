@@ -237,20 +237,7 @@ func (s *TraceStore) Start(meta TraceMetadata) *TraceSession {
 		return nil
 	}
 	now := time.Now().UTC()
-	return &TraceSession{
-		store: s,
-		start: now,
-		trace: AnalysisTrace{
-			JobID:           traceText(meta.JobID),
-			BuildID:         traceText(meta.BuildID),
-			TestName:        traceText(meta.TestName),
-			APIMode:         traceText(meta.APIMode),
-			Model:           traceText(meta.Model),
-			ReasoningEffort: safeReasoningEffortTrace(meta.ReasoningEffort),
-			StartedAt:       now.Format(time.RFC3339Nano),
-			Events:          []TraceEvent{},
-		},
-	}
+	return &TraceSession{store: s, record: newRunRecord(meta, now)}
 }
 
 // Snapshot returns a deterministic copy of all completed traces.
@@ -283,26 +270,32 @@ func (s *TraceStore) Save(path string) error {
 	return statefile.WriteJSON(path, snapshot)
 }
 
-// TraceSession records one analysis until Finish is called.
-type TraceSession struct {
-	mu       sync.Mutex
-	store    *TraceStore
-	start    time.Time
-	trace    AnalysisTrace
-	finished bool
+// runRecord is the in-memory, content-free event record for one analysis run.
+// AnalysisTrace is projected from it only when the run finishes.
+type runRecord struct {
+	metadata   TraceMetadata
+	startedAt  time.Time
+	recordedAt string
+	elapsedMs  int
+	outcome    string
+	errorCode  string
+	events     []TraceEvent
+	truncated  bool
 }
 
-// Record appends one sanitized event while preserving draft decisions at the cap.
-func (s *TraceSession) Record(event TraceEvent) {
-	if s == nil {
-		return
+func newRunRecord(meta TraceMetadata, startedAt time.Time) runRecord {
+	return runRecord{
+		metadata: TraceMetadata{
+			JobID: traceText(meta.JobID), BuildID: traceText(meta.BuildID), TestName: traceText(meta.TestName),
+			APIMode: traceText(meta.APIMode), Model: traceText(meta.Model), ReasoningEffort: safeReasoningEffortTrace(meta.ReasoningEffort),
+		},
+		startedAt: startedAt,
+		events:    []TraceEvent{},
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.finished {
-		return
-	}
-	event.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
+}
+
+func (r *runRecord) append(event TraceEvent) {
+	event.ElapsedMs = int(time.Since(r.startedAt) / time.Millisecond)
 	event.Kind = traceText(event.Kind)
 	event.Outcome = traceText(event.Outcome)
 	event.ResponseID = traceResponseID(event.ResponseID)
@@ -349,23 +342,63 @@ func (s *TraceSession) Record(event TraceEvent) {
 	if event.Grep != nil {
 		event.Grep = sanitizeGrepCallObservation(*event.Grep)
 	}
-	event.Sequence = nextTraceSequence(s.trace.Events)
-	if len(s.trace.Events) < analysisTraceMaxEvents {
-		s.trace.Events = append(s.trace.Events, event)
+	event.Sequence = nextTraceSequence(r.events)
+	if len(r.events) < analysisTraceMaxEvents {
+		r.events = append(r.events, event)
 		return
 	}
-	s.trace.Truncated = true
+	r.truncated = true
 	if event.Kind != "draft_selection" {
 		return
 	}
-	for i := range s.trace.Events {
-		if s.trace.Events[i].Kind == "draft_selection" {
+	for i := range r.events {
+		if r.events[i].Kind == "draft_selection" {
 			continue
 		}
-		copy(s.trace.Events[i:], s.trace.Events[i+1:])
-		s.trace.Events[len(s.trace.Events)-1] = event
+		copy(r.events[i:], r.events[i+1:])
+		r.events[len(r.events)-1] = event
 		return
 	}
+}
+
+func (r *runRecord) complete(outcome string, err error, recordedAt time.Time) {
+	r.recordedAt = recordedAt.Format(time.RFC3339Nano)
+	r.elapsedMs = int(recordedAt.Sub(r.startedAt) / time.Millisecond)
+	r.outcome = traceText(outcome)
+	if err != nil {
+		r.errorCode = traceErrorCode(err)
+	}
+}
+
+func (r runRecord) analysisTrace() AnalysisTrace {
+	return normalizeAnalysisTrace(AnalysisTrace{
+		JobID: r.metadata.JobID, BuildID: r.metadata.BuildID, TestName: r.metadata.TestName,
+		APIMode: r.metadata.APIMode, Model: r.metadata.Model, ReasoningEffort: r.metadata.ReasoningEffort,
+		StartedAt: r.startedAt.Format(time.RFC3339Nano), RecordedAt: r.recordedAt,
+		ElapsedMs: r.elapsedMs, Outcome: r.outcome, ErrorCode: r.errorCode,
+		Truncated: r.truncated, Events: append([]TraceEvent(nil), r.events...),
+	})
+}
+
+// TraceSession records one analysis until Finish is called.
+type TraceSession struct {
+	mu       sync.Mutex
+	store    *TraceStore
+	record   runRecord
+	finished bool
+}
+
+// Record appends one sanitized event while preserving draft decisions at the cap.
+func (s *TraceSession) Record(event TraceEvent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finished {
+		return
+	}
+	s.record.append(event)
 }
 
 // analysisTraceMaxEvidenceGroups bounds the group refs retained per event so a
@@ -480,13 +513,8 @@ func (s *TraceSession) Finish(outcome string, err error) {
 		return
 	}
 	s.finished = true
-	s.trace.ElapsedMs = int(time.Since(s.start) / time.Millisecond)
-	s.trace.RecordedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	s.trace.Outcome = traceText(outcome)
-	if err != nil {
-		s.trace.ErrorCode = traceErrorCode(err)
-	}
-	completed := s.trace
+	s.record.complete(outcome, err, time.Now().UTC())
+	completed := s.record.analysisTrace()
 	s.mu.Unlock()
 
 	s.store.Upsert(completed)
