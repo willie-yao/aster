@@ -126,6 +126,7 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 		VerifiedSourceFileHashes: cloneStringMap(candidate.VerifiedSourceFileHashes),
 		SourceBranch:             candidate.SourceBranch,
 		AssistantAnswer:          candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		EvidenceWarnings: append([]string(nil), candidate.EvidenceWarnings...),
 	}
 	if candidate.ProposedRevision != nil {
 		input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}

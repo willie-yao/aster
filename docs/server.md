@@ -132,11 +132,14 @@ access. Citations are verified against the artifacts the conversation actually
 read, including reads from earlier turns of the same conversation. The quote a
 citation carries is attributed by the engine from what those reads returned
 rather than copied from the model, so a citation naming a passage the tools never
-returned, or one so generic it names several, cannot be verified. An answer that
-fails that check, or that does not follow the response format at all, is still
-returned, with its unproven citations removed and the answer marked unverified so
-it is visually distinct in the UI. An unverified answer cannot start a Fix
-preview or a correction. A response that only announces the model's next step is
+returned, or one so generic it names several, cannot be verified. Invalid
+citations are omitted individually. When verified citations remain, the answer
+is marked partially verified and may start a Fix investigation with only the
+validated citations carried as artifact evidence. An answer with no verified
+citation, or one that does not
+follow the response format, remains unverified and cannot start a Fix preview or
+a correction. Partially verified answers cannot promote corrections. A response
+that only announces the model's next step is
 not an answer: the engine asks the model to take that step or conclude, and the
 turn fails if it does neither.
 

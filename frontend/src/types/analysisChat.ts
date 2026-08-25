@@ -96,6 +96,7 @@ export interface AnalysisChatMessage {
   proposed_revision?: AnalysisChatRevision;
   unverified?: boolean;
   unverified_reason?: AnalysisChatUnverifiedReason;
+  evidence_warnings?: string[];
   tool_calls?: number;
   gcs_bytes?: number;
   elapsed_ms?: number;

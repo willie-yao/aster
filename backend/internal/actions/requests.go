@@ -1240,6 +1240,7 @@ func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 	clone := input
 	clone.VerifiedSourceFileHashes = cloneStringMap(input.VerifiedSourceFileHashes)
 	clone.ArtifactCitations = slices.Clone(input.ArtifactCitations)
+	clone.EvidenceWarnings = slices.Clone(input.EvidenceWarnings)
 	if input.ProposedRevision != nil {
 		revision := *input.ProposedRevision
 		clone.ProposedRevision = &revision

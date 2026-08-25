@@ -11,6 +11,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/models"
 )
 
 // analysisChatMaxQuoteBytes bounds one citation quote. The engine attributes the
@@ -28,7 +29,10 @@ const analysisChatMaxQuoteLines = 50
 
 // analysisChatMaxAnswerBytes bounds the answer text, both when the model
 // returns a contract-shaped reply and when the engine salvages one.
-const analysisChatMaxAnswerBytes = 32 << 10
+const (
+	analysisChatMaxAnswerBytes      = 32 << 10
+	analysisChatMaxEvidenceWarnings = 20
+)
 
 const (
 	analysisChatValidationCandidate = "candidate_selection"
@@ -41,7 +45,7 @@ const (
 type analysisChatParseStats struct {
 	CandidateCount int
 	Category       string
-	// EvidenceGate is set when the selected reply was degraded to unverified.
+	// EvidenceGate is set when the selected reply needs citation repair.
 	EvidenceGate string
 	// EvidenceDetail is engine-generated repair text for the corrective round.
 	EvidenceDetail string
@@ -50,9 +54,9 @@ type analysisChatParseStats struct {
 	ValidationDetail string
 }
 
-// analysisChatEvidenceFailure is a soft gate failure. It degrades a reply to
-// unverified instead of rejecting the turn. Detail is engine-generated and
-// never carries model or provider output.
+// analysisChatEvidenceFailure is a soft gate failure. It removes unsupported
+// evidence instead of rejecting the turn. Detail is engine-generated and never
+// carries model or provider output.
 type analysisChatEvidenceFailure struct {
 	Gate   string
 	Detail string
@@ -216,6 +220,9 @@ func degradeAnalysisChatReply(reply *analysischat.Reply, failure *analysisChatEv
 	reply.Assessment = "inconclusive"
 	reply.Unverified = true
 	reply.UnverifiedReason = failure.Gate
+	if failure.Detail != "" && len(reply.EvidenceWarnings) == 0 {
+		reply.EvidenceWarnings = []string{failure.Detail}
+	}
 }
 
 // salvageAnalysisChatReply recovers the answer text from a response that failed
@@ -309,9 +316,6 @@ func decodeAnalysisChatReplyCandidate(
 		return analysischat.Reply{}, nil, err
 	}
 	failure := validateAnalysisChatCitations(&reply, evidence)
-	if failure != nil {
-		degradeAnalysisChatReply(&reply, failure)
-	}
 	return reply, failure, nil
 }
 
@@ -407,105 +411,157 @@ func validateAnalysisChatCitations(
 	reply *analysischat.Reply,
 	evidence map[string]*analysisChatEvidence,
 ) *analysisChatEvidenceFailure {
-	if len(reply.Citations) > 20 {
-		return &analysisChatEvidenceFailure{
-			Gate: analysischat.UnverifiedCitation, Detail: "citations must contain at most 20 entries",
+	citations := reply.Citations
+	warnings := make([]string, 0, min(len(citations), analysisChatMaxEvidenceWarnings))
+	omittedWarnings := 0
+	addWarning := func(warning string) {
+		if len(warnings) < analysisChatMaxEvidenceWarnings {
+			warnings = append(warnings, warning)
+			return
+		}
+		omittedWarnings++
+	}
+	gate := ""
+	valid := make([]analysischat.Citation, 0, min(len(citations), 20))
+	for i := range citations {
+		if len(valid) == 20 {
+			addWarning("additional citations were discarded after 20 verified entries")
+			if gate == "" {
+				gate = analysischat.UnverifiedCitation
+			}
+			break
+		}
+		citation := citations[i]
+		if failure := validateAnalysisChatCitation(&citation, evidence, i+1); failure != nil {
+			addWarning(failure.Detail)
+			if gate == "" || failure.Gate == analysischat.UnverifiedReference {
+				gate = failure.Gate
+			}
+			continue
+		}
+		valid = append(valid, citation)
+	}
+	if omittedWarnings > 0 {
+		summary := fmt.Sprintf("%d additional citation warning(s) were omitted", omittedWarnings+1)
+		warnings[len(warnings)-1] = summary
+	}
+	reply.Citations = valid
+	reply.EvidenceWarnings = warnings
+	reply.Answer = removeUncitedLineClaims(reply.Answer, analysisChatModelCitations(valid))
+	if reply.ProposedRevision != nil {
+		reply.ProposedRevision.RootCause = removeUncitedLineClaims(reply.ProposedRevision.RootCause, analysisChatModelCitations(valid))
+		reply.ProposedRevision.SuggestedFix = removeUncitedLineClaims(reply.ProposedRevision.SuggestedFix, analysisChatModelCitations(valid))
+	}
+	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(valid) == 0 && len(warnings) == 0 {
+		gate = analysischat.UnverifiedMissing
+		addWarning(fmt.Sprintf("a %s response requires artifact citations", reply.Assessment))
+		reply.EvidenceWarnings = warnings
+	}
+	if len(warnings) == 0 {
+		return nil
+	}
+	failure := &analysisChatEvidenceFailure{Gate: gate, Detail: strings.Join(warnings, "; ")}
+	if failure.Gate == "" {
+		failure.Gate = analysischat.UnverifiedCitation
+	}
+	if len(valid) == 0 {
+		degradeAnalysisChatReply(reply, failure)
+	}
+	return failure
+}
+
+func analysisChatModelCitations(citations []analysischat.Citation) []models.EvidenceCitation {
+	out := make([]models.EvidenceCitation, len(citations))
+	for i, citation := range citations {
+		out[i] = models.EvidenceCitation{
+			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
 		}
 	}
-	for i := range reply.Citations {
-		citation := &reply.Citations[i]
-		citation.Path = strings.TrimSpace(citation.Path)
-		citation.Quote = strings.TrimSpace(citation.Quote)
-		safe, err := artifacts.SafePath(citation.Path)
-		if err != nil || safe == "" {
-			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an unsafe path", i+1),
-			}
+	return out
+}
+
+func validateAnalysisChatCitation(
+	citation *analysischat.Citation,
+	evidence map[string]*analysisChatEvidence,
+	index int,
+) *analysisChatEvidenceFailure {
+	citation.Path = strings.TrimSpace(citation.Path)
+	citation.Quote = strings.TrimSpace(citation.Quote)
+	safe, err := artifacts.SafePath(citation.Path)
+	if err != nil || safe == "" {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an unsafe path", index),
 		}
-		artifactEvidence := evidence[safe]
-		if artifactEvidence == nil {
-			return &analysisChatEvidenceFailure{
-				Gate:   analysischat.UnverifiedReference,
-				Detail: fmt.Sprintf("citation %d names an artifact not read during this conversation", i+1),
-			}
+	}
+	artifactEvidence := evidence[safe]
+	if artifactEvidence == nil {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedReference,
+			Detail: fmt.Sprintf("citation %d names an artifact not read during this conversation", index),
 		}
-		citation.Path = safe
-		if citation.LineStart < 0 || citation.LineEnd < 0 ||
-			(citation.LineStart == 0) != (citation.LineEnd == 0) ||
-			citation.LineEnd > 0 && (citation.LineStart > citation.LineEnd || citation.LineEnd-citation.LineStart > analysisChatMaxQuoteLines) {
-			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedCitation, Detail: fmt.Sprintf("citation %d has an invalid line range", i+1),
-			}
+	}
+	citation.Path = safe
+	coordinatesUsable := citation.LineStart >= 0 && citation.LineEnd >= 0 &&
+		(citation.LineStart == 0) == (citation.LineEnd == 0) &&
+		(citation.LineEnd == 0 || citation.LineStart <= citation.LineEnd)
+	locator := NormalizeCitationText(citation.Quote)
+	if len(citation.Quote) < 4 || locator == "" {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the artifact", index),
 		}
-		locator := NormalizeCitationText(citation.Quote)
-		// A quote of nothing but colour codes normalizes away and would match
-		// any passage.
-		if len(citation.Quote) < 4 || locator == "" {
-			return &analysisChatEvidenceFailure{
-				Gate:   analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the artifact", i+1),
-			}
-		}
-		tooLong := &analysisChatEvidenceFailure{
-			Gate: analysischat.UnverifiedCitation,
-			Detail: fmt.Sprintf(
-				"citation %d quote is too long to record; quote the passage that supports the answer", i+1,
-			),
-		}
-		// A line range pins the passage on its own, so it is the attribution.
-		// Without one the quote is a locator the engine resolves, and a locator
-		// that could name two different passages is not evidence.
-		if citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 {
-			quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
-			if !ok || !analysisChatEvidenceContains(artifactEvidence, quote) {
-				return &analysisChatEvidenceFailure{
-					Gate:   analysischat.UnverifiedCitation,
-					Detail: fmt.Sprintf("citation %d line range was not returned by the cited artifact read", i+1),
-				}
-			}
-			// A range too long to record narrows to the lines that fit, so the
-			// stored text and the cited lines still describe each other. What
-			// survives has to still cover the passage the model pointed at.
+	}
+	tooLong := &analysisChatEvidenceFailure{
+		Gate: analysischat.UnverifiedCitation,
+		Detail: fmt.Sprintf(
+			"citation %d quote is too long to record; quote the passage that supports the answer", index,
+		),
+	}
+	if coordinatesUsable && citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 && citation.LineEnd-citation.LineStart <= analysisChatMaxQuoteLines {
+		quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
+		if ok && analysisChatEvidenceContains(artifactEvidence, quote) {
 			clamped, kept := clampAnalysisChatQuote(quote)
 			if clamped != quote && !strings.Contains(NormalizeCitationText(clamped), locator) {
 				return tooLong
 			}
 			citation.Quote = clamped
 			citation.LineEnd = citation.LineStart + kept - 1
-			continue
+			return nil
 		}
-		quote, matches := attributeAnalysisChatQuote(artifactEvidence, citation.Quote)
-		switch {
-		case matches == 0:
-			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf(
-					"citation %d quote does not appear in the cited artifact read; quote text the tools returned", i+1,
-				),
-			}
-		case matches > 1:
-			return &analysisChatEvidenceFailure{
-				Gate: analysischat.UnverifiedCitation,
-				Detail: fmt.Sprintf(
-					"citation %d quote matches more than one passage in the cited artifact; quote a longer, unique passage", i+1,
-				),
-			}
-		}
-		clamped, _ := clampAnalysisChatQuote(quote)
-		// Recording only part of the passage would leave the maintainer reading
-		// text that no longer covers what the citation claimed.
-		if !strings.Contains(NormalizeCitationText(clamped), locator) {
-			return tooLong
-		}
-		citation.Quote = clamped
-		citation.LineStart, citation.LineEnd = 0, 0
 	}
-	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(reply.Citations) == 0 {
+	return attributeAnalysisChatCitation(citation, artifactEvidence, index, locator, tooLong)
+}
+
+func attributeAnalysisChatCitation(
+	citation *analysischat.Citation,
+	evidence *analysisChatEvidence,
+	index int,
+	locator string,
+	tooLong *analysisChatEvidenceFailure,
+) *analysisChatEvidenceFailure {
+	quote, matches := attributeAnalysisChatQuote(evidence, citation.Quote)
+	switch {
+	case matches == 0:
 		return &analysisChatEvidenceFailure{
-			Gate:   analysischat.UnverifiedMissing,
-			Detail: fmt.Sprintf("a %s response requires artifact citations", reply.Assessment),
+			Gate: analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf(
+				"citation %d quote does not appear in the cited artifact read; quote text the tools returned", index,
+			),
+		}
+	case matches > 1:
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf(
+				"citation %d quote matches more than one passage in the cited artifact; quote a longer, unique passage", index,
+			),
 		}
 	}
+	clamped, _ := clampAnalysisChatQuote(quote)
+	if !strings.Contains(NormalizeCitationText(clamped), locator) {
+		return tooLong
+	}
+	citation.Quote = clamped
+	citation.LineStart, citation.LineEnd = 0, 0
 	return nil
 }
 

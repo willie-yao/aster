@@ -188,6 +188,7 @@ type Reply struct {
 	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
 	Unverified        bool       `json:"unverified,omitempty"`
 	UnverifiedReason  string     `json:"unverified_reason,omitempty"`
+	EvidenceWarnings  []string   `json:"evidence_warnings,omitempty"`
 	ToolCalls         int        `json:"tool_calls,omitempty"`
 	GCSBytes          int        `json:"gcs_bytes,omitempty"`
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
@@ -205,6 +206,7 @@ type Message struct {
 	ProposedRevision  *Revision  `json:"proposed_revision,omitempty"`
 	Unverified        bool       `json:"unverified,omitempty"`
 	UnverifiedReason  string     `json:"unverified_reason,omitempty"`
+	EvidenceWarnings  []string   `json:"evidence_warnings,omitempty"`
 	ToolCalls         int        `json:"tool_calls,omitempty"`
 	GCSBytes          int        `json:"gcs_bytes,omitempty"`
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
@@ -1404,6 +1406,7 @@ func cloneSessionView(view SessionView) SessionView {
 	for i := range view.Messages {
 		view.Messages[i].Citations = slices.Clone(view.Messages[i].Citations)
 		view.Messages[i].ProposedRevision = cloneRevision(view.Messages[i].ProposedRevision)
+		view.Messages[i].EvidenceWarnings = slices.Clone(view.Messages[i].EvidenceWarnings)
 	}
 	return view
 }
