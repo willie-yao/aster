@@ -145,7 +145,7 @@ func TestBuildPatternAnalysisDerivesRecurrence(t *testing.T) {
 		{name: "insufficient", response: patternResponse{UnclassifiedBuilds: []string{"a", "b"}, Summary: "insufficient"}, want: models.PatternRecurrenceInsufficientEvidence, confidence: "low"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			pattern := buildPatternAnalysis("job", 2, canonicalizePatternResponse(testCase.response), nil)
+			pattern := buildPatternAnalysis("job", 2, canonicalizePatternResponse(testCase.response), nil, "2026-01-01T00:00:00Z")
 			if pattern.Recurrence != testCase.want || pattern.Systemic != testCase.systemic || pattern.SharedRootCause != testCase.rootCause || strings.Join(pattern.SharedBuilds, ",") != testCase.shared || pattern.Confidence != testCase.confidence {
 				t.Fatalf("pattern=%+v", pattern)
 			}
@@ -208,6 +208,83 @@ func TestAnalyzePatternCachesStrictResponse(t *testing.T) {
 	}
 	if atomic.LoadInt32(&srv.calls) != 1 {
 		t.Fatalf("calls=%d", srv.calls)
+	}
+}
+
+// TestAnalyzePatternRepublishesCachedGenerationTimestamp pins that a cache hit
+// carries the timestamp the verdict was generated with. Re-stamping it every
+// pass changes the published pattern while its content is identical, which
+// rejects cause-scoped conversations bound to it.
+func TestAnalyzePatternRepublishesCachedGenerationTimestamp(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, patternToolResponse(sharedPatternResponse()))
+	service := newPatternTestService(t, srv.URL)
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	service.patternNow = func() time.Time { return now }
+	first, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.GeneratedAt != now.Format(time.RFC3339) {
+		t.Fatalf("generated_at = %q, want %q", first.GeneratedAt, now.Format(time.RFC3339))
+	}
+	now = now.Add(30 * time.Minute)
+	second, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.GeneratedAt != first.GeneratedAt || models.PatternHash(*second) != models.PatternHash(*first) {
+		t.Fatalf("republished generated_at = %q, want %q", second.GeneratedAt, first.GeneratedAt)
+	}
+}
+
+// TestAnalyzePatternDatesUntimestampedCacheEntryFromItsAge covers entries written
+// before the verdict timestamp was recorded: they must resolve to when they were
+// cached, so republishing neither moves the timestamp nor renews the entry.
+func TestAnalyzePatternDatesUntimestampedCacheEntryFromItsAge(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, patternToolResponse(sharedPatternResponse()))
+	service := newPatternTestService(t, srv.URL)
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	service.patternNow = func() time.Time { return now }
+	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the single cached verdict in the pre-timestamp shape.
+	cached := service.client.cache.EntriesWithPrefix("pattern:")
+	if len(cached) != 1 {
+		t.Fatalf("cached entries = %d, want 1", len(cached))
+	}
+	var key string
+	var data patternCacheData
+	for entryKey, entry := range cached {
+		key = entryKey
+		if err := json.Unmarshal(entry.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Cache validity is wall-clock based, so the entry's age must stay relative.
+	entryCreated := time.Now().UTC().Add(-13 * 24 * time.Hour).Truncate(time.Second)
+	if err := service.client.cache.StoreEntry(CacheEntry{
+		Key: key, CreatedAt: entryCreated,
+		Data: mustJSON(patternCacheData{Version: patternCacheVersion, Response: data.Response}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		now = now.Add(30 * time.Minute)
+		pattern, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pattern.GeneratedAt != entryCreated.Format(time.RFC3339) {
+			t.Fatalf("attempt %d generated_at = %q, want %q", attempt, pattern.GeneratedAt, entryCreated.Format(time.RFC3339))
+		}
+	}
+	if entry, ok := service.client.cache.Lookup(key); !ok || !entry.CreatedAt.Equal(entryCreated) {
+		t.Fatalf("cache entry age was renewed: %v", entry.CreatedAt)
 	}
 }
 

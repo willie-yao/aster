@@ -636,6 +636,79 @@ func TestServiceAnalysisFixCandidateRejectsNewlyContestedAnalysis(t *testing.T) 
 	}
 }
 
+// TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp covers
+// the reported symptom: a cause-scoped conversation whose pattern is republished
+// unchanged must stay valid rather than being rejected with "analysis changed".
+func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{
+		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
+		Remediation: &models.PatternCausalGroupRemediation{BuildID: "2", SuggestedFix: "change the controller"},
+	}}, nil)
+	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleActive}
+	models.AssignPatternIdentity(&pattern)
+	// publish writes one pass over the same cached verdict. Only the pattern's
+	// generation timestamp differs between passes.
+	publish := func(generatedAt string) {
+		published := pattern
+		published.GeneratedAt = generatedAt
+		detail := causalPatternDetail(published, "1", "2")
+		for i := range detail.Runs {
+			run := &detail.Runs[i]
+			run.RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+			testCase := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
+			testCase.AIAnalysis.FileLinks = map[string]string{
+				"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go",
+			}
+			run.TestCases = []models.TestCase{testCase}
+		}
+		writeJobDetail(t, dir, detail)
+	}
+	publish("2026-08-12T12:00:00Z")
+	runner := &fakeRunner{reply: Reply{
+		Answer: "Both builds show the same controller defect.", Assessment: "supports",
+		Citations: []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
+	}}
+	service, err := NewService(t.Context(), dir, runner, Options{StateDir: filepath.Join(dir, ".chat")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureTestFixPreflight(func(
+		_ context.Context, _ sourceinvestigation.Repository, _ string, _ []string,
+	) (string, map[string]string, error) {
+		return exactFixSourceRevision, map[string]string{"pkg/controller.go": strings.Repeat("a", 64)}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	group := pattern.CausalGroups[0]
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	publish("2026-08-12T12:30:00Z")
+	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", requestID); err != nil {
+		t.Fatalf("Fix preflight after republished pattern error = %v", err)
+	}
+	candidate, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID)
+	if err != nil {
+		t.Fatalf("Fix candidate after republished pattern error = %v (analysis changed = %v)",
+			err, errors.Is(err, ErrAnalysisChanged))
+	}
+	if candidate.FixTarget.BuildID != "2" || candidate.FixTarget.TestName != "TestCluster" {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+}
+
 func TestServiceCauseAnalysisFixCandidateUsesRepresentativeFailure(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{

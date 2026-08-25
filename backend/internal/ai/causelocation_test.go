@@ -286,7 +286,7 @@ func TestBuildPatternAnalysisPublishesAgreedGroupOwnership(t *testing.T) {
 		{Builds: []string{"2", "3"}, RootCause: "mixed ownership", Confidence: "medium"},
 	}}
 
-	pattern := buildPatternAnalysis("subject", len(failures), response, failures)
+	pattern := buildPatternAnalysis("subject", len(failures), response, failures, "2026-01-01T00:00:00Z")
 	if len(pattern.CausalGroups) != 2 {
 		t.Fatalf("groups = %d", len(pattern.CausalGroups))
 	}
