@@ -321,40 +321,6 @@ func (r analysisResponse) proseFields() []string {
 	return out
 }
 
-// buildOutputs splits an analysisResponse into the AISummary + AIAnalysis pair.
-func buildOutputs(parsed analysisResponse, model, modelHash string, now time.Time) (*models.AISummary, *models.AIAnalysis) {
-	generatedAt := now.UTC().Format(time.RFC3339)
-
-	summaryText := parsed.Summary
-	if summaryText == "" {
-		summaryText = firstSentence(parsed.RootCause)
-	}
-
-	summary := &models.AISummary{
-		GeneratedAt: generatedAt,
-		Summary:     summaryText,
-		IsTransient: parsed.IsTransient,
-	}
-	analysis := &models.AIAnalysis{
-		GeneratedAt:       generatedAt,
-		Model:             model,
-		ModelHash:         modelHash,
-		RootCause:         parsed.RootCause,
-		Severity:          parsed.Severity,
-		SuggestedFix:      parsed.SuggestedFix,
-		RelevantFiles:     parsed.RelevantFiles,
-		SearchSuggestions: parsed.SearchSuggestions,
-		CauseLocation:     parsed.CauseLocation.Clone(),
-		EvidenceCitations: parsed.EvidenceCitations,
-	}
-	return summary, analysis
-}
-
-// buildOutputs uses the current client identity for a fresh model response.
-func (c *Client) buildOutputs(parsed analysisResponse) (*models.AISummary, *models.AIAnalysis) {
-	return buildOutputs(parsed, c.model, c.modelFingerprint(), time.Now())
-}
-
 // firstSentence returns the first sentence of s, capped at 200 chars. It derives
 // a list-view summary when the model omits "summary".
 func firstSentence(s string) string {

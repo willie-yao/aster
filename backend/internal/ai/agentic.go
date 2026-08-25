@@ -809,8 +809,8 @@ type agentState struct {
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
 	// so in-loop and post-loop critique paths both consult the same
-	// set, and so cacheAcceptedAnalysis / stampAgenticTelemetry can
-	// stamp the hash without re-threading it.
+	// set, and so analysis-record and cache projections can stamp the hash
+	// without re-threading it.
 	skillSet *skills.Set
 
 	// initialEvidencePlan is matched against the bounded failure signal before
@@ -901,45 +901,6 @@ func (s *agentState) evidencePlanCovered() bool {
 func (s *agentState) modelRemaining() int { return s.opts.ModelByteBudget - s.modelBytes }
 func (s *agentState) gcsRemaining() int   { return s.opts.GCSByteBudget - s.gcsBytes }
 
-// stampAgenticTelemetry copies per-call counters onto the AIAnalysis so the
-// published JSON exposes per-failure cost. Called at every successful exit
-// point: cache hit, normal finish, finalize-round finish, or synthesized
-// fallback. An empty mode defaults to AgenticMode.
-func stampAgenticTelemetry(analysis *models.AIAnalysis, state *agentState, mode string, cacheHit bool, start time.Time) {
-	if analysis == nil {
-		return
-	}
-	if mode == "" {
-		mode = AgenticMode
-	}
-	analysis.Mode = mode
-	analysis.CacheHit = cacheHit
-	analysis.ElapsedMs = int(time.Since(start) / time.Millisecond)
-	if state != nil {
-		analysis.ToolCalls = state.calls
-		analysis.ContextBytes = state.modelBytes
-		analysis.GCSBytes = state.gcsBytes
-		analysis.EvidencePlanCovered = state.evidencePlanCovered()
-		analysis.GCSFloorRetryExhausted = state.gcsFloorRetryExhausted
-		analysis.BudgetExhausted = state.budgetExhausted
-		analysis.CritiquePassed = state.critiquePassed
-		analysis.CritiqueHardFailures = append([]string(nil), state.critiqueHardFailures...)
-		analysis.CritiqueSoftWarnings = append([]string(nil), state.critiqueSoftWarnings...)
-		analysis.CachePersistenceAttempted = state.cachePersistenceAttempted
-		analysis.CachePersistenceAccepted = state.cachePersistenceAccepted
-		analysis.CachePolicyRejectionReason = string(state.cacheRejectionReason)
-		analysis.CritiqueVersion = currentCritiqueVersion
-		if state.skillSet != nil {
-			analysis.SkillSetHash = state.skillSet.Hash()
-		}
-		analysis.PromptHash = state.promptHash
-		analysis.JudgeRan = state.judgeRan
-		analysis.JudgeObjected = state.judgeObjected
-		analysis.JudgeRevised = state.judgeRevised
-		analysis.JudgeRevisionRejected = state.judgeRevisionRejected
-	}
-}
-
 func (s *agentState) setCritiqueOutcome(out critiqueOutcome) {
 	if s == nil {
 		return
@@ -1013,17 +974,23 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 		skillSetHash = in.Skills.Hash()
 	}
 	attempts := c.preliminaryAttempts(cacheKey)
-	result, reason := LookupAgenticCache(c.cache, cacheKey, agenticCachePolicy(
+	record, reason := lookupAgenticCacheRecord(c.cache, cacheKey, agenticCachePolicy(
 		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
 	))
 	if reason != CacheAccepted {
 		return nil, nil, attempts, false
 	}
-	stampAgenticTelemetry(result.Analysis, nil, in.Mode, true, start)
-	if !StampAnalysisDisposition(result.Analysis) {
+	if in.Mode != "" {
+		record.mode = in.Mode
+	}
+	record.cacheHit = true
+	record.elapsedMs = int(time.Since(start) / time.Millisecond)
+	record, ok := stampRecordDisposition(record)
+	result := projectFailureAnalysis(record)
+	if !ok {
 		return result.Summary, result.Analysis, attempts, true
 	}
-	if result.Analysis.Disposition == models.AnalysisDispositionPreliminary {
+	if record.disposition == models.AnalysisDispositionPreliminary {
 		// Retrying spent artifacts cannot surface new evidence, so serve the
 		// cached preliminary result once the budget is gone.
 		if attempts >= maxPreliminaryAttempts {
@@ -1137,21 +1104,28 @@ func (c *Client) doAnalyzeAgentic(
 	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, loop.messages, parsed, in.Opts)
 
 	state.notifyDraftSelection()
-	summary, analysis := c.buildOutputs(parsed)
-	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
-	if !StampAnalysisDisposition(analysis) {
+	generatedAt := time.Now().UTC().Format(time.RFC3339)
+	record := analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
+	record, ok = stampRecordDisposition(record)
+	if !ok {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "rejected", ErrorCode: "unsafe_analysis"})
 		return nil, nil, ErrRejectedAnalysis
 	}
-	if analysis.Disposition == models.AnalysisDispositionPreliminary {
+	if record.disposition == models.AnalysisDispositionPreliminary {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "preliminary"})
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
 	}
-	c.recordPreliminaryAttempt(cacheKey, analysis.Disposition, state.priorPreliminaryAttempts)
-	c.cacheAcceptedAnalysis(loopCtx, cacheKey, parsed, analysis.GeneratedAt, state, in.Opts)
-	stampAgenticTelemetry(analysis, state, in.Mode, false, start)
-	return summary, analysis, nil
+	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
+	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
+
+	record = analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
+	record, ok = stampRecordDisposition(record)
+	if !ok {
+		return nil, nil, ErrRejectedAnalysis
+	}
+	result := projectFailureAnalysis(record)
+	return result.Summary, result.Analysis, nil
 }
 
 func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
@@ -2332,7 +2306,7 @@ func matchSkillsForDraft(state *agentState, parsed analysisResponse) []skills.Sk
 
 // cacheAcceptedAnalysis evaluates the independent floor, critique, and semantic
 // gates, then records the exact persistence outcome.
-func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, parsed analysisResponse, generatedAt string, state *agentState, opts AgenticOptions) {
+func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, record analysisRecord, state *agentState, opts AgenticOptions) {
 	state.cachePersistenceAttempted = false
 	state.cachePersistenceAccepted = false
 	state.cacheRejectionReason = cachePersistenceRejection(state, opts)
@@ -2343,33 +2317,8 @@ func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, par
 		})
 		return
 	}
-	skillHash := ""
-	if state.skillSet != nil {
-		skillHash = state.skillSet.Hash()
-	}
 	state.cachePersistenceAttempted = true
-	err := c.cache.Set(cacheKey, agenticCacheData{
-		analysisResponse:       parsed,
-		GeneratedAt:            generatedAt,
-		Model:                  c.model,
-		ToolCalls:              state.calls,
-		ModelBytes:             state.modelBytes,
-		GCSBytes:               state.gcsBytes,
-		EvidencePlanCovered:    state.evidencePlanCovered(),
-		GCSFloorRetryExhausted: state.gcsFloorRetryExhausted,
-		BudgetExhausted:        state.budgetExhausted,
-		JudgeRan:               state.judgeRan,
-		JudgeObjected:          state.judgeObjected,
-		JudgeRevised:           state.judgeRevised,
-		JudgeRevisionRejected:  state.judgeRevisionRejected,
-		CritiquePassed:         state.critiquePassed,
-		CritiqueHardFailures:   append([]string(nil), state.critiqueHardFailures...),
-		CritiqueSoftWarnings:   append([]string(nil), state.critiqueSoftWarnings...),
-		CritiqueVersion:        currentCritiqueVersion,
-		SkillSetHash:           skillHash,
-		ModelHash:              c.modelFingerprint(),
-		PromptHash:             state.promptHash,
-	})
+	err := c.cache.Set(cacheKey, projectAgenticCacheData(record))
 	if err != nil {
 		state.cacheRejectionReason = CacheRejectedNotPersisted
 		recordTrace(ctx, TraceEvent{Kind: "cache_persistence", Outcome: "error", CacheRejectionReason: string(state.cacheRejectionReason)})
