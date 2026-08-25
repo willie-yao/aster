@@ -2,8 +2,8 @@ package agentanalysis
 
 import (
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -388,48 +388,22 @@ func workspaceTestSourcesRoot(t *testing.T, sourceRoot string) string {
 }
 
 func copyWorkspaceTestTree(sourceRoot, targetRoot string) error {
-	return filepath.WalkDir(sourceRoot, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	clone := exec.Command("git", "-c", "maintenance.auto=false", "clone", "--quiet", "--no-hardlinks", sourceRoot, targetRoot)
+	if output, err := clone.CombinedOutput(); err != nil {
+		return fmt.Errorf("clone test source: %w: %s", err, output)
+	}
+	for key, value := range map[string]string{
+		"commit.gpgsign":   "false",
+		"maintenance.auto": "false",
+		"user.email":       "test@example.com",
+		"user.name":        "Test",
+	} {
+		config := exec.Command("git", "-C", targetRoot, "config", key, value)
+		if output, err := config.CombinedOutput(); err != nil {
+			return fmt.Errorf("configure test source %s: %w: %s", key, err, output)
 		}
-		relative, err := filepath.Rel(sourceRoot, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(targetRoot, relative)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			value, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(value, target)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported test source entry %s", relative)
-		}
-		input, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
+	}
+	return nil
 }
 
 func linkWorkspaceTestSource(t *testing.T, workspaceRoot, sourceRoot string) {
