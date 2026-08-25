@@ -141,6 +141,8 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.oauth.sessionKey=session-key \
   --show-only templates/server-deployment.yaml > "$tmp/chat.yaml"
 grep -A1 -F 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat.yaml" | grep -Fq 'value: "true"'
+test "$(grep -Fc 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml")" -eq 1
+grep -A1 -F 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml" | grep -Fq 'value: "10m"'
 grep -A1 -F 'name: AUTH_MODE' "$tmp/chat.yaml" | grep -Fq 'value: "oauth"'
 if grep -Fq 'name: BOT_TOKEN' "$tmp/chat.yaml" || grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat.yaml"; then
   echo 'chat-only OAuth rendered write-action credentials' >&2
@@ -188,6 +190,8 @@ fi
 expect_fail escalation-without-ai 'server.pullRequestEscalation.enabled requires ai.enabled' --set server.pullRequestEscalation.enabled=true --set server.actions.mode=proxy
 expect_fail escalation-raw-env 'server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED' \
   --set server.extraEnv[0].name=PULL_REQUEST_ESCALATION_ENABLED --set server.extraEnv[0].value=true
+expect_fail chat-timeout-raw-env 'server.extraEnv must not set ANALYSIS_CHAT_TIMEOUT' \
+  --set server.extraEnv[0].name=ANALYSIS_CHAT_TIMEOUT --set server.extraEnv[0].value=1m
 # Escalation is an authenticated origin, so the public LoadBalancer guardrail
 # must cover it exactly as it covers actions, chat, and remediation.
 expect_fail escalation-public-load-balancer 'authenticated server features with a LoadBalancer require' \

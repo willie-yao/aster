@@ -255,7 +255,7 @@ server:
   # actions authentication settings and a secure origin.
   chat:
     enabled: false
-    # timeout: 2m
+    # timeout: 10m
     # correctionsEnabled: false
 
   # Actions enable GitHub writes. admins is a fail-closed allowlist. OAuth and
