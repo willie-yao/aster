@@ -682,8 +682,9 @@ Publication disposition is separate from cache policy. A draft whose causal clai
 has no validated artifact citation is published as `preliminary` with an
 `artifact_grounding_incomplete` warning under every policy, and a preliminary
 result cannot feed patterns, corrections, remediation, actions, or Fix. Cache
-policy can still change which draft is published, because a policy-rejected
-draft neither replaces an earlier draft nor reaches semantic review.
+policy can still change which draft is published: it gates whether a draft
+reaches post-loop semantic review, and a policy-unaccepted semantic revision
+cannot replace the selected draft.
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer
 token channel. Use a trusted proxy or custom deployment for providers that need

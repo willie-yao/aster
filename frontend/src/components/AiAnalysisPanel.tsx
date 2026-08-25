@@ -314,7 +314,7 @@ export function AiAnalysisPanel({
     </>
   );
 
-  const dispositionPanel = analysis.disposition === "preliminary" ? (
+  const dispositionPanel = analysis.disposition !== "grounded" ? (
     <Alert severity="warning" variant="outlined">
       Preliminary analysis. The structured result is safe to review, but evidence or
       quality checks remain unresolved. It cannot be used for corrections, remediation,
