@@ -33,6 +33,9 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		case CritiqueRuleTransientConflict:
 			grounded = false
 			warnings[models.AnalysisWarningClassification] = true
+		case CritiqueRuleRerunOnlyRemediation:
+			grounded = false
+			warnings[models.AnalysisWarningRemediation] = true
 		default:
 			return "", nil
 		}

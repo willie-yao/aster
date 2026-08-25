@@ -40,6 +40,10 @@ func TestAnalysisDisposition(t *testing.T) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRuleSourceUnverified)}
 		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningSourceGrounding}},
+		{name: "rerun only remediation", mutate: func(value *models.AIAnalysis) {
+			value.CritiquePassed = false
+			value.CritiqueHardFailures = []string{string(CritiqueRuleRerunOnlyRemediation)}
+		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningRemediation}},
 		{name: "unsafe", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRulePathUnsafe)}
