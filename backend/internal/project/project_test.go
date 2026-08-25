@@ -62,9 +62,7 @@ id: capz
 	wantSubstrings := []string{
 		"name",
 		"testgrid.dashboard",
-		"storage.provider",
 		"storage.bucket",
-		"branding.title",
 		"branding.base_path",
 		"branding.site_url",
 		"branding.source_repo.owner",
@@ -175,25 +173,30 @@ func TestParseGCSWebBucketDiscovery(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresProvider(t *testing.T) {
-	const noProvider = `
+func TestParseDefaultsGCSProviderAndBrandingTitle(t *testing.T) {
+	const defaults = `
 id: x
-name: x
+name: Example
 testgrid:
   dashboard: d
 storage:
   bucket: "b"
 branding:
-  title: x
   base_path: /x
   site_url: https://example.com
   source_repo:
     owner: x
     name: x
 `
-	_, err := parse(strings.NewReader(noProvider))
-	if err == nil || !strings.Contains(err.Error(), "storage.provider") {
-		t.Fatalf("expected storage.provider required error, got: %v", err)
+	cfg, err := parse(strings.NewReader(defaults))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Storage.Provider != "gcs" || cfg.StorageConfig().Provider != "gcs" {
+		t.Fatalf("storage provider = %q, config = %+v", cfg.Storage.Provider, cfg.StorageConfig())
+	}
+	if cfg.Branding.Title != "Example Prow Dashboard" {
+		t.Fatalf("branding title = %q", cfg.Branding.Title)
 	}
 }
 

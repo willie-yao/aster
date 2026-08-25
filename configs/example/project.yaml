@@ -15,16 +15,13 @@ name: "Example Kubernetes Project"
 testgrid:
   dashboard: "sig-foo-your-project"
 
-# Where the project's Prow build artifacts live. The engine does not assume GCS,
-# so provider is required. See docs/project-configuration.md for gcsweb and
-# local providers.
+# Where the project's Prow build artifacts live. GCS is the default provider.
+# See docs/project-configuration.md for gcsweb and local providers.
 storage:
-  provider: gcs
   bucket: "kubernetes-ci-logs"
 
 # Site identity and the default repo for analysis and write targets.
 branding:
-  title: "Your Project Prow Dashboard"
   base_path: "/your-consumer-repo"
   site_url: "https://your-org.github.io/your-consumer-repo"
   source_repo:

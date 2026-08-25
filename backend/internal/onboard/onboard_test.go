@@ -160,7 +160,6 @@ func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 	}
 	for _, want := range []string{
 		`dashboard: "my-dashboard"`,
-		`provider: gcs`,
 		`bucket: "kubernetes-ci-logs"`,
 		`base_path: "/my-proj-aster"`,
 		`site_url: "https://my-org.github.io/my-proj-aster"`,
