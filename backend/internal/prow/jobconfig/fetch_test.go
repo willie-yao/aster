@@ -168,7 +168,7 @@ func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
@@ -216,7 +216,7 @@ func TestFetchJobConfigs_OnlyConfigJobsYAMLsAreDownloaded(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
@@ -239,7 +239,7 @@ func TestFetchJobConfigs_TruncatedTreeIsError(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
 		t.Fatal("expected error for truncated tree, got nil")
@@ -260,7 +260,7 @@ func TestFetchJobConfigs_TreeHTTPErrorSurfacesBody(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
 		t.Fatal("expected HTTP 403 to surface, got nil")
@@ -280,7 +280,7 @@ func TestFetchJobConfigs_CommitResolutionFails(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
 		t.Fatal("expected error when commit resolution fails, got nil")
@@ -306,7 +306,7 @@ func TestFetchJobConfigs_RawDownloadFailureCancelsBatch(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
 		t.Fatal("expected error when a candidate file fails to download, got nil")
@@ -326,7 +326,7 @@ func TestFetchJobConfigs_ZeroMatchErrors(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "wanted"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "wanted"}}
 	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err == nil {
 		t.Fatal("expected zero-match error, got nil")
@@ -346,7 +346,7 @@ func TestFetchJobConfigs_AnonymousIsAllowed(t *testing.T) {
 	setURLs(t, raw, api)
 	setToken(t, "")
 
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "d"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs without token: %v", err)
@@ -425,7 +425,7 @@ func TestFetchCatalogWithoutTargetKeepsOnlyDashboardJobs(t *testing.T) {
 	raw, api, stop := tf.start(t)
 	defer stop()
 	setURLs(t, raw, api)
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: dashboard}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
 	_, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
 	if err != nil {
 		t.Fatal(err)
@@ -549,10 +549,7 @@ func TestFetchJobConfigs_UsesConfiguredRevisionWithoutResolvingMaster(t *testing
 	setURLs(t, raw, api)
 
 	cfg := &project.Config{
-		TestGrid: project.TestGrid{Dashboard: dashboard},
-		Discovery: project.Discovery{
-			TestInfraRevision: fakeSHA,
-		},
+		Discovery: project.Discovery{TestGridDashboard: dashboard, TestInfraRevision: fakeSHA},
 	}
 	jobs, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
 	if err != nil {
@@ -579,7 +576,7 @@ func TestFetchJobConfigs_RejectsInvalidResolvedRevision(t *testing.T) {
 	raw, api, stop := tf.start(t)
 	defer stop()
 	setURLs(t, raw, api)
-	cfg := &project.Config{TestGrid: project.TestGrid{Dashboard: "dashboard"}}
+	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "dashboard"}}
 	if _, err := FetchJobConfigs(t.Context(), http.DefaultClient, cfg); err == nil || !strings.Contains(err.Error(), "unexpected SHA response") {
 		t.Fatalf("error = %v", err)
 	}

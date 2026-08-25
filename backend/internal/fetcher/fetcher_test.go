@@ -319,7 +319,7 @@ func TestNormalizeBuildResultExcludesBuildSubjectFromJUnitCounts(t *testing.T) {
 func TestSetJobCatalogRecordsResolvedTestInfraRevision(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	t.Run("testgrid", func(t *testing.T) {
-		p := &pipeline{cfg: &project.Config{TestGrid: project.TestGrid{Dashboard: "dashboard"}}}
+		p := &pipeline{cfg: &project.Config{Discovery: project.Discovery{TestGridDashboard: "dashboard"}}}
 		catalog := &jobconfig.Catalog{Revision: revision}
 		p.setJobCatalog(catalog)
 		if p.jobCatalog != catalog || p.cfg.Discovery.ResolvedTestInfraRevision != revision {

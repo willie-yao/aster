@@ -474,8 +474,8 @@ func TestCheckGitOpsRejectsSpecialGeneratedFile(t *testing.T) {
 
 const gitOpsProject = `id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: gcs
   bucket: example-bucket

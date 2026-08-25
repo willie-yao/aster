@@ -37,8 +37,8 @@ policy.
 id: myproject
 name: "My Project"
 
-testgrid:
-  dashboard: "sig-myproject-periodics"
+discovery:
+  testgrid_dashboard: "sig-myproject-periodics"
 
 storage:
   bucket: kubernetes-ci-logs
@@ -55,7 +55,7 @@ branding:
 | --- | --- |
 | `id` | Stable lowercase identifier used in task identities, cache keys, and logs |
 | `name` | Human-readable project name |
-| `testgrid.dashboard` | TestGrid annotation used by the default discovery source |
+| `discovery.testgrid_dashboard` | TestGrid annotation used by the default discovery source |
 | `storage` | Artifact bucket. The provider defaults to `gcs`. |
 | `branding` | Site URL paths and default repository. The title defaults to `<name> Prow Dashboard`. |
 
@@ -111,7 +111,7 @@ local provider is intended for tests and offline fetches.
 ## Job discovery
 
 The default source reads Kubernetes test-infra job configuration and keeps jobs
-whose `testgrid-dashboards` annotation contains `testgrid.dashboard`.
+whose `testgrid-dashboards` annotation contains `discovery.testgrid_dashboard`.
 
 For a reproducible evaluation or incident replay, optionally pin discovery to an
 exact lowercase 40-character `kubernetes/test-infra` commit:

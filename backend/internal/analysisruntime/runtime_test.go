@@ -78,8 +78,8 @@ func TestLoadProjectUsesCurrentToolSelectedSkills(t *testing.T) {
 	}
 	write(filepath.Join(dir, "project.yaml"), `id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: /fixtures
@@ -156,8 +156,8 @@ func TestLoadProjectRequiresConsumerSkillCount(t *testing.T) {
 	}
 	write(filepath.Join(dir, "project.yaml"), `id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: /fixtures
@@ -207,7 +207,7 @@ func TestLoadProjectRequiredConsumerBundleMissing(t *testing.T) {
 	}
 	config := `id: test
 name: Test
-testgrid: {dashboard: test}
+discovery: {testgrid_dashboard: test}
 storage: {provider: local, base: /fixtures}
 branding:
   title: Test
@@ -271,8 +271,8 @@ func TestReusePlannerMatchesAnalyzerPromptIdentity(t *testing.T) {
 	}
 	write(filepath.Join(dir, "project.yaml"), `id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: /fixtures

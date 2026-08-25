@@ -101,7 +101,7 @@ func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *pr
 	}
 	if len(allJobs) == 0 {
 		return nil, nil, fmt.Errorf("no jobs labeled with dashboard %q found across %d candidate YAML(s) at test-infra@%s",
-			cfg.TestGrid.Dashboard, len(files), sha[:7])
+			cfg.Discovery.TestGridDashboard, len(files), sha[:7])
 	}
 	return allJobs, catalog, nil
 }
@@ -223,7 +223,7 @@ func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) (
 // downloadAndParseAll fetches every candidate file in parallel from
 // raw.githubusercontent.com pinned to the same SHA and runs them through
 // ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
-// contains cfg.TestGrid.Dashboard. The first file-level error cancels every
+// contains cfg.Discovery.TestGridDashboard. The first file-level error cancels every
 // in-flight goroutine and is returned to the caller.
 func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config, targetRepo string, includeAllDefinitions bool) ([]models.ProwJob, *Catalog, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -265,7 +265,7 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 			}
 			var jobs []models.ProwJob
 			if cfg != nil {
-				jobs, err = ParseJobConfig(body, f, cfg.TestGrid.Dashboard, cfg.EffectiveCategories())
+				jobs, err = ParseJobConfig(body, f, cfg.Discovery.TestGridDashboard, cfg.EffectiveCategories())
 				if err != nil {
 					recordErr(fmt.Errorf("parsing %s: %w", f, err))
 					return
@@ -294,7 +294,7 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 	for i, jobs := range perFile {
 		all = append(all, jobs...)
 		for _, definition := range catalogPerFile[i] {
-			matchesDashboard := cfg != nil && definitionMatchesDashboard(definition, cfg.TestGrid.Dashboard)
+			matchesDashboard := cfg != nil && definitionMatchesDashboard(definition, cfg.Discovery.TestGridDashboard)
 			matchesTarget := targetRepo != "" && definition.TestsRepo(targetRepo)
 			if !includeAllDefinitions && !matchesDashboard && !matchesTarget {
 				continue

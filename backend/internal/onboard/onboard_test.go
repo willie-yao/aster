@@ -874,8 +874,8 @@ func TestRenderProjectYAML_QuotesUntrustedDiscoveryValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v\n%s", err, yamlText)
 	}
-	if cfg.TestGrid.Dashboard != opts.TestGrid {
-		t.Fatalf("dashboard = %q, want %q", cfg.TestGrid.Dashboard, opts.TestGrid)
+	if cfg.Discovery.TestGridDashboard != opts.TestGrid {
+		t.Fatalf("dashboard = %q, want %q", cfg.Discovery.TestGridDashboard, opts.TestGrid)
 	}
 	if cfg.AI != nil {
 		t.Fatalf("untrusted dashboard injected AI config: %+v", cfg.AI)

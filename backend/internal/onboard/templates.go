@@ -56,13 +56,11 @@ var projectYAMLTmpl = template.Must(template.New("project.yaml").Funcs(yamlTempl
 id: {{quote .ID}}
 name: {{quote .Name}}
 {{if .ShortName}}short_name: {{quote .ShortName}}
-{{end}}{{if .DiscoveryTestGrid}}
-# Jobs advertising this testgrid dashboard are discovered automatically.
-testgrid:
-  dashboard: {{quote .DiscoveryTestGrid}}
-{{end}}{{if or .BucketDiscovery .IncludePresubmits}}
-discovery:
-{{- if .BucketDiscovery}}
+{{end}}discovery:
+{{- if .DiscoveryTestGrid}}
+  # Jobs advertising this TestGrid dashboard are discovered automatically.
+  testgrid_dashboard: {{quote .DiscoveryTestGrid}}
+{{- else}}
   # Jobs are discovered by listing the storage bucket's own job indexes.
   source: bucket
 {{- if .ExactJobs}}
@@ -76,7 +74,6 @@ discovery:
   # Include presubmit jobs in the dashboard job set.
   include_presubmits: true
 {{- end}}
-{{end}}
 # Where this project's Prow build artifacts live.
 storage:
 {{- if ne .Provider "gcs"}}

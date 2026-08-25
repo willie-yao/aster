@@ -33,7 +33,6 @@ type Config struct {
 	ID                   string         `yaml:"id"         json:"id"`
 	Name                 string         `yaml:"name"       json:"name"`
 	ShortName            string         `yaml:"short_name" json:"short_name,omitempty"`
-	TestGrid             TestGrid       `yaml:"testgrid,omitempty"   json:"testgrid,omitempty"`
 	Storage              Storage        `yaml:"storage"    json:"storage"`
 	Discovery            Discovery      `yaml:"discovery,omitempty"  json:"discovery,omitempty"`
 	Branding             Branding       `yaml:"branding"   json:"branding"`
@@ -99,12 +98,6 @@ func CategorizeJob(name string, rules []CategoryRule) string {
 		}
 	}
 	return "other"
-}
-
-// TestGrid identifies the testgrid dashboard that owns the project's jobs.
-// Only used when discovery.source is "testgrid".
-type TestGrid struct {
-	Dashboard string `yaml:"dashboard" json:"dashboard"`
 }
 
 // PullRequests configures the open pull request triage view, which reports the
@@ -184,7 +177,8 @@ type Storage struct {
 //	source: bucket             -> list the storage bucket's own job indexes
 //	                              under logs/ and pr-logs/directory/.
 type Discovery struct {
-	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Source            string `yaml:"source,omitempty" json:"source,omitempty"`
+	TestGridDashboard string `yaml:"testgrid_dashboard,omitempty" json:"testgrid_dashboard,omitempty"`
 	// IncludePresubmits adds presubmit jobs to the dashboard job set.
 	IncludePresubmits bool `yaml:"include_presubmits,omitempty" json:"include_presubmits,omitempty"`
 	// TestInfraRevision optionally pins TestGrid discovery to one exact
@@ -1345,7 +1339,7 @@ func (c *Config) Validate() error {
 
 	switch c.EffectiveDiscoverySource() {
 	case DiscoveryTestGrid:
-		require("testgrid.dashboard", c.TestGrid.Dashboard)
+		require("discovery.testgrid_dashboard", c.Discovery.TestGridDashboard)
 		if c.Discovery.TestInfraRevision != "" && !validTestInfraRevision(c.Discovery.TestInfraRevision) {
 			missing = append(missing, "discovery.test_infra_revision must be a lowercase 40-character commit SHA")
 		}

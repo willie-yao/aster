@@ -143,8 +143,8 @@ func TestAttention_RoundTripsThroughYAML(t *testing.T) {
 	cfg, err := parse(strings.NewReader(`
 id: test
 name: Test
-testgrid:
-  dashboard: test-dashboard
+discovery:
+  testgrid_dashboard: test-dashboard
 storage:
   provider: gcs
   bucket: test-bucket

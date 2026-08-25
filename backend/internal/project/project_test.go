@@ -15,8 +15,8 @@ const validYAML = `
 id: capz
 name: "Cluster API Provider Azure"
 short_name: "CAPZ"
-testgrid:
-  dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
+discovery:
+  testgrid_dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"
 storage:
   provider: "gcs"
   bucket: "kubernetes-ci-logs"
@@ -37,8 +37,8 @@ func TestParseValid(t *testing.T) {
 	if c.ID != "capz" {
 		t.Errorf("ID = %q, want %q", c.ID, "capz")
 	}
-	if c.TestGrid.Dashboard != "sig-cluster-lifecycle-cluster-api-provider-azure" {
-		t.Errorf("TestGrid.Dashboard = %q", c.TestGrid.Dashboard)
+	if c.Discovery.TestGridDashboard != "sig-cluster-lifecycle-cluster-api-provider-azure" {
+		t.Errorf("TestGrid.Dashboard = %q", c.Discovery.TestGridDashboard)
 	}
 	if c.Storage.Bucket != "kubernetes-ci-logs" {
 		t.Errorf("Storage.Bucket = %q", c.Storage.Bucket)
@@ -62,7 +62,7 @@ id: capz
 	msg := err.Error()
 	wantSubstrings := []string{
 		"name",
-		"testgrid.dashboard",
+		"discovery.testgrid_dashboard",
 		"storage.bucket",
 		"branding.base_path",
 		"branding.site_url",
@@ -81,8 +81,8 @@ func TestParseUnknownField(t *testing.T) {
 id: capz
 name: x
 unknown_field: oops
-testgrid:
-  dashboard: x
+discovery:
+  testgrid_dashboard: x
 storage:
   provider: gcs
   bucket: x
@@ -109,8 +109,8 @@ id: x
 name: x
 source:
   test_infra_paths: ["config/jobs/x"]
-testgrid:
-  dashboard: x
+discovery:
+  testgrid_dashboard: x
 storage:
   provider: gcs
   bucket: x
@@ -178,8 +178,8 @@ func TestParseDefaultsGCSProviderAndBrandingTitle(t *testing.T) {
 	const defaults = `
 id: x
 name: Example
-testgrid:
-  dashboard: d
+discovery:
+  testgrid_dashboard: d
 storage:
   bucket: "b"
 branding:
@@ -284,10 +284,10 @@ func TestDisplayShortName(t *testing.T) {
 // below mutate it to exercise individual category-rule failure paths.
 func validConfig() *Config {
 	return &Config{
-		ID:       "test",
-		Name:     "Test",
-		TestGrid: TestGrid{Dashboard: "test-dashboard"},
-		Storage:  Storage{Provider: "gcs", Bucket: "test-bucket"},
+		ID:        "test",
+		Name:      "Test",
+		Discovery: Discovery{TestGridDashboard: "test-dashboard"},
+		Storage:   Storage{Provider: "gcs", Bucket: "test-bucket"},
 		Branding: Branding{
 			Title:    "Test",
 			BasePath: "/test",
@@ -1018,8 +1018,8 @@ func TestValidateRejectsUnknownAIAPI(t *testing.T) {
 func TestParseValidatesInMemory(t *testing.T) {
 	data := []byte(`id: test
 name: Test
-testgrid:
-  dashboard: dashboard
+discovery:
+  testgrid_dashboard: dashboard
 storage:
   provider: gcs
   bucket: bucket
@@ -1223,7 +1223,7 @@ func TestValidateTestInfraRevision(t *testing.T) {
 			cfg.Discovery.Source = tc.source
 			cfg.Discovery.TestInfraRevision = tc.revision
 			if tc.source == DiscoveryBucket {
-				cfg.TestGrid.Dashboard = ""
+				cfg.Discovery.TestGridDashboard = ""
 			}
 			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("validation error = %v, want %q", err, tc.wantError)
@@ -1248,14 +1248,12 @@ func TestParseTestInfraRevision(t *testing.T) {
 	cfg, err := parse(strings.NewReader(`
 id: example
 name: Example
-testgrid:
-  dashboard: example-dashboard
-storage:
-  provider: gcs
-  bucket: kubernetes-ci-logs
 discovery:
+  testgrid_dashboard: example-dashboard
   source: testgrid
   test_infra_revision: ` + revision + `
+storage:
+  bucket: kubernetes-ci-logs
 branding:
   title: Example
   base_path: /example
@@ -1429,8 +1427,8 @@ func TestParseRejectsLegacyAgentSandboxCommandStrings(t *testing.T) {
 	const legacy = `
 id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: /tmp
@@ -1611,8 +1609,8 @@ func TestParsePullRequestsBlock(t *testing.T) {
 	cfg, err := parse(strings.NewReader(`
 id: example
 name: Example
-testgrid:
-  dashboard: d
+discovery:
+  testgrid_dashboard: d
 storage:
   provider: gcs
   bucket: b

@@ -26,7 +26,7 @@ func TestLoadExampleGolden(t *testing.T) {
 		want string
 	}{
 		{"id", cfg.ID, "example"},
-		{"testgrid.dashboard", cfg.TestGrid.Dashboard, "sig-foo-your-project"},
+		{"discovery.testgrid_dashboard", cfg.Discovery.TestGridDashboard, "sig-foo-your-project"},
 		{"storage.provider", cfg.Storage.Provider, "gcs"},
 		{"storage.bucket", cfg.Storage.Bucket, "kubernetes-ci-logs"},
 	}

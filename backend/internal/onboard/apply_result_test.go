@@ -235,7 +235,6 @@ func TestApplyReviewedWritesValidatedOutputs(t *testing.T) {
 	}
 	plan.Project.Storage = project.Storage{Provider: "local", Base: artifactRoot}
 	plan.Project.Discovery = project.Discovery{Source: project.DiscoveryBucket, ExactJobs: []string{jobName}}
-	plan.Project.TestGrid = project.TestGrid{}
 	projectYAML, err := yaml.Marshal(plan.Project)
 	if err != nil {
 		t.Fatal(err)

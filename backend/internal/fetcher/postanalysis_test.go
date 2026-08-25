@@ -24,8 +24,8 @@ func TestRunFinalizedSideEffectsLoadsFinalizedOutput(t *testing.T) {
 	config := `
 id: test
 name: Test Project
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: ` + storageDir + `

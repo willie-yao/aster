@@ -331,7 +331,7 @@ func sampleConfig() *project.Config {
 		ID:        "capz",
 		Name:      "Cluster API Provider Azure",
 		ShortName: "CAPZ",
-		TestGrid:  project.TestGrid{Dashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"},
+		Discovery: project.Discovery{TestGridDashboard: "sig-cluster-lifecycle-cluster-api-provider-azure"},
 		Storage:   project.Storage{Provider: "gcs", Bucket: "kubernetes-ci-logs"},
 		Branding: project.Branding{
 			Title:    "CAPZ Prow Dashboard",
@@ -505,7 +505,7 @@ func TestWriteManifest(t *testing.T) {
 func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &project.Config{
-		ID: "test", Name: "Test", TestGrid: project.TestGrid{Dashboard: "test"},
+		ID: "test", Name: "Test", Discovery: project.Discovery{TestGridDashboard: "test"},
 		Storage:  project.Storage{Provider: "gcs", Bucket: "bucket"},
 		Branding: project.Branding{Title: "Test", BasePath: "/", SiteURL: "https://example.invalid", SourceRepo: project.SourceRepo{Owner: "branding", Name: "repo"}},
 		AI: &project.AI{
