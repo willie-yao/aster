@@ -45,13 +45,26 @@ test("partially verified chat findings keep validated evidence fix-eligible", ()
 
 test("permanent source ineligibility is reported before the per-response citation reason", () => {
   const chat = source("src/components/AnalysisChat.tsx");
-  assert.match(chat, /fixSourceUnavailable = exactFixEnabled/);
+  assert.match(chat, /fixSourceUnavailable = Boolean\(features\.junit_chat_fix\) && exactJUnitAnalysis/);
   assert.match(chat, /\{fixSourceUnavailable && \(\s*<Alert/);
-  assert.match(chat, /exactFixEnabled && hasVerifiedSourcePaths && !hasArtifactEvidence/);
+  assert.match(chat, /exactFixEnabled && \(causeFixEnabled \|\| hasVerifiedSourcePaths\) && !hasArtifactEvidence/);
   // Ineligibility is reported without gating a mode, and the one question set
   // leads with an artifact-grounded prompt so answers can become fix-eligible.
   assert.match(chat, /questions = causeScope \? causeSuggestedQuestions : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
   assert.match(chat, /"What does the build log show at the failure\?"/);
+});
+
+test("cause chat fixes use a representative failure and replace the global pattern chat", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  const nextStep = source("src/components/CausalGroupNextStep.tsx");
+  const banner = source("src/components/PatternBanner.tsx");
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  assert.match(chat, /causeFixEnabled = causeScope && Boolean\(fixTarget\)/);
+  assert.match(chat, /exactAnalysis=\{!patternScope\}/);
+  assert.match(chat, /causeScope=\{causeScope\}/);
+  assert.match(nextStep, /fixTarget=\{routable && !routable\.stale \? routable\.target \?\? undefined : undefined\}/);
+  assert.match(banner, /causalGroups\.length === 0 && chatAvailability === "ready"/);
+  assert.match(dialog, /representative failed JUnit target for this cause/);
 });
 
 test("chat fix grounding accumulates validated citations across the conversation", () => {

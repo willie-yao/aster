@@ -110,6 +110,7 @@ export function ChatFixDialog({
   message,
   patterns,
   exactAnalysis,
+  causeScope = false,
   onClose,
 }: {
   open: boolean;
@@ -117,6 +118,7 @@ export function ChatFixDialog({
   message: AnalysisChatMessage | null;
   patterns: PatternAnalysis[];
   exactAnalysis: boolean;
+  causeScope?: boolean;
   onClose: () => void;
 }) {
   const [patternID, setPatternID] = useState("");
@@ -402,9 +404,11 @@ export function ChatFixDialog({
               </Alert>
             )}
             <Alert severity="info" variant="outlined">
-              {exactAnalysis
-                ? "Only this exact failed JUnit analysis, this response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
-                : "Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded."}
+              {causeScope
+                ? "Only the representative failed JUnit target for this cause, this cause-scoped response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
+                : exactAnalysis
+                  ? "Only this exact failed JUnit analysis, this response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
+                  : "Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded."}
             </Alert>
 
             {!exactAnalysis && <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>

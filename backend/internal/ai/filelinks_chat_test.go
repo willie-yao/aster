@@ -22,11 +22,11 @@ func (staticChatRunner) Reply(context.Context, analysischat.Turn) (analysischat.
 	return analysischat.Reply{Answer: "The artifact supports the analysis.", Assessment: "supports"}, nil
 }
 
-// TestPreflightTestFixSurvivesFlakyLinkVerification covers the reported
+// TestPreflightAnalysisFixSurvivesFlakyLinkVerification covers the reported
 // symptom: a chat session bound to an unchanged cache-hit analysis must stay
 // valid across a publication pass where GitHub link verification fails, rather
 // than being rejected with "analysis changed".
-func TestPreflightTestFixSurvivesFlakyLinkVerification(t *testing.T) {
+func TestPreflightAnalysisFixSurvivesFlakyLinkVerification(t *testing.T) {
 	revision := strings.Repeat("d", 40)
 	healthy := true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -91,13 +91,13 @@ func TestPreflightTestFixSurvivesFlakyLinkVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
+	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
 		t.Fatalf("initial Fix preflight error = %v", err)
 	}
 
 	healthy = false
 	publish()
-	if err := service.PreflightTestFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
+	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
 		t.Fatalf("Fix preflight after flaky link verification error = %v (analysis changed = %v)",
 			err, errors.Is(err, analysischat.ErrAnalysisChanged))
 	}

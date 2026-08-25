@@ -23,8 +23,8 @@ func (s *Service) ConfigureTestFixPreflight(
 	return nil
 }
 
-// PreflightTestFix verifies exact JUnit Fix source eligibility without a provider request.
-func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, requestID string) error {
+// PreflightAnalysisFix verifies the selected failed-test Fix target without a provider request.
+func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, requestID string) error {
 	owner = normalizeOwner(owner)
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
@@ -34,6 +34,7 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 	storeCtx, cancel := s.store.context()
 	defer cancel()
 	var ref AnalysisRef
+	var targetRef AnalysisRef
 	var analysisHash string
 	var sourceRepository buildsource.Source
 	var sourceBranch string
@@ -46,10 +47,11 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		if current.View.Analysis.Scope != ScopeTest || current.View.Analysis.Source == models.TestCaseSourceBuild || current.View.Analysis.JUnitFile == "" {
-			return changed, fmt.Errorf("%w: exact JUnit Fix requires a failed test analysis", ErrInvalidRequest)
+		target := persistedAnalysisFixTarget(current.Resolved)
+		if target == nil || target.Ref.Source == models.TestCaseSourceBuild || target.Ref.JUnitFile == "" {
+			return changed, fmt.Errorf("%w: Fix requires an eligible failed JUnit test", ErrInvalidRequest)
 		}
-		repository, ok := persistedBuildSourceRepository(current.Resolved, s.sourceRepo)
+		repository, ok := persistedFixTargetSourceRepository(target, s.sourceRepo)
 		if !ok {
 			return changed, fmt.Errorf("%w: exact JUnit Fix source identity is unavailable", ErrInvalidRequest)
 		}
@@ -60,9 +62,10 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 		}
 		_, requestAdmitted = current.Requests[requestID]
 		ref = current.View.Analysis
-		analysisHash = current.Resolved.AnalysisHash
+		targetRef = target.Ref
+		analysisHash = target.AnalysisHash
 		sourceRepository = buildsource.Source{Owner: repository.Owner, Name: repository.Name, Revision: repository.Revision}
-		sourceBranch, sourceBranchKnown = buildsource.Branch(current.Resolved.Build, repository.Owner, repository.Name)
+		sourceBranch, sourceBranchKnown = buildsource.Branch(target.Build, repository.Owner, repository.Name)
 		return changed, nil
 	})
 	if err != nil {
@@ -72,23 +75,27 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 	if err != nil {
 		return err
 	}
-	currentSource, ok := buildsource.Resolve(resolved.build, sourceRepository.Owner, sourceRepository.Name)
-	if !ok || currentSource != sourceRepository || analysisHash == "" || models.TestAnalysisContentHash(resolved.testCase) != analysisHash {
+	target := resolvedAnalysisFixTarget(resolved)
+	if target == nil || target.ref != targetRef {
 		return ErrAnalysisChanged
 	}
-	currentBranch, currentBranchKnown := buildsource.Branch(resolved.build, sourceRepository.Owner, sourceRepository.Name)
+	currentSource, ok := buildsource.Resolve(target.build, sourceRepository.Owner, sourceRepository.Name)
+	if !ok || currentSource != sourceRepository || analysisHash == "" || models.TestAnalysisContentHash(target.testCase) != analysisHash {
+		return ErrAnalysisChanged
+	}
+	currentBranch, currentBranchKnown := buildsource.Branch(target.build, sourceRepository.Owner, sourceRepository.Name)
 	if currentBranchKnown != sourceBranchKnown || sourceBranchKnown && currentBranch != sourceBranch {
 		return ErrAnalysisChanged
 	}
-	if resolved.testCase.AIAnalysis == nil {
+	if target.testCase.AIAnalysis == nil {
 		return fmt.Errorf("%w: exact JUnit Fix has no verified immutable source paths", ErrInvalidRequest)
 	}
-	files := buildsource.VerifiedPaths(resolved.testCase.AIAnalysis.FileLinks, sourceRepository)
+	files := buildsource.VerifiedPaths(target.testCase.AIAnalysis.FileLinks, sourceRepository)
 	if len(files) == 0 {
 		return fmt.Errorf("%w: exact JUnit Fix has no verified immutable source paths", ErrInvalidRequest)
 	}
 	if existing != nil && requestAdmitted {
-		if validTestFixSource(*existing, sourceRepository.Revision, files) {
+		if validTestFixSource(*existing, targetRef, sourceRepository.Revision, files) {
 			return nil
 		}
 		return fmt.Errorf("%w: exact JUnit Fix source binding is invalid", ErrInvalidRequest)
@@ -99,14 +106,13 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 	repository := sourceinvestigation.Repository{Owner: sourceRepository.Owner, Name: sourceRepository.Name, Revision: sourceRepository.Revision}
 	generationBase, hashes, err := s.testFixPreflight(ctx, repository, sourceBranch, files)
 	if err != nil {
-		// Keep the cause so the caller can report why the Fix was rejected.
 		return fmt.Errorf("%w: exact JUnit Fix source compatibility failed: %w", ErrInvalidRequest, err)
 	}
 	binding := persistedTestFixSource{
-		FailureRevision: sourceRepository.Revision, GenerationBaseRevision: generationBase,
+		TargetRef: targetRef, FailureRevision: sourceRepository.Revision, GenerationBaseRevision: generationBase,
 		VerifiedSourceFileHashes: cloneTestFixHashes(hashes),
 	}
-	if !validTestFixSource(binding, sourceRepository.Revision, files) {
+	if !validTestFixSource(binding, targetRef, sourceRepository.Revision, files) {
 		return fmt.Errorf("%w: exact JUnit Fix source compatibility is invalid", ErrInvalidRequest)
 	}
 	persistCtx, persistCancel := s.store.context()
@@ -117,15 +123,19 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		repository, ok := persistedBuildSourceRepository(current.Resolved, s.sourceRepo)
-		if !ok || !strings.EqualFold(repository.Revision, binding.FailureRevision) || current.Resolved.AnalysisHash != analysisHash {
+		currentTarget := persistedAnalysisFixTarget(current.Resolved)
+		if currentTarget == nil || currentTarget.Ref != targetRef || currentTarget.AnalysisHash != analysisHash {
+			return changed, ErrAnalysisChanged
+		}
+		repository, ok := persistedFixTargetSourceRepository(currentTarget, s.sourceRepo)
+		if !ok || !strings.EqualFold(repository.Revision, binding.FailureRevision) {
 			return changed, ErrAnalysisChanged
 		}
 		if current.FixSources == nil {
 			current.FixSources = map[string]persistedTestFixSource{}
 		}
 		if previous, ok := current.FixSources[requestID]; ok {
-			if !validTestFixSource(previous, repository.Revision, files) {
+			if !validTestFixSource(previous, targetRef, repository.Revision, files) {
 				return changed, fmt.Errorf("%w: exact JUnit Fix source binding is invalid", ErrInvalidRequest)
 			}
 			if !sameTestFixSource(previous, binding) {
@@ -141,8 +151,25 @@ func (s *Service) PreflightTestFix(ctx context.Context, sessionID, owner, reques
 	})
 }
 
+func persistedFixTargetSourceRepository(
+	target *persistedResolvedFixTarget,
+	configured sourceinvestigation.Repository,
+) (sourceinvestigation.Repository, bool) {
+	if target == nil {
+		return sourceinvestigation.Repository{}, false
+	}
+	source, ok := resolveBuildSourceRepository(target.Build, configured)
+	if !ok || sourceinvestigation.ValidateRepository(target.Source) != nil ||
+		!strings.EqualFold(target.Source.Owner, source.Owner) ||
+		!strings.EqualFold(target.Source.Name, source.Name) ||
+		!strings.EqualFold(target.Source.Revision, source.Revision) {
+		return sourceinvestigation.Repository{}, false
+	}
+	return source, true
+}
+
 func sameTestFixSource(left, right persistedTestFixSource) bool {
-	if !strings.EqualFold(left.FailureRevision, right.FailureRevision) ||
+	if left.TargetRef != right.TargetRef || !strings.EqualFold(left.FailureRevision, right.FailureRevision) ||
 		!strings.EqualFold(left.GenerationBaseRevision, right.GenerationBaseRevision) ||
 		len(left.VerifiedSourceFileHashes) != len(right.VerifiedSourceFileHashes) {
 		return false
@@ -155,7 +182,10 @@ func sameTestFixSource(left, right persistedTestFixSource) bool {
 	return true
 }
 
-func validTestFixSource(binding persistedTestFixSource, failureRevision string, files []string) bool {
+func validTestFixSource(binding persistedTestFixSource, targetRef AnalysisRef, failureRevision string, files []string) bool {
+	if binding.TargetRef != targetRef {
+		return false
+	}
 	failure, ok := buildsource.NormalizeRevision(binding.FailureRevision)
 	if !ok || !strings.EqualFold(failure, failureRevision) {
 		return false

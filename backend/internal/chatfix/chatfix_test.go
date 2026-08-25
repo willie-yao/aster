@@ -29,7 +29,7 @@ type fakeChatStore struct {
 	patternHash           string
 }
 
-func (f *fakeChatStore) PreflightTestFix(_ context.Context, sessionID, owner, requestID string) error {
+func (f *fakeChatStore) PreflightAnalysisFix(_ context.Context, sessionID, owner, requestID string) error {
 	f.preflighted = true
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
 	if f.preflightErr != nil {
@@ -55,7 +55,7 @@ func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, pat
 	return f.candidate, f.candidateErr
 }
 
-func (f *fakeChatStore) TestFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error) {
+func (f *fakeChatStore) AnalysisFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error) {
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
 	if f.onReturn != nil {
 		f.onReturn()
@@ -235,6 +235,10 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
 			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
 		},
+		FixTarget: analysischat.AnalysisRef{
+			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
+			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+		},
 		AssistantAnswer:   "The artifact supports changing the terminal branch.",
 		ArtifactCitations: []analysischat.Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 		EvidenceWarnings:  []string{"citation 2 was omitted"},
@@ -278,6 +282,10 @@ func TestValidateAnalysisPreviewRejectsChangedChatIdentity(t *testing.T) {
 		AnalysisContentHash:      "analysis-hash",
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
 		Analysis: analysischat.AnalysisRef{
+			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
+			JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+		},
+		FixTarget: analysischat.AnalysisRef{
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
 			JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
 		},
@@ -348,5 +356,47 @@ func TestCreateAnalysisFixRequestRejectsIneligibleSource(t *testing.T) {
 	}
 	if fixes.requestCalled {
 		t.Fatal("a fix request was admitted despite an ineligible source")
+	}
+}
+
+func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
+	target := analysischat.AnalysisRef{
+		Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "209", TestName: "TestFlatcar",
+		JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-25T01:00:00Z",
+	}
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+		SessionID: "session", RequestID: "request", ResponseHash: "response-hash",
+		Analysis: analysischat.AnalysisRef{
+			Scope: analysischat.ScopeCause, JobID: "periodic-capz", PatternID: "pattern", PatternHash: "pattern-hash",
+			CausalGroupID: "cause", CausalGroupHash: "cause-hash",
+		},
+		FixTarget: target, AnalysisContentHash: "analysis-hash",
+		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
+		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
+		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
+		VerifiedSourceFileHashes: map[string]string{"pkg/controller.go": strings.Repeat("d", 64)},
+		AssistantAnswer:          "The two cause builds support changing the controller.",
+		ArtifactCitations:        []analysischat.Citation{{Path: "builds/209/build-log.txt", Quote: "resource not found"}},
+	}}
+	fixes := &fakeFixPreviewer{}
+	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		t.Context(), "session", "Alice", "request", "write-token", "keep compatibility",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.ID != "async-request" || fixes.analysisInput.Identity.BuildID != target.BuildID ||
+		fixes.analysisInput.Identity.TestName != target.TestName || fixes.analysisInput.Identity.JUnitFile != target.JUnitFile {
+		t.Fatalf("request=%+v input=%+v", request, fixes.analysisInput)
+	}
+	binding := actions.AnalysisPreviewBinding{
+		Identity: fixes.analysisInput.Identity, AnalysisContentHash: "analysis-hash",
+		SourceRepository: chat.candidate.SourceRepositorySnapshot,
+		ChatSessionID:    "session", ChatRequestID: "request", ChatResponseHash: "response-hash",
+		FailureRevision: chat.candidate.FailureRevision, GenerationBaseRevision: chat.candidate.GenerationBaseRevision,
+		VerifiedSourceFileHashes: chat.candidate.VerifiedSourceFileHashes,
+	}
+	if err := NewService(chat, fixes).ValidateAnalysisPreview(t.Context(), "Alice", binding); err != nil {
+		t.Fatalf("cause preview validation error = %v", err)
 	}
 }

@@ -46,6 +46,7 @@ const failedTest: TestCase = {
     root_cause: "cause",
     severity: "high",
     suggested_fix: "fix",
+    disposition: "grounded",
     file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
   },
 };
@@ -121,6 +122,7 @@ test("a cause gathers everything it offers under one Next step section", () => {
   assert.match(html, /Bump the node image to the current release\./);
   assert.match(html, /Open representative failure: Conformance tests should pass/);
   assert.match(html, /Expand investigate cause/);
+  assert.doesNotMatch(html, /Expand investigate and fix/);
 
   assert.doesNotMatch(html, /Verify code target|Implementation target/);
 });

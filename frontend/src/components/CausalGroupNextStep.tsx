@@ -81,6 +81,7 @@ export function CausalGroupNextStep({
             key={`${chat.ref.job_id}\u0000${chat.ref.pattern_id}\u0000${chat.ref.causal_group_id}\u0000${chat.ref.causal_group_hash}`}
             analysisRef={chat.ref}
             fileCtx={chat.fileCtx}
+            fixTarget={routable && !routable.stale ? routable.target ?? undefined : undefined}
           />
         </Box>
       )}

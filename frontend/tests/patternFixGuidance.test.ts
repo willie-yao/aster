@@ -50,6 +50,7 @@ const analysis = {
   root_cause: "cause",
   severity: "high",
   suggested_fix: "fix",
+  disposition: "grounded" as const,
 };
 
 const groundedRun: BuildResult = {
@@ -450,5 +451,42 @@ test("a cause separates builds that left the window from builds with no eligible
   assert.deepEqual(causalGroupFixTarget(firstGroup, [groundedRun]), {
     buildID: groundedRun.build_id,
     testName: "fails",
+  });
+});
+
+test("cause Fix routing skips a semantically contested higher-severity failure", () => {
+  const build: BuildResult = {
+    ...groundedRun,
+    build_id: "700",
+    test_cases: [
+      {
+        ...groundedRun.test_cases[0],
+        name: "contested higher severity",
+        ai_analysis: {
+          ...analysis,
+          severity: "critical",
+          disposition: "preliminary",
+          disposition_warnings: ["semantic_review_unresolved"],
+          file_links: { "pkg/contested.go": "https://github.com/o/r/blob/4f2a9c1e83b7d0526ab1c94f7e3d81a06b5c2f97/pkg/contested.go" },
+        },
+      },
+      {
+        ...groundedRun.test_cases[0],
+        name: "usable lower severity",
+        ai_analysis: {
+          ...analysis,
+          severity: "high",
+          file_links: { "pkg/usable.go": "https://github.com/o/r/blob/4f2a9c1e83b7d0526ab1c94f7e3d81a06b5c2f97/pkg/usable.go" },
+        },
+      },
+    ],
+  };
+  const group: PatternCausalGroup = {
+    id: "cause", content_hash: "cause-hash", builds: ["700"], root_cause: "usable cause", confidence: "high",
+  };
+
+  assert.deepEqual(causalGroupFixTarget(group, [build]), {
+    buildID: "700",
+    testName: "usable lower severity",
   });
 });

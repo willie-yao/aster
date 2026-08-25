@@ -36,6 +36,7 @@ type FixCandidate struct {
 	SessionID                string
 	RequestID                string
 	Analysis                 AnalysisRef
+	FixTarget                AnalysisRef
 	Original                 AnalysisSnapshot
 	AssistantAnswer          string
 	ProposedRevision         *Revision
@@ -52,8 +53,8 @@ type FixCandidate struct {
 	SourceBranchKnown        bool
 }
 
-// TestFixCandidate returns one owner-bound answer for the exact JUnit analysis session.
-func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandidate, error) {
+// AnalysisFixCandidate returns one owner-bound answer and its exact failed-test Fix target.
+func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
@@ -69,8 +70,8 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		if current == nil || current.Owner != owner {
 			return changed, ErrSessionNotFound
 		}
-		if current.View.Analysis.Scope != ScopeTest {
-			return changed, fmt.Errorf("%w: exact JUnit fix requires a test-scoped conversation", ErrInvalidRequest)
+		if current.View.Analysis.Scope != ScopeTest && current.View.Analysis.Scope != ScopeCause {
+			return changed, fmt.Errorf("%w: Fix requires a test- or cause-scoped conversation", ErrInvalidRequest)
 		}
 		request, ok := current.Requests[requestID]
 		if !ok || request.Status != requestSucceeded {
@@ -82,25 +83,26 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
-		if analysis == nil {
-			return changed, ErrAnalysisNotFound
-		}
-		if !models.AnalysisHasUsableDiagnosis(analysis) {
+		if !analysisFixConversationUsable(current.View.Analysis.Scope, analysis) {
 			return changed, fmt.Errorf("%w: the analysis has no usable diagnosis to fix", ErrInvalidRequest)
 		}
+		target := persistedAnalysisFixTarget(current.Resolved)
+		if target == nil || target.TestCase.AIAnalysis == nil || !models.AnalysisHasUsableDiagnosis(target.TestCase.AIAnalysis) {
+			return changed, fmt.Errorf("%w: conversation has no eligible failed-test Fix target", ErrInvalidRequest)
+		}
 		candidate = FixCandidate{
-			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis,
+			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis, FixTarget: target.Ref,
 			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
 			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: citations,
 			EvidenceWarnings:    conversationEvidenceWarnings(current.View.Messages, requestID),
-			AnalysisContentHash: current.Resolved.AnalysisHash, SourceRepositorySnapshot: current.Resolved.Source,
+			AnalysisContentHash: target.AnalysisHash, SourceRepositorySnapshot: target.Source,
 		}
 		if binding, ok := current.FixSources[requestID]; ok {
 			candidate.FailureRevision = binding.FailureRevision
 			candidate.GenerationBaseRevision = binding.GenerationBaseRevision
 			candidate.VerifiedSourceFileHashes = cloneTestFixHashes(binding.VerifiedSourceFileHashes)
 			candidate.SourceBranch, candidate.SourceBranchKnown = buildsource.Branch(
-				current.Resolved.Build, current.Resolved.Source.Owner, current.Resolved.Source.Name,
+				target.Build, target.Source.Owner, target.Source.Name,
 			)
 		}
 		return changed, nil
@@ -113,27 +115,34 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	currentSource, sourceOK := resolveBuildSourceRepository(resolved.build, candidate.SourceRepositorySnapshot)
-	if analysis == nil || !models.AnalysisHasUsableDiagnosis(analysis) || candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(resolved.testCase) != candidate.AnalysisContentHash ||
-		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil ||
-		!sourceOK || currentSource != candidate.SourceRepositorySnapshot {
+	target := resolvedAnalysisFixTarget(resolved)
+	if target == nil {
+		return FixCandidate{}, ErrAnalysisChanged
+	}
+	currentSource, sourceOK := resolveBuildSourceRepository(target.build, candidate.SourceRepositorySnapshot)
+	if !analysisFixConversationUsable(candidate.Analysis.Scope, analysis) ||
+		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || candidate.FixTarget != target.ref ||
+		target.testCase.AIAnalysis == nil || !models.AnalysisHasUsableDiagnosis(target.testCase.AIAnalysis) ||
+		candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(target.testCase) != candidate.AnalysisContentHash ||
+		sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	if candidate.GenerationBaseRevision != "" {
 		currentBranch, currentBranchKnown := buildsource.Branch(
-			resolved.build, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name,
+			target.build, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name,
 		)
 		if currentBranchKnown != candidate.SourceBranchKnown || candidate.SourceBranchKnown && currentBranch != candidate.SourceBranch {
 			return FixCandidate{}, ErrAnalysisChanged
 		}
-		files := buildsource.VerifiedPaths(analysis.FileLinks, buildsource.Source{
+		files := buildsource.VerifiedPaths(target.testCase.AIAnalysis.FileLinks, buildsource.Source{
 			Owner: candidate.SourceRepositorySnapshot.Owner, Name: candidate.SourceRepositorySnapshot.Name,
 			Revision: candidate.SourceRepositorySnapshot.Revision,
 		})
 		if !validTestFixSource(persistedTestFixSource{
-			FailureRevision: candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
+			TargetRef: candidate.FixTarget, FailureRevision: candidate.FailureRevision,
+			GenerationBaseRevision:   candidate.GenerationBaseRevision,
 			VerifiedSourceFileHashes: candidate.VerifiedSourceFileHashes,
-		}, candidate.SourceRepositorySnapshot.Revision, files) {
+		}, candidate.FixTarget, candidate.SourceRepositorySnapshot.Revision, files) {
 			return FixCandidate{}, ErrAnalysisChanged
 		}
 	}
@@ -144,10 +153,46 @@ func (s *Service) TestFixCandidate(sessionID, owner, requestID string) (FixCandi
 	return candidate, nil
 }
 
+func analysisFixConversationUsable(scope string, analysis *models.AIAnalysis) bool {
+	if analysis == nil {
+		return false
+	}
+	if scope == ScopeCause {
+		return strings.TrimSpace(analysis.RootCause) != ""
+	}
+	return models.AnalysisHasUsableDiagnosis(analysis)
+}
+
+func persistedAnalysisFixTarget(resolved persistedResolvedAnalysis) *persistedResolvedFixTarget {
+	switch resolved.Ref.Scope {
+	case ScopeTest:
+		return &persistedResolvedFixTarget{
+			Ref: resolved.Ref, AnalysisHash: resolved.AnalysisHash, Source: resolved.Source,
+			Build: resolved.Build, TestCase: resolved.TestCase,
+		}
+	case ScopeCause:
+		return resolved.FixTarget
+	default:
+		return nil
+	}
+}
+
+func resolvedAnalysisFixTarget(resolved resolvedAnalysis) *resolvedFixTarget {
+	switch resolved.ref.Scope {
+	case ScopeTest:
+		return &resolvedFixTarget{ref: resolved.ref, build: resolved.build, testCase: resolved.testCase}
+	case ScopeCause:
+		return resolved.fixTarget
+	default:
+		return nil
+	}
+}
+
 func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 	payload, err := json.Marshal(struct {
 		SessionID, RequestID                    string
 		Analysis                                AnalysisRef
+		FixTarget                               AnalysisRef
 		Original                                AnalysisSnapshot
 		AssistantAnswer                         string
 		ProposedRevision                        *Revision
@@ -160,7 +205,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		SourceBranch                            string
 		SourceBranchKnown                       bool
 	}{
-		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.Original, candidate.AssistantAnswer,
+		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.FixTarget, candidate.Original, candidate.AssistantAnswer,
 		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.EvidenceWarnings, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
 		candidate.FailureRevision, candidate.GenerationBaseRevision, candidate.VerifiedSourceFileHashes,
 		candidate.SourceBranch, candidate.SourceBranchKnown,
