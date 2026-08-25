@@ -191,11 +191,13 @@ func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
 // on a mostly unread log cannot be mistaken for absence.
 func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		result           *artifacts.GrepResult
-		wantScan         bool
-		wantMatches      bool
-		wantHintContains []string
+		name              string
+		result            *artifacts.GrepResult
+		remainingGCSBytes int
+		wantScan          bool
+		wantMatches       bool
+		wantHintContains  []string
+		wantHintExcludes  []string
 	}{
 		{
 			name:   "complete scan",
@@ -207,16 +209,24 @@ func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
 			wantMatches: true,
 		},
 		{
-			name:             "coverage gap",
+			name:             "coverage gap with budget left",
 			result:           &artifacts.GrepResult{FileSize: 4096, BytesScanned: 512, ScanTruncated: true},
 			wantScan:         true,
 			wantHintContains: []string{"512", "4096", "tail_artifact"},
 		},
 		{
+			name:              "coverage gap with budget spent",
+			result:            &artifacts.GrepResult{FileSize: 4096, BytesScanned: 512, ScanTruncated: true},
+			remainingGCSBytes: 512,
+			wantScan:          true,
+			wantHintContains:  []string{"512", "budget is spent"},
+			wantHintExcludes:  []string{"tail_artifact"},
+		},
+		{
 			name:             "coverage gap with unknown file size",
 			result:           &artifacts.GrepResult{FileSize: -1, BytesScanned: 512, ScanTruncated: true},
 			wantScan:         true,
-			wantHintContains: []string{"512", "tail_artifact"},
+			wantHintContains: []string{"512", "may be unread", "tail_artifact"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,8 +234,9 @@ func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
 				files:      map[string][]byte{"build-log.txt": []byte("line\n")},
 				grepResult: tc.result,
 			}
+			env := &tools.Env{Browser: browser, RemainingGCSBytes: tc.remainingGCSBytes}
 			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "missing"})
-			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+			result := (&grepTool{}).Dispatch(context.Background(), env, raw)
 			payload := result.Payload
 			if payload["file_size"] != tc.result.FileSize || payload["bytes_scanned"] != tc.result.BytesScanned {
 				t.Fatalf("payload coverage=%v", payload)
@@ -242,6 +253,11 @@ func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
 			for _, want := range tc.wantHintContains {
 				if !strings.Contains(hint, want) {
 					t.Fatalf("scan_hint = %q, want it to mention %q", hint, want)
+				}
+			}
+			for _, unwanted := range tc.wantHintExcludes {
+				if strings.Contains(hint, unwanted) {
+					t.Fatalf("scan_hint = %q, want it to omit %q", hint, unwanted)
 				}
 			}
 			observation := result.Observation.(tools.GrepCallObservation)
