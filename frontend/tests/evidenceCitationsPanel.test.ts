@@ -20,6 +20,7 @@ const { AiAnalysisPanel } = (await vite.ssrLoadModule("/src/components/AiAnalysi
   AiAnalysisPanel: (props: {
     analysis: AIAnalysis;
     fileCtx: Record<string, unknown>;
+    buildWebURL?: string;
     appearance?: "default" | "detail";
   }) => ReturnType<typeof createElement>;
 };
@@ -53,7 +54,11 @@ function analysisWith(citations?: EvidenceCitation[]): AIAnalysis {
   };
 }
 
-function render(analysis: AIAnalysis, appearance: "default" | "detail" = "detail"): string {
+function render(
+  analysis: AIAnalysis,
+  appearance: "default" | "detail" = "detail",
+  buildWebURL?: string,
+): string {
   return renderToStaticMarkup(
     createElement(
       ThemeProvider,
@@ -67,7 +72,7 @@ function render(analysis: AIAnalysis, appearance: "default" | "detail" = "detail
           createElement(
             AuthContext.Provider,
             { value: anonymous },
-            createElement(AiAnalysisPanel, { analysis, fileCtx: {}, appearance }) as ReactNode,
+            createElement(AiAnalysisPanel, { analysis, fileCtx: {}, appearance, buildWebURL }) as ReactNode,
           ),
         ),
       ),
@@ -140,4 +145,29 @@ test("the section renders in the compact appearance too", () => {
   ));
   assert.match(rendered, /Evidence/u);
   assert.match(rendered, /compact-quote/u);
+});
+
+test("a cited artifact links into the build when a build is in scope", () => {
+  const html = render(
+    analysisWith([
+      { path: "artifacts/junit.e2e_suite.1.xml", line_start: 213, line_end: 214, quote: "status=failed" },
+    ]),
+    "detail",
+    "https://gcsweb.example/gcs/bucket/logs/job/1234",
+  );
+  assert.match(
+    html,
+    /href="https:\/\/gcsweb\.example\/gcs\/bucket\/logs\/job\/1234\/artifacts\/junit\.e2e_suite\.1\.xml"/u,
+  );
+  // Opening an artifact must not hand the origin to the opened tab.
+  assert.match(html, /rel="noopener noreferrer"/u);
+});
+
+test("cited paths stay plain text when no build is in scope", () => {
+  const html = render(
+    analysisWith([{ path: "build-log.txt", line_start: 1, line_end: 1, quote: "boom" }]),
+  );
+  const rendered = text(html);
+  assert.match(rendered, /build-log\.txt/u);
+  assert.doesNotMatch(html, /<a[^>]*build-log\.txt/u);
 });

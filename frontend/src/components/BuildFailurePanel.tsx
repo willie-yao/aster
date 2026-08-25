@@ -165,6 +165,7 @@ export function BuildFailurePanel({
         <AiAnalysisPanel
           analysis={failure.ai_analysis}
           fileCtx={fileCtx}
+          buildWebURL={run.web_url}
           chatRef={chatRef}
           appearance="detail"
           severityInHeader={Boolean(headerSeverity)}

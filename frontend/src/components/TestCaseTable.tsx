@@ -636,6 +636,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                         <AiAnalysisPanel
                           analysis={tc.ai_analysis}
                           fileCtx={aiFileCtx}
+                          buildWebURL={webUrl}
                           appearance="detail"
                         />
                       </Box>
