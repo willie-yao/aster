@@ -1711,10 +1711,6 @@
           "type": "string",
           "description": "Discovery and artifact fetch timeout."
         },
-        "includePresubmits": {
-          "type": "boolean",
-          "description": "Include presubmit jobs."
-        },
         "extraEnv": {
           "$ref": "#/definitions/envVars"
         },
@@ -1746,7 +1742,6 @@
         "buildsPerJob",
         "workers",
         "timeout",
-        "includePresubmits",
         "extraEnv",
         "resources",
         "nodeSelector",

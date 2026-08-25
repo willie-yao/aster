@@ -66,9 +66,6 @@ spec:
             - -timeout={{ .Values.fetcher.timeout }}
             - -watch-interval={{ .Values.fetcher.watchInterval }}
             - -reconcile-interval={{ .Values.fetcher.reconcileInterval }}
-            {{- if .Values.fetcher.includePresubmits }}
-            - -include-presubmits
-            {{- end }}
             {{- if .Values.ai.enabled }}
             - -ai
             {{- end }}

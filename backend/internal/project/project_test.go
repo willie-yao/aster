@@ -124,10 +124,10 @@ branding:
 `
 	_, err := parse(strings.NewReader(legacy))
 	if err == nil {
-		t.Fatal("expected error for legacy source.test_infra_paths, got nil")
+		t.Fatal("expected error for removed source block, got nil")
 	}
-	if !strings.Contains(err.Error(), "test_infra_paths") {
-		t.Errorf("error should mention the removed field; got: %v", err)
+	if !strings.Contains(err.Error(), "field source not found") {
+		t.Errorf("error should mention the removed source block; got: %v", err)
 	}
 }
 

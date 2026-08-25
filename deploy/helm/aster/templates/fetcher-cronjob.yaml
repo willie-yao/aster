@@ -80,9 +80,6 @@ spec:
                 - -builds={{ .Values.fetcher.buildsPerJob }}
                 - -workers={{ .Values.fetcher.workers }}
                 - -timeout={{ .Values.fetcher.timeout }}
-                {{- if .Values.fetcher.includePresubmits }}
-                - -include-presubmits
-                {{- end }}
                 {{- if .Values.ai.enabled }}
                 - -ai
                 {{- end }}

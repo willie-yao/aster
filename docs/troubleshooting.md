@@ -131,7 +131,7 @@ found no matching jobs, or every discovered job failed while loading build data.
    confirm the storage provider, bucket, and gcsweb base. For
    `discovery.exact_jobs`, verify the exact case-sensitive job name and its
    direct `logs/<job>/` or `pr-logs/directory/<job>/` index.
-6. Add `source.include_presubmits: true` only when the expected jobs are
+6. Add `discovery.include_presubmits: true` only when the expected jobs are
    presubmits rather than periodics.
 
 The `onboard` command validates discovery before generating a scaffold. A later

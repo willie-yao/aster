@@ -504,7 +504,7 @@ func TestBuildBaselineKeepsSameNamedPeriodicFlakiness(t *testing.T) {
 	}
 }
 
-// Attribution must not depend on source.include_presubmits, which decides only
+// Attribution must not depend on discovery.include_presubmits, which decides only
 // whether presubmits are published as dashboard rows.
 func TestPublishedPresubmitsDoNotChangeAttribution(t *testing.T) {
 	presubmitID := models.JobIDFor(models.JobTypePresubmit, "example/project", e2eJob)

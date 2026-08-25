@@ -81,11 +81,6 @@ on:
         required: false
         type: string
         default: ""
-      include-presubmits:
-        description: "Include presubmit jobs in addition to periodics. ORed with project.yaml source.include_presubmits — setting either to true enables presubmits."
-        required: false
-        type: boolean
-        default: false
       skip-fetch:
         description: "Skip the data fetcher and publish pre-fetched data from <project_dir>/data/ in the consumer repo. Useful when the AI endpoint is unreachable from GitHub-hosted runners (e.g. a private cluster service) — run the fetcher locally, commit data/, set this true."
         required: false
@@ -269,18 +264,13 @@ jobs:
           if [ "${{ inputs.ai }}" = "true" ]; then
             AI_FLAG="-ai"
           fi
-          PRESUBMITS_FLAG=""
-          if [ "${{ inputs.include-presubmits }}" = "true" ]; then
-            PRESUBMITS_FLAG="-include-presubmits"
-          fi
           "$GITHUB_WORKSPACE/aster" \
             -project-dir="${{ steps.cfg.outputs.project_dir_abs }}" \
             -builds=${{ inputs.builds }} \
             -workers=${{ inputs.workers }} \
             -out="$GITHUB_WORKSPACE/engine/frontend/public/data" \
             -timeout=${{ inputs.fetch-timeout }} \
-            $AI_FLAG \
-            $PRESUBMITS_FLAG
+            $AI_FLAG
 
       - name: Save data cache
         if: ${{ !inputs.skip-fetch && always() }}
