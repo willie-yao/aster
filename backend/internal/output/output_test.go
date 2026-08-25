@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -578,7 +579,7 @@ func TestPublicPatternOutputDefaultsRepeatedCausalGroupRemediation(t *testing.T)
 	}
 	jobSummary := jobPattern.RemediationInvestigations[0]
 	reportSummary := reportPattern.RemediationInvestigations[0]
-	if jobSummary != reportSummary || jobSummary.State != models.PatternRemediationNotInvestigated {
+	if !reflect.DeepEqual(jobSummary, reportSummary) || jobSummary.State != models.PatternRemediationNotInvestigated {
 		t.Fatalf("job summary=%+v report summary=%+v", jobSummary, reportSummary)
 	}
 	if jobSummary.CausalGroupID != jobPattern.CausalGroups[0].ID || jobSummary.CausalGroupHash != jobPattern.CausalGroups[0].ContentHash {

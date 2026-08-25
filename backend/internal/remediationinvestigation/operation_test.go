@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -592,5 +593,47 @@ func TestOperationFailureReasonSeparatesCauses(t *testing.T) {
 			t.Fatalf("two distinct failures share a reason: %q", reason)
 		}
 		seen[reason] = true
+	}
+}
+
+// The engine rejecting every proposed target and the investigation proposing
+// none both classify as insufficient evidence, but they ask opposite things of a
+// maintainer, so they must not publish the same sentence.
+func TestInsufficientEvidenceReasonsAreDistinct(t *testing.T) {
+	ref := OperationRef{CausalGroupID: "g1", CausalGroupHash: "h1"}
+	seen := map[string]string{}
+	for _, code := range []VerdictReason{
+		VerdictNoHypothesisProposed, VerdictNoHypothesisPassed,
+		VerdictEvidenceReverifyFailed, VerdictModelAssessment,
+	} {
+		view := safeOperationView(ref, VerifiedResult{
+			Classification: ClassificationInsufficientEvidence, ReasonCode: code,
+		}, "2026-01-01T00:00:00Z")
+		if view.State != models.PatternRemediationInsufficientEvidence {
+			t.Fatalf("%s: state = %s", code, view.State)
+		}
+		if view.ReasonCode != string(code) {
+			t.Fatalf("%s: reason code = %q", code, view.ReasonCode)
+		}
+		if prior, ok := seen[view.Reason]; ok {
+			t.Fatalf("%s and %s publish the same sentence: %q", prior, code, view.Reason)
+		}
+		seen[view.Reason] = string(code)
+	}
+}
+
+func TestSafeOperationViewWithholdsModelProse(t *testing.T) {
+	view := safeOperationView(OperationRef{CausalGroupID: "g1", CausalGroupHash: "h1"}, VerifiedResult{
+		Classification:   ClassificationInsufficientEvidence,
+		ReasonCode:       VerdictModelAssessment,
+		AssessmentReason: "secret model prose naming /etc/private/path",
+		RejectedReasons:  []VerdictReason{VerdictKindNotDeterministic, VerdictPathOutsidePolicy},
+	}, "2026-01-01T00:00:00Z")
+	if strings.Contains(view.Reason, "secret model prose") {
+		t.Fatalf("model prose reached the published summary: %q", view.Reason)
+	}
+	want := []string{"target_kind_not_deterministic", "path_outside_policy"}
+	if !slices.Equal(view.RejectedReasons, want) {
+		t.Fatalf("rejected reasons = %v, want %v", view.RejectedReasons, want)
 	}
 }

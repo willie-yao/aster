@@ -164,6 +164,33 @@ const (
 	NonActionableDependencyOwnershipUnverified NonActionableReason = "dependency_ownership_unverified"
 )
 
+// VerdictReason is the engine-owned code for why an investigation reached its
+// classification. Several distinct outcomes share the insufficient-evidence
+// classification, and they ask different things of a maintainer, so the code
+// travels with the verdict rather than being flattened into its prose.
+type VerdictReason string
+
+const (
+	VerdictTargetVerified            VerdictReason = "target_verified"
+	VerdictAlreadyPresent            VerdictReason = "already_present"
+	VerdictModelAssessment           VerdictReason = "model_assessment"
+	VerdictNoHypothesisPassed        VerdictReason = "no_hypothesis_passed"
+	VerdictNoHypothesisProposed      VerdictReason = "no_hypothesis_proposed"
+	VerdictEvidenceReverifyFailed    VerdictReason = "evidence_reverification_failed"
+	VerdictTargetUntyped             VerdictReason = "target_not_typed"
+	VerdictDestinationNotAllowed     VerdictReason = "destination_not_allowed"
+	VerdictPathOutsidePolicy         VerdictReason = "path_outside_policy"
+	VerdictTargetValidationFailed    VerdictReason = "target_validation_failed"
+	VerdictKindNotDeterministic      VerdictReason = "target_kind_not_deterministic"
+	VerdictPathNotInRepository       VerdictReason = "path_not_in_repository"
+	VerdictSafetyPolicy              VerdictReason = "safety_policy"
+	VerdictJobIdentityMismatch       VerdictReason = "job_identity_mismatch"
+	VerdictCurrentSourceInconclusive VerdictReason = "current_source_inconclusive"
+	VerdictTargetAlreadyResolved     VerdictReason = "target_already_resolved"
+	VerdictFailureSourcesUnproven    VerdictReason = "failure_sources_unproven"
+	VerdictAmbiguousTargets          VerdictReason = "ambiguous_targets"
+)
+
 type CandidateKind string
 
 const (

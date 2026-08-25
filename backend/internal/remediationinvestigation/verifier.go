@@ -24,9 +24,17 @@ type RevisionVerification struct {
 // VerifiedResult is the deterministic terminal interpretation of a private
 // model result. Only ClassificationActionable may carry a verified proposal.
 type VerifiedResult struct {
-	VerificationVersion int                      `json:"verification_version"`
-	Classification      Classification           `json:"classification"`
-	Reason              string                   `json:"reason"`
+	VerificationVersion int            `json:"verification_version"`
+	Classification      Classification `json:"classification"`
+	// Reason is always engine-authored and safe to publish. Model prose stays
+	// in AssessmentReason so the two are never confused at a publish boundary.
+	Reason           string        `json:"reason"`
+	ReasonCode       VerdictReason `json:"reason_code,omitempty"`
+	AssessmentReason string        `json:"assessment_reason,omitempty"`
+	// RejectedReasons lists the distinct codes for every hypothesis the verifier
+	// turned down, which is what separates a model that proposed nothing from
+	// one whose proposals the engine rejected.
+	RejectedReasons     []VerdictReason          `json:"rejected_reasons,omitempty"`
 	Proposal            *ActionableProposal      `json:"proposal,omitempty"`
 	CurrentSource       *RevisionVerification    `json:"current_source,omitempty"`
 	FailureSources      []RevisionVerification   `json:"failure_sources,omitempty"`
@@ -79,18 +87,26 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 		return accepted[0], nil
 	case 0:
 		if entry.Result.NonActionable == nil {
-			result := insufficientVerification("no target hypothesis passed deterministic verification")
+			code, reason := VerdictNoHypothesisPassed, "no target hypothesis passed deterministic verification"
+			if len(verified) == 0 {
+				code, reason = VerdictNoHypothesisProposed, "the investigation proposed no target hypothesis to verify"
+			}
+			result := insufficientVerification(code, reason)
+			result.RejectedReasons = rejectedReasonCodes(verified)
 			result.PolicyRuleID = sharedPolicyRuleID(verified)
 			return result, nil
 		}
 		assessment := *entry.Result.NonActionable
 		if err := verifyCachedEvidence(ctx, v.source, browser, input, assessment.EvidenceIDs, entry.EvidenceCatalog); err != nil {
-			return insufficientVerification("cached non-actionable evidence could not be reverified"), nil
+			return insufficientVerification(VerdictEvidenceReverifyFailed, "cached non-actionable evidence could not be reverified"), nil
 		}
 		return VerifiedResult{
 			VerificationVersion: VerificationVersion,
 			Classification:      classificationForNonActionable(&assessment.NonActionableReason),
-			Reason:              assessment.Reason,
+			Reason:              "the investigation reported this cause as non-actionable",
+			ReasonCode:          VerdictModelAssessment,
+			AssessmentReason:    assessment.Reason,
+			RejectedReasons:     rejectedReasonCodes(verified),
 			PolicyRuleID:        sharedPolicyRuleID(verified),
 		}, nil
 	default:
@@ -98,8 +114,24 @@ func (v *Verifier) Verify(ctx context.Context, input FrozenInput, entry CacheEnt
 			VerificationVersion: VerificationVersion,
 			Classification:      ClassificationAmbiguous,
 			Reason:              "Multiple distinct target hypotheses passed deterministic verification.",
+			ReasonCode:          VerdictAmbiguousTargets,
 		}, nil
 	}
+}
+
+// rejectedReasonCodes lists each distinct code the verifier turned a hypothesis
+// down for, in first-seen order.
+func rejectedReasonCodes(results []VerifiedResult) []VerdictReason {
+	var codes []VerdictReason
+	for _, result := range results {
+		if result.Classification == ClassificationActionable || result.ReasonCode == "" {
+			continue
+		}
+		if !slices.Contains(codes, result.ReasonCode) {
+			codes = append(codes, result.ReasonCode)
+		}
+	}
+	return codes
 }
 
 // VerifyHypotheses independently verifies every model-authored target identity.
@@ -153,46 +185,46 @@ func acceptedHypothesisResults(results []VerifiedResult) []VerifiedResult {
 
 func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypothesis TargetHypothesis, catalog EvidenceCatalog, browser artifacts.Browser) VerifiedResult {
 	if err := verifyCachedEvidence(ctx, v.source, browser, input, hypothesis.EvidenceIDs, catalog); err != nil {
-		return insufficientVerification("target hypothesis evidence could not be reverified")
+		return insufficientVerification(VerdictEvidenceReverifyFailed, "target hypothesis evidence could not be reverified")
 	}
 	kind, target, ok := candidateToTarget(hypothesis.Target, input.InvestigationSource)
 	if !ok {
-		return insufficientVerification("target hypothesis could not be converted to a typed remediation target")
+		return insufficientVerification(VerdictTargetUntyped, "target hypothesis could not be converted to a typed remediation target")
 	}
 	policy := destinationPolicyForSource(input)
 	if policy == nil {
-		return insufficientVerification("the frozen source repository is not an allowed destination repository")
+		return insufficientVerification(VerdictDestinationNotAllowed, "the frozen source repository is not an allowed destination repository")
 	}
 	if !pathAllowedByPolicy(target.Path, policy.AllowedPaths) {
-		return insufficientVerification("target hypothesis path is outside the frozen destination policy")
+		return insufficientVerification(VerdictPathOutsidePolicy, "target hypothesis path is outside the frozen destination policy")
 	}
 	if reason := actionverify.InvalidTargetReason(target); reason != "" {
-		return insufficientVerification("target hypothesis failed typed remediation validation")
+		return insufficientVerification(VerdictTargetValidationFailed, "target hypothesis failed typed remediation validation")
 	}
 	if !deterministicallyVerifiableTargetKind(kind) {
-		return insufficientVerification("the typed target kind lacks a deterministic present-or-missing predicate")
+		return insufficientVerification(VerdictKindNotDeterministic, "the typed target kind lacks a deterministic present-or-missing predicate")
 	}
 	if suspiciousRepositoryPath(target.Path) {
-		return insufficientVerification("module-cache or workspace paths cannot identify a destination-repository target")
+		return insufficientVerification(VerdictPathNotInRepository, "module-cache or workspace paths cannot identify a destination-repository target")
 	}
 	policyEvaluation := remediationpolicy.Evaluate(candidateExpectedBehavior(hypothesis.Target), []models.RemediationTarget{target})
 	if policyEvaluation.Blocked() {
-		return insufficientPolicyVerification("target hypothesis violates deterministic remediation safety policy", policyEvaluation.RuleID)
+		return insufficientPolicyVerification(VerdictSafetyPolicy, "target hypothesis violates deterministic remediation safety policy", policyEvaluation.RuleID)
 	}
 	policyWarning := remediationpolicy.RelationshipTextWarning(hypothesis.RelationshipReason)
 	if target.Intent == models.RemediationIntentSetJobEnvironment {
 		if err := v.verifyFrozenProwJobIdentity(ctx, input, target); err != nil {
-			return insufficientVerification("the prow target does not match the exact frozen job identity")
+			return insufficientVerification(VerdictJobIdentityMismatch, "the prow target does not match the exact frozen job identity")
 		}
 	}
 	proposal := policyDerivedProposal(input, hypothesis, kind, target, *policy)
 	if err := verifyStructuralRelationship(ctx, v.source, browser, input, hypothesis, catalog, proposal); err != nil {
-		return insufficientVerification(err.Error())
+		return insufficientVerification(VerdictCurrentSourceInconclusive, err.Error())
 	}
 
 	currentState, err := sourceinvestigation.VerifyTargetState(ctx, v.source, input.InvestigationSource, targetForRepository(target, input.InvestigationSource))
 	if err != nil {
-		return insufficientVerification("current-source target verification was inconclusive")
+		return insufficientVerification(VerdictCurrentSourceInconclusive, "current-source target verification was inconclusive")
 	}
 	current := RevisionVerification{Repository: input.InvestigationSource, State: currentState.State, Reason: currentState.Reason}
 	if currentState.State == actionverify.StateAlreadyPresent {
@@ -200,21 +232,23 @@ func (v *Verifier) verifyHypothesis(ctx context.Context, input FrozenInput, hypo
 			VerificationVersion: VerificationVersion,
 			Classification:      ClassificationAlreadyFixed,
 			Reason:              "Current source already contains the deterministically verified remediation target.",
+			ReasonCode:          VerdictAlreadyPresent,
 			CurrentSource:       &current,
 			PolicyWarningRuleID: policyWarning,
 		}
 	}
 	if currentState.State != actionverify.StateUnresolved {
-		return insufficientVerification("current source does not prove one unresolved remediation target")
+		return insufficientVerification(VerdictTargetAlreadyResolved, "current source does not prove one unresolved remediation target")
 	}
 	failureStates, ok := v.verifyFailureSources(ctx, input, target)
 	if !ok {
-		return insufficientVerification("failure revisions do not prove that the target was unresolved for every causal-group build")
+		return insufficientVerification(VerdictFailureSourcesUnproven, "failure revisions do not prove that the target was unresolved for every causal-group build")
 	}
 	return VerifiedResult{
 		VerificationVersion: VerificationVersion,
 		Classification:      ClassificationActionable,
 		Reason:              "The typed target is absent from current source and every available failure revision, with bounded evidence linking it to the cause.",
+		ReasonCode:          VerdictTargetVerified,
 		Proposal:            &proposal,
 		CurrentSource:       &current,
 		FailureSources:      failureStates,
@@ -538,16 +572,17 @@ func targetForRepository(target models.RemediationTarget, repository sourceinves
 	return target
 }
 
-func insufficientVerification(reason string) VerifiedResult {
+func insufficientVerification(code VerdictReason, reason string) VerifiedResult {
 	return VerifiedResult{
 		VerificationVersion: VerificationVersion,
 		Classification:      ClassificationInsufficientEvidence,
 		Reason:              reason,
+		ReasonCode:          code,
 	}
 }
 
-func insufficientPolicyVerification(reason string, ruleID remediationpolicy.RuleID) VerifiedResult {
-	result := insufficientVerification(reason)
+func insufficientPolicyVerification(code VerdictReason, reason string, ruleID remediationpolicy.RuleID) VerifiedResult {
+	result := insufficientVerification(code, reason)
 	result.PolicyRuleID = ruleID
 	return result
 }
