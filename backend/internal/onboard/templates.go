@@ -73,7 +73,9 @@ discovery:
 {{end}}
 # Where this project's Prow build artifacts live.
 storage:
+{{- if ne .Provider "gcs"}}
   provider: {{.Provider}}
+{{- end}}
   bucket: {{quote .Bucket}}
 {{- if .GCSWebBase}}
   base: {{quote .GCSWebBase}}
@@ -88,9 +90,8 @@ categories:
     label: {{quote .Label}}
 {{- end}}
 {{end}}
-# UI branding.
+# UI branding. The title defaults to "{{.Name}} Prow Dashboard".
 branding:
-  title: {{quote .Title}}
   base_path: {{quote .BasePath}}
   site_url: {{quote .SiteURL}}
   source_repo:

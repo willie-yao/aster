@@ -41,11 +41,9 @@ testgrid:
   dashboard: "sig-myproject-periodics"
 
 storage:
-  provider: gcs
   bucket: kubernetes-ci-logs
 
 branding:
-  title: "My Project Prow Dashboard"
   base_path: "/myproject-dashboard"
   site_url: "https://my-org.github.io/myproject-dashboard"
   source_repo:
@@ -58,8 +56,8 @@ branding:
 | `id` | Stable lowercase identifier used in task identities, cache keys, and logs |
 | `name` | Human-readable project name |
 | `testgrid.dashboard` | TestGrid annotation used by the default discovery source |
-| `storage` | Artifact backend and bucket |
-| `branding` | Site identity, URL paths, and default repository |
+| `storage` | Artifact bucket. The provider defaults to `gcs`. |
+| `branding` | Site URL paths and default repository. The title defaults to `<name> Prow Dashboard`. |
 
 `short_name` is an optional compact display label. The wizard suggests one only
 when the repository name provides a reasonable abbreviation. Type `none` in the
@@ -89,9 +87,8 @@ Both `owner` and `name` are required when `ai.source_repo` is present.
 ## Storage
 
 ```yaml
-# Native Google Cloud Storage.
+# Native Google Cloud Storage. `gcs` is the default provider.
 storage:
-  provider: gcs
   bucket: kubernetes-ci-logs
 
 # A gcsweb gateway, including S3-backed Prow installations.
@@ -650,19 +647,17 @@ Most projects do not need analysis tuning. The defaults are designed to work
 without an `ai:` block. Add only the setting that a measured model or artifact
 constraint requires:
 
+For example, a non-Kubernetes project can remove the Kubernetes tool group:
+
 ```yaml
 ai:
-  tools: [filesystem, k8s]
-  concurrency: 1
-  max_iters: 15
-  timeout: 5m
-  min_tool_calls: 2
-  min_gcs_bytes: 0
-  single_tool_call: false
-  critique:
-    max_retries: 0
-    cache_policy: hard
+  tools: [filesystem]
 ```
+
+The engine defaults to 15 iterations, a 5-minute per-failure timeout, two tool
+calls, no byte floor, parallel tool calls, zero critique repair requests, and
+the `hard` critique cache policy. Override one of those defaults only after a
+measured provider or artifact constraint requires it.
 
 `critique.max_retries` controls provider repair attempts only. `0` evaluates
 critique without making a critique repair request. `critique.cache_policy`

@@ -169,9 +169,8 @@ func (c *Config) CommentDryRun() bool {
 }
 
 // Storage configures the artifact store that holds the project's Prow builds.
-// The engine does not assume Google Cloud Storage. Provider is required and
-// selects the backend, and the optional *Base fields point the engine at a
-// project's own endpoints.
+// Provider defaults to Google Cloud Storage and selects the backend. The
+// optional *Base fields point the engine at a project's own endpoints.
 //
 //	provider: gcs    -> native Google Cloud Storage.
 //	provider: gcsweb -> a gcsweb HTTP gateway fronting a bucket.
@@ -247,10 +246,13 @@ func (c *Config) EffectiveDiscoverySource() string {
 }
 
 // StorageConfig maps the project's storage block onto a storage.Config.
-// Validate guarantees Provider is set, so no defaulting happens here.
 func (c *Config) StorageConfig() storage.Config {
+	provider := c.Storage.Provider
+	if provider == "" {
+		provider = string(storage.ProviderGCS)
+	}
 	return storage.Config{
-		Provider: storage.Provider(c.Storage.Provider),
+		Provider: storage.Provider(provider),
 		Bucket:   c.Storage.Bucket,
 		Base:     c.Storage.Base,
 		WebBase:  c.Storage.WebBase,
@@ -1312,9 +1314,19 @@ func parse(r io.Reader) (*Config, error) {
 	return &c, nil
 }
 
-// Validate reports every missing required field in one error message so
-// users can fix the YAML in a single pass instead of iterating.
+func (c *Config) applyDefaults() {
+	if c.Storage.Provider == "" {
+		c.Storage.Provider = string(storage.ProviderGCS)
+	}
+	if c.Branding.Title == "" && strings.TrimSpace(c.Name) != "" {
+		c.Branding.Title = c.Name + " Prow Dashboard"
+	}
+}
+
+// Validate applies safe defaults and reports every missing required field in
+// one error so users can fix the YAML in a single pass.
 func (c *Config) Validate() error {
+	c.applyDefaults()
 	var missing []string
 	require := func(name, val string) {
 		if strings.TrimSpace(val) == "" {
@@ -1323,11 +1335,9 @@ func (c *Config) Validate() error {
 	}
 	require("id", c.ID)
 	require("name", c.Name)
-	require("storage.provider", c.Storage.Provider)
 	if c.Storage.Provider != string(storage.ProviderLocal) {
 		require("storage.bucket", c.Storage.Bucket)
 	}
-	require("branding.title", c.Branding.Title)
 	require("branding.base_path", c.Branding.BasePath)
 	require("branding.site_url", c.Branding.SiteURL)
 	require("branding.source_repo.owner", c.Branding.SourceRepo.Owner)
