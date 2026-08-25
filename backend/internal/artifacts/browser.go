@@ -80,7 +80,12 @@ type GrepResult struct {
 	// TotalMatches may exceed len(Matches) if maxMatches was hit.
 	TotalMatches int
 	Matches      []GrepMatch
-	Truncated    bool
+	// MatchesTruncated reports that more matches were found than Matches
+	// lists. The pattern is present; only the listing was capped.
+	MatchesTruncated bool
+	// ScanTruncated reports that the scan stopped before the end of the file,
+	// so zero matches does not prove the pattern is absent.
+	ScanTruncated bool
 	// BytesScanned may be less than FileSize if a budget was exhausted.
 	BytesScanned int64
 }

@@ -187,6 +187,71 @@ func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
 	}
 }
 
+// A partial scan must say so in the payload the model reads, so zero matches
+// on a mostly unread log cannot be mistaken for absence.
+func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		result           *artifacts.GrepResult
+		wantScan         bool
+		wantMatches      bool
+		wantHintContains []string
+	}{
+		{
+			name:   "complete scan",
+			result: &artifacts.GrepResult{FileSize: 19, BytesScanned: 19},
+		},
+		{
+			name:        "display cap only",
+			result:      &artifacts.GrepResult{FileSize: 19, BytesScanned: 19, TotalMatches: 5, MatchesTruncated: true},
+			wantMatches: true,
+		},
+		{
+			name:             "coverage gap",
+			result:           &artifacts.GrepResult{FileSize: 4096, BytesScanned: 512, ScanTruncated: true},
+			wantScan:         true,
+			wantHintContains: []string{"512", "4096", "tail_artifact"},
+		},
+		{
+			name:             "coverage gap with unknown file size",
+			result:           &artifacts.GrepResult{FileSize: -1, BytesScanned: 512, ScanTruncated: true},
+			wantScan:         true,
+			wantHintContains: []string{"512", "tail_artifact"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			browser := &fakeBrowser{
+				files:      map[string][]byte{"build-log.txt": []byte("line\n")},
+				grepResult: tc.result,
+			}
+			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "missing"})
+			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
+			payload := result.Payload
+			if payload["file_size"] != tc.result.FileSize || payload["bytes_scanned"] != tc.result.BytesScanned {
+				t.Fatalf("payload coverage=%v", payload)
+			}
+			if payload["scan_truncated"] != tc.wantScan || payload["matches_truncated"] != tc.wantMatches {
+				t.Fatalf("payload flags=%v", payload)
+			}
+			hint, _ := payload["scan_hint"].(string)
+			if len(tc.wantHintContains) == 0 {
+				if _, present := payload["scan_hint"]; present {
+					t.Fatalf("unexpected scan_hint: %v", payload)
+				}
+			}
+			for _, want := range tc.wantHintContains {
+				if !strings.Contains(hint, want) {
+					t.Fatalf("scan_hint = %q, want it to mention %q", hint, want)
+				}
+			}
+			observation := result.Observation.(tools.GrepCallObservation)
+			if observation.FileScanTruncated != tc.wantScan || observation.ResultTruncated != tc.wantMatches {
+				t.Fatalf("observation=%+v", observation)
+			}
+		})
+	}
+}
+
 // junitTree models a typical prow build with a handful of junit XML files
 // scattered across artifact subdirs plus some non-XML files that must be
 // excluded by the basename pattern.

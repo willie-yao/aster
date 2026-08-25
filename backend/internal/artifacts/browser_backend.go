@@ -326,7 +326,7 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 					})
 				}
 			} else {
-				out.Truncated = true
+				out.MatchesTruncated = true
 			}
 		}
 
@@ -338,7 +338,7 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 	}
 	out.BytesScanned = counter.n
 	if fileSize > maxBytes || (fileSize < 0 && counter.n >= maxBytes) {
-		out.Truncated = true
+		out.ScanTruncated = true
 	}
 	if err := scanner.Err(); err != nil {
 		return out, fmt.Errorf("scan artifact: %w", err)

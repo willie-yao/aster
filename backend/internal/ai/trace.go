@@ -421,7 +421,7 @@ func sanitizeGrepCallObservation(observation tools.GrepCallObservation) *tools.G
 	ranges := observation.ReturnedRanges
 	if len(ranges) > analysisTraceMaxGrepRanges {
 		ranges = ranges[:analysisTraceMaxGrepRanges]
-		out.ResultTruncated = true
+		out.RangesTruncated = true
 	}
 	out.ReturnedRanges = make([]tools.GrepRangeObservation, 0, len(ranges))
 	for _, item := range ranges {

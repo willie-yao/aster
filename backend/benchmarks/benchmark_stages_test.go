@@ -541,7 +541,7 @@ func (b *benchmarkStageBrowser) Grep(_ context.Context, path string, re *regexp.
 		}
 		result.TotalMatches++
 		if len(result.Matches) >= maxMatches {
-			result.Truncated = true
+			result.MatchesTruncated = true
 			continue
 		}
 		start := max(0, i-contextLines)

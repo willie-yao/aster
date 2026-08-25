@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -260,23 +261,40 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	observation.MatchCount = res.TotalMatches
 	observation.FilesScanned = 1
-	observation.ResultTruncated = res.Truncated
+	observation.FileScanTruncated = res.ScanTruncated
+	observation.ResultTruncated = res.MatchesTruncated
 	observation.Outcome = tools.GrepOutcomeZeroMatches
 	if res.TotalMatches > 0 {
 		observation.Outcome = tools.GrepOutcomeMatched
 	}
 	observation.ReturnedRanges = artifactGrepRanges(canonicalArtifactGrepPath(args.Path), res.Matches)
+	payload := map[string]interface{}{
+		"path":              args.Path,
+		"file_size":         res.FileSize,
+		"bytes_scanned":     res.BytesScanned,
+		"total_matches":     res.TotalMatches,
+		"matches":           matches,
+		"matches_truncated": res.MatchesTruncated,
+		"scan_truncated":    res.ScanTruncated,
+	}
+	if res.ScanTruncated {
+		payload["scan_hint"] = scanTruncationHint(res.BytesScanned, res.FileSize)
+	}
 	return tools.Result{
 		BytesFetched: int(res.BytesScanned),
-		Payload: map[string]interface{}{
-			"path":          args.Path,
-			"file_size":     res.FileSize,
-			"total_matches": res.TotalMatches,
-			"matches":       matches,
-			"truncated":     res.Truncated,
-		},
-		Observation: observation,
+		Payload:      payload,
+		Observation:  observation,
 	}
+}
+
+// scanTruncationHint states how much of the file grep_artifact actually read
+// and how to reach the rest, so an incomplete scan is not read as absence.
+func scanTruncationHint(bytesScanned, fileSize int64) string {
+	scope := fmt.Sprintf("Scanned only the first %d bytes of this file", bytesScanned)
+	if fileSize > 0 {
+		scope = fmt.Sprintf("Scanned only the first %d of %d bytes of this file", bytesScanned, fileSize)
+	}
+	return scope + "; anything after that point was never read, so a zero or low match count does not prove the pattern is absent. Use tail_artifact to inspect the end of the file, or grep a smaller, more specific artifact."
 }
 
 func artifactGrepObservation(path string, contextLines, maxMatches int) tools.GrepCallObservation {
