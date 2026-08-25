@@ -132,7 +132,7 @@ type AgenticOptions struct {
 	CritiqueMaxRetries int
 
 	// CritiqueCachePolicy independently controls which findings block cache reuse.
-	// Empty preserves the legacy max-retries behavior.
+	// Empty defaults to hard.
 	CritiqueCachePolicy CritiqueCachePolicy
 
 	// SingleToolCall caps the loop to one tool call per assistant turn. Extra

@@ -43,6 +43,9 @@ func reusablePublishedTestCase(analysis *models.AIAnalysis) *models.TestCase {
 		generatedAt = time.Now().UTC().Format(time.RFC3339)
 		analysis.GeneratedAt = generatedAt
 	}
+	if analysis.Disposition == "" {
+		analysis.Disposition = models.AnalysisDispositionGrounded
+	}
 	return &models.TestCase{
 		AISummary:  &models.AISummary{GeneratedAt: generatedAt, Summary: "cached summary"},
 		AIAnalysis: analysis,
@@ -124,7 +127,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion}
+	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, Disposition: models.AnalysisDispositionGrounded}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -158,6 +161,7 @@ func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 	tc.AIAnalysis = &models.AIAnalysis{
 		GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "flake", Mode: AgenticMode, SkillSetHash: "old-skills", ModelHash: "old-model",
 		PromptHash: "old-prompt", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+		Disposition: models.AnalysisDispositionGrounded,
 	}
 
 	if s.NeedsAnalysis(t.Context(), &http.Client{}, newRun("j", "1"), tc, transientPersistThreshold) {
@@ -432,6 +436,43 @@ func TestService_CritiqueCachePolicyControlsReuse(t *testing.T) {
 				t.Fatal("hard policy accepted an unclassified critique result")
 			}
 			s.agenticOpts.CritiqueCachePolicy = CritiqueCachePolicyAdvisory
+		})
+	}
+}
+
+// TestService_UnstampedDispositionForcesReanalysis pins that an analysis whose
+// disposition was never stamped is refreshed rather than reused forever. Such an
+// analysis is not grounded, so leaving it in place would strand it: never
+// action-eligible and never re-evaluated.
+func TestService_UnstampedDispositionForcesReanalysis(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	base := models.AIAnalysis{
+		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 50_000,
+		PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
+		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+	}
+	s := &Service{
+		client: client, systemPrompt: "sys",
+		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueCachePolicy: CritiqueCachePolicyAdvisory},
+	}
+	for _, tc := range []struct {
+		name           string
+		disposition    string
+		wantReanalysis bool
+	}{
+		{name: "unstamped", disposition: "", wantReanalysis: true},
+		{name: "unrecognized", disposition: "somethingelse", wantReanalysis: true},
+		{name: "grounded", disposition: models.AnalysisDispositionGrounded},
+		{name: "preliminary", disposition: models.AnalysisDispositionPreliminary, wantReanalysis: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analysis := base
+			analysis.Disposition = tc.disposition
+			published := reusablePublishedTestCase(&analysis)
+			published.AIAnalysis.Disposition = tc.disposition
+			if got := s.shouldReanalyze(published); got != tc.wantReanalysis {
+				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.wantReanalysis)
+			}
 		})
 	}
 }
