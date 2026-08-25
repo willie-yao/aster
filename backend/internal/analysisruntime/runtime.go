@@ -307,23 +307,13 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	if module == nil {
 		module = universal.New()
 	}
-	service := ai.NewService(r.Client, module, r.Project.SystemPrompt, opts.ConsecutiveFailures)
-	service.SetCacheGeneration(r.Project.CacheGenerationFingerprint)
-	if opts.TraceStore != nil {
-		service.SetTraceStore(opts.TraceStore)
-	}
-	if r.UsageRecorder != nil {
-		service.SetUsageRecorder(r.UsageRecorder, r.UsageOrigin)
-	}
 	sourceRepo := r.Project.AnalysisSource
 	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
 		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
 	}
-	service.SetSourceRepo(sourceRepo.Owner, sourceRepo.Name)
-	service.SetGitHubReadToken(opts.GitHubReadToken)
+	var patternRepo tools.RepoReader
 	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
-		service.SetPatternRepoReader(ai.NewGitHubRepoReader(
-			sourceRepo.Owner, sourceRepo.Name, "", opts.GitHubReadToken))
+		patternRepo = ai.NewGitHubRepoReader(sourceRepo.Owner, sourceRepo.Name, "", opts.GitHubReadToken)
 		mode := "anonymous"
 		if opts.GitHubReadToken != "" {
 			mode = "authenticated"
@@ -333,23 +323,39 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	}
 
 	eff := cfg.AI.EffectiveAgentic()
-	factory := artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket)
-	service.EnableAgentic(ai.AgenticOptions{
-		MaxIters:            eff.MaxIters,
-		ModelByteBudget:     r.ModelByteBudget,
-		GCSByteBudget:       gcsByteBudget,
-		Timeout:             eff.Timeout,
-		ContextByteBudget:   r.ContextByteBudget,
-		ContextWindowTokens: r.ContextWindowTokens,
-		RequestTokenBudget:  r.RequestTokenBudget,
-		MinToolCalls:        eff.MinToolCalls,
-		MinGCSBytes:         eff.MinGCSBytes,
-		CritiqueMaxRetries:  *eff.Critique.MaxRetries,
-		CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
-		SingleToolCall:      eff.SingleToolCall,
-		SemanticJudge:       true,
-	}, factory, r.Registry, r.EnabledTools)
-	service.SetSkills(r.Project.SkillSet)
+	service := ai.NewService(ai.ServiceConfig{
+		Client:              r.Client,
+		Module:              module,
+		SystemPrompt:        r.Project.SystemPrompt,
+		ConsecutiveFailures: opts.ConsecutiveFailures,
+		CacheGeneration:     r.Project.CacheGenerationFingerprint,
+		AgenticOptions: ai.AgenticOptions{
+			MaxIters:            eff.MaxIters,
+			ModelByteBudget:     r.ModelByteBudget,
+			GCSByteBudget:       gcsByteBudget,
+			Timeout:             eff.Timeout,
+			ContextByteBudget:   r.ContextByteBudget,
+			ContextWindowTokens: r.ContextWindowTokens,
+			RequestTokenBudget:  r.RequestTokenBudget,
+			MinToolCalls:        eff.MinToolCalls,
+			MinGCSBytes:         eff.MinGCSBytes,
+			CritiqueMaxRetries:  *eff.Critique.MaxRetries,
+			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
+			SingleToolCall:      eff.SingleToolCall,
+			SemanticJudge:       true,
+		},
+		BrowserFactory:    artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket),
+		ToolRegistry:      r.Registry,
+		EnabledTools:      r.EnabledTools,
+		Skills:            r.Project.SkillSet,
+		SourceRepoOwner:   sourceRepo.Owner,
+		SourceRepoName:    sourceRepo.Name,
+		GitHubReadToken:   opts.GitHubReadToken,
+		PatternRepoReader: patternRepo,
+		TraceStore:        opts.TraceStore,
+		UsageRecorder:     r.UsageRecorder,
+		UsageOrigin:       r.UsageOrigin,
+	})
 	return service, nil
 }
 
@@ -401,8 +407,6 @@ func NewReusePlanner(project *Project) *ai.Service {
 		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
 		ReasoningEffort: project.Provider.ReasoningEffort,
 	})
-	service := ai.NewService(client, universal.New(), project.SystemPrompt, nil)
-	service.SetCacheGeneration(project.CacheGenerationFingerprint)
 	// The planner decides reuse by comparing prompt hashes, so it must resolve
 	// the source repository exactly as the analyzing service does. A planner
 	// that omitted it would hash a different prompt and treat every published
@@ -411,14 +415,20 @@ func NewReusePlanner(project *Project) *ai.Service {
 	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
 		sourceRepo = project.Config.EffectiveAnalysisSourceRepo()
 	}
-	service.SetSourceRepo(sourceRepo.Owner, sourceRepo.Name)
 	eff := project.Config.AI.EffectiveAgentic()
-	service.EnableAgentic(ai.AgenticOptions{
-		MinToolCalls:        eff.MinToolCalls,
-		MinGCSBytes:         eff.MinGCSBytes,
-		CritiqueMaxRetries:  *eff.Critique.MaxRetries,
-		CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
-	}, nil, nil, nil)
-	service.SetSkills(project.SkillSet)
-	return service
+	return ai.NewService(ai.ServiceConfig{
+		Client:          client,
+		Module:          universal.New(),
+		SystemPrompt:    project.SystemPrompt,
+		CacheGeneration: project.CacheGenerationFingerprint,
+		AgenticOptions: ai.AgenticOptions{
+			MinToolCalls:        eff.MinToolCalls,
+			MinGCSBytes:         eff.MinGCSBytes,
+			CritiqueMaxRetries:  *eff.Critique.MaxRetries,
+			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
+		},
+		Skills:          project.SkillSet,
+		SourceRepoOwner: sourceRepo.Owner,
+		SourceRepoName:  sourceRepo.Name,
+	})
 }

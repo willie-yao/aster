@@ -93,8 +93,8 @@ func TestPolicyUnavailableCacheHardPolicyOnly(t *testing.T) {
 func TestServiceIgnoresPersistedLegacyPolicyUnavailableCooldown(t *testing.T) {
 	cacheDir := t.TempDir()
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model", CacheDir: cacheDir})
-	service := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	service.EnableAgentic(AgenticOptions{MinToolCalls: 2, CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
+	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(service, AgenticOptions{MinToolCalls: 2, CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
 
 	run := newRun("job", "1")
 	tc := newFailedTC("Test A", "failure")
@@ -109,8 +109,8 @@ func TestServiceIgnoresPersistedLegacyPolicyUnavailableCooldown(t *testing.T) {
 	}
 
 	reloaded := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model", CacheDir: cacheDir})
-	reloadedService := NewService(reloaded, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	reloadedService.EnableAgentic(AgenticOptions{MinToolCalls: 2, CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
+	reloadedService := NewService(ServiceConfig{Client: reloaded, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(reloadedService, AgenticOptions{MinToolCalls: 2, CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
 	result, err := reloadedService.AnalyzeFailure(context.Background(), &http.Client{}, FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1/", Build: run.BuildInfo, TestCase: *tc, ConsecutiveFailures: 3,
 	})
@@ -124,8 +124,8 @@ func TestServiceIgnoresPersistedLegacyPolicyUnavailableCooldown(t *testing.T) {
 
 func TestServiceAdvisoryPolicyDoesNotReuseUnavailableCooldown(t *testing.T) {
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model", CacheDir: t.TempDir()})
-	hardService := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	hardService.EnableAgentic(AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
+	hardService := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(hardService, AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{JobName: "job", BuildID: "1"}}
 	tc := newFailedTC("Test A", "failure")
 	promptHash := hardService.analysisPromptHash(tc, hardService.baseFailurePrompt(t.Context(), &http.Client{}, run, tc, 1))
@@ -134,8 +134,8 @@ func TestServiceAdvisoryPolicyDoesNotReuseUnavailableCooldown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	advisory := NewService(client, &stubModule{name: "kubernetes", prompt: "user"}, "sys", nil)
-	advisory.EnableAgentic(AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyAdvisory}, nil, nil, nil)
+	advisory := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
+	configureAgenticTestService(advisory, AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyAdvisory}, nil, nil, nil)
 	_, err := advisory.AnalyzeFailure(t.Context(), &http.Client{}, FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1/", Build: run.BuildInfo, TestCase: *tc, ConsecutiveFailures: 1,
 	})

@@ -16,7 +16,7 @@ import (
 func newPatternBackoffService(t *testing.T, serverURL, cacheDir, model string) *Service {
 	t.Helper()
 	client := NewClientWithOptions(Options{Token: "test-token", CacheDir: cacheDir, Endpoint: serverURL, Model: model})
-	return NewService(client, &stubModule{name: "kubernetes"}, "sys", nil)
+	return NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 }
 
 func TestPatternFailureBackoffSuppressesUnchangedFailureAndSurvivesRestart(t *testing.T) {
@@ -32,7 +32,7 @@ func TestPatternFailureBackoffSuppressesUnchangedFailureAndSurvivesRestart(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.SetUsageRecorder(usage, aiusage.OriginFetcher)
+	service.usageRecorder, service.usageOrigin = usage, aiusage.OriginFetcher
 
 	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); PatternFailureCategoryOf(err) != PatternFailureMissing {
 		t.Fatalf("error=%v category=%s", err, PatternFailureCategoryOf(err))
@@ -77,7 +77,7 @@ func TestPatternFailureBackoffIdentityChangesCallProvider(t *testing.T) {
 	}{
 		{name: "input", change: func(_ *Service, failures []PatternFailure) { failures[0].FailureMessage += " changed" }},
 		{name: "model", change: func(service *Service, _ []PatternFailure) { service.client.model = "changed" }},
-		{name: "generation", change: func(service *Service, _ []PatternFailure) { service.SetCacheGeneration("changed") }},
+		{name: "generation", change: func(service *Service, _ []PatternFailure) { service.cacheGeneration = "changed" }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			srv := newScriptedChatServer(t)
@@ -104,12 +104,12 @@ func TestPatternFailureBackoffSourceIdentityDoesNotChangeAnalysisContract(t *tes
 	srv := newScriptedChatServer(t)
 	srv.push(200, patternToolResponse(sharedPatternResponse()))
 	service := newPatternBackoffService(t, srv.URL, t.TempDir(), "claude-test")
-	service.SetSourceRepo("owner", "repo")
-	service.SetPatternRepoReader(&unusedPatternRepo{})
+	service.sourceRepoOwner, service.sourceRepoName = "owner", "repo"
+	service.patternRepo = &unusedPatternRepo{}
 	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {
 		t.Fatal(err)
 	}
-	service.SetSourceRepo("other", "source")
+	service.sourceRepoOwner, service.sourceRepoName = "other", "source"
 	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {
 		t.Fatal(err)
 	}

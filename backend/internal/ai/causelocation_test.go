@@ -359,13 +359,13 @@ func TestSourceRepoSectionNamesTheProjectRepository(t *testing.T) {
 // project's source repo can invert external versus own-repo classification, so
 // the entry must be re-analyzed rather than reused.
 func TestAnalysisPromptHashTracksTheProjectRepository(t *testing.T) {
-	service := NewService(&Client{}, &stubModule{name: "kubernetes"}, "sys", nil)
+	service := NewService(ServiceConfig{Client: &Client{}, Module: &stubModule{name: "kubernetes"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	unconfigured := service.analysisPromptHash(nil, "")
 
-	service.SetSourceRepo(causeProjectOwner, causeProjectName)
+	service.sourceRepoOwner, service.sourceRepoName = causeProjectOwner, causeProjectName
 	configured := service.analysisPromptHash(nil, "")
 
-	service.SetSourceRepo("kubernetes", "kubernetes")
+	service.sourceRepoOwner, service.sourceRepoName = "kubernetes", "kubernetes"
 	repointed := service.analysisPromptHash(nil, "")
 
 	if unconfigured == configured || configured == repointed || unconfigured == repointed {

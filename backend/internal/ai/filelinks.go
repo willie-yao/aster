@@ -141,7 +141,7 @@ func (r *FileLinkResolver) SetVerificationStore(store LinkVerificationStore) {
 	if r == nil {
 		return
 	}
-	r.service.SetLinkVerificationStore(store)
+	r.service.linkVerifyStore = store
 }
 
 // resolveFileLinks builds the verified GitHub link map for one analysis. It

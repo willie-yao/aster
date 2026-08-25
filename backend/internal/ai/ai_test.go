@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
 func TestCacheSetAndGet(t *testing.T) {
@@ -398,4 +401,11 @@ func TestModelFingerprintSeparatesResponsesWithoutChangingChat(t *testing.T) {
 	if chat.modelFingerprint() == responses.modelFingerprint() {
 		t.Fatal("Responses mode reused the Chat fingerprint")
 	}
+}
+
+func configureAgenticTestService(service *Service, opts AgenticOptions, factory artifacts.Factory, registry *tools.Registry, enabled []string) {
+	service.agenticOpts = opts
+	service.browserFactory = factory
+	service.registry = registry
+	service.enabledTools = enabled
 }
