@@ -4,8 +4,6 @@ These pages describe active private or experimental surfaces. User-facing
 configuration and deployment instructions remain in the main documentation
 index.
 
-- [Remediation investigation](remediation-investigation.md): private,
-  source-grounded causal-group investigation and benchmark contract.
 - [Agent Sandbox OpenCode analyzer](agent-sandbox-opencode-analyzer.md): active
   private shadow evaluation of the non-authoritative analyzer.
 

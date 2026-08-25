@@ -378,7 +378,7 @@ jobs:
       # into dist/data/ at build; strip AI traces, the cache, and side-effect
       # state (they carry operational metadata, never dashboard data). The flat
       # files stay in sync with output.NonPublishedFiles; private status and
-      # remediation-investigation cache files are hidden in dot-directories.
+      # retired investigation cache files are hidden in dot-directories.
       # remediations.json is a retired public projection stripped so a
       # pre-fetched data directory cannot republish it.
       - name: Strip non-published data files

@@ -8,7 +8,7 @@ import (
 
 func TestSubjectEligibilityBlocksAnalysisOnlyCausalGroups(t *testing.T) {
 	pattern := &models.PatternAnalysis{
-		ID: "pattern", Systemic: true, Recurrence: models.PatternRecurrenceSharedCause, RemediationInvestigations: []models.PatternRemediationInvestigationSummary{{CausalGroupID: "group", CausalGroupHash: "hash", State: models.PatternRemediationNotInvestigated}},
+		ID: "pattern", Systemic: true, Recurrence: models.PatternRecurrenceSharedCause,
 		SuggestedFix: "fix", RemediationTargets: []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}},
 	}
 	code, reason := subjectEligibilityReason(&ActionSubject{Kind: actionSubjectPattern, Pattern: pattern})

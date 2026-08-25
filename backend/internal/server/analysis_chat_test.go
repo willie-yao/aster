@@ -666,6 +666,33 @@ func TestHandlerAnalysisChatAcceptsPatternReference(t *testing.T) {
 	}
 }
 
+func TestHandlerAnalysisChatAcceptsCauseReference(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions", strings.NewReader(
+		`{"scope":"cause","job_id":"periodic-demo","pattern_id":"pattern-1","pattern_hash":"hash-1","causal_group_id":"group-1","causal_group_hash":"group-hash-1"}`,
+	))
+	request.Header.Set("Authorization", "ok")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(analysisChatIdempotencyHeader, "cause-create")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	ref := runner.createdRef
+	if ref.Scope != analysischat.ScopeCause || ref.PatternID != "pattern-1" || ref.PatternHash != "hash-1" ||
+		ref.CausalGroupID != "group-1" || ref.CausalGroupHash != "group-hash-1" {
+		t.Fatalf("created ref = %+v", ref)
+	}
+}
+
 // A Fix preflight rejection used to return a bare 400 with no server-side log
 // line, so the reason was computed and then discarded.
 func TestAnalysisChatRejectionIsDiagnosable(t *testing.T) {

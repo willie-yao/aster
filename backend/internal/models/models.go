@@ -475,8 +475,7 @@ type PatternCausalGroup struct {
 	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 	// Remediation is the action this cause's own member analyses reported. Like
 	// Signature it is excluded from ContentHash, so refreshing the displayed
-	// suggestion never churns causal-group identity or invalidates a
-	// remediation investigation already running against the same cause.
+	// suggestion never churns causal-group identity or an active cause chat.
 	Remediation *PatternCausalGroupRemediation `json:"remediation,omitempty"`
 }
 
@@ -484,8 +483,8 @@ type PatternCausalGroup struct {
 // analyses reported, carried through so a cause is never shown without the
 // action its own evidence supports. It is engine-derived from the per-failure
 // analyses; the correlation model is prompted to return no remediation field.
-// It is a suggestion, not a verified target: acting on a cause still goes
-// through the remediation investigation and its deterministic verification.
+// It is a suggestion, not a verified target. A cause chat can challenge it,
+// while Fix generation starts from a representative exact failure.
 type PatternCausalGroupRemediation struct {
 	// SuggestedFix is carried verbatim from one member analysis rather than
 	// merged, because free text cannot be combined across builds the way
@@ -553,66 +552,10 @@ type PatternAnalysis struct {
 	// RemediationVerification records whether the legacy structured target remains
 	// unresolved at SourceRef or is already present there.
 	RemediationVerification *PatternRemediationVerification `json:"remediation_verification,omitempty"`
-	// RemediationInvestigations are safe public projections keyed to exact
-	// recurring causal groups. Private investigation evidence is stored separately.
-	RemediationInvestigations []PatternRemediationInvestigationSummary `json:"remediation_investigations,omitempty"`
 	// Lifecycle combines source verification with post-fix run evidence.
 	Lifecycle *PatternLifecycle `json:"lifecycle,omitempty"`
 	// Summary is a one-paragraph human-readable verdict.
 	Summary string `json:"summary"`
-}
-
-type PatternRemediationInvestigationState string
-
-const (
-	PatternRemediationNotInvestigated             PatternRemediationInvestigationState = "not_investigated"
-	PatternRemediationQueued                      PatternRemediationInvestigationState = "queued"
-	PatternRemediationInvestigating               PatternRemediationInvestigationState = "investigating"
-	PatternRemediationVerifying                   PatternRemediationInvestigationState = "verifying"
-	PatternRemediationActionable                  PatternRemediationInvestigationState = "actionable"
-	PatternRemediationAlreadyFixed                PatternRemediationInvestigationState = "already_fixed"
-	PatternRemediationExternalDependency          PatternRemediationInvestigationState = "external_dependency"
-	PatternRemediationEnvironmentOrInfrastructure PatternRemediationInvestigationState = "environment_or_infrastructure"
-	PatternRemediationMitigationOnly              PatternRemediationInvestigationState = "mitigation_only"
-	PatternRemediationInsufficientEvidence        PatternRemediationInvestigationState = "insufficient_evidence"
-	PatternRemediationInvestigationFailed         PatternRemediationInvestigationState = "failed"
-	PatternRemediationStale                       PatternRemediationInvestigationState = "stale"
-	// PatternRemediationEvidenceExpired is terminal in a way stale is not: the
-	// builds the cause was correlated from have left the analysis window, so the
-	// investigation has nothing left to read and no refresh can bring them back.
-	PatternRemediationEvidenceExpired PatternRemediationInvestigationState = "evidence_expired"
-)
-
-// PatternRemediationInvestigationSummary is the safe public state for one
-// recurring causal group. Private evidence and model output are never embedded.
-type PatternRemediationInvestigationSummary struct {
-	CausalGroupID   string                               `json:"causal_group_id"`
-	CausalGroupHash string                               `json:"causal_group_hash"`
-	State           PatternRemediationInvestigationState `json:"state"`
-	Reason          string                               `json:"reason,omitempty"`
-	// ReasonCode names the specific outcome behind State. Several outcomes share
-	// the insufficient-evidence state and ask different things of a maintainer.
-	ReasonCode string `json:"reason_code,omitempty"`
-	// RejectedReasons lists why the verifier turned down each proposed target,
-	// which separates a run that proposed nothing from one whose proposals were
-	// rejected.
-	RejectedReasons []string                         `json:"rejected_reasons,omitempty"`
-	Target          *PatternRemediationTargetSummary `json:"target,omitempty"`
-	CompletedAt     string                           `json:"completed_at,omitempty"`
-}
-
-// PatternRemediationTargetSummary is the safe public identity of one verified target.
-type PatternRemediationTargetSummary struct {
-	Kind         string `json:"kind"`
-	Repository   string `json:"repository"`
-	Revision     string `json:"revision"`
-	Path         string `json:"path"`
-	Symbol       string `json:"symbol,omitempty"`
-	RequiredCall string `json:"required_call,omitempty"`
-	Job          string `json:"job,omitempty"`
-	Container    string `json:"container,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Value        string `json:"value,omitempty"`
 }
 
 type PatternRemediationState string

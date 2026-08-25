@@ -58,11 +58,6 @@ export function PatternBanner({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const analysisOnly = Boolean(pattern.recurrence_classification);
-  // Mirrors the resolver's pattern-level gate: the investigation runs only on a
-  // pattern the engine classified as recurring and systemic.
-  const remediationPatternEligible =
-    pattern.systemic &&
-    (pattern.recurrence_classification === "shared_cause" || pattern.recurrence_classification === "mixed_causes");
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
@@ -71,6 +66,20 @@ export function PatternBanner({
     fixCapable ? causalGroupFixTarget(group, runs) : null,
   );
   const causalEvidencePresent = causalGroups.map((group) => causalGroupEvidencePresent(group, runs));
+  const availableBuildIDs = new Set(runs.map((run) => run.build_id));
+  const causeChatRefs = causalGroups.map((group) =>
+    features.analysis_chat && jobID && pattern.id && pattern.content_hash && group.id && group.content_hash &&
+      group.builds.length > 0 && group.builds.every((buildID) => availableBuildIDs.has(buildID))
+      ? {
+          scope: "cause" as const,
+          job_id: jobID,
+          pattern_id: pattern.id,
+          pattern_hash: pattern.content_hash,
+          causal_group_id: group.id,
+          causal_group_hash: group.content_hash,
+        }
+      : null,
+  );
   // Correlation only ever sees the current window, so a cause it reports as new
   // may have been failing for months.
   const causalRecurrence = causalGroups.map((group) =>
@@ -89,9 +98,6 @@ export function PatternBanner({
   }, new Map<string, number>());
   const fixTargetNeedsBuild = fixTargetLabels.map(
     (label) => label !== null && (fixTargetLabelCounts.get(label) ?? 0) > 1,
-  );
-  const remediationByHash = new Map(
-    (pattern.remediation_investigations ?? []).map((summary) => [summary.causal_group_hash, summary]),
   );
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
   const patternUpstreamCause = patternExternalCause(pattern);
@@ -359,14 +365,18 @@ export function PatternBanner({
                     group={group}
                     jobID={jobID}
                     fileCtx={patternFileCtx}
-                    investigation={
-                      analysisOnly
+                    chat={
+                      causeChatRefs[index]
                         ? {
-                            summary: group.content_hash ? remediationByHash.get(group.content_hash) : undefined,
-                            patternID: pattern.id,
-                            patternHash: pattern.content_hash,
-                            patternEligible: remediationPatternEligible,
-                            chatAvailable: Boolean(chatRef),
+                            ref: causeChatRefs[index],
+                            fileCtx: {
+                              builds: Object.fromEntries(
+                                group.builds.flatMap((buildID) =>
+                                  buildContexts[buildID] ? [[buildID, buildContexts[buildID]]] : [],
+                                ),
+                              ),
+                              fileLinks: pattern.file_links,
+                            },
                           }
                         : undefined
                     }

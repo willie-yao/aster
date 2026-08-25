@@ -28,7 +28,7 @@ const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabil
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
 await vite.close();
 
-// A static Pages deploy: no chat, no fix routing, no remediation investigation.
+// A static Pages deploy has no chat or fix routing.
 const published: Capabilities = { mode: "static", features: { actions: false } };
 const fixCapable: Capabilities = {
   mode: "server",
@@ -120,12 +120,9 @@ test("a cause gathers everything it offers under one Next step section", () => {
   assert.match(html, /Suggested remediation from build 300/);
   assert.match(html, /Bump the node image to the current release\./);
   assert.match(html, /Open representative failure: Conformance tests should pass/);
-  assert.match(html, /Implementation target/);
+  assert.match(html, /Expand investigate cause/);
 
-  // The old framing stamped the same sentence the test detail page presents
-  // plainly as untrustworthy, and named a verdict the control cannot give.
-  assert.doesNotMatch(html, /Unverified suggested fix/);
-  assert.doesNotMatch(html, /Verified fix investigation/);
+  assert.doesNotMatch(html, /Verify code target|Implementation target/);
 });
 
 test("a published-only deploy still gets the cause's reported remediation", () => {
@@ -136,7 +133,7 @@ test("a published-only deploy still gets the cause's reported remediation", () =
   assert.match(html, /Bump the node image to the current release\./);
   // Neither capability is present, so neither control may be offered.
   assert.doesNotMatch(html, /Open representative failure/);
-  assert.doesNotMatch(html, /Implementation target/);
+  assert.doesNotMatch(html, /Expand investigate cause/);
 });
 
 test("a cause with nothing to offer renders no Next step section at all", () => {

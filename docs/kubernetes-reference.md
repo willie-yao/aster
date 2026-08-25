@@ -250,7 +250,6 @@ main operator controls.
 | `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. Carries `ISSUE_TOKEN` for issue recovery and `ASTER_APP_ID` / `ASTER_APP_PRIVATE_KEY` for the optional bot comment on new pull requests. |
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
 | `server.chat.*` | Authenticated analysis conversation settings. |
-| `server.remediationInvestigation.*` | Explicit authenticated causal remediation start/status operation. Does not enable writes. |
 | `server.pullRequestEscalation.enabled` | Authenticated on-demand analysis of one unexplained pull request failure. Requires `ai.enabled` and `pull_requests.enabled` in `project.yaml`. Does not enable writes. |
 | `server.security.hsts.enabled` | Helm HSTS behavior. Keep enabled for deployed HTTPS origins. |
 | `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |
@@ -363,7 +362,7 @@ Enable optional features only after the baseline writer, server, storage, and
 public data path are healthy.
 
 - [Server mode](server.md) owns authentication, capabilities, analysis chat,
-  read-only remediation investigation, and guarded action lifecycles.
+  cause-scoped analysis chat and guarded action lifecycles.
 - [GitHub issues](github-issues.md) owns issue credentials and issue state.
 - [Notifications](notifications.md) owns SMTP credentials and routing.
 - [Fix PR generation](fix-prs.md) owns the code-writing workflow, GitHub identity,
@@ -393,8 +392,8 @@ ConfigMap ownership is required.
 
 The shared volume contains public dashboard data and private operational state.
 The server blocks private files from `/data`, including AI cache and traces,
-notifications and action state, chat transcripts, remediation investigation,
-private coverage catalogs, and usage ledgers. Pages publication strips them.
+notifications and action state, chat transcripts, private coverage catalogs,
+and usage ledgers. Pages publication strips them.
 Protect the PVC, backups, and server access.
 
 The optional Agent analysis-shadow ledger lives on a separate private PVC outside

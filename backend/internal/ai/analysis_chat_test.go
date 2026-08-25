@@ -1393,14 +1393,6 @@ func TestAnalysisChatPatternContextCurrentCausalFields(t *testing.T) {
 			State: models.PatternLifecycleRecovered, Reason: "three later builds passed",
 			SourceRevision: "private-source-revision", PassingBuilds: []string{"private-passing-build"},
 		},
-		RemediationInvestigations: []models.PatternRemediationInvestigationSummary{
-			{
-				CausalGroupID: "group-a", CausalGroupHash: "hash-a", State: models.PatternRemediationActionable,
-				Reason: "verified source target", CompletedAt: "2026-08-12T12:00:00Z",
-				Target: &models.PatternRemediationTargetSummary{Path: "private/target.go", Repository: "private/repo", Revision: "private-revision"},
-			},
-			{CausalGroupID: "group-b", CausalGroupHash: "hash-b", State: models.PatternRemediationInsufficientEvidence, Reason: "source evidence is incomplete"},
-		},
 	}
 	encoded, err := encodeAnalysisChatPatternContext(analysischat.Turn{
 		JobID: "periodic-demo", Pattern: pattern,
@@ -1418,14 +1410,13 @@ func TestAnalysisChatPatternContextCurrentCausalFields(t *testing.T) {
 	if context.Recurrence != models.PatternRecurrenceMixedCauses || len(context.CausalGroups) != 3 || !slices.Equal(context.Unclassified, []string{"99"}) {
 		t.Fatalf("context = %+v", context)
 	}
-	if !slices.Equal(context.CausalGroups[0].Builds, []string{"104", "103"}) || !slices.Equal(context.CausalGroups[0].ArtifactBuilds, []string{"104"}) ||
-		context.CausalGroups[0].Remediation == nil || context.CausalGroups[0].Remediation.State != models.PatternRemediationActionable {
+	if !slices.Equal(context.CausalGroups[0].Builds, []string{"104", "103"}) || !slices.Equal(context.CausalGroups[0].ArtifactBuilds, []string{"104"}) {
 		t.Fatalf("group a = %+v", context.CausalGroups[0])
 	}
-	if len(context.CausalGroups[1].ArtifactBuilds) != 0 || context.CausalGroups[1].Remediation != nil {
+	if len(context.CausalGroups[1].ArtifactBuilds) != 0 {
 		t.Fatalf("singleton = %+v", context.CausalGroups[1])
 	}
-	if !slices.Equal(context.CausalGroups[2].ArtifactBuilds, []string{"101"}) || context.CausalGroups[2].Remediation == nil || context.CausalGroups[2].Remediation.State != models.PatternRemediationInsufficientEvidence {
+	if !slices.Equal(context.CausalGroups[2].ArtifactBuilds, []string{"101"}) {
 		t.Fatalf("group b = %+v", context.CausalGroups[2])
 	}
 	if context.Lifecycle == nil || context.Lifecycle.State != models.PatternLifecycleRecovered || context.Lifecycle.Reason != "three later builds passed" {
@@ -1439,6 +1430,30 @@ func TestAnalysisChatPatternContextCurrentCausalFields(t *testing.T) {
 	}
 	if strings.Contains(text, "published_suggested_fix") {
 		t.Fatalf("pattern context invented a suggested fix: %s", text)
+	}
+}
+
+func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
+	pattern := &models.PatternAnalysis{
+		ID: "pattern", Subject: "job", BuildsAnalyzed: 2, Confidence: "high",
+		CausalGroups: []models.PatternCausalGroup{{
+			ID: "cause", ContentHash: "cause-hash", Builds: []string{"2", "1"},
+			RootCause: "same cause", Confidence: "high",
+		}},
+		SharedRootCause: "same cause", SharedBuilds: []string{"2", "1"}, Summary: "same cause",
+	}
+	context, err := analysisChatContext(analysischat.Turn{
+		Scope: analysischat.ScopeCause, JobID: "periodic-demo", Pattern: pattern,
+		EvidenceBuilds: []analysischat.ArtifactBuild{{Build: models.BuildInfo{BuildID: "2"}}, {Build: models.BuildInfo{BuildID: "1"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(context, "Selected published causal-group analysis") || strings.Contains(context, "Selected published recurring-pattern analysis") {
+		t.Fatalf("context = %s", context)
+	}
+	if !strings.Contains(context, "Answer only about this cause and its listed builds") {
+		t.Fatalf("context = %s", context)
 	}
 }
 
@@ -1495,16 +1510,12 @@ func TestAnalysisChatPatternContextBounds(t *testing.T) {
 		{name: "unclassified", mutate: func(pattern *models.PatternAnalysis) {
 			pattern.UnclassifiedBuilds = make([]string, analysisChatMaxPatternUnclassifiedBuilds+1)
 		}},
-		{name: "remediation summaries", mutate: func(pattern *models.PatternAnalysis) {
-			pattern.RemediationInvestigations = make([]models.PatternRemediationInvestigationSummary, analysisChatMaxPatternRemediationSummaries+1)
-		}},
 		{name: "total bytes", mutate: func(pattern *models.PatternAnalysis) {
 			pattern.SharedRootCause = strings.Repeat("r", 32<<10)
 			pattern.SuggestedFix = strings.Repeat("f", 16<<10)
 			for index := 0; index < analysisChatMaxPatternCausalGroups; index++ {
 				group := models.PatternCausalGroup{ID: fmt.Sprintf("g-%d", index), ContentHash: fmt.Sprintf("h-%d", index), Builds: []string{fmt.Sprintf("%d", index)}, RootCause: strings.Repeat("c", analysisChatMaxPatternRootCauseBytes), Confidence: "high"}
 				pattern.CausalGroups = append(pattern.CausalGroups, group)
-				pattern.RemediationInvestigations = append(pattern.RemediationInvestigations, models.PatternRemediationInvestigationSummary{CausalGroupID: group.ID, CausalGroupHash: group.ContentHash, State: models.PatternRemediationActionable, Reason: strings.Repeat("x", analysisChatMaxPatternRemediationReasonBytes)})
 			}
 		}},
 	}

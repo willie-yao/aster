@@ -108,7 +108,6 @@ test("each cause is a bounded card with its own ordinal identity", () => {
 test("causal group rhythm and headings express the hierarchy", () => {
   const pattern = source("src/components/PatternBanner.tsx");
   const nextStep = source("src/components/CausalGroupNextStep.tsx");
-  const remediation = source("src/components/CausalGroupRemediation.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
   const cause = pattern.slice(
     pattern.indexOf("causalGroups.map((group, index)"),
@@ -118,7 +117,7 @@ test("causal group rhythm and headings express the hierarchy", () => {
   // The gap between two unrelated causes has to exceed every gap inside one,
   // or the reader cannot tell a cause boundary from a paragraph boundary.
   const between = Number(/<Stack spacing=\{([\d.]+)\}>\s*\n\s*\{causalGroups\.map/.exec(pattern)?.[1]);
-  const within = [cause, nextStep, remediation, routing]
+  const within = [cause, nextStep, routing]
     .flatMap((text) => [...text.matchAll(/\bmt: ([\d.]+)/g)])
     .map((match) => Number(match[1]));
 
@@ -136,9 +135,6 @@ test("causal group rhythm and headings express the hierarchy", () => {
   assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
   assert.match(nextStep, /component="h5"[\s\S]*>\s*Next step\s*</);
   assert.match(nextStep, /component="h6"[\s\S]*>\s*Suggested remediation/);
-  assert.match(remediation, /component="h6"/);
-  assert.match(remediation, /slotProps=\{\{ heading: \{ component: "h6" \} \}\}/);
-  assert.doesNotMatch(remediation, /component="h4"|component="h5"/);
 });
 
 test("one shared component defines the briefing section treatment", () => {

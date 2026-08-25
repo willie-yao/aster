@@ -58,7 +58,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "")
 		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
-		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "")
 		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
 	}
@@ -68,7 +67,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !features.Actions || features.AnalysisChat || features.CausalRemediationInvestigation {
+		if !features.Actions || features.AnalysisChat {
 			t.Fatalf("features = %+v", features)
 		}
 	})
@@ -107,17 +106,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 			t.Fatalf("features = %+v", features)
 		}
 	})
-	t.Run("causal remediation defaults writes off", func(t *testing.T) {
-		setDefaults(t)
-		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "true")
-		features, err := interactiveFeaturesFromEnv()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if features.Actions || !features.CausalRemediationInvestigation {
-			t.Fatalf("features = %+v", features)
-		}
-	})
 	t.Run("escalation defaults writes off", func(t *testing.T) {
 		setDefaults(t)
 		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "true")
@@ -151,7 +139,7 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 	})
 	t.Run("invalid", func(t *testing.T) {
 		setDefaults(t)
-		t.Setenv("CAUSAL_REMEDIATION_INVESTIGATION_ENABLED", "sometimes")
+		t.Setenv("ANALYSIS_CHAT_ENABLED", "sometimes")
 		if _, err := interactiveFeaturesFromEnv(); err == nil {
 			t.Fatal("invalid feature flag was accepted")
 		}

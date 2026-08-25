@@ -171,7 +171,7 @@ project config, selects an auth mode, and writes private state, so the server
 templates gate those on this single answer. Emits "true" or the empty string.
 */}}
 {{- define "aster.serverInteractive" -}}
-{{- if or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.remediationInvestigation.enabled .Values.server.pullRequestEscalation.enabled -}}
+{{- if or .Values.server.actions.enabled .Values.server.chat.enabled .Values.server.pullRequestEscalation.enabled -}}
 true
 {{- end -}}
 {{- end -}}

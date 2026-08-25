@@ -27,10 +27,8 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/auth"
-	"github.com/willie-yao/aster/backend/internal/causalfixpreview"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/redact"
-	"github.com/willie-yao/aster/backend/internal/remediationinvestigation"
 )
 
 // ActionRunner performs on-demand actions for a failure id using the admin's
@@ -62,11 +60,6 @@ type ActionEligibilityRunner interface {
 // the model and opens a PR, so it can run for a while.
 const defaultActionTimeout = 5 * time.Minute
 
-// CausalFixPreviewRunner generates a non-confirmable preview from one reverified proposal.
-type CausalFixPreviewRunner interface {
-	Preview(context.Context, remediationinvestigation.OperationRef, string, string) (causalfixpreview.Preview, error)
-}
-
 // Options configures a server Handler.
 type Options struct {
 	// DataDir is the fetcher output directory served at /data. Required.
@@ -93,17 +86,13 @@ type Options struct {
 	// observed across several pull requests. Nil withholds the routes and the
 	// capability, independently of PullRequestEscalation, so a controls surface
 	// is never advertised when its service failed to construct.
-	SharedFailureEscalation        SharedFailureEscalationRunner
-	CausalRemediationInvestigation CausalRemediationInvestigationRunner
-	CausalFixPreview               CausalFixPreviewRunner
+	SharedFailureEscalation SharedFailureEscalationRunner
 	// ChatFix bridges one selected chat response into the existing fix preview.
 	ChatFix ChatFixRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
 	// AnalysisChatTimeout bounds one conversation turn.
 	AnalysisChatTimeout time.Duration
-	// CausalRemediationRequestTimeout bounds synchronous start and status validation.
-	CausalRemediationRequestTimeout time.Duration
 	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
 	// "proxy" (auth handled upstream), or "dev" for local use.
 	AuthMode string
@@ -179,11 +168,8 @@ type Features struct {
 	// AIUsage enables the private token and cost API.
 	AIUsage bool `json:"ai_usage,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
-	AnalysisChat                                bool `json:"analysis_chat,omitempty"`
-	AnalysisCorrections                         bool `json:"analysis_corrections,omitempty"`
-	CausalRemediationInvestigation              bool `json:"causal_remediation_investigation,omitempty"`
-	CausalRemediationInvestigationAuthenticated bool `json:"causal_remediation_investigation_authenticated,omitempty"`
-	CausalRemediationFixPreview                 bool `json:"causal_remediation_fix_preview,omitempty"`
+	AnalysisChat        bool `json:"analysis_chat,omitempty"`
+	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
 	ChatFix              bool   `json:"chat_fix,omitempty"`
 	JUnitChatFix         bool   `json:"junit_chat_fix,omitempty"`
@@ -295,27 +281,6 @@ func Handler(opts Options) (http.Handler, error) {
 		if requests, ok := opts.ChatFix.(ChatFixRequestRunner); ok {
 			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
 				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(timeout, requests))))
-		}
-	}
-
-	if opts.Auth != nil && opts.CausalRemediationInvestigation != nil {
-		caps.Features.CausalRemediationInvestigation = true
-		caps.Features.CausalRemediationInvestigationAuthenticated = true
-		timeout := opts.CausalRemediationRequestTimeout
-		if timeout <= 0 {
-			timeout = 45 * time.Second
-		}
-		trusted := trustedOriginSet(opts.TrustedOrigins)
-		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
-		path := "/api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation"
-		mux.Handle("POST "+path,
-			auth.Middleware(opts.Auth, guard(startCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation))))
-		mux.Handle("GET "+path,
-			auth.Middleware(opts.Auth, getCausalRemediationInvestigationHandler(timeout, opts.CausalRemediationInvestigation)))
-		if opts.CausalFixPreview != nil {
-			caps.Features.CausalRemediationFixPreview = true
-			mux.Handle("POST "+path+"/fix-preview",
-				auth.Middleware(opts.Auth, guard(causalFixPreviewHandler(defaultActionTimeout, opts.CausalFixPreview))))
 		}
 	}
 

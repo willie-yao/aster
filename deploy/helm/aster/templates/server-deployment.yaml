@@ -3,11 +3,9 @@
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $corrections := .Values.server.chat.correctionsEnabled -}}
-{{- $remediation := .Values.server.remediationInvestigation.enabled -}}
-{{- $remediationFixPreview := .Values.server.remediationInvestigation.fixPreview.enabled -}}
 {{- $escalation := .Values.server.pullRequestEscalation.enabled -}}
 {{- $interactive := include "aster.serverInteractive" . -}}
-{{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled (or $actions $remediationFixPreview) -}}
+{{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled $actions -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraHSTS := false -}}
 {{- $extraInsecureCookies := false -}}
@@ -64,23 +62,8 @@
 {{- if and $chat (not .Values.ai.enabled) -}}
 {{- fail "server.chat.enabled requires ai.enabled" -}}
 {{- end -}}
-{{- if and $remediation (not .Values.ai.enabled) -}}
-{{- fail "server.remediationInvestigation.enabled requires ai.enabled" -}}
-{{- end -}}
 {{- if and $escalation (not .Values.ai.enabled) -}}
 {{- fail "server.pullRequestEscalation.enabled requires ai.enabled" -}}
-{{- end -}}
-{{- if and $remediation (le (int .Values.server.remediationInvestigation.maxOperations) 0) -}}
-{{- fail "server.remediationInvestigation.maxOperations must be positive" -}}
-{{- end -}}
-{{- if and $remediation (not .Values.server.remediationInvestigation.timeout) -}}
-{{- fail "server.remediationInvestigation.timeout is required" -}}
-{{- end -}}
-{{- if and $remediationFixPreview (not $remediation) -}}
-{{- fail "server.remediationInvestigation.fixPreview.enabled requires server.remediationInvestigation.enabled" -}}
-{{- end -}}
-{{- if and $remediationFixPreview (not .Values.agentSandbox.fixRuntime.enabled) -}}
-{{- fail "server.remediationInvestigation.fixPreview.enabled requires agentSandbox.fixRuntime.enabled" -}}
 {{- end -}}
 {{- if and $corrections (not $chat) -}}
 {{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
@@ -171,18 +154,6 @@ spec:
             {{- end }}
             {{- if $agentSandboxActions }}
             {{- include "aster.agentSandboxEnv" . | nindent 12 }}
-            {{- end }}
-            {{- if $remediation }}
-            - name: CAUSAL_REMEDIATION_INVESTIGATION_ENABLED
-              value: "true"
-            - name: CAUSAL_REMEDIATION_INVESTIGATION_TIMEOUT
-              value: {{ .Values.server.remediationInvestigation.timeout | quote }}
-            - name: CAUSAL_REMEDIATION_INVESTIGATION_MAX_OPERATIONS
-              value: {{ .Values.server.remediationInvestigation.maxOperations | quote }}
-            {{- if $remediationFixPreview }}
-            - name: CAUSAL_REMEDIATION_FIX_PREVIEW_ENABLED
-              value: "true"
-            {{- end }}
             {{- end }}
             {{- if $escalation }}
             - name: PULL_REQUEST_ESCALATION_ENABLED

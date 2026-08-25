@@ -2727,9 +2727,6 @@ type kubernetesDoctorValues struct {
 		Chat struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"chat"`
-		RemediationInvestigation struct {
-			Enabled bool `yaml:"enabled"`
-		} `yaml:"remediationInvestigation"`
 		PullRequestEscalation struct {
 			Enabled bool `yaml:"enabled"`
 		} `yaml:"pullRequestEscalation"`
@@ -2753,6 +2750,5 @@ type kubernetesDoctorValues struct {
 // mirroring the chart's aster.serverInteractive helper. Every one of them signs
 // admins in, so they share the OAuth callback contract.
 func (v kubernetesDoctorValues) serverInteractive() bool {
-	return v.Server.Actions.Enabled || v.Server.Chat.Enabled ||
-		v.Server.RemediationInvestigation.Enabled || v.Server.PullRequestEscalation.Enabled
+	return v.Server.Actions.Enabled || v.Server.Chat.Enabled || v.Server.PullRequestEscalation.Enabled
 }

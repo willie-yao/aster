@@ -28,8 +28,6 @@ schema.
 | `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn through SSE progress. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
-| `POST /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Start an explicit read-only causal-group source investigation. |
-| `GET /api/jobs/{jobID}/patterns/{patternID}/causal-groups/{groupID}/remediation-investigation` | Read its safe current state. |
 | `POST /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Start one on-demand analysis of a pull request failure the deterministic pass could not explain. |
 | `GET /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Read that escalation's current state. |
 | `POST /api/shared-failures/{id}/escalation` | Start one on-demand analysis of a failure shared across several open pull requests. |
@@ -115,7 +113,13 @@ private state directory. Chat is read-only and does not require `BOT_TOKEN`.
 Static Pages deployments do not serve it.
 
 A session is bound to the signed-in owner and one exact current analysis
-identity. Each start or message uses a unique `Idempotency-Key`. Repeating the
+identity. Test, recurring-pattern, and causal-group scopes are supported. A
+causal-group session is bound to the parent pattern ID and hash plus the cause ID
+and hash. It exposes exactly the cause's member builds, including single-build
+causes, and does not require the parent pattern to be systemic. The server refuses
+the session when any member build has left the published window.
+
+Each start or message uses a unique `Idempotency-Key`. Repeating the
 same key and body returns the original state; reusing the key for different
 input fails. Streaming clients may reconnect to an existing server-owned turn.
 Disconnecting does not cancel it, while explicit cancellation and server
@@ -143,30 +147,6 @@ Sessions are stored in private owner-bound state, have bounded admitted turns,
 and expire after inactivity. The state contains transcripts and selected failure
 context, so the RWX volume and backups are operator-private. Replicas require
 advisory locking, atomic rename, and file and directory synchronization.
-
-## Causal remediation investigation
-
-This optional authenticated operation investigates one published causal group
-against pinned source. It is read-only, idempotent, hash-bound, and independent
-of analysis chat. The request fails closed when the published pattern, group,
-build set, source revision, provider identity, or destination policy is stale.
-
-The public response contains only the group identity, safe state, fixed concise
-reason, optional verified target identity, and completion time. Raw source,
-evidence excerpts, prompts, model output, and private cache content remain
-private.
-
-Even an `actionable` investigation does not grant action authority. Causal-group
-patterns remain blocked from File Issue, Fix PR, and resolution by the engine's
-action policy.
-
-Causal groups are recomputed from the current build window every pass, so a cause
-that ages out and returns would otherwise be re-investigated from scratch. The
-server consults a private recurrence ledger keyed by each group's durable
-signature and reuses a prior non-actionable verdict instead of re-spending model
-budget. Reuse is capped, an `actionable` or `already_fixed` verdict is never
-reused, and an explicit refresh always forces a fresh investigation. See
-[recurrence memory](maintainer/remediation-investigation.md#recurrence-memory).
 
 ## Admin-gated actions
 
@@ -221,7 +201,6 @@ directories. Private state includes:
 - analysis traces and pattern diagnostics;
 - fetch status and pass history;
 - AI usage ledgers;
-- remediation-investigation cache;
 - optional Agent Sandbox shadow ledgers.
 
 Authenticated APIs expose only sanitized, purpose-specific views. They never

@@ -116,6 +116,13 @@ const patternSuggestedQuestions = [
   "What evidence would change the grouping?",
 ] as const;
 
+const causeSuggestedQuestions = [
+  "What evidence supports this cause across its builds?",
+  "How do the member builds differ?",
+  "What concrete change follows from this cause?",
+  "What evidence would disprove this cause?",
+] as const;
+
 const assessmentConfig: Record<
   AnalysisChatAssessment,
   { label: string; color: "primary" | "success" | "warning" | "default" }
@@ -574,6 +581,10 @@ export function AnalysisChat({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
+  const causeScope = analysisRef.scope === "cause";
+  const multiBuildScope = patternScope || causeScope;
+  const chatTitle = causeScope ? "Investigate cause" : "Investigate and fix";
+  const chatToggleLabel = `${expanded ? "Collapse" : "Expand"} ${chatTitle.toLowerCase()}`;
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
   const groundedRequestIDs = useMemo(() => chatFixGroundedRequestIDs(session?.messages), [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
@@ -601,6 +612,8 @@ export function AnalysisChat({
         analysisRef.analysis_generated_at,
         analysisRef.pattern_id,
         analysisRef.pattern_hash,
+        analysisRef.causal_group_id,
+        analysisRef.causal_group_hash,
       ].join("\u0000"),
     [analysisRef],
   );
@@ -802,8 +815,8 @@ export function AnalysisChat({
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
-  const questions = patternScope ? patternSuggestedQuestions : suggestedQuestions;
-  const exactJUnitAnalysis = !patternScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
+  const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
+  const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
   const exactFixEnabled = Boolean(features.junit_chat_fix) && exactJUnitAnalysis;
   const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(fileCtx.fileLinks, session?.source_repository).length > 0;
   // No published file link means no verified source path can exist, which is
@@ -1225,7 +1238,7 @@ export function AnalysisChat({
                 component="span"
                 sx={detailAppearance ? undefined : { fontSize: "0.875rem", fontWeight: 750 }}
               >
-                Investigate and fix
+                {chatTitle}
               </Box>
             </ButtonBase>
           </Box>
@@ -1251,7 +1264,7 @@ export function AnalysisChat({
           <IconButton
             disableRipple
             size="small"
-            aria-label={expanded ? "Collapse investigate and fix" : "Expand investigate and fix"}
+            aria-label={chatToggleLabel}
             aria-expanded={expanded}
             aria-controls="analysis-chat-content"
             onClick={toggleChat}
@@ -1306,12 +1319,18 @@ export function AnalysisChat({
               {!restoring && history.length === 0 && !busy && !pendingTurn && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                    {patternScope ? "Interrogate the pattern across builds." : "Interrogate the conclusion, not just the summary."}
+                    {causeScope
+                      ? "Interrogate this cause across its builds."
+                      : patternScope
+                        ? "Interrogate the pattern across builds."
+                        : "Interrogate the conclusion, not just the summary."}
                   </Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
-                    {patternScope
-                      ? "Ask which builds agree, where they differ, or whether the shared cause holds up."
-                      : "Ask for evidence, test another cause, or challenge what the agent missed."}
+                    {causeScope
+                      ? "Ask what the member builds prove, where they differ, or what concrete change follows."
+                      : patternScope
+                        ? "Ask which builds agree, where they differ, or whether the shared cause holds up."
+                        : "Ask for evidence, test another cause, or challenge what the agent missed."}
                   </Typography>
                   <Stack direction="row" spacing={0.75} useFlexGap sx={{ flexWrap: "wrap" }}>
                     {questions.map((suggestion) => (
@@ -1358,7 +1377,7 @@ export function AnalysisChat({
                     key={entry.key}
                     message={message}
                     fileCtx={fileCtx}
-                    correctionEnabled={!patternScope && Boolean(features.analysis_corrections)}
+                    correctionEnabled={!multiBuildScope && Boolean(features.analysis_corrections)}
                     chatFixEnabled={exactFixEnabled || Boolean(features.chat_fix && patternScope)}
                     fixEligible={exactFixEligible || legacyFixEligible}
                     fixIneligibleReason={fixIneligibleReason}
@@ -1502,7 +1521,7 @@ export function AnalysisChat({
         sessionID={session?.id ?? ""}
         message={fixMessage}
         patterns={fixPatterns}
-        exactAnalysis={!patternScope}
+        exactAnalysis={!multiBuildScope}
         onClose={() => setFixOpen(false)}
       />
       <Dialog open={resetOpen} onClose={resetting ? undefined : () => setResetOpen(false)} fullWidth maxWidth="xs">

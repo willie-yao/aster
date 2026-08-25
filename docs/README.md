@@ -48,7 +48,7 @@ basic dashboard is healthy.
 | Feature | Canonical guide | Boundary |
 | --- | --- | --- |
 | Analysis chat | [Server mode](server.md#analysis-chat) | Authenticated, read-only model conversation over published analysis. |
-| Causal remediation investigation | [Server mode](server.md#causal-remediation-investigation) | Explicit read-only source investigation. It does not enable issue or Fix actions for causal groups. |
+| Cause-scoped analysis chat | [Server mode](server.md#analysis-chat) | Authenticated chat over exactly one causal group and its member builds. |
 | File Issue and Mark Resolved | [Server mode](server.md#admin-gated-actions) and [GitHub issues](github-issues.md) | Authenticated preview or lifecycle action. GitHub writes use a server-held `BOT_TOKEN`. |
 | Email notifications | [Notifications](notifications.md) | SMTP credentials and routing stay deployment-owned. |
 | Fix PR generation | [Fix PR generation](fix-prs.md) | Experimental, confirmation-gated code writing through Agent Sandbox. |

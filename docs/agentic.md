@@ -208,12 +208,12 @@ A fresh valid verdict replaces the previous pattern. A fresh non-systemic
 verdict removes it. When an eligible refresh fails, the exact prior valid verdict
 may remain visible as `Last known good`; otherwise no fallback is fabricated.
 Retained patterns stay readable but cannot start notifications, issues, Fix
-previews, remediation attempts, or resolution changes.
+previews, or resolution changes.
 
-Causal groups are analysis-only. An authenticated server may run a separate,
-explicit read-only remediation investigation, but its public safe state does not
-grant File Issue or Fix PR eligibility. Individual build analyses may still link
-to verified pinned source as evidence.
+Causal groups are analysis-only. When every member build remains available, an
+authenticated cause-scoped chat can inspect exactly those builds and return prose
+with verified artifact citations. Chat does not grant File Issue or Fix PR
+eligibility. A fix still starts from a representative exact JUnit failure.
 
 ## Private operational data
 

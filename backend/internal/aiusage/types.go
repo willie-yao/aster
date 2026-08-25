@@ -9,16 +9,15 @@ const LedgerVersion = 2
 type Feature string
 
 const (
-	FeatureFailureAnalysis          Feature = "failure_analysis"
-	FeaturePatternAnalysis          Feature = "pattern_analysis"
-	FeatureAnalysisChat             Feature = "analysis_chat"
-	FeatureIssueDraft               Feature = "issue_draft"
-	FeatureFixPreview               Feature = "fix_preview"
-	FeatureFixCritique              Feature = "fix_critique"
-	FeaturePRTemplate               Feature = "pr_template"
-	FeatureSourceInvestigation      Feature = "source_investigation"
-	FeatureRemediationInvestigation Feature = "remediation_investigation"
-	FeatureUnknown                  Feature = "unknown"
+	FeatureFailureAnalysis     Feature = "failure_analysis"
+	FeaturePatternAnalysis     Feature = "pattern_analysis"
+	FeatureAnalysisChat        Feature = "analysis_chat"
+	FeatureIssueDraft          Feature = "issue_draft"
+	FeatureFixPreview          Feature = "fix_preview"
+	FeatureFixCritique         Feature = "fix_critique"
+	FeaturePRTemplate          Feature = "pr_template"
+	FeatureSourceInvestigation Feature = "source_investigation"
+	FeatureUnknown             Feature = "unknown"
 )
 
 type Origin string
@@ -178,7 +177,7 @@ func validFeature(value Feature) bool {
 	switch value {
 	case FeatureFailureAnalysis, FeaturePatternAnalysis, FeatureAnalysisChat,
 		FeatureIssueDraft, FeatureFixPreview, FeatureFixCritique, FeaturePRTemplate,
-		FeatureSourceInvestigation, FeatureRemediationInvestigation, FeatureUnknown:
+		FeatureSourceInvestigation, FeatureUnknown:
 		return true
 	default:
 		return false

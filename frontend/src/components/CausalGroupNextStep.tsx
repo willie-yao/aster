@@ -2,38 +2,33 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import { RichText } from "./RichText";
 import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
-import { CausalGroupRemediation } from "./CausalGroupRemediation";
+import { AnalysisChat } from "./AnalysisChat";
 import type { FileToUrlContext } from "../lib/utils";
+import type { CauseAnalysisChatReference } from "../types/analysisChat";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import type {
   AnalysisCauseLocation,
   PatternCausalGroup,
-  PatternRemediationInvestigationSummary,
 } from "../types/dashboard";
 import { overviewTypography } from "../theme/overview";
 
 // CausalGroupNextStep is the one place a cause offers something to act on: the
 // remediation its own member analyses reported, the route to the failure a fix
-// proposal starts from, and the investigation that verifies a code target.
-// Each part has its own gate, so the section renders whichever the deployment
-// has and nothing at all when it has none.
+// proposal starts from, and a chat grounded in the cause's member builds. Each
+// part has its own gate, so the section renders whichever the deployment has.
 export function CausalGroupNextStep({
   group,
   jobID,
   fileCtx,
-  investigation,
+  chat,
   routing,
 }: {
   group: PatternCausalGroup;
   jobID?: string;
   fileCtx?: FileToUrlContext;
-  // Omitted where the deployment does not run remediation investigations.
-  investigation?: {
-    summary?: PatternRemediationInvestigationSummary;
-    patternID?: string;
-    patternHash?: string;
-    patternEligible?: boolean;
-    chatAvailable?: boolean;
+  chat?: {
+    ref: CauseAnalysisChatReference;
+    fileCtx: FileToUrlContext;
   };
   // Omitted where no chat session on this deployment could start a fix.
   routing?: {
@@ -48,7 +43,7 @@ export function CausalGroupNextStep({
   // Routing has nothing to point at without a job, which is the same condition
   // CausalGroupFixRouting returns null on.
   const routable = routing && jobID ? routing : undefined;
-  if (!suggested && !routable && !investigation) return null;
+  if (!suggested && !routable && !chat) return null;
 
   return (
     <Box sx={{ mt: 1.5, minWidth: 0 }}>
@@ -80,16 +75,14 @@ export function CausalGroupNextStep({
           evidencePresent={routable.evidencePresent}
         />
       )}
-      {investigation && (
-        <CausalGroupRemediation
-          group={group}
-          investigation={investigation.summary}
-          jobID={jobID}
-          patternID={investigation.patternID}
-          patternHash={investigation.patternHash}
-          patternEligible={investigation.patternEligible}
-          chatAvailable={investigation.chatAvailable}
-        />
+      {chat && (
+        <Box sx={{ mt: 1.5 }}>
+          <AnalysisChat
+            key={`${chat.ref.job_id}\u0000${chat.ref.pattern_id}\u0000${chat.ref.causal_group_id}\u0000${chat.ref.causal_group_hash}`}
+            analysisRef={chat.ref}
+            fileCtx={chat.fileCtx}
+          />
+        </Box>
       )}
     </Box>
   );

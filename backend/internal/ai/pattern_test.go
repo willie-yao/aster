@@ -381,7 +381,7 @@ func TestGroupRemediationSkipsMembersWithoutAFix(t *testing.T) {
 
 // TestGroupRemediationIsExcludedFromCausalGroupIdentity verifies refreshing the
 // displayed suggestion never churns causal-group identity, which would
-// invalidate a remediation investigation already running against the cause.
+// invalidate a cause chat already running against the same published cause.
 func TestGroupRemediationIsExcludedFromCausalGroupIdentity(t *testing.T) {
 	base := models.PatternCausalGroup{
 		Builds: []string{"1", "2"}, RootCause: "etcd learner never joined", Confidence: "high",

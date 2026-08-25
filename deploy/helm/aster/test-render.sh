@@ -147,21 +147,6 @@ if grep -Fq 'name: BOT_TOKEN' "$tmp/chat.yaml" || grep -Fq 'name: ACTIONS_ENABLE
   exit 1
 fi
 
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set ai.enabled=true \
-  --set ai.endpoint=https://model.example.test/v1/chat/completions \
-  --set ai.model=fixture-model \
-  --set ai.token=test-token \
-  --set server.remediationInvestigation.enabled=true \
-  --set server.actions.mode=proxy \
-  --show-only templates/server-deployment.yaml > "$tmp/remediation.yaml"
-grep -A1 -F 'name: CAUSAL_REMEDIATION_INVESTIGATION_ENABLED' "$tmp/remediation.yaml" | grep -Fq 'value: "true"'
-if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/remediation.yaml" || grep -Fq 'name: BOT_TOKEN' "$tmp/remediation.yaml"; then
-  echo 'remediation rendered write-action credentials' >&2
-  exit 1
-fi
-expect_fail remediation-without-ai 'server.remediationInvestigation.enabled requires ai.enabled' --set server.remediationInvestigation.enabled=true --set server.actions.mode=proxy
-
 # Escalation alone must render every prerequisite the feature needs: the project
 # mount, an auth mode, the model credential, and an authenticated GitHub read.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \

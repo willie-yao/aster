@@ -248,7 +248,7 @@ published in job details and aggregated into `flakiness.json`.
 Raw provider exchanges are transient and are not included in traces or public
 output. Private persisted state includes `ai_cache.json`, `ai_traces.json`,
 fetcher and server usage ledgers, fetch status, side-effect state, Agent Sandbox
-comparison ledgers, and remediation investigation caches. Pages strips private
+comparison ledgers. Pages strips private
 files before deployment, and the Kubernetes server rejects them from the
 data-serving path.
 
@@ -264,20 +264,11 @@ data-serving path.
   unavailable. Correlation does not rewrite the per-build diagnosis, and
   `patterns.MergeLastGood` isolates per-job correlation failures before public
   output.
-- **Analysis chat** resolves a published test or pattern into a bounded private
-  session under `backend/internal/analysischat`. Chat replies do not change job
-  JSON. A separately enabled, explicitly confirmed correction workflow can
+- **Analysis chat** resolves a published test, pattern, or causal group into a
+  bounded private session under `backend/internal/analysischat`. Cause scope
+  exposes exactly the selected group's member builds. Chat replies do not change
+  job JSON. A separately enabled, explicitly confirmed correction workflow can
   publish an overlay without mutating fetcher output.
-- **Remediation investigation** consumes a frozen active causal group, its
-  referenced analyses and artifacts, and pinned source. The model produces
-  bounded target hypotheses, not authoritative proposals. Dashboard code
-  validates selected evidence, converts each hypothesis to a typed target,
-  applies `actionverify` and `remediationpolicy` to engine-derived behavior, and
-  verifies current and failure-revision source state through
-  `sourceinvestigation`. Only then can the engine derive a private verified
-  proposal and a safe public target summary. Model-authored relationship prose
-  is non-authoritative. This flow uses a separate private cache and does not
-  alter per-build analysis.
 - **Actions** are authenticated server operations over current published
   subjects with independent lifecycle and quality gates. File Issue and Fix PR
   use preview-confirm workflows. Resolve is a direct lifecycle state change
@@ -335,7 +326,6 @@ data-serving path.
 | Public and private output boundary | `backend/internal/models/models.go`, `backend/internal/output/`, `backend/internal/ai/trace.go`, `backend/internal/ai/trace_store.go`, `backend/internal/aiusage/` |
 | Recurring patterns | `backend/internal/patterns/`, `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, `backend/internal/ai/pattern_verification.go` |
 | Analysis chat and actions | `backend/internal/analysischat/`, `backend/internal/actions/` |
-| Remediation investigation authority | `backend/internal/remediationinvestigation/`, `backend/internal/remediationpolicy/`, `backend/internal/actionverify/`, `backend/internal/sourceinvestigation/` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
 | Scheduled analysis shadows | `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/agentanalysis/workspace*.go`, `backend/internal/analysispublisher/`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
 | Agent Sandbox analyzer benchmark | `backend/benchmarks/agent_sandbox_analyzer_benchmark_test.go`, `hack/compare-agent-sandbox-analyzer-benchmark.py` |

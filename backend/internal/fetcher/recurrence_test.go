@@ -75,24 +75,11 @@ func TestRecordRecurrenceRetiresMemoryOlderThanTheRetentionWindow(t *testing.T) 
 	dir := t.TempDir()
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	observe(dir, start, signedDetail("job-1", "sig-a", "10"))
-	if err := recurrenceledger.Update(dir, func(ledger *recurrenceledger.Ledger) bool {
-		return ledger.RecordVerdict("sig-a", recurrenceledger.Verdict{
-			State: models.PatternRemediationEnvironmentOrInfrastructure, RecordedAt: start.Format(time.RFC3339),
-		}, start)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if verdict, ok := recurrenceledger.Load(dir).ReusableVerdict("sig-a", start); !ok || verdict.State == "" {
-		t.Fatal("the baseline verdict is not reusable")
-	}
 
 	returned := start.Add(recurrenceledger.RetentionWindow + 24*time.Hour)
 	observe(dir, returned, signedDetail("job-1", "sig-a", "90"))
 
 	entry := recurrenceledger.Load(dir).Entries["sig-a"]
-	if entry.Verdict != nil {
-		t.Fatalf("entry=%+v, want the expired verdict retired", entry)
-	}
 	if entry.FirstSeen != returned.Format(time.RFC3339) || entry.Occurrences != 1 {
 		t.Fatalf("entry=%+v, want the returning cause to start fresh", entry)
 	}
