@@ -23,21 +23,27 @@ type GrepRangeObservation struct {
 
 // GrepCallObservation is content-free telemetry for one grep tool call.
 type GrepCallObservation struct {
-	SelectorID         string                 `json:"selector_id"`
-	PathFilter         string                 `json:"path_filter,omitempty"`
-	PathFilterSupplied bool                   `json:"path_filter_supplied"`
-	PathFilterLength   int                    `json:"path_filter_length,omitempty"`
-	PathFilterRedacted bool                   `json:"path_filter_redacted,omitempty"`
-	ContextLines       int                    `json:"context_lines"`
-	MaxMatches         int                    `json:"max_matches"`
-	MatchCount         int                    `json:"match_count"`
-	FilesAttempted     int                    `json:"files_attempted"`
-	FilesScanned       int                    `json:"files_scanned"`
-	FileReadErrors     int                    `json:"file_read_errors"`
-	FileScanTruncated  bool                   `json:"file_scan_truncated,omitempty"`
-	ResultTruncated    bool                   `json:"result_truncated,omitempty"`
-	Outcome            string                 `json:"outcome"`
-	ReturnedRanges     []GrepRangeObservation `json:"returned_ranges"`
+	SelectorID         string `json:"selector_id"`
+	PathFilter         string `json:"path_filter,omitempty"`
+	PathFilterSupplied bool   `json:"path_filter_supplied"`
+	PathFilterLength   int    `json:"path_filter_length,omitempty"`
+	PathFilterRedacted bool   `json:"path_filter_redacted,omitempty"`
+	ContextLines       int    `json:"context_lines"`
+	MaxMatches         int    `json:"max_matches"`
+	MatchCount         int    `json:"match_count"`
+	FilesAttempted     int    `json:"files_attempted"`
+	FilesScanned       int    `json:"files_scanned"`
+	FileReadErrors     int    `json:"file_read_errors"`
+	// FileScanTruncated reports that scanned content was cut short, so a low
+	// match count does not prove the pattern is absent.
+	FileScanTruncated bool `json:"file_scan_truncated,omitempty"`
+	// ResultTruncated reports that matches beyond the returned set exist.
+	ResultTruncated bool `json:"result_truncated,omitempty"`
+	// RangesTruncated reports that ReturnedRanges was capped by the trace
+	// writer, independently of what the tool returned to the model.
+	RangesTruncated bool                   `json:"ranges_truncated,omitempty"`
+	Outcome         string                 `json:"outcome"`
+	ReturnedRanges  []GrepRangeObservation `json:"returned_ranges"`
 }
 
 // EffectiveGrepLimits resolves the shared grep defaults and maximums.

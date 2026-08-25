@@ -214,11 +214,11 @@ func (b *fakeBrowser) Grep(_ context.Context, p string, re *regexp.Regexp, _, ma
 		matches = matches[:maxMatches]
 	}
 	return &artifacts.GrepResult{
-		FileSize:     int64(len(data)),
-		TotalMatches: total,
-		Matches:      matches,
-		Truncated:    total > len(matches),
-		BytesScanned: int64(len(data)),
+		FileSize:         int64(len(data)),
+		TotalMatches:     total,
+		Matches:          matches,
+		MatchesTruncated: total > len(matches),
+		BytesScanned:     int64(len(data)),
 	}, nil
 }
 

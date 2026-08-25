@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -260,23 +261,52 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	observation.MatchCount = res.TotalMatches
 	observation.FilesScanned = 1
-	observation.ResultTruncated = res.Truncated
+	observation.FileScanTruncated = res.ScanTruncated
+	observation.ResultTruncated = res.MatchesTruncated
 	observation.Outcome = tools.GrepOutcomeZeroMatches
 	if res.TotalMatches > 0 {
 		observation.Outcome = tools.GrepOutcomeMatched
 	}
 	observation.ReturnedRanges = artifactGrepRanges(canonicalArtifactGrepPath(args.Path), res.Matches)
+	payload := map[string]interface{}{
+		"path":              args.Path,
+		"file_size":         res.FileSize,
+		"bytes_scanned":     res.BytesScanned,
+		"total_matches":     res.TotalMatches,
+		"matches":           matches,
+		"matches_truncated": res.MatchesTruncated,
+		"scan_truncated":    res.ScanTruncated,
+	}
+	if res.ScanTruncated {
+		// A scan capped by the caller's remaining artifact budget leaves
+		// nothing for a follow-up read. A non-positive budget means the caller
+		// set no limit, matching how Grep treats maxBytes.
+		budgetLeft := env.RemainingGCSBytes <= 0 || int64(env.RemainingGCSBytes) > res.BytesScanned
+		payload["scan_hint"] = scanTruncationHint(res.BytesScanned, res.FileSize, budgetLeft)
+	}
 	return tools.Result{
 		BytesFetched: int(res.BytesScanned),
-		Payload: map[string]interface{}{
-			"path":          args.Path,
-			"file_size":     res.FileSize,
-			"total_matches": res.TotalMatches,
-			"matches":       matches,
-			"truncated":     res.Truncated,
-		},
-		Observation: observation,
+		Payload:      payload,
+		Observation:  observation,
 	}
+}
+
+// scanTruncationHint states how much of the file grep_artifact actually read
+// and what to do next, so an incomplete scan is not read as absence.
+func scanTruncationHint(bytesScanned, fileSize int64, budgetLeft bool) string {
+	var b strings.Builder
+	if fileSize > 0 {
+		fmt.Fprintf(&b, "Scanned only the first %d of %d bytes of this file; the rest was never read", bytesScanned, fileSize)
+	} else {
+		fmt.Fprintf(&b, "Scanned %d bytes and stopped at the scan limit; more of this file may be unread", bytesScanned)
+	}
+	b.WriteString(", so a zero or low match count does not prove the pattern is absent. ")
+	if budgetLeft {
+		b.WriteString("Use tail_artifact to inspect the end of the file, or grep a smaller, more specific artifact.")
+	} else {
+		b.WriteString("The artifact byte budget is spent, so report this coverage gap instead of concluding the pattern is absent.")
+	}
+	return b.String()
 }
 
 func artifactGrepObservation(path string, contextLines, maxMatches int) tools.GrepCallObservation {
