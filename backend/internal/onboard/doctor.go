@@ -143,7 +143,7 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	default:
 		add("deployment", DoctorFail, "no supported deployment scaffold was found", "Restore .github/workflows/deploy.yml or deploy/values.yaml.")
 	}
-	profile.includePresubmits = profile.includePresubmits || cfg.Source.IncludePresubmits
+	profile.includePresubmits = cfg.Discovery.IncludePresubmits
 
 	checkPullRequestTriage(add, cfg, profile)
 
@@ -191,7 +191,7 @@ type doctorProfile struct {
 
 // checkPullRequestTriage reports how the consumer's settings relate to the pull
 // request triage view. Triage resolves presubmits from the job catalog, so
-// source.include_presubmits neither enables it nor improves its verdicts, while
+// discovery.include_presubmits neither enables it nor improves its verdicts, while
 // enlarging the analyzed job set.
 func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg *project.Config, profile doctorProfile) {
 	if cfg.PullRequests == nil {
@@ -204,7 +204,7 @@ func checkPullRequestTriage(add func(string, DoctorStatus, string, string), cfg 
 	}
 	checkPullRequestComment(add, cfg)
 	if profile.includePresubmits {
-		add("source.include_presubmits", DoctorWarn, "presubmits join the dashboard job set, enlarging each fetch and any enabled analysis",
+		add("discovery.include_presubmits", DoctorWarn, "presubmits join the dashboard job set, enlarging each fetch and any enabled analysis",
 			"Keep this on only if you want presubmit rows in the main dashboard. It is not required for pull request triage, which resolves presubmits from the job catalog either way.")
 	}
 }
@@ -315,15 +315,6 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	// unconditionally, so a deploy job that reaches it reads GitHub
 	// authenticated regardless of the inputs it sets.
 	profile.readToken = readTokenConfigured
-	if value, ok := deploy.With["include-presubmits"]; ok {
-		if dynamicExpression(value) {
-			add("Pages presubmits", DoctorWarn, "include-presubmits is dynamic and cannot be resolved offline", "Confirm the expression enables presubmits when the dashboard depends on them.")
-		} else if parsed, valid := yamlBool(value, false); valid {
-			profile.includePresubmits = parsed
-		} else {
-			add("Pages presubmits", DoctorFail, "include-presubmits is not a boolean", "Set jobs.deploy.with.include-presubmits to true or false.")
-		}
-	}
 	workflowRoot := filepath.Dir(filepath.Dir(filepath.Dir(workflowPath)))
 	configuredProjectDir := "."
 	if value, ok := deploy.With["project_dir"]; ok {
@@ -466,8 +457,7 @@ type doctorKubernetesValues struct {
 		AccessMode    string `yaml:"accessMode"`
 	} `yaml:"persistence"`
 	Fetcher struct {
-		IncludePresubmits bool             `yaml:"includePresubmits"`
-		ExtraEnv          []doctorExtraEnv `yaml:"extraEnv"`
+		ExtraEnv []doctorExtraEnv `yaml:"extraEnv"`
 	} `yaml:"fetcher"`
 	AI struct {
 		Enabled                   *bool  `yaml:"enabled"`
@@ -604,7 +594,6 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		add("Kubernetes values", DoctorFail, err.Error(), "Fix deploy/values.yaml so it is valid YAML.")
 		return
 	}
-	profile.includePresubmits = values.Fetcher.IncludePresubmits
 	profile.readToken = kubernetesReadTokenSource(values)
 	rawExistingClaim := values.Persistence.ExistingClaim
 	rawStorageClass := values.Persistence.StorageClass

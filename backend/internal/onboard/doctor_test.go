@@ -867,42 +867,15 @@ func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
 	}
 }
 
-func TestDoctor_DeploymentPresubmitSettingsReachSweep(t *testing.T) {
-	t.Run("pages", func(t *testing.T) {
-		workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      include-presubmits: true\n", 1)
-		sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}}
-		_ = runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-			files: doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}), sweeper: sweeper,
-		})
-		if !sweeper.include {
-			t.Fatal("Pages include-presubmits did not reach discovery")
-		}
-	})
-	t.Run("kubernetes", func(t *testing.T) {
-		values := "persistence:\n  storageClass: fast\nfetcher:\n  includePresubmits: true\n"
-		sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}}
-		_ = runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-			files: doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}), sweeper: sweeper,
-		})
-		if !sweeper.include {
-			t.Fatal("Kubernetes includePresubmits did not reach discovery")
-		}
-	})
-}
-
 func TestDoctor_PagesRejectsInvalidBooleanInputs(t *testing.T) {
-	for _, key := range []string{"ai", "skip-fetch", "include-presubmits"} {
+	for _, key := range []string{"ai", "skip-fetch"} {
 		t.Run(key, func(t *testing.T) {
 			workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      "+key+": enabled\n", 1)
 			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 				files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
 				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 			})
-			checkName := "Pages AI"
-			if key == "include-presubmits" {
-				checkName = "Pages presubmits"
-			}
-			if !hasDoctorCheck(report, checkName, DoctorFail) {
+			if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
 				t.Fatalf("checks = %+v", report.Checks)
 			}
 		})
@@ -916,7 +889,7 @@ func TestGitHubExpression_RejectsWhitespaceInsideIdentifier(t *testing.T) {
 }
 
 func TestDoctor_ProjectPresubmitsDoNotSkipDeploymentValidation(t *testing.T) {
-	projectYAML := doctorProjectYAML + "source:\n  include_presubmits: true\n"
+	projectYAML := doctorProjectYAML + "discovery:\n  include_presubmits: true\n"
 	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs: {}\n"})
 	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
@@ -984,36 +957,26 @@ func TestDoctor_PullRequestTriageHint(t *testing.T) {
 }
 
 // The warning has to reflect what actually runs, so it reads the value already
-// combined across project.yaml and the deployment profile.
+// resolved from project.yaml.
 func TestDoctor_IncludePresubmitsWarning(t *testing.T) {
 	t.Run("silent by default", func(t *testing.T) {
 		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 			files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow}),
 			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 		})
-		if hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
+		if hasDoctorCheck(report, "discovery.include_presubmits", DoctorWarn) {
 			t.Fatalf("checks = %+v", report.Checks)
 		}
 	})
 	t.Run("project.yaml", func(t *testing.T) {
 		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 			files: doctorFiles(map[string]string{
-				"/consumer/project.yaml":                 doctorProjectYAML + "source:\n  include_presubmits: true\n",
+				"/consumer/project.yaml":                 doctorProjectYAML + "discovery:\n  include_presubmits: true\n",
 				"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow,
 			}),
 			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}},
 		})
-		if !hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
-			t.Fatalf("checks = %+v", report.Checks)
-		}
-	})
-	t.Run("deployment profile", func(t *testing.T) {
-		workflow := strings.Replace(doctorPagesWorkflow, "with:\n", "with:\n      include-presubmits: true\n", 1)
-		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-			files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
-			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}},
-		})
-		if !hasDoctorCheck(report, "source.include_presubmits", DoctorWarn) {
+		if !hasDoctorCheck(report, "discovery.include_presubmits", DoctorWarn) {
 			t.Fatalf("checks = %+v", report.Checks)
 		}
 	})

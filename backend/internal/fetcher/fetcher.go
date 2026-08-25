@@ -89,8 +89,7 @@ type Options struct {
 	ShadowAnalysis  ShadowAnalysisOptions
 	CausalCritic    CausalCriticOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
-	// It is combined with cfg.Source.IncludePresubmits, so either source can
-	// enable presubmits.
+	// The project discovery policy and this direct CLI override are combined.
 	IncludePresubmits bool
 	EnableAI          bool
 	AIMaxOutputTokens int
@@ -247,7 +246,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiToken:           aiToken,
 		aiProject:         aiProject,
 		usageRecorder:     usageRecorder,
-		includePresubmits: opts.IncludePresubmits || cfg.Source.IncludePresubmits,
+		includePresubmits: opts.IncludePresubmits || cfg.Discovery.IncludePresubmits,
 	}
 	p.warnPullRequestTokenMissing()
 	p.warnCommentCredentialsMissing()

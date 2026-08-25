@@ -505,7 +505,7 @@ func TestWriteManifest(t *testing.T) {
 func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &project.Config{
-		ID: "test", Name: "Test", Source: project.Source{}, TestGrid: project.TestGrid{Dashboard: "test"},
+		ID: "test", Name: "Test", TestGrid: project.TestGrid{Dashboard: "test"},
 		Storage:  project.Storage{Provider: "gcs", Bucket: "bucket"},
 		Branding: project.Branding{Title: "Test", BasePath: "/", SiteURL: "https://example.invalid", SourceRepo: project.SourceRepo{Owner: "branding", Name: "repo"}},
 		AI: &project.AI{

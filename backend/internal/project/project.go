@@ -33,7 +33,6 @@ type Config struct {
 	ID                   string         `yaml:"id"         json:"id"`
 	Name                 string         `yaml:"name"       json:"name"`
 	ShortName            string         `yaml:"short_name" json:"short_name,omitempty"`
-	Source               Source         `yaml:"source"     json:"source"`
 	TestGrid             TestGrid       `yaml:"testgrid,omitempty"   json:"testgrid,omitempty"`
 	Storage              Storage        `yaml:"storage"    json:"storage"`
 	Discovery            Discovery      `yaml:"discovery,omitempty"  json:"discovery,omitempty"`
@@ -100,13 +99,6 @@ func CategorizeJob(name string, rules []CategoryRule) string {
 		}
 	}
 	return "other"
-}
-
-// Source controls fetcher behavior for kubernetes/test-infra job discovery.
-// Discovery lists YAML under config/jobs/ at one test-infra commit, then keeps
-// jobs whose testgrid-dashboards annotation contains cfg.TestGrid.Dashboard.
-type Source struct {
-	IncludePresubmits bool `yaml:"include_presubmits" json:"include_presubmits,omitempty"`
 }
 
 // TestGrid identifies the testgrid dashboard that owns the project's jobs.
@@ -193,6 +185,8 @@ type Storage struct {
 //	                              under logs/ and pr-logs/directory/.
 type Discovery struct {
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	// IncludePresubmits adds presubmit jobs to the dashboard job set.
+	IncludePresubmits bool `yaml:"include_presubmits,omitempty" json:"include_presubmits,omitempty"`
 	// TestInfraRevision optionally pins TestGrid discovery to one exact
 	// kubernetes/test-infra commit. Empty follows the current master revision.
 	TestInfraRevision string `yaml:"test_infra_revision,omitempty" json:"test_infra_revision,omitempty"`

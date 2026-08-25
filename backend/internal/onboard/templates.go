@@ -60,15 +60,21 @@ name: {{quote .Name}}
 # Jobs advertising this testgrid dashboard are discovered automatically.
 testgrid:
   dashboard: {{quote .DiscoveryTestGrid}}
-{{else}}
-# Jobs are discovered by listing the storage bucket's own job indexes.
+{{end}}{{if or .BucketDiscovery .IncludePresubmits}}
 discovery:
+{{- if .BucketDiscovery}}
+  # Jobs are discovered by listing the storage bucket's own job indexes.
   source: bucket
 {{- if .ExactJobs}}
   exact_jobs:
 {{- range .ExactJobs}}
     - {{quote .}}
 {{- end}}
+{{- end}}
+{{- end}}
+{{- if .IncludePresubmits}}
+  # Include presubmit jobs in the dashboard job set.
+  include_presubmits: true
 {{- end}}
 {{end}}
 # Where this project's Prow build artifacts live.
@@ -98,11 +104,7 @@ branding:
     owner: {{quote .SourceOwner}}
     name: {{quote .SourceName}}
 
-{{if .IncludePresubmits}}
-# This project's dashboard includes presubmit jobs.
-source:
-  include_presubmits: true
-{{end}}`))
+`))
 
 var deployYAMLTmpl = template.Must(template.New("deploy.yml").Funcs(yamlTemplateFuncs).Parse(
 	`name: Deploy Dashboard

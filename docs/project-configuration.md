@@ -158,7 +158,7 @@ through its direct `pr-logs/directory/<job>/` index.
 Periodics are included by default. Add presubmits with:
 
 ```yaml
-source:
+discovery:
   include_presubmits: true
 ```
 
@@ -207,7 +207,7 @@ triage degrades to intermittent 403s while the dashboard keeps publishing, so
 the only symptom is a pull request view that stops updating. `aster onboard
 doctor` reports the same gap as a warning.
 
-`source.include_presubmits` is not a prerequisite for pull request triage, and
+`discovery.include_presubmits` is not a prerequisite for pull request triage, and
 turning it on does not improve attribution. Triage always resolves presubmits
 from the job catalog, and attribution reads base-branch history only, so a
 verdict is the same either way. The toggle only adds every presubmit to the main
