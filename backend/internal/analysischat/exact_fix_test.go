@@ -24,8 +24,21 @@ func exactFixService(t *testing.T, reply Reply, runnerErr error) (*Service, Sess
 
 func exactFixServiceRunner(t *testing.T, reply Reply, runnerErr error) (*Service, SessionView, string, *fakeRunner) {
 	t.Helper()
+	return exactFixServiceRunnerWithTest(t, reply, runnerErr, analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
+}
+
+// exactFixServiceWithTest builds the exact-JUnit fixture around one caller-supplied
+// analyzed test, so a case can vary the published analysis it starts from.
+func exactFixServiceWithTest(t *testing.T, reply Reply, analyzed models.TestCase) (*Service, SessionView, string) {
+	t.Helper()
+	service, session, requestID, _ := exactFixServiceRunnerWithTest(t, reply, nil, analyzed)
+	return service, session, requestID
+}
+
+func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, analyzed models.TestCase) (*Service, SessionView, string, *fakeRunner) {
+	t.Helper()
 	dir := t.TempDir()
-	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
+	detail := testDetail(analyzed)
 	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: reply, err: runnerErr}
@@ -529,5 +542,96 @@ func TestConversationCitationsBoundsTotalQuoteBytes(t *testing.T) {
 	// The selected answer's own evidence must survive the budget.
 	if len(got) == 0 || got[0].Path != "log-7.txt" {
 		t.Fatalf("newest evidence was dropped: %+v", got)
+	}
+}
+
+// TestServiceTestFixCandidateAcceptsUsablePreliminaryAnalysis pins that a
+// preliminary original analysis no longer blocks a chat answer that carries its
+// own validated evidence. Chat exists to improve such an analysis, so requiring
+// the original to be grounded made the improvement unreachable. An analysis
+// whose causal claim the semantic judge left contested stays ineligible.
+func TestServiceTestFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.T) {
+	reply := Reply{
+		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
+		Citations:        []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+		ProposedRevision: &Revision{RootCause: "The terminal branch omits Ready.", SuggestedFix: "Record Ready before returning."},
+	}
+	for _, tc := range []struct {
+		name     string
+		warnings []string
+		wantErr  bool
+	}{
+		{name: "remediation warning", warnings: []string{models.AnalysisWarningRemediation}},
+		{name: "artifact grounding warning", warnings: []string{models.AnalysisWarningArtifactGrounding}},
+		{name: "unresolved semantic objection", warnings: []string{models.AnalysisWarningSemanticReview}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			analyzed := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
+			analyzed.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
+			analyzed.AIAnalysis.DispositionWarnings = tc.warnings
+			service, session, requestID := exactFixServiceWithTest(t, reply, analyzed)
+			_, err := service.TestFixCandidate(session.ID, "Alice", requestID)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidRequest) {
+					t.Fatalf("contested analysis error = %v, want ErrInvalidRequest", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("usable preliminary analysis was rejected: %v", err)
+			}
+		})
+	}
+}
+
+// TestPersistedResolvedAnalysisRetainsDispositionWarnings pins that the session
+// snapshot keeps the warnings qualifying a preliminary disposition. Dropping
+// them made a contested diagnosis look usable to every check reading the
+// snapshot, while a fresh resolve disagreed.
+func TestPersistedResolvedAnalysisRetainsDispositionWarnings(t *testing.T) {
+	resolved := resolvedAnalysis{
+		testCase: models.TestCase{
+			Name: "TestCluster", Status: "failed",
+			AIAnalysis: &models.AIAnalysis{
+				GeneratedAt: "2026-08-13T01:00:00Z", RootCause: "cause", Severity: "High",
+				Disposition:         models.AnalysisDispositionPreliminary,
+				DispositionWarnings: []string{models.AnalysisWarningSemanticReview},
+			},
+		},
+	}
+	persisted := persistResolved(resolved, sourceinvestigation.Repository{Owner: "example", Name: "repo"})
+	analysis := persisted.TestCase.AIAnalysis
+	if analysis == nil || !slices.Equal(analysis.DispositionWarnings, []string{models.AnalysisWarningSemanticReview}) {
+		t.Fatalf("persisted analysis = %+v, want the semantic review warning retained", analysis)
+	}
+	if models.AnalysisHasUsableDiagnosis(analysis) {
+		t.Fatal("a contested diagnosis survived persistence as usable")
+	}
+}
+
+// TestServiceTestFixCandidateRejectsNewlyContestedAnalysis covers the fresh
+// re-resolve. Disposition warnings are excluded from the analysis content hash,
+// so a diagnosis that becomes contested after the conversation started is caught
+// only by the usable-diagnosis check on the re-resolved analysis.
+func TestServiceTestFixCandidateRejectsNewlyContestedAnalysis(t *testing.T) {
+	usable := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
+	usable.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
+	usable.AIAnalysis.DispositionWarnings = []string{models.AnalysisWarningRemediation}
+	service, session, requestID := exactFixServiceWithTest(t, Reply{
+		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
+		Citations: []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+	}, usable)
+	if _, err := service.TestFixCandidate(session.ID, "Alice", requestID); err != nil {
+		t.Fatalf("usable preliminary analysis was rejected: %v", err)
+	}
+
+	contested := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
+	contested.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
+	contested.AIAnalysis.DispositionWarnings = []string{models.AnalysisWarningSemanticReview}
+	detail := testDetail(contested)
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+	writeJobDetail(t, service.dataDir, detail)
+	if _, err := service.TestFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
+		t.Fatalf("newly contested analysis error = %v, want ErrAnalysisChanged", err)
 	}
 }

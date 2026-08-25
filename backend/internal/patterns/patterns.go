@@ -393,6 +393,9 @@ func GatherFailures(d *models.JobDetail) []ai.PatternFailure {
 }
 
 // RepresentativeAnalyzedFailure returns the exact failure used for causal correlation.
+// Correlation groups diagnoses rather than authorizing writes, so it accepts a
+// preliminary analysis whose root cause is still usable. Causal-group patterns
+// remain action-ineligible through models.PatternAllowsActions.
 func RepresentativeAnalyzedFailure(run *models.BuildResult) *models.TestCase {
 	if run == nil {
 		return nil
@@ -400,7 +403,7 @@ func RepresentativeAnalyzedFailure(run *models.BuildResult) *models.TestCase {
 	var representative *models.TestCase
 	for index := range run.TestCases {
 		testCase := &run.TestCases[index]
-		if testCase.Status != "failed" || testCase.AIAnalysis == nil || !ai.IsGroundedAnalysis(testCase.AIAnalysis) {
+		if testCase.Status != "failed" || !models.AnalysisHasUsableDiagnosis(testCase.AIAnalysis) {
 			continue
 		}
 		if representative == nil || models.SeverityRank(testCase.AIAnalysis.Severity) > models.SeverityRank(representative.AIAnalysis.Severity) {
