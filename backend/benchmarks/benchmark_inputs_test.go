@@ -565,8 +565,8 @@ func writeBenchmarkConsumer(t *testing.T, dir, prompt string, recipe bool) {
 	t.Helper()
 	projectData := `id: benchmark
 name: Benchmark
-testgrid:
-  dashboard: benchmark
+discovery:
+  testgrid_dashboard: benchmark
 storage:
   provider: gcs
   bucket: kubernetes-ci-logs

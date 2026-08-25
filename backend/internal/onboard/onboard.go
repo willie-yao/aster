@@ -299,7 +299,7 @@ func sweepConfig(opts Options) *project.Config {
 		Storage: project.Storage{Provider: provider(opts), Bucket: bucket(opts), Base: opts.GCSWebBase},
 	}
 	if opts.TestGrid != "" {
-		cfg.TestGrid = project.TestGrid{Dashboard: opts.TestGrid}
+		cfg.Discovery.TestGridDashboard = opts.TestGrid
 	} else {
 		cfg.Discovery = project.Discovery{Source: project.DiscoveryBucket, ExactJobs: append([]string(nil), opts.ExactJobs...)}
 	}

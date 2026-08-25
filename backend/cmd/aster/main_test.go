@@ -13,8 +13,8 @@ func TestGitOpsCLI(t *testing.T) {
 	dir := t.TempDir()
 	writeCLITestFile(t, filepath.Join(dir, "project.yaml"), `id: sample
 name: Sample
-testgrid:
-  dashboard: sample
+discovery:
+  testgrid_dashboard: sample
 storage:
   provider: gcs
   bucket: example-bucket

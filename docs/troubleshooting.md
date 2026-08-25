@@ -125,7 +125,7 @@ found no matching jobs, or every discovered job failed while loading build data.
    python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
    ```
 
-4. If the logs contain no job fetch errors, confirm `testgrid.dashboard` exactly
+4. If the logs contain no job fetch errors, confirm `discovery.testgrid_dashboard` exactly
    matches the jobs' `testgrid-dashboards` annotation.
 5. For broad bucket discovery, remove `discovery.job_filters` temporarily and
    confirm the storage provider, bucket, and gcsweb base. For

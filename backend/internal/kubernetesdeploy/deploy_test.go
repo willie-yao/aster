@@ -367,8 +367,8 @@ func containsPair(values []string, first, second string) bool {
 
 const minimalProject = `id: test
 name: Test
-testgrid:
-  dashboard: test
+discovery:
+  testgrid_dashboard: test
 storage:
   provider: local
   base: /tmp

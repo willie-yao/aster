@@ -154,7 +154,7 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		action := "Verify the TestGrid dashboard or artifact bucket, GitHub access, and network connectivity, then rerun doctor."
 		add("Prow discovery", DoctorFail, err.Error(), action)
 	} else if len(sweep.Jobs) == 0 {
-		add("Prow discovery", DoctorFail, "the real discovery sweep found zero jobs", "Correct testgrid.dashboard or discovery/storage settings until at least one job is found.")
+		add("Prow discovery", DoctorFail, "the real discovery sweep found zero jobs", "Correct discovery.testgrid_dashboard or discovery/storage settings until at least one job is found.")
 	} else {
 		add("Prow discovery", DoctorPass, fmt.Sprintf("the real discovery sweep found %d job(s)", len(sweep.Jobs)), "")
 	}

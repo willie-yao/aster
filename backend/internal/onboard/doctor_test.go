@@ -37,8 +37,8 @@ func (f *doctorFakeSweeper) Discover(_ context.Context, _ *project.Config, inclu
 
 const doctorProjectYAML = `id: project
 name: Project
-testgrid:
-  dashboard: dashboard
+discovery:
+  testgrid_dashboard: dashboard
 storage:
   provider: gcs
   bucket: bucket
@@ -889,7 +889,7 @@ func TestGitHubExpression_RejectsWhitespaceInsideIdentifier(t *testing.T) {
 }
 
 func TestDoctor_ProjectPresubmitsDoNotSkipDeploymentValidation(t *testing.T) {
-	projectYAML := doctorProjectYAML + "discovery:\n  include_presubmits: true\n"
+	projectYAML := strings.Replace(doctorProjectYAML, "  testgrid_dashboard: dashboard\n", "  testgrid_dashboard: dashboard\n  include_presubmits: true\n", 1)
 	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": "jobs: {}\n"})
 	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
@@ -971,7 +971,7 @@ func TestDoctor_IncludePresubmitsWarning(t *testing.T) {
 	t.Run("project.yaml", func(t *testing.T) {
 		report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 			files: doctorFiles(map[string]string{
-				"/consumer/project.yaml":                 doctorProjectYAML + "discovery:\n  include_presubmits: true\n",
+				"/consumer/project.yaml":                 strings.Replace(doctorProjectYAML, "  testgrid_dashboard: dashboard\n", "  testgrid_dashboard: dashboard\n  include_presubmits: true\n", 1),
 				"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow,
 			}),
 			sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "pull-job", JobType: models.JobTypePresubmit}}},

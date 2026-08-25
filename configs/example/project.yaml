@@ -12,8 +12,8 @@ id: example
 name: "Example Kubernetes Project"
 
 # Which testgrid dashboard's jobs to show (the default discovery source).
-testgrid:
-  dashboard: "sig-foo-your-project"
+discovery:
+  testgrid_dashboard: "sig-foo-your-project"
 
 # Where the project's Prow build artifacts live. GCS is the default provider.
 # See docs/project-configuration.md for gcsweb and local providers.
