@@ -603,6 +603,7 @@ export function AnalysisChat({
   const [resetting, setResetting] = useState(false);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const preparedLookupIdentityRef = useRef("");
+  const createPreparedSessionRef = useRef<() => void>(() => {});
   const preparedRetryTimerRef = useRef<number | null>(null);
   const [preparedRetryNonce, setPreparedRetryNonce] = useState(0);
   const restoreControllerRef = useRef<AbortController | null>(null);
@@ -849,6 +850,12 @@ export function AnalysisChat({
     correctionControllerRef.current?.abort();
     resetControllerRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (features.analysis_chat && causeScope && expanded && authStatus === "authenticated" && !session && !restoring && preparedLookupIdentityRef.current !== identity) {
+      createPreparedSessionRef.current();
+    }
+  }, [authStatus, causeScope, expanded, features.analysis_chat, identity, preparedRetryNonce, restoring, session]);
 
   if (!features.analysis_chat) return null;
 
@@ -1226,11 +1233,7 @@ export function AnalysisChat({
     }
   }
 
-  useEffect(() => {
-    if (causeScope && expanded && authStatus === "authenticated" && !session && !restoring && preparedLookupIdentityRef.current !== identity) {
-      void createPreparedSession();
-    }
-  }, [authStatus, causeScope, expanded, preparedRetryNonce, restoring, session]);
+  createPreparedSessionRef.current = () => { void createPreparedSession(); };
 
   function toggleChat() {
     if (authStatus === "anonymous") {
