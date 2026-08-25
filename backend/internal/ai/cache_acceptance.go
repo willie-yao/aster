@@ -233,7 +233,7 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 		MinToolCalls:        opts.MinToolCalls,
 		MinGCSBytes:         opts.MinGCSBytes,
 		ConsecutiveFailures: consecutiveFailures,
-		CritiquePolicy:      effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries),
+		CritiquePolicy:      effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy),
 		SkillSetHash:        skillSetHash,
 		PromptHash:          promptHash,
 	}
@@ -245,10 +245,7 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 }
 
 func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePolicy) CacheRejectionReason {
-	if policy == "" {
-		policy = CritiqueCachePolicyStrict
-	}
-	switch policy {
+	switch effectiveCritiqueCachePolicy(policy) {
 	case CritiqueCachePolicyAdvisory:
 		return CacheAccepted
 	case CritiqueCachePolicyHard:

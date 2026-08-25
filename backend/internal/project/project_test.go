@@ -626,8 +626,9 @@ func TestAgenticCritiqueEffectiveCachePolicy(t *testing.T) {
 		in   AgenticCritique
 		want CritiqueCachePolicy
 	}{
-		{name: "legacy zero is advisory", in: AgenticCritique{MaxRetries: &zero}, want: CritiqueCachePolicyAdvisory},
-		{name: "legacy positive is strict", in: AgenticCritique{MaxRetries: &one}, want: CritiqueCachePolicyStrict},
+		{name: "omitted defaults to hard", in: AgenticCritique{MaxRetries: &zero}, want: CritiqueCachePolicyHard},
+		{name: "retries do not change the default", in: AgenticCritique{MaxRetries: &one}, want: CritiqueCachePolicyHard},
+		{name: "explicit advisory ignores retries", in: AgenticCritique{MaxRetries: &one, CachePolicy: CritiqueCachePolicyAdvisory}, want: CritiqueCachePolicyAdvisory},
 		{name: "explicit hard ignores retries", in: AgenticCritique{MaxRetries: &zero, CachePolicy: CritiqueCachePolicyHard}, want: CritiqueCachePolicyHard},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

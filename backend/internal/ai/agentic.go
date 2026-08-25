@@ -1594,7 +1594,7 @@ agentLoop:
 										}
 									}
 									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
-									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy, in.Opts.CritiqueMaxRetries)
+									policy := effectiveCritiqueCachePolicy(in.Opts.CritiqueCachePolicy)
 									decision := c.reviewSemanticRevision(loopCtx, state, prior, result.Findings, semanticCandidate, headroom, policy)
 									if !decision.accepted && semanticRevisionRejected(decision, semanticCandidate, policy) {
 										state.judgeRevisionRejected = true
@@ -1748,7 +1748,7 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
 		}
 	}
-	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
+	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy)
 	newlyPassed := out.Passed && !state.critiquePassed
 	state.setCritiqueOutcome(out)
 	accepted := critiqueAcceptedForPolicy(out, policy)
@@ -2038,7 +2038,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if out.Passed {
 		recordTrace(ctx, critiqueTraceEvent("passed", out))
 		if opts.SemanticJudge && !state.judgeRan {
-			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries))
+			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
 		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 		return state.bestDraft.parsed
@@ -2179,7 +2179,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 	state.critiquePassed = state.bestDraft.quality.Passed
 	if state.critiquePassed && opts.SemanticJudge && !state.judgeRan {
 		selected := state.bestDraft
-		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries))
+		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
@@ -2410,7 +2410,7 @@ func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAc
 }
 
 func (s *agentState) considerDraftDecision(candidate *critiqueDraftCandidate, semanticAccepted bool) draftReplacementDecision {
-	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy, s.opts.CritiqueMaxRetries)
+	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy)
 	return s.considerDraftDecisionForPolicy(candidate, semanticAccepted, policy)
 }
 
@@ -2424,7 +2424,7 @@ func (s *agentState) considerDraftDecisionForPolicy(candidate *critiqueDraftCand
 }
 
 func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy, s.opts.CritiqueMaxRetries)
+	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy)
 	return s.considerFallbackDraftForPolicy(candidate, semanticAccepted, policy)
 }
 
@@ -2981,7 +2981,7 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
 		JudgeRevisionRejected: state.judgeRevisionRejected,
 	}
-	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy, opts.CritiqueMaxRetries)
+	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy)
 	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {
 		return reason
 	}

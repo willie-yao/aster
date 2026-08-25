@@ -132,14 +132,12 @@ func (o critiqueOutcome) RuleIDs() []CritiqueRuleID {
 	return out
 }
 
-func effectiveCritiqueCachePolicy(policy CritiqueCachePolicy, maxRetries int) CritiqueCachePolicy {
+// effectiveCritiqueCachePolicy resolves an explicit policy, defaulting to hard.
+func effectiveCritiqueCachePolicy(policy CritiqueCachePolicy) CritiqueCachePolicy {
 	if policy != "" {
 		return policy
 	}
-	if maxRetries > 0 {
-		return CritiqueCachePolicyStrict
-	}
-	return CritiqueCachePolicyAdvisory
+	return CritiqueCachePolicyHard
 }
 
 func critiqueRuleSeverity(rule CritiqueRuleID) CritiqueRuleSeverity {

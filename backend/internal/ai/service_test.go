@@ -397,11 +397,11 @@ func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 	}
 }
 
-func TestService_ZeroCritiqueRetriesMakesCritiqueAdvisory(t *testing.T) {
+func TestService_CritiqueCachePolicyControlsReuse(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	s := &Service{
 		client: client, systemPrompt: "sys",
-		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueMaxRetries: 0},
+		agenticOpts: AgenticOptions{MinToolCalls: 2, MinGCSBytes: 50_000, CritiqueCachePolicy: CritiqueCachePolicyAdvisory},
 	}
 	base := models.AIAnalysis{
 		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 50_000,
@@ -427,12 +427,35 @@ func TestService_ZeroCritiqueRetriesMakesCritiqueAdvisory(t *testing.T) {
 			if got := s.shouldReanalyze(reusablePublishedTestCase(&analysis)); got != tc.wantReanalysis {
 				t.Fatalf("shouldReanalyze = %t, want %t", got, tc.wantReanalysis)
 			}
-			s.agenticOpts.CritiqueMaxRetries = 1
+			s.agenticOpts.CritiqueCachePolicy = CritiqueCachePolicyHard
 			if !s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
-				t.Fatal("enforced critique accepted advisory analysis")
+				t.Fatal("hard policy accepted an unclassified critique result")
 			}
-			s.agenticOpts.CritiqueMaxRetries = 0
+			s.agenticOpts.CritiqueCachePolicy = CritiqueCachePolicyAdvisory
 		})
+	}
+}
+
+// TestService_CritiqueRetriesDoNotChangeCacheEnforcement pins the decoupling:
+// repair attempts are independent of which findings block reuse.
+func TestService_CritiqueRetriesDoNotChangeCacheEnforcement(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	analysis := models.AIAnalysis{
+		Mode: AgenticMode, ToolCalls: 2, GCSBytes: 50_000,
+		PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
+		CritiqueVersion: currentCritiqueVersion,
+	}
+	for _, retries := range []int{0, 1, 3} {
+		s := &Service{
+			client: client, systemPrompt: "sys",
+			agenticOpts: AgenticOptions{
+				MinToolCalls: 2, MinGCSBytes: 50_000,
+				CritiqueMaxRetries: retries, CritiqueCachePolicy: CritiqueCachePolicyAdvisory,
+			},
+		}
+		if s.shouldReanalyze(reusablePublishedTestCase(&analysis)) {
+			t.Fatalf("advisory policy with %d retries rejected a reusable analysis", retries)
+		}
 	}
 }
 
