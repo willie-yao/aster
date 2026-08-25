@@ -325,7 +325,7 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 	}
 	_, attempt, err := c.runStructuredAttempt(ctx, request, StructuredAttemptForcedFunction, strictValidate)
 	if err == nil {
-		// The single forced-function path historically recorded status only for provider errors.
+		// Single forced-function attempts expose provider status only for provider errors.
 		attempt.ProviderStatus = 0
 	}
 	metadata := appendStructuredAttempt(ctx, StructuredCompletionMetadata{}, attempt)
