@@ -325,11 +325,11 @@ data-serving path.
 | Fetcher entry and runtime wiring | `backend/internal/fetcher/analysis.go`, `backend/internal/analysisruntime/runtime.go` |
 | Per-failure contract | `backend/internal/ai/runner.go`, `backend/internal/ai/service.go` |
 | Provider wire format | `backend/internal/ai/transport.go`, `backend/internal/ai/transport_chat.go`, `backend/internal/ai/transport_responses.go` |
-| Authoritative provider loop | `backend/internal/ai/agent_loop.go`, `backend/internal/ai/agentic.go` |
+| Authoritative provider loop and finalization | `backend/internal/ai/agent_loop.go`, `backend/internal/ai/agentic.go`, `backend/internal/ai/finalization.go` |
 | Context and agentic tool execution | `backend/internal/ai/context.go`, `backend/internal/ai/tool_execution.go`, `backend/internal/ai/tools/` |
 | Shared downstream tool and structured execution | `backend/internal/ai/toolloopcore.go`, `backend/internal/ai/structured.go` |
 | Prompt composition | `backend/internal/ai/compose.go`, `backend/internal/ai/baseprompt.go`, `backend/internal/ai/responseformat.go`, `backend/internal/ai/modules/universal/` |
-| Evidence planning and skill coverage | `backend/internal/ai/evidenceplan/`, `backend/internal/ai/skills/`, `backend/internal/ai/agentic.go` |
+| Evidence planning, coverage, and repair | `backend/internal/ai/evidenceplan/`, `backend/internal/ai/skills/`, `backend/internal/ai/evidence_repair.go` |
 | Deterministic critique | `backend/internal/ai/critique.go`, `backend/internal/ai/critique_rules.go` |
 | Semantic review and draft selection | `backend/internal/ai/semantic.go`, `backend/internal/ai/draft_selection.go` |
 | Cache identity and acceptance | `backend/internal/ai/service.go`, `backend/internal/ai/cache.go`, `backend/internal/ai/cache_acceptance.go` |
