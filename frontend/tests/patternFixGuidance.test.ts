@@ -342,55 +342,87 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
   assert.match(chat, /Use this finding in a fix proposal/);
 });
 
-test("pattern dismissal is reachable on the causal-group results the engine publishes", () => {
+test("pattern resolution is reachable on the causal-group results the engine publishes", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const actions = source("src/components/FailureActions.tsx");
 
   // The regression: every published pattern carries a recurrence_classification,
   // so gating the control on !analysisOnly hid it everywhere.
-  assert.match(banner, /const dismissible = patternDismissible\(pattern, refreshStatus\)/);
+  assert.match(banner, /patternResolvable\(pattern, refreshStatus\)/);
   assert.match(banner, /\{showFailureActions && pattern\.id && \(/);
   assert.doesNotMatch(banner, /!analysisOnly[^\n]*<FailureActions/);
-  // The dismissed state has to render for the same patterns it can be set on.
+  // The resolved state has to render for the same patterns it can be set on.
   assert.match(banner, /const resolvedEntry = pattern\.id \? resolved\.resolved\[pattern\.id\] : undefined/);
-  // A dismissed pattern keeps its Restore control even once a fresh dismissal
+  // A resolved pattern keeps its Reopen control even once a fresh resolution
   // would be refused.
-  assert.match(banner, /const showFailureActions = draftable \|\| dismissible \|\| Boolean\(resolvedEntry\)/);
-  assert.match(banner, /dismissible=\{dismissible\}/);
+  assert.match(banner, /draftable \|\| canResolve \|\| Boolean\(resolvedEntry\)/);
+  assert.match(banner, /canResolve=\{canResolve\}/);
+  // Per-cause resolution replaces the pattern-level control only where it
+  // covers every cause, so a pattern with an unsigned cause keeps the fallback.
+  assert.match(banner, /const causeResolutionCovers = patternResolutionCovered\(pattern, refreshStatus\)/);
+  assert.match(banner, /patternResolvable\(pattern, refreshStatus\) && !causeResolutionCovers/);
 
-  // Only drafting is suppressed when draftable is false; dismissal is not.
+  // Only drafting is suppressed when draftable is false; resolution is not.
   assert.match(actions, /const drafting = draftable && features\.action_requests/);
   assert.match(actions, /\{drafting && canStartActions && \(/);
   assert.match(actions, /\{draftable && !eligibilityLoading && eligibility/);
 });
 
-test("restoring a pattern never falls back to a dismissal the server would refuse", () => {
+// A cause is acknowledged on its own, so its control has to live in the cause
+// card and key on the signature the server records the resolution under.
+test("per-cause resolution is offered per causal group and keyed by signature", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+  const cause = source("src/components/CauseResolution.tsx");
+  const eligibility = source("src/lib/actionEligibility.ts");
+
+  assert.match(banner, /<CauseResolution\s+signature=\{group\.signature\}/);
+  assert.match(banner, /resolvedEntry=\{causeResolutions\[index\]\}/);
+  assert.match(banner, /resolvable=\{causeResolvableFlags\[index\]\}/);
+  assert.match(banner, /group\.signature \? resolved\.causes\[group\.signature\] : undefined/);
+  // An unsigned group has no durable key, so it is never offered the control.
+  assert.match(eligibility, /group\.signature\?\.trim\(\) &&/);
+  // Reopening stays available once a fresh resolution would be refused.
+  assert.match(cause, /\(!resolvable && !resolved\)/);
+  // An anonymous viewer needs the pattern-level block for its sign-in prompt
+  // wherever a signed-in one would see per-cause controls. A cause that is
+  // already resolved still offers Reopen after it stops qualifying for a fresh
+  // resolution, so covering only the resolvable ones would drop the prompt.
+  assert.match(banner, /causeResolutionCovers \|\| causeResolutions\.some\(Boolean\)/);
+  assert.match(banner, /authStatus === "anonymous" && causeControlsPresent/);
+  // One owner holds resolved state, as with the pattern scope.
+  assert.doesNotMatch(cause, /useResolved/);
+});
+
+test("reopening a pattern never falls back to a resolution the server would refuse", () => {
   const actions = source("src/components/FailureActions.tsx");
   const banner = source("src/components/PatternBanner.tsx");
 
-  // Restore is gated on resolvable, but starting a NEW dismissal additionally
-  // needs dismissible, so a resolved pattern that no longer qualifies for a
-  // fresh dismissal can be restored without ever offering Dismiss.
+  // Reopen is gated on resolvable, but starting a NEW resolution additionally
+  // needs canResolve, so a resolved pattern that no longer qualifies for a
+  // fresh resolution can be reopened without ever offering Resolve.
   assert.match(actions, /\{resolvable && \(isResolved \?/);
-  assert.match(actions, /\) : dismissible && \(/);
-  // A dismissal write outlives the pattern it started on, so a late response
+  assert.match(actions, /\) : canResolve && \(/);
+  // A resolution write outlives the pattern it started on, so a late response
   // must not land on whichever failure the user navigated to.
   assert.match(actions, /const startedFailureID = failureID;/);
   assert.match(actions, /if \(activeFailureID\.current !== startedFailureID\) return;/);
-  assert.match(actions, /open=\{resolvable && dismissible && resolveOpen\}/);
+  assert.match(actions, /open=\{resolvable && canResolve && resolveOpen\}/);
   // One owner holds resolved state. Two independent useResolved() copies could
-  // diverge and pair a "Dismissed" chip with a "Dismiss pattern" button.
+  // diverge and pair a "Resolved" chip with a "Resolve pattern" button.
   assert.doesNotMatch(actions, /useResolved/);
   assert.match(banner, /isResolved=\{Boolean\(resolvedEntry\)\}/);
   assert.match(banner, /onResolvedChange=\{refetchResolved\}/);
 
-  // The read that follows a dismissal write keeps prior state and retries, so a
-  // transient failure cannot leave a stale control until remount.
+  // The read that follows a resolution write keeps prior state and retries, so
+  // a transient failure cannot leave a stale control until remount.
   const data = source("src/hooks/useData.ts");
-  assert.match(data, /if \(r\.status === 404\) return \{ resolved: \{\} \} as ResolvedState;/);
+  assert.match(data, /if \(r\.status === 404\) return emptyResolved\(\);/);
   assert.match(data, /if \(!r\.ok\) throw new Error\(`resolved\.json: \$\{r\.status\}`\);/);
   assert.match(data, /timer = window\.setTimeout\(load, Math\.min\(8000/);
   assert.match(data, /const resolvedReadAttempts = \d+;/);
+  // causes is omitted when empty, so it is filled in before any consumer reads
+  // it and none of them has to guard the lookup.
+  assert.match(data, /causes: d\.causes \?\? \{\}/);
 });
 
 test("guidance keeps a contained mobile action and points to the nearby test ledger", () => {

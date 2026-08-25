@@ -34,13 +34,17 @@ import (
 // ActionRunner performs on-demand actions for a failure id using the admin's
 // token. Actions are two-phase: a preview renders the exact issue or PR without
 // posting, then Confirm posts the previewed draft. Resolve/Unresolve hide or
-// restore a systemic pattern in the published view. actions.Service satisfies it.
+// restore a whole systemic pattern in the published view, and
+// ResolveCause/UnresolveCause do the same for one cause of a pattern that has
+// several. actions.Service satisfies it.
 type ActionRunner interface {
 	PreviewIssue(ctx context.Context, failureID, owner, writeToken, instruction string) (actions.PreviewResult, error)
 	PreviewFix(ctx context.Context, failureID, owner, writeToken, instruction string) (actions.PreviewResult, error)
 	Confirm(ctx context.Context, token, owner, writeToken string) (string, error)
 	Resolve(failureID, login, note string) error
 	Unresolve(failureID string) error
+	ResolveCause(signature, login, note string) error
+	UnresolveCause(signature string) error
 }
 
 // ActionRequestRunner persists asynchronous drafts for later authenticated review.
@@ -354,6 +358,10 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(resolveHandler(opts.Actions.Resolve))))
 		mux.Handle("POST /api/failures/{id}/unresolve",
 			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.Unresolve))))
+		mux.Handle("POST /api/causes/{id}/resolve",
+			auth.Middleware(opts.Auth, guard(resolveHandler(opts.Actions.ResolveCause))))
+		mux.Handle("POST /api/causes/{id}/unresolve",
+			auth.Middleware(opts.Auth, guard(unresolveHandler(opts.Actions.UnresolveCause))))
 		if eligibility, ok := opts.Actions.(ActionEligibilityRunner); ok {
 			caps.Features.ActionEligibility = true
 			caps.Features.ActionEligibilityReasonCodes = actions.ReasonCodes()

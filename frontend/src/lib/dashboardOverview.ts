@@ -262,22 +262,40 @@ export function orderedDashboardBranches(jobs: JobSummary[]): string[] {
   });
 }
 
-// unlistedDismissals selects dismissals whose pattern has left the active
-// recurring set, paired with their id. Such a marker is retained on purpose
-// (correlation can miss for a single pass, and dropping it would return the
-// pattern to the active view unbidden), but the overview stops showing it, so
-// the dismissed-patterns disclosure offers it here.
+// patternFullyResolved reports whether every failure a pattern represents has
+// been acknowledged. A pattern-level resolution covers it outright; otherwise
+// each of its causes must be resolved individually, so acknowledging one cause
+// of four leaves the pattern in the active view with three causes still to
+// answer. A pattern with no causal groups can only be resolved at pattern
+// scope.
+export function patternFullyResolved(
+  pattern: PatternAnalysis,
+  resolved: ResolvedState,
+): boolean {
+  if (pattern.id && resolved.resolved[pattern.id]) return true;
+  const groups = pattern.causal_groups ?? [];
+  return (
+    groups.length > 0 &&
+    groups.every((group) => Boolean(group.signature && resolved.causes[group.signature]))
+  );
+}
+
+// unlistedPatternResolutions selects pattern resolutions whose pattern has left
+// the active recurring set, paired with their id. Such a marker is retained on
+// purpose (correlation can miss for a single pass, and dropping it would return
+// the pattern to the active view unbidden), but the overview stops showing it,
+// so the resolved-failures disclosure offers it here.
 //
 // This covers a pattern that aged out entirely and one whose lifecycle moved to
 // recovered, observing, or verified fixed. The overview reads only the
 // recurring set, which is already filtered to active patterns, so it cannot
 // distinguish the two, and a lifecycle-inactive pattern keeps its own banner
-// where Restore is also offered.
+// where Reopen is also offered.
 //
-// Restoring is the only thing a viewer can do with one, so they are selected
+// Reopening is the only thing a viewer can do with one, so they are selected
 // only where that is possible. A report that has not loaded yields none: it
 // cannot tell an unlisted pattern from an unread one.
-export function unlistedDismissals(
+export function unlistedPatternResolutions(
   report: FlakinessReport | null,
   resolved: ResolvedState,
   canRestore: boolean,
@@ -287,4 +305,26 @@ export function unlistedDismissals(
     (report.recurring_patterns ?? []).map((pattern) => pattern.id).filter(Boolean),
   );
   return Object.entries(resolved.resolved ?? {}).filter(([id]) => !published.has(id));
+}
+
+// unlistedCauseResolutions selects resolved causes that no published pattern
+// still shows, paired with their signature. A cause leaves the published set
+// when its builds age out of the window, and its resolution is retained for the
+// same reason a pattern's is, so this disclosure is the only place left to
+// reopen one.
+export function unlistedCauseResolutions(
+  report: FlakinessReport | null,
+  resolved: ResolvedState,
+  canRestore: boolean,
+): [string, ResolvedEntry][] {
+  if (!report || !canRestore) return [];
+  const published = new Set(
+    (report.recurring_patterns ?? [])
+      .flatMap((pattern) => pattern.causal_groups ?? [])
+      .map((group) => group.signature)
+      .filter(Boolean),
+  );
+  return Object.entries(resolved.causes ?? {}).filter(
+    ([signature]) => !published.has(signature),
+  );
 }

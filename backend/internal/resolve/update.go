@@ -31,13 +31,23 @@ func Update(dir string, mutate func(*State) bool) error {
 	return state.Save(dir)
 }
 
-// RemoveMatching removes only entries that still match the staged values.
-func RemoveMatching(dir string, expected map[string]Entry) error {
+// RemoveMatching removes only the pattern and cause entries that still match the
+// staged values, so a resolution rewritten since staging is left alone.
+func RemoveMatching(dir string, expected *State) error {
+	if expected == nil {
+		return nil
+	}
 	return Update(dir, func(state *State) bool {
 		changed := false
-		for id, want := range expected {
+		for id, want := range expected.Resolved {
 			if current, ok := state.Resolved[id]; ok && current == want {
 				delete(state.Resolved, id)
+				changed = true
+			}
+		}
+		for signature, want := range expected.Causes {
+			if current, ok := state.Causes[signature]; ok && current == want {
+				delete(state.Causes, signature)
 				changed = true
 			}
 		}

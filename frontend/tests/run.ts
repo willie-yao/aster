@@ -9,7 +9,7 @@ import "./causalFixRouting.test.js";
 import "./causalNextStep.test.js";
 import "./briefingSection.test.js";
 import "./upstreamCause.test.js";
-import "./patternDismissal.test.js";
+import "./patternResolution.test.js";
 import "./pageMetadata.test.js";
 import "./navigation.test.js";
 import "./routes.test.js";
