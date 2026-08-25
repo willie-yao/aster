@@ -153,20 +153,7 @@ ai:
     enabled: true
     author_name: "Jane Maintainer"
     author_email: "jane@example.com"
-    fork: true
-    max_files: 3
-    critique_retries: 0
     agent_runtime:
-      type: agent-sandbox
-      allow_bash: false
-      max_turns: 30
-      timeout: 10m
-      output_limit_bytes: 524288
-      allowed_commands:
-        - argv: [go, test, ./path/to/package]
-          timeout: 5m
-        - argv: [git, diff, --cached, --check]
-          timeout: 1m
       model_provider:
         credential_mode: direct
         api: chat_completions
@@ -176,12 +163,14 @@ ai:
           type: bearer
 ```
 
-`critique_retries` must be `0`. Generation is one-shot, followed by exact
-validation without a model repair retry. `allow_bash` must remain `false`.
-`agent_runtime.type` accepts only `agent-sandbox`.
+Agent Sandbox is the only Fix runtime. It defaults to 30 turns, a 10-minute
+timeout, a 512 KiB output limit, no shell access, and no model critique retry.
+The repository defaults to `branding.source_repo`, fork mode defaults to true,
+and `max_files` defaults to 3.
 
-Every `allowed_commands` entry uses an exact argv list and an explicit timeout.
-The final command must be exactly:
+When `allowed_commands` is omitted, Aster runs only the mandatory staged-diff
+check. Additional entries use exact argv lists and explicit timeouts, and the
+final command must remain exactly:
 
 ```yaml
 - argv: [git, diff, --cached, --check]
