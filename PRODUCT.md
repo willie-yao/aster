@@ -61,6 +61,11 @@ appear only where the capability endpoint reports them.
 - Surfaces: Overview (Needs attention, Job ledger), Failure Trends, Pulls, Job
   detail, Test detail, Build failure, plus operator-gated Analysis Health and AI
   Usage.
+- Signing in unlocks the write and conversation surfaces: the inline action bar
+  (Resolve failure, Draft issue, Propose fix), their dialogs and draft previews,
+  bounded analysis chat, escalation, and the analysis trace ledger. These exist
+  only in the Kubernetes deployment; the Pages deployment has no server and does
+  not render them.
 - Engine and consumer are separate repositories. Consumers own `project.yaml`
   and `prompts/system.md`; the engine owns prompts, tool schemas, cache shape,
   and the output contract.

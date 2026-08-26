@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-26T17:05:37Z",
+  "generatedAt": "2026-08-26T17:18:09Z",
   "title": "Design System: Aster",
   "extensions": {
     "colorMeta": {
@@ -200,6 +200,23 @@
         "name": "xl",
         "value": "1536px"
       }
+    ],
+    "tints": [
+      {
+        "name": "wash",
+        "value": "soft(accent, 0.05)",
+        "purpose": "Barely-there surface wash marking a tinted region."
+      },
+      {
+        "name": "fill",
+        "value": "soft(accent, 0.12-0.16)",
+        "purpose": "Chip and callout backgrounds. softChipSx uses 0.16 and reads its label from the accent dark ramp in light mode."
+      },
+      {
+        "name": "border",
+        "value": "soft(accent, 0.24-0.3)",
+        "purpose": "Tinted border around a semantic region."
+      }
     ]
   },
   "components": [
@@ -258,6 +275,30 @@
       "description": "Icon over label, 76px rail. The active destination takes a violet tint and a 3px leading bar.",
       "html": "<a class=\"ds-nav ds-nav-active\" href=\"#\" aria-current=\"page\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z\"/></svg><span class=\"ds-nav-label\">Overview</span></a>",
       "css": ".ds-nav { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 76px; height: 54px; color: #59636e; text-decoration: none; transition: color 140ms ease, background-color 140ms ease; } .ds-nav:hover { color: #1f2328; background: #f0f3f6; } .ds-nav-active { color: #7c3aed; background: color-mix(in srgb, #7c3aed 14%, transparent); } .ds-nav-active::before { content: \"\"; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: #7c3aed; } .ds-nav-label { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 11px; font-weight: 600; line-height: 1.2; letter-spacing: 0.01em; } .ds-nav:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } @media (prefers-reduced-motion: reduce) { .ds-nav { transition: none; } }"
+    },
+    {
+      "name": "Action Bar",
+      "kind": "custom",
+      "refersTo": "action-bar-button",
+      "description": "Segmented row of write actions under a cause. Divided by hairlines, not gaps, so it reads as one control strip on a dense page.",
+      "html": "<div class=\"ds-actionbar\"><button class=\"ds-action\">Investigate cause</button><button class=\"ds-action\">Draft issue</button><button class=\"ds-action\">Resolve failure</button></div>",
+      "css": ".ds-actionbar { display: flex; flex-wrap: wrap; row-gap: 8px; align-items: center; } .ds-action { min-height: 36px; padding: 0 10px; border: none; border-left: 1px solid #d0d7de; border-radius: 0; background: transparent; color: #7c3aed; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 0.875rem; font-weight: 600; text-transform: none; cursor: pointer; } .ds-action:first-of-type { border-left: 0; padding-left: 0; } .ds-action:hover { background: #f0f3f6; } .ds-action:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } @media (max-width: 599px) { .ds-action { min-height: 44px; } }"
+    },
+    {
+      "name": "Draft Preview",
+      "kind": "custom",
+      "refersTo": "draft-preview",
+      "description": "Generated issue or pull request body shown before a maintainer sends it. Monospace, pre-wrap, so generated markdown keeps its shape.",
+      "html": "<div><span class=\"ds-microlabel\">Issue body</span><div class=\"ds-draft\">### What failed\nAzureSecurityGroupsSpec E2E timed out after 1200s.</div></div>",
+      "css": ".ds-microlabel { display: block; margin-bottom: 6px; text-transform: uppercase; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: #59636e; } .ds-draft { border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; padding: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8125rem; line-height: 1.65; white-space: pre-wrap; word-break: break-word; color: #1f2328; }"
+    },
+    {
+      "name": "Verification Badge",
+      "kind": "chip",
+      "refersTo": "chip-pass",
+      "description": "Reports whether a generated remediation verified against pinned source. Tint plus glyph plus words; never tint alone.",
+      "html": "<div class=\"ds-verify\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 15-4-4 1.4-1.4L11 14.2l5.6-5.6L18 10z\"/></svg><span>Verification passed</span></div>",
+      "css": ".ds-verify { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid rgba(26, 127, 55, 0.3); border-radius: 4px; background: rgba(26, 127, 55, 0.12); color: #1a7f37; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 0.875rem; font-weight: 600; } @media (forced-colors: active) { .ds-verify { border-color: CanvasText; } }"
     }
   ],
   "narrative": {
@@ -320,6 +361,21 @@
         "name": "The Real Payload Rule",
         "body": "Every layout is verified against production volumes: dozens of jobs, twenty runs each, multi-line failure text, and job names long enough to need truncation.",
         "section": "layout"
+      },
+      {
+        "name": "The Capability Gate Rule",
+        "body": "An affordance appears only when the capability endpoint reports it. Never render a disabled control, a teaser, or an upsell for something this deployment cannot do.",
+        "section": "components"
+      },
+      {
+        "name": "The Inline Action Rule",
+        "body": "A write action lives next to the evidence that justifies it. Actions do not collect into a toolbar far from the thing they act on.",
+        "section": "components"
+      },
+      {
+        "name": "The Tint Roles Rule",
+        "body": "soft(accent, alpha) carries state on a surface with three jobs: a wash near 0.05, a fill near 0.12 to 0.16, and a border near 0.24 to 0.3. A tint is never the only signal.",
+        "section": "colors"
       }
     ],
     "dos": [
@@ -328,7 +384,8 @@
       "Do mount one responsive layout at a time and verify it against production data volumes.",
       "Do keep prose between 65 and 75 characters per line.",
       "Do give truncated content a recovery path that works by touch and keyboard. A title tooltip alone is desktop-only.",
-      "Do let capability absence remove an affordance cleanly. A read-only Pages deployment shows fewer buttons, never broken ones."
+      "Do let capability absence remove an affordance cleanly. A read-only Pages deployment shows fewer buttons, never broken ones.",
+      "Do put a write action next to the evidence that justifies it, and say in one sentence what it changes and what it leaves alone."
     ],
     "donts": [
       "Don't put a shadow on anything that does not genuinely float.",
@@ -337,7 +394,9 @@
       "Don't render functional text below 11px, or a text input below 16px on mobile.",
       "Don't add a colored left border above 1px to a card or list item. The 3px accent edge is reserved for section bands.",
       "Don't let a single control become one tab stop per data point. Composite widgets get roving tabindex.",
-      "Don't describe Aster as autonomous repair, self-healing, or guaranteed root-cause detection."
+      "Don't describe Aster as autonomous repair, self-healing, or guaranteed root-cause detection.",
+      "Don't render a disabled control or a teaser for a capability this deployment does not have.",
+      "Don't style the analysis conversation like a consumer chat app. Opposing bubbles, avatars, and typing theatrics do not belong on a console."
     ],
     "provenance": "Aster was not built as an Impeccable project. The interface came first and this system was written by reading the implementation: the tokens in frontend/src/theme/, the components, and the rules already recorded in docs/brand.md. It is normative going forward while the code is brought up to it incrementally.",
     "knownGaps": [
@@ -347,7 +406,10 @@
       "Accent edge reserved for bands: 3px borderLeft on insets in LabeledBlock and ChatFixDialog.",
       "Composite widgets get roving tabindex: Sparkline puts roughly 300 run links in the overview tab order.",
       "aria-current=\"page\" on exact match only: NavRail marks the active section page on nested routes.",
-      "Buttons inherit the theme family: no MuiButtonBase override, so bare ButtonBase falls back to the user agent font."
-    ]
+      "Buttons inherit the theme family: no MuiButtonBase override, so bare ButtonBase falls back to the user agent font.",
+      "The Tint Roles Rule: soft() is called at 16 distinct alphas between 0.025 and 0.5; the three documented roles need consolidating.",
+      "The operator surfaces are documented from the implementation but have not been audited for accessibility, responsive behavior, or performance. Reach them locally with make dev-actions (AUTH_MODE=dev)."
+    ],
+    "operatorSurfaces": "Signing in adds the write surfaces, the analysis conversation, and two operator-only pages. They are the same console, not a separate product. The character is efficient rather than ceremonial: a maintainer reaching for Resolve failure already knows what they are doing, so actions sit inline next to their evidence, state what they change in one sentence, and get out of the way. Capability, not layout, decides what renders."
   }
 }

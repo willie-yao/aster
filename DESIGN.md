@@ -113,6 +113,18 @@ components:
     textColor: "{colors.on-surface}"
     rounded: "{rounded.default}"
     height: "44px"
+  action-bar-button:
+    backgroundColor: "transparent"
+    textColor: "{colors.primary}"
+    rounded: "0"
+    padding: "0 10px"
+    height: "36px"
+  draft-preview:
+    backgroundColor: "{colors.surface-container-low}"
+    textColor: "{colors.on-surface}"
+    typography: "{typography.data}"
+    rounded: "{rounded.default}"
+    padding: "14px"
 ---
 
 # Design System: Aster
@@ -359,6 +371,79 @@ an 11px label, with the active one taking a violet tint and a 3px leading bar.
 `aria-current="page"` marks only an exact URL match; a section that stays
 highlighted for its nested pages reports `aria-current="true"`.
 
+### Operator surfaces (signed in)
+
+Everything above is visible to anyone. A signed-in maintainer additionally gets
+the write surfaces, the analysis conversation, and two operator-only pages. They
+are the same console, not a separate product: the same bands, hairlines, flat
+surfaces, and monospace rules apply.
+
+The character is efficient rather than ceremonial. A maintainer reaching for
+Resolve failure or Draft issue already knows what they are doing, so the console
+does not stage a confirmation ritual around them. Actions sit inline where the
+evidence is, they state what they will do in one sentence, and they get out of
+the way. Weight is carried by the copy, not by the chrome.
+
+Capability, not layout, decides what appears. The Pages deployment has no server,
+so these surfaces do not render at all there, and the read-only console stays
+whole rather than showing disabled controls.
+
+#### Action bar
+A segmented row of text buttons under a cause or failure: radius 0, divided by
+1px `borderLeft` rules, with `&:first-of-type` dropping its rule and left
+padding. Buttons are 44px tall on mobile and 36px from `sm` up, and the row wraps
+with a 1px `rowGap`. It reads as one ruled control strip rather than a cluster of
+separate buttons, which is why it survives sitting directly on a dense page.
+
+#### Action dialogs
+Opened by the action bar. The header is the same `sectionBandSx()` band the page
+uses, so an overlay reads as a section of the page it came from. Body and actions
+share the `dialogGutter` (2.5), and the paper is squared and flat with a 1px
+divider border and no background image. One sentence under the title states what
+the action does and what it does not touch.
+
+#### Draft preview
+Where a generated issue or pull request body is shown before a maintainer sends
+it. A monospace block at 0.8125rem / 1.65 on `surface.containerLow` inside a 1px
+divider border, with `white-space: pre-wrap` and `word-break: break-word` so
+generated markdown keeps its shape. Draft HTML comments are stripped before
+display. Each region is introduced by an uppercase micro-label.
+
+#### Verification badge
+Reports whether a generated remediation verified against pinned source. A
+bordered row tinted with the semantic accent: `soft(accent, 0.12)` fill inside a
+`soft(accent, 0.3)` border, with a check or error glyph. It states an outcome, so
+it never relies on the tint alone to carry pass or fail.
+
+#### Analysis chat
+A bounded conversation about one published analysis. User turns and agent turns
+are separated by tint and alignment rather than by opposing bubbles: the console
+does not do chat-app styling. Evidence citations appear as monospace path and
+line references inside a 1px accent rule. Grounding state, evidence warnings, and
+fix eligibility each get a tinted callout rather than a modal, so the
+conversation stays readable top to bottom.
+
+#### Trace ledger
+Analysis traces reuse the ledger row exactly: hairline dividers, monospace data
+columns, one row per record. An operator page earns no separate table language.
+
+#### Named Rules
+
+**The Capability Gate Rule.** An affordance appears only when the capability
+endpoint reports it. Never render a disabled control, a teaser, or an upsell for
+something this deployment cannot do.
+
+**The Inline Action Rule.** A write action lives next to the evidence that
+justifies it. Actions do not collect into a toolbar far from the thing they act
+on.
+
+**The Tint Roles Rule.** `soft(accent, alpha)` carries state on a surface, and it
+has three jobs: a wash at roughly 0.05 for a tinted region, a fill at roughly
+0.12 to 0.16 for chips and callouts, and a border at roughly 0.24 to 0.3. A tint
+is never the only signal; the label says what the state is. `softChipSx()` reads
+its label from the accent's dark ramp in light mode, because `main` on its own
+tint falls under 4.5:1.
+
 ## Do's and Don'ts
 
 **Do** carry status with a word and a color together, so it survives High
@@ -377,6 +462,9 @@ A `title` tooltip alone is desktop-only.
 
 **Do** let capability absence remove an affordance cleanly. A read-only Pages
 deployment shows fewer buttons, never broken ones.
+
+**Do** put a write action next to the evidence that justifies it, and say in one
+sentence what it changes and what it leaves alone.
 
 **Don't** put a shadow on anything that does not genuinely float.
 
@@ -398,6 +486,12 @@ widgets get roving tabindex.
 **Don't** describe Aster as autonomous repair, self-healing, or guaranteed
 root-cause detection, in UI copy or anywhere else.
 
+**Don't** render a disabled control or a teaser for a capability this deployment
+does not have.
+
+**Don't** style the analysis conversation like a consumer chat app. Opposing
+bubbles, avatars, and typing theatrics do not belong on a console.
+
 ## Known Gaps
 
 Aster was not built as an Impeccable project. The interface came first, and this
@@ -416,13 +510,20 @@ here so the document is not mistaken for a description of what already ships.
 
 | Rule | Current state |
 | --- | --- |
-| The Eleven Pixel Floor | `0.625rem` (10.6px) labels in `SearchBar`, `TestCaseTable`, `TestResultsGrid`; 10px run-history axis |
+| The Eleven Pixel Floor | `0.625rem` (10.6px) labels in `SearchBar`, `TestCaseTable`, `TestResultsGrid`, and the `ActionDraftPreview` micro-label; 10px run-history axis |
 | The Sixteen Pixel Input Rule | Filter input 14px, search input 0.875rem; both force-zoom on iOS |
 | The One Layout Rule | `JobHealthTable` mounts both layouts and hides one with `display: none` |
 | Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` and `ChatFixDialog` |
 | Composite widgets get roving tabindex | `Sparkline` puts roughly 300 run links in the overview tab order |
 | `aria-current="page"` on exact match only | `NavRail` marks the active section `page` on nested routes |
 | Buttons inherit the theme family | No `MuiButtonBase` override, so bare `ButtonBase` falls back to the user agent font |
+| The Tint Roles Rule | `soft()` is called at 16 distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
+
+The operator surfaces have not been audited. They are documented here from the
+implementation, but the accessibility, responsive, and performance pass that
+covered the public views has not yet run against them. Reaching them locally
+needs `make dev-actions`, which serves the built SPA with `AUTH_MODE=dev` and
+authenticates every request as an admin.
 
 The color rules above are already enforced: `docs/brand.md` and
 `frontend/src/theme/tokens.ts` are the authority for those, and the interface
