@@ -5,14 +5,15 @@ html {
   font-size: 17px;
 }
 
-/* Honor the OS reduced-motion setting: neutralize transitions and animations
-   (card lifts, sparkline scale, expand/collapse) for users who opt out. */
+/* Honor the OS reduced-motion setting. Transitions are neutralized rather than
+   removed, so every state change still lands, just instantly: hover, expand and
+   collapse, dialogs, and menus all keep reading. Looping animation is decided
+   per element instead, because a blanket animation rule also stops progress
+   spinners, and a frozen spinner reports nothing. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
@@ -20,8 +21,7 @@ html {
 
 /* Animated aurora border for AI analysis panels. A conic gradient is masked to
    a thin ring and its angle is spun via @property. Only the border ring
-   repaints, and the global reduced-motion rule above pauses it. Browsers
-   without @property fall back to a static gradient border. */
+   repaints. Browsers without @property fall back to a static gradient border. */
 @property --aurora-angle {
   syntax: "<angle>";
   initial-value: 0deg;
@@ -58,6 +58,14 @@ html {
 @keyframes ai-aurora-spin {
   to {
     --aurora-angle: 360deg;
+  }
+}
+
+/* Decorative loop, so it stops outright rather than running instantly: the
+   panel keeps its gradient ring, which is what the border is there to say. */
+@media (prefers-reduced-motion: reduce) {
+  .ai-aurora::before {
+    animation: none;
   }
 }
 

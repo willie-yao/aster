@@ -517,6 +517,9 @@ function ThinkingState({
           <Box key={i} sx={{
             width: 5, height: 5, borderRadius: "50%", bgcolor: "primary.main",
             animation: "analysisChatPulse 1.2s ease-in-out infinite", animationDelay: `${i * 150}ms`,
+            // The dots are aria-hidden and the status line beside them names
+            // the state, so the bounce stops without losing meaning.
+            "@media (prefers-reduced-motion: reduce)": { animation: "none" },
             "@keyframes analysisChatPulse": {
               "0%, 70%, 100%": { opacity: 0.25, transform: "translateY(0)" },
               "35%": { opacity: 1, transform: "translateY(-3px)" },
@@ -808,7 +811,10 @@ export function AnalysisChat({
     if (!expanded || (history.length === 0 && !busy)) return;
     const list = messageListRef.current;
     if (!list) return;
-    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+    // An explicit behavior overrides the CSS scroll-behavior rule, so the
+    // preference has to be read here for the jump to be honored.
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    list.scrollTo({ top: list.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
   }, [busy, expanded, history.length]);
 
   useEffect(() => () => {
