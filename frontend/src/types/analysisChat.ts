@@ -89,6 +89,7 @@ export interface AnalysisChatRevision {
 
 export interface AnalysisChatMessage {
   role: "user" | "assistant";
+  actor?: string;
   request_id?: string;
   content: string;
   assessment?: AnalysisChatAssessment;
@@ -124,6 +125,7 @@ export type AnalysisChatUnverifiedReason = "citation" | "reference" | "missing" 
 
 export interface AnalysisChatAttempt {
   request_id: string;
+  actor?: string;
   question?: string;
   outcome: AnalysisChatAttemptOutcome;
   failure_kind?: AnalysisChatAttemptFailureKind;
@@ -134,6 +136,7 @@ export interface AnalysisChatAttempt {
 
 export interface AnalysisChatSession {
   id: string;
+  created_by?: string;
   analysis: AnalysisChatReference;
   created_at: string;
   updated_at: string;
@@ -167,5 +170,6 @@ export interface AnalysisChatProgress {
 }
 
 export interface AnalysisChatActiveTurn extends AnalysisChatProgress {
+  actor?: string;
   question?: string;
 }

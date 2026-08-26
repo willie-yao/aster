@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateVersion    = 2
+	stateVersion    = 4
 	createVersion   = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
@@ -45,6 +45,8 @@ type persistedSession struct {
 	Requests             map[string]persistedRequest       `json:"requests,omitempty"`
 	FixSources           map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
 	Active               *persistedActiveTurn              `json:"active,omitempty"`
+	Retired              bool                              `json:"retired,omitempty"`
+	FixBaseExpiresAt     time.Time                         `json:"fix_base_expires_at,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -75,6 +77,7 @@ type persistedArtifactBuild struct {
 }
 
 type persistedRequest struct {
+	Actor        string `json:"actor,omitempty"`
 	QuestionHash string `json:"question_hash"`
 	Question     string `json:"question,omitempty"`
 	Status       string `json:"status"`
@@ -87,6 +90,8 @@ type persistedRequest struct {
 }
 
 type persistedTestFixSource struct {
+	PendingReservations      map[string]bool   `json:"pending_reservations,omitempty"`
+	References               map[string]bool   `json:"references,omitempty"`
 	TargetRef                AnalysisRef       `json:"target_ref"`
 	FailureRevision          string            `json:"failure_revision"`
 	GenerationBaseRevision   string            `json:"generation_base_revision"`
@@ -94,6 +99,7 @@ type persistedTestFixSource struct {
 }
 
 type persistedActiveTurn struct {
+	Actor             string    `json:"actor,omitempty"`
 	RequestID         string    `json:"request_id"`
 	Question          string    `json:"question,omitempty"`
 	LeaseID           string    `json:"lease_id"`
@@ -236,6 +242,10 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 		migrateStateV3(&state)
 		migrated = true
 	}
+	if state.Version == 2 {
+		migrateStateV2(&state)
+		migrated = true
+	}
 	if state.Version != stateVersion {
 		return nil, false, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
@@ -252,7 +262,7 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 }
 
 func migrateStateV1(state *persistedState) {
-	state.Version = stateVersion
+	state.Version = 2
 	for _, session := range state.Sessions {
 		if session == nil {
 			continue
@@ -270,7 +280,119 @@ func migrateStateV1(state *persistedState) {
 }
 
 func migrateStateV3(state *persistedState) {
+	state.Version = 2
+}
+
+func migrateStateV2(state *persistedState) {
+	for _, session := range state.Sessions {
+		if session == nil {
+			continue
+		}
+		owner := normalizeOwner(session.Owner)
+		session.Owner = owner
+		session.View.CreatedBy = owner
+		for i := range session.View.Messages {
+			message := &session.View.Messages[i]
+			if message.Role == "user" && message.Actor == "" {
+				message.Actor = owner
+			}
+		}
+		for requestID, binding := range session.FixSources {
+			if !hasFixBindingDependency(binding) {
+				binding.References = map[string]bool{"legacy:" + requestID: true}
+				session.FixSources[requestID] = binding
+			}
+		}
+		if hasFixDependency(session.FixSources) {
+			retainUntil := time.Now().UTC().Add(analysisFixReferenceTTL)
+			if session.ExpiresAt.Before(retainUntil) {
+				extendSessionExpiry(session, retainUntil)
+			}
+		}
+		for requestID, request := range session.Requests {
+			if request.Actor == "" && !request.Prepared {
+				request.Actor = owner
+				session.Requests[requestID] = request
+			}
+		}
+		if session.Active != nil && session.Active.Actor == "" {
+			session.Active.Actor = owner
+		}
+	}
+	canonical := map[AnalysisRef]string{}
+	for id, session := range state.Sessions {
+		if session == nil {
+			continue
+		}
+		previousID, ok := canonical[session.View.Analysis]
+		if !ok || sharedSessionNewer(id, session, previousID, state.Sessions[previousID]) {
+			canonical[session.View.Analysis] = id
+		}
+	}
+	for id, session := range state.Sessions {
+		if session == nil || canonical[session.View.Analysis] == id {
+			continue
+		}
+		if !hasFixDependency(session.FixSources) {
+			delete(state.Sessions, id)
+			continue
+		}
+		retireMigratedSession(session)
+	}
 	state.Version = stateVersion
+}
+
+func retireMigratedSession(session *persistedSession) {
+	session.Retired = true
+	if session.Active == nil {
+		return
+	}
+	active := session.Active
+	if session.Requests == nil {
+		session.Requests = map[string]persistedRequest{}
+	}
+	request := session.Requests[active.RequestID]
+	if request.Actor == "" {
+		request.Actor = active.Actor
+	}
+	if request.Question == "" {
+		request.Question = active.Question
+	}
+	if request.Status == requestPending {
+		request.Status = requestUnknown
+	}
+	request.UpdatedAt = active.UpdatedAt.UTC().Format(time.RFC3339)
+	session.Requests[active.RequestID] = request
+	session.Active = nil
+}
+
+func sharedSessionNewer(candidateID string, candidate *persistedSession, currentID string, current *persistedSession) bool {
+	if current == nil {
+		return true
+	}
+	candidateActivity := persistedSessionActivity(candidate)
+	currentActivity := persistedSessionActivity(current)
+	if !candidateActivity.Equal(currentActivity) {
+		return candidateActivity.After(currentActivity)
+	}
+	if !candidate.ExpiresAt.Equal(current.ExpiresAt) {
+		return candidate.ExpiresAt.After(current.ExpiresAt)
+	}
+	return candidateID > currentID
+}
+
+func persistedSessionActivity(session *persistedSession) time.Time {
+	if session == nil {
+		return time.Time{}
+	}
+	activity, err := time.Parse(time.RFC3339, session.View.UpdatedAt)
+	if err != nil {
+		activity, _ = time.Parse(time.RFC3339, session.View.CreatedAt)
+	}
+	if session.Active != nil && session.Active.UpdatedAt.After(activity) {
+		activity = session.Active.UpdatedAt
+	}
+	return activity
 }
 
 func migrateRequestSummaries(state *persistedState) bool {

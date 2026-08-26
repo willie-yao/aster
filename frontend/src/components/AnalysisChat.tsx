@@ -41,6 +41,7 @@ import {
   analysisChatRequestPendingMessage,
   analysisChatRequestState,
   analysisChatSessionBusyMessage,
+  analysisChatSessionReferencedMessage,
   analysisChatTurnLimitReached,
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitMessage,
@@ -52,6 +53,7 @@ import {
   createPreparedAnalysisChatSession,
   deleteAnalysisChatSession,
   findAnalysisChatSession,
+  getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
   isAnalysisChatOAuthExpired,
   limitAnalysisChatQuestion,
@@ -153,7 +155,10 @@ function readableError(error: unknown): string {
         return "This analysis or conversation is no longer available. Refresh the page to load the latest data.";
       case 409:
         if (error.message === analysisChatSessionBusyMessage || error.message === analysisChatRequestPendingMessage) {
-          return "Another answer is still running for this conversation. Select Continue to reconnect.";
+          return "Another operator is using this shared investigation. You can follow their progress here.";
+        }
+        if (error.message === analysisChatSessionReferencedMessage) {
+          return "This shared investigation is retained because a Fix proposal depends on it.";
         }
         if (error.message === analysisChatRequestOutcomeUnknownMessage) {
           return "The previous answer could not be confirmed after a server interruption. Select Continue to try again.";
@@ -195,7 +200,7 @@ function formatLines(citation: AnalysisChatCitation) {
   return `lines ${citation.line_start}-${citation.line_end}`;
 }
 
-function UserMessage({ content }: { content: string }) {
+function UserMessage({ content, actor }: { content: string; actor?: string }) {
   return (
     <Box
       sx={{
@@ -212,6 +217,11 @@ function UserMessage({ content }: { content: string }) {
         py: 1.1,
       }}
     >
+      {actor && (
+        <Typography variant="caption" color="textSecondary" sx={{ display: "block", mb: 0.25, fontWeight: 700 }}>
+          {actor}
+        </Typography>
+      )}
       <Typography variant="body2" sx={{ lineHeight: 1.55 }}>
         {content}
       </Typography>
@@ -231,7 +241,7 @@ function AttemptSummary({ attempt }: { attempt: AnalysisChatAttempt }) {
   return (
     <Stack spacing={0.75}>
       {attempt.question
-        ? <UserMessage content={attempt.question} />
+        ? <UserMessage content={attempt.question} actor={attempt.actor} />
         : (
           <Typography variant="caption" color="textSecondary" sx={{ ml: { xs: 2, sm: 5 } }}>
             Question text is unavailable for this earlier attempt.
@@ -502,14 +512,15 @@ const progressLabels: Record<AnalysisChatProgressPhase, { title: string; detail:
 };
 
 function ThinkingState({
-  phase, cancelling, startedAt, validationRetries, maxValidationRetries, onCancel,
+  phase, actor, cancelling, startedAt, validationRetries, maxValidationRetries, onCancel,
 }: {
   phase: AnalysisChatProgressPhase;
+  actor?: string;
   cancelling: boolean;
   startedAt?: string;
   validationRetries: number;
   maxValidationRetries: number;
-  onCancel: () => void;
+  onCancel?: () => void;
 }) {
   const copy = progressLabels[phase];
   const [now, setNow] = useState(() => Date.now());
@@ -543,7 +554,9 @@ function ThinkingState({
       </Stack>
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 650 }}>{copy.title}</Typography>
-        <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>{copy.detail}</Typography>
+        <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
+          {actor ? `${actor} is using this shared investigation. ${copy.detail}` : copy.detail}
+        </Typography>
         {/* The counter reads once a second. Announcing it would interrupt the
             operator on every tick for the whole turn, so it stays visual. */}
         <Typography variant="caption" color="textSecondary" aria-hidden="true">
@@ -552,12 +565,14 @@ function ThinkingState({
             ? ` · Validation retry ${validationRetries} of ${maxValidationRetries}` : ""}
         </Typography>
       </Box>
-      <Button size="small" variant="outlined" color="inherit" startIcon={<StopCircleOutlined />}
-        onClick={() => { if (!cancelling) onCancel(); }}
-        aria-disabled={cancelling || undefined}
-        sx={{ flexShrink: 0, ...(cancelling && { opacity: 0.6 }) }}>
-        {cancelling ? "Cancelling" : "Cancel"}
-      </Button>
+      {onCancel && (
+        <Button size="small" variant="outlined" color="inherit" startIcon={<StopCircleOutlined />}
+          onClick={() => { if (!cancelling) onCancel(); }}
+          aria-disabled={cancelling || undefined}
+          sx={{ flexShrink: 0, ...(cancelling && { opacity: 0.6 }) }}>
+          {cancelling ? "Cancelling" : "Cancel"}
+        </Button>
+      )}
     </Stack>
   );
 }
@@ -617,6 +632,8 @@ export function AnalysisChat({
   // what distinguishes orphaned focus from focus the operator moved away.
   const panelHadFocus = useRef(false);
   const analysisRefRef = useRef(analysisRef);
+  const sessionRef = useRef<AnalysisChatSession | null>(null);
+  const sessionGenerationRef = useRef(0);
   const patternScope = analysisRef.scope === "pattern";
   const causeScope = analysisRef.scope === "cause";
   const multiBuildScope = patternScope || causeScope;
@@ -656,6 +673,7 @@ export function AnalysisChat({
   );
   analysisRefRef.current = analysisRef;
   identityRef.current = identity;
+  sessionRef.current = session;
 
   useEffect(() => {
     preparedLookupIdentityRef.current = "";
@@ -664,6 +682,7 @@ export function AnalysisChat({
   }, [identity]);
 
   useEffect(() => {
+    sessionGenerationRef.current += 1;
     restoreControllerRef.current?.abort();
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
@@ -719,6 +738,11 @@ export function AnalysisChat({
           restored.id,
           restored.active.request_id,
         );
+        setProgressPhase(restored.active.phase);
+        setProgressStartedAt(restored.active.started_at);
+        setValidationRetries(restored.active.validation_retries ?? 0);
+        setMaxValidationRetries(restored.active.max_validation_retries ?? 0);
+        if (restoredRecorded === undefined) return;
         restoredTurn = {
           sessionID: restored.id,
           requestID: restored.active.request_id,
@@ -727,7 +751,6 @@ export function AnalysisChat({
         };
         setPendingTurn(restoredTurn);
         setQuestion(restoredTurn.question);
-        setProgressPhase(restored.active.phase);
         setBusy(true);
         const updated = await resumeAnalysisChatTurn(
           restored,
@@ -835,6 +858,46 @@ export function AnalysisChat({
   }, [authMode, authStatus, features.analysis_chat, identity, recordProgress, signIn]);
 
   useEffect(() => {
+    if (!features.analysis_chat || authStatus !== "authenticated" || !expanded || busy || restoring || resetting) return;
+    const controller = new AbortController();
+    const generation = sessionGenerationRef.current;
+    const refreshIdentity = identity;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        let refreshed: AnalysisChatSession | null;
+        const current = sessionRef.current;
+        if (current) {
+          try {
+            refreshed = await getAnalysisChatSession(current.id, controller.signal);
+          } catch (refreshError) {
+            if (!(refreshError instanceof AnalysisChatAPIError && refreshError.status === 404)) throw refreshError;
+            refreshed = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
+          }
+        } else {
+          refreshed = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
+        }
+        if (controller.signal.aborted || generation !== sessionGenerationRef.current || identityRef.current !== refreshIdentity) return;
+        setSession(refreshed);
+        if (refreshed?.active) recordProgress(refreshed.active);
+      } catch (refreshError) {
+        if (refreshError instanceof Error && refreshError.name === "AbortError") return;
+        if (isAnalysisChatOAuthExpired(refreshError, authMode)) signIn();
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [authMode, authStatus, busy, expanded, features.analysis_chat, identity, recordProgress, resetting, restoring, signIn]);
+
+  useEffect(() => {
     if (!expanded || (history.length === 0 && !busy)) return;
     const list = messageListRef.current;
     if (!list) return;
@@ -875,10 +938,10 @@ export function AnalysisChat({
   // A turn is in flight or the session is loading, so the composer accepts no
   // input but keeps its focus. Nothing here is ever natively disabled: that
   // drops the operator's focus to the document body mid-interaction.
-  const composerLocked = busy || restoring || pendingTurn !== null;
+  const composerLocked = busy || restoring || pendingTurn !== null || Boolean(session?.active);
   // Not composerLocked: a pending turn locks the field but leaves the button
   // live, because that button is what resumes it.
-  const sendBlocked = busy || restoring || (pendingTurn?.question ?? question).trim() === "";
+  const sendBlocked = busy || restoring || Boolean(session?.active) || (pendingTurn?.question ?? question).trim() === "";
   const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
   const causeFixEnabled = causeScope && Boolean(fixTarget);
@@ -891,7 +954,7 @@ export function AnalysisChat({
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
-    if (!value || busy || restoring || turnLimitReached) return;
+    if (!value || busy || restoring || turnLimitReached || session?.active) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Select Continue before asking another question.");
       return;
@@ -922,6 +985,11 @@ export function AnalysisChat({
           controller.signal,
         );
         setSession(activeSession);
+      }
+      if (!activeTurn && activeSession.active) {
+        recordProgress(activeSession.active);
+        setError("Another operator is using this shared investigation. You can follow their progress here.");
+        return;
       }
       if (!activeTurn) {
         activeTurn = {
@@ -972,6 +1040,20 @@ export function AnalysisChat({
       }
       if (isAnalysisChatOAuthExpired(requestError, authMode)) {
         signIn();
+        return;
+      }
+      if (requestError instanceof AnalysisChatAPIError && requestError.message === analysisChatSessionBusyMessage) {
+        setPendingTurn(null);
+        setQuestion("");
+        setContinueMode(false);
+        if (activeSession) {
+          try {
+            setSession(await getAnalysisChatSession(activeSession.id, controller.signal));
+          } catch {
+            // The observer refresh will reconcile the shared session.
+          }
+        }
+        setError("Another operator is using this shared investigation. You can follow their progress here.");
         return;
       }
 
@@ -1090,6 +1172,7 @@ export function AnalysisChat({
     if (resetting || restoring || busy) return;
     const resetIdentity = identity;
     const discarded = session;
+    sessionGenerationRef.current += 1;
     resetControllerRef.current?.abort();
     // A cancel that resolves after the reset would resubmit against the
     // discarded session.
@@ -1306,11 +1389,11 @@ export function AnalysisChat({
               {`${turnUsage.used}/${turnUsage.max} attempts`}
             </Typography>
           )}
-          <Tooltip title="This conversation does not change the published analysis">
+          <Tooltip title="This shared conversation is visible to authenticated operators and does not change the published analysis">
             <IconButton
               disableRipple
               size="small"
-              aria-label="This conversation does not change the published analysis"
+              aria-label="This shared conversation is visible to authenticated operators and does not change the published analysis"
               sx={{ ...touchTargetSx, p: 0.5 }}
             >
               <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
@@ -1383,7 +1466,7 @@ export function AnalysisChat({
                   the failing build's repository and commit. Questions still work, but no answer here can start a fix preview.
                 </Alert>
               )}
-              {!restoring && history.length === 0 && !busy && !pendingTurn && !turnLimitReached && (
+              {!restoring && history.length === 0 && !busy && !pendingTurn && !session?.active && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {causeScope
@@ -1426,7 +1509,7 @@ export function AnalysisChat({
                 }
                 const message = entry.message;
                 if (message.role === "user") {
-                  return <UserMessage key={entry.key} content={message.content} />;
+                  return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
                 }
                 const hasArtifactEvidence = message.request_id
                   ? groundedRequestIDs.has(message.request_id)
@@ -1445,7 +1528,7 @@ export function AnalysisChat({
                     key={entry.key}
                     message={message}
                     fileCtx={fileCtx}
-                    chatFixEnabled={exactFixEnabled || Boolean(features.chat_fix && patternScope)}
+                    chatFixEnabled={!session?.active && (exactFixEnabled || Boolean(features.chat_fix && patternScope))}
                     fixEligible={exactFixEligible || legacyFixEligible}
                     fixIneligibleReason={fixIneligibleReason}
                     onUseForFix={() => openFix(message)}
@@ -1453,14 +1536,15 @@ export function AnalysisChat({
                 );
               })}
 
-              {busy && pendingTurn && (
+              {(session?.active || (busy && pendingTurn)) && (
                 <ThinkingState
                   phase={progressPhase}
+                  actor={session?.active?.actor}
                   cancelling={cancelling}
-                  startedAt={progressStartedAt}
+                  startedAt={progressStartedAt ?? session?.active?.started_at}
                   validationRetries={validationRetries}
                   maxValidationRetries={maxValidationRetries}
-                  onCancel={() => void cancelTurn()}
+                  onCancel={busy && pendingTurn ? () => void cancelTurn() : undefined}
                 />
               )}
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
@@ -1584,7 +1668,7 @@ export function AnalysisChat({
                     color="inherit"
                     startIcon={<RestartAltOutlined />}
                     onClick={() => setResetOpen(true)}
-                    disabled={restoring || busy || resetting}
+                    disabled={restoring || busy || resetting || Boolean(session.active)}
                     sx={{ ...touchTargetSx, color: "text.secondary", fontSize: "0.75rem" }}
                   >
                     New conversation
@@ -1616,8 +1700,7 @@ export function AnalysisChat({
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="textSecondary">
-            This discards the current conversation and its attempts. The transcript cannot be recovered, and the
-            published analysis is unchanged.
+            This removes the shared conversation for every operator. The transcript cannot be recovered, and the published analysis is unchanged.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
@@ -1629,9 +1712,9 @@ export function AnalysisChat({
             variant="contained"
             color="warning"
             onClick={() => void startNewConversation()}
-            disabled={resetting || restoring || busy}
+            disabled={resetting || restoring || busy || Boolean(session?.active)}
           >
-            {resetting ? "Discarding" : "Discard and start new"}
+            {resetting ? "Removing" : "Remove and start new"}
           </Button>
         </DialogActions>
       </Dialog>

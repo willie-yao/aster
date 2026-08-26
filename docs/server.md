@@ -21,13 +21,13 @@ schema.
 | `GET /api/analysis-health/download` | Attachment form of the same filtered report. |
 | `GET /api/ai-usage` | Admin-only private usage report with optional date and feature filters. |
 | `GET /api/ai-usage/download` | Attachment form of the same usage report. |
-| `POST /api/analysis-chat/sessions` | Start an owner-bound chat for one current published analysis. |
-| `POST /api/analysis-chat/sessions/lookup` | Restore the owner's latest matching non-expired conversation. |
-| `GET /api/analysis-chat/sessions/{id}` | Read the owner's current conversation. |
-| `DELETE /api/analysis-chat/sessions/{id}` | Discard the owner's conversation, cancelling any turn still in flight. |
+| `POST /api/analysis-chat/sessions` | Start or restore the shared chat for one current published analysis. |
+| `POST /api/analysis-chat/sessions/lookup` | Restore the shared non-expired conversation for one current analysis. |
+| `GET /api/analysis-chat/sessions/{id}` | Read a shared conversation and its current active turn. |
+| `DELETE /api/analysis-chat/sessions/{id}` | Remove an idle shared conversation unless a Fix proposal depends on it, so the next question starts a new one. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn through SSE progress. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active owner-bound turn. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active turn. Only the operator who started it may cancel it. |
 | `POST /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Start one on-demand analysis of a pull request failure the deterministic pass could not explain. |
 | `GET /api/pull-requests/{number}/checks/{jobID}/builds/{buildID}/escalation` | Read that escalation's current state. |
 | `POST /api/shared-failures/{id}/escalation` | Start one on-demand analysis of a failure shared across several open pull requests. |
@@ -112,8 +112,10 @@ private state directory. Chat is read-only and does not require `BOT_TOKEN`.
 Static Pages deployments do not serve it. Each model turn defaults to 10 minutes;
 operators can set `server.chat.timeout` to a value up to 30 minutes.
 
-A session is bound to the signed-in owner and one exact current analysis
-identity. Test, recurring-pattern, and causal-group scopes are supported. A
+One shared session is bound to each exact current analysis identity. Authenticated
+operators see the same transcript and active-turn progress. Only one turn may run
+at a time, and only the operator who started it may cancel it. Test,
+recurring-pattern, and causal-group scopes are supported. A
 causal-group session is bound to the parent pattern ID and hash plus the cause ID
 and hash. It exposes exactly the cause's member builds, including single-build
 causes, and does not require the parent pattern to be systemic. The server refuses
@@ -154,8 +156,13 @@ A proposed revision or Fix finding is still inert model output. Source
 compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff
 requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
-Sessions are stored in private owner-bound state, have bounded admitted turns,
-and expire after inactivity. The state contains transcripts and selected failure
+Sessions are stored in private shared state and have bounded admitted turns.
+They normally expire after inactivity; a session referenced by an admitted Fix
+request is retained through that request's confirmation window. The Helm chart uses a `Recreate` server rollout when
+chat is enabled so old and new binaries never write different chat-state schemas
+at the same time. Equivalent manual deployments must stop old server replicas
+before starting the new version. User questions and attempts retain the
+initiating operator for attribution. The state contains transcripts and selected failure
 context, so the RWX volume and backups are operator-private. Replicas require
 advisory locking, atomic rename, and file and directory synchronization.
 

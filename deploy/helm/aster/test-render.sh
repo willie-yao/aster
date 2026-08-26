@@ -137,6 +137,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.oauth.sessionKey=session-key \
   --show-only templates/server-deployment.yaml > "$tmp/chat.yaml"
 grep -A1 -F 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat.yaml" | grep -Fq 'value: "true"'
+grep -A1 -F 'strategy:' "$tmp/chat.yaml" | grep -Fq 'type: Recreate'
 test "$(grep -Fc 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml")" -eq 1
 grep -A1 -F 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml" | grep -Fq 'value: "10m"'
 grep -A1 -F 'name: AUTH_MODE' "$tmp/chat.yaml" | grep -Fq 'value: "oauth"'

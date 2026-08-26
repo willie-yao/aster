@@ -18,7 +18,14 @@ type fakeChatStore struct {
 	candidate             analysischat.FixCandidate
 	candidateErr          error
 	preflightErr          error
+	reserveErr            error
+	releaseErr            error
 	preflighted           bool
+	reserveCalled         bool
+	commitCalled          bool
+	releaseCalled         bool
+	reservations          map[string]bool
+	references            map[string]bool
 	pinnedFailureRevision string
 	pinnedGenerationBase  string
 	onReturn              func()
@@ -63,6 +70,40 @@ func (f *fakeChatStore) AnalysisFixCandidate(sessionID, owner, requestID string)
 	return f.candidate, f.candidateErr
 }
 
+func (f *fakeChatStore) ReserveAnalysisFix(sessionID, owner, requestID, reservationID string) error {
+	f.reserveCalled = true
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	if f.reserveErr != nil {
+		return f.reserveErr
+	}
+	if f.reservations == nil {
+		f.reservations = map[string]bool{}
+	}
+	f.reservations[reservationID] = true
+	return nil
+}
+
+func (f *fakeChatStore) CommitAnalysisFix(sessionID, owner, requestID, reservationID, referenceID string) error {
+	f.commitCalled = true
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	delete(f.reservations, reservationID)
+	if f.references == nil {
+		f.references = map[string]bool{}
+	}
+	f.references[referenceID] = true
+	return nil
+}
+
+func (f *fakeChatStore) ReleaseAnalysisFix(sessionID, owner, requestID, reservationID string) error {
+	f.releaseCalled = true
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	delete(f.reservations, reservationID)
+	return nil
+}
+
 type fakeFixPreviewer struct {
 	pattern           models.PatternAnalysis
 	owner             string
@@ -73,6 +114,7 @@ type fakeFixPreviewer struct {
 	called            bool
 	requestCalled     bool
 	analysisInput     actions.AnalysisFixInput
+	requestErr        error
 }
 
 func (f *fakeFixPreviewer) PreviewFixWithContext(
@@ -94,6 +136,9 @@ func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
 	input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	f.analysisInput, f.owner, f.userToken, f.instruction, f.requestCalled = input, owner, userToken, instruction, true
+	if f.requestErr != nil {
+		return actions.ActionRequestView{}, f.requestErr
+	}
 	return actions.ActionRequestView{ID: "async-request", Kind: "analysis-fix", Owner: owner, Status: actions.RequestPending}, nil
 }
 
@@ -249,7 +294,8 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.ID != "async-request" || !fixes.requestCalled || fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" {
+	if request.ID != "async-request" || !fixes.requestCalled || fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" ||
+		!chat.reserveCalled || !chat.commitCalled || len(chat.references) != 1 || len(chat.reservations) != 0 || chat.releaseCalled {
 		t.Fatalf("request=%+v fixes=%+v", request, fixes)
 	}
 	input := fixes.analysisInput
@@ -263,6 +309,22 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		len(input.ArtifactCitations) != 1 || !slices.Equal(input.EvidenceWarnings, []string{"citation 2 was omitted"}) ||
 		input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)
+	}
+}
+
+func TestCreateAnalysisFixRequestRollsBackReservationWhenAdmissionFails(t *testing.T) {
+	admissionErr := errors.New("action request admission failed")
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+		SessionID: "session", RequestID: "request", ResponseHash: "response",
+		Analysis:  analysischat.AnalysisRef{Scope: analysischat.ScopeTest},
+		FixTarget: analysischat.AnalysisRef{Scope: analysischat.ScopeTest},
+	}}
+	fixes := &fakeFixPreviewer{requestErr: admissionErr}
+	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		t.Context(), "session", "Alice", "request", "token", "",
+	)
+	if !errors.Is(err, admissionErr) || !chat.reserveCalled || chat.commitCalled || !chat.releaseCalled || len(chat.reservations) != 0 || len(chat.references) != 0 {
+		t.Fatalf("error=%v chat=%+v", err, chat)
 	}
 }
 

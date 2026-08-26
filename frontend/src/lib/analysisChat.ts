@@ -16,6 +16,7 @@ export const analysisChatRateLimitMessage = "analysis chat rate limit reached";
 export const analysisChatRequestOutcomeUnknownMessage = "analysis chat request outcome unknown";
 export const analysisChatRequestPendingMessage = "analysis chat request is pending";
 export const analysisChatSessionBusyMessage = "analysis chat session is busy";
+export const analysisChatSessionReferencedMessage = "analysis chat session supports a fix request";
 export const analysisChatTurnLimitMessage = "analysis chat turn limit reached";
 export const analysisChatProviderFailureMessage = "analysis chat provider request failed";
 export const analysisChatResponseValidationMessage = "analysis chat model response could not be validated";
@@ -365,8 +366,8 @@ export async function getAnalysisChatSession(
   return parseResponse(response);
 }
 
-// Discarding a conversation is irreversible. A session the server no longer
-// knows about is already in the desired end state, so 404 counts as success.
+// Removing a shared conversation makes room for a replacement. A session the
+// server no longer knows about is already in the desired end state.
 export async function deleteAnalysisChatSession(
   sessionID: string,
   signal?: AbortSignal,

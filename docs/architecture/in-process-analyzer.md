@@ -292,7 +292,7 @@ data-serving path.
   investigation reaches the public `actionable` state.
 - **Fix PR generation** consumes an eligible action subject and verified source
   through `backend/internal/fixpr` and `backend/internal/fixruntime`. Exact JUnit
-  chat handoff binds one accepted published analysis and one cited owner-bound
+  chat handoff binds one accepted published analysis and one cited shared-chat
   response to an immutable build revision and deterministic source snapshot.
   Pattern actions keep their separate `PatternAllowsActions` gate. The coding
   agent, review, validation, and PR state are independent of failure-analysis

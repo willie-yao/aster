@@ -61,6 +61,9 @@ func (s *Service) Stream(
 // Cancel requests cancellation of one active idempotent turn.
 func (s *Service) Cancel(id, owner, requestID string) error {
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
 		return err
@@ -72,12 +75,15 @@ func (s *Service) Cancel(id, owner, requestID string) error {
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		request, ok := current.Requests[requestID]
 		if !ok {
 			return changed, ErrRequestNotFound
+		}
+		if actorForRequest(current, requestID, request) != owner {
+			return changed, ErrSessionBusy
 		}
 		if request.Status != requestPending {
 			return changed, nil
@@ -130,6 +136,9 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		return startTurnResult{}, err
 	}
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return startTurnResult{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	questionHash := hashText(question)
 	now := s.opts.Now().UTC()
 	leaseID, err := newSessionID()
@@ -142,7 +151,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 	err = s.store.update(storeCtx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		if current.Requests == nil {
@@ -150,6 +159,9 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 			changed = true
 		}
 		if previous, ok := current.Requests[requestID]; ok {
+			if previous.Actor != "" && previous.Actor != owner {
+				return changed, ErrIdempotencyConflict
+			}
 			if previous.QuestionHash != questionHash {
 				return changed, ErrIdempotencyConflict
 			}
@@ -183,11 +195,11 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		stamp := now.Format(time.RFC3339)
 		state.OwnerRequests[owner] = append(state.OwnerRequests[owner], now)
 		current.Requests[requestID] = persistedRequest{
-			QuestionHash: questionHash, Question: question, Status: requestPending,
+			Actor: owner, QuestionHash: questionHash, Question: question, Status: requestPending,
 			Turn: current.Turns, CreatedAt: stamp, UpdatedAt: stamp,
 		}
 		current.Active = &persistedActiveTurn{
-			RequestID: requestID, Question: question, LeaseID: leaseID,
+			Actor: owner, RequestID: requestID, Question: question, LeaseID: leaseID,
 			ExpiresAt: now.Add(s.opts.TurnLeaseTTL), Phase: PhaseQueued, StartedAt: now, UpdatedAt: now,
 		}
 		current.View.UpdatedAt = stamp
@@ -262,14 +274,17 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, finishedAt)
 		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
-		if current.Active == nil || current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
+		if current.Active == nil || current.Active.Actor != owner || current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
 			return changed, ErrRequestOutcomeUnknown
 		}
 		active := current.Active
 		previous := current.Requests[requestID]
+		if previous.Actor == "" {
+			previous.Actor = owner
+		}
 		if current.Active.CancelRequested {
 			runErr = context.Canceled
 		}
@@ -295,7 +310,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 			return true, nil
 		}
 		current.View.Messages = append(current.View.Messages,
-			Message{Role: "user", RequestID: requestID, Content: question, CreatedAt: stamp},
+			Message{Role: "user", Actor: owner, RequestID: requestID, Content: question, CreatedAt: stamp},
 			Message{
 				Role: "assistant", RequestID: requestID, Content: reply.Answer, Assessment: reply.Assessment,
 				Citations: slices.Clone(reply.Citations), ProposedRevision: cloneRevision(reply.ProposedRevision),
@@ -372,11 +387,11 @@ func (s *Service) requestSnapshot(id, owner, requestID string) (requestSnapshot,
 	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		request, ok := current.Requests[requestID]
-		if !ok {
+		if !ok || actorForRequest(current, requestID, request) != owner {
 			return changed, ErrRequestNotFound
 		}
 		snapshot.Status = request.Status
@@ -408,7 +423,7 @@ func (s *Service) updateProgress(id, owner, requestID, leaseID, phase string) er
 	changed := false
 	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		current := state.Sessions[id]
-		if current == nil || current.Owner != owner || current.Active == nil ||
+		if current == nil || current.Retired || current.Active == nil || current.Active.Actor != owner ||
 			current.Active.RequestID != requestID || current.Active.LeaseID != leaseID {
 			return false, nil
 		}
@@ -464,7 +479,7 @@ func (s *Service) cancellationRequested(id, owner, requestID, leaseID string) (b
 	requested, valid := false, false
 	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		current := state.Sessions[id]
-		if current != nil && current.Owner == owner && current.Active != nil &&
+		if current != nil && !current.Retired && current.Active != nil && current.Active.Actor == owner &&
 			current.Active.RequestID == requestID && current.Active.LeaseID == leaseID {
 			requested, valid = current.Active.CancelRequested, true
 		}
@@ -485,7 +500,10 @@ func (s *Service) cancelLocal(id, requestID string) {
 func (s *Service) activeTurnsForOwner(state *persistedState, owner string) int {
 	count := 0
 	for _, session := range state.Sessions {
-		if session.Owner == owner && session.Active != nil {
+		if session == nil || session.Retired || session.Active == nil {
+			continue
+		}
+		if session.Active.Actor == owner {
 			count++
 		}
 	}
@@ -534,6 +552,16 @@ func validProgressPhase(phase string) bool {
 	default:
 		return false
 	}
+}
+
+func actorForRequest(session *persistedSession, requestID string, request persistedRequest) string {
+	if request.Actor != "" {
+		return request.Actor
+	}
+	if session.Active != nil && session.Active.RequestID == requestID {
+		return session.Active.Actor
+	}
+	return ""
 }
 
 func pruneOwnerRequestTimes(times []time.Time, now time.Time) []time.Time {

@@ -308,6 +308,8 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 		status, message, outcome = http.StatusConflict, "analysis changed; start a new chat", "rejected"
 	case errors.Is(err, analysischat.ErrSessionBusy):
 		status, message, outcome = http.StatusConflict, analysischat.ErrSessionBusy.Error(), "pending"
+	case errors.Is(err, analysischat.ErrSessionReferenced):
+		status, message, outcome = http.StatusConflict, analysischat.ErrSessionReferenced.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrRequestPending):
 		status, message, outcome = http.StatusConflict, analysischat.ErrRequestPending.Error(), "pending"
 	case errors.Is(err, analysischat.ErrIdempotencyConflict):

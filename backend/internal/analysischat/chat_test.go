@@ -197,12 +197,16 @@ func TestServiceCreateAndSend(t *testing.T) {
 	if len(secondTurn.History) != 2 || secondTurn.History[0].Role != "user" || secondTurn.History[1].Role != "assistant" {
 		t.Fatalf("second turn history = %+v", secondTurn.History)
 	}
-	if _, err := service.Get(created.ID, "bob"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("other owner Get error = %v", err)
+	shared, err := service.Get(created.ID, "bob")
+	if err != nil {
+		t.Fatalf("shared Get error = %v", err)
+	}
+	if shared.CreatedBy != "alice" || shared.Messages[0].Actor != "alice" || shared.Attempts[0].Actor != "alice" {
+		t.Fatalf("shared attribution = %+v", shared)
 	}
 }
 
-func TestServiceFindLatestSessionAcrossInstances(t *testing.T) {
+func TestServiceFindSharedSessionAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	var nowNanos atomic.Int64
@@ -210,7 +214,7 @@ func TestServiceFindLatestSessionAcrossInstances(t *testing.T) {
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now})
+	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +228,7 @@ func TestServiceFindLatestSessionAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now})
+	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,40 +236,35 @@ func TestServiceFindLatestSessionAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found.ID != newer.ID || found.ID == older.ID {
-		t.Fatalf("found session = %q, want latest %q", found.ID, newer.ID)
+	if older.ID != newer.ID || found.ID != older.ID {
+		t.Fatalf("shared sessions = older %q newer %q found %q", older.ID, newer.ID, found.ID)
 	}
-	if _, err := second.Find(ref, "bob"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("cross-owner find error = %v", err)
+	shared, err := second.Find(ref, "bob")
+	if err != nil || shared.ID != older.ID || shared.CreatedBy != "alice" {
+		t.Fatalf("cross-operator find = %+v err=%v", shared, err)
+	}
+	reused, err := second.Create(ref, "bob", "create-shared-at-capacity")
+	if err != nil || reused.ID != older.ID {
+		t.Fatalf("shared create at capacity = %+v err=%v", reused, err)
 	}
 }
 
-func TestServiceFindPrefersRecentlyActiveSession(t *testing.T) {
+func TestServiceFindReflectsActiveSharedSession(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	var nowNanos atomic.Int64
-	start := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	nowNanos.Store(start.UnixNano())
-	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
 	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
-	service, err := NewService(t.Context(), dir, runner, Options{Now: now, PollInterval: 10 * time.Millisecond})
+	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	first, err := service.Create(ref, "alice", "create-first-active")
+	created, err := service.Create(ref, "alice", "create-shared-active")
 	if err != nil {
 		t.Fatal(err)
 	}
-	nowNanos.Store(start.Add(time.Minute).UnixNano())
-	second, err := service.Create(ref, "alice", "create-second-idle")
-	if err != nil {
-		t.Fatal(err)
-	}
-	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.Stream(t.Context(), first.ID, "alice", "turn-first-active", "question", nil)
+		_, err := service.Stream(t.Context(), created.ID, "bob", "turn-shared-active", "question", nil)
 		done <- err
 	}()
 	<-runner.started
@@ -273,25 +272,16 @@ func TestServiceFindPrefersRecentlyActiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if found.ID != first.ID || found.ID == second.ID {
-		t.Fatalf("found active session = %q, want %q", found.ID, first.ID)
+	if found.Active == nil || found.Active.Actor != "bob" || found.Active.RequestID != "turn-shared-active" || found.Active.Question != "question" {
+		t.Fatalf("shared active turn = %+v", found.Active)
 	}
-	if found.Active == nil || found.Active.RequestID != "turn-first-active" || found.Active.Question != "question" || found.Active.Phase == "" {
-		t.Fatalf("active turn = %+v", found.Active)
-	}
-	if found.TurnsUsed != 1 || found.MaxTurns != 10 {
-		t.Fatalf("pending usage = %d/%d", found.TurnsUsed, found.MaxTurns)
-	}
-	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, PollInterval: 10 * time.Millisecond})
+	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fromReplica, err := replica.Get(first.ID, "alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fromReplica.Active == nil || fromReplica.Active.RequestID != found.Active.RequestID || fromReplica.Active.Question != found.Active.Question {
-		t.Fatalf("replica active turn = %+v", fromReplica.Active)
+	fromReplica, err := replica.Get(created.ID, "carol")
+	if err != nil || fromReplica.Active == nil || fromReplica.Active.Actor != "bob" {
+		t.Fatalf("replica active turn = %+v err=%v", fromReplica.Active, err)
 	}
 	close(runner.release)
 	if err := <-done; err != nil {
@@ -385,7 +375,10 @@ func TestServiceResolveRejectsAmbiguousAndChangedAnalysis(t *testing.T) {
 
 func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 	dir := t.TempDir()
-	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	writeJobDetail(t, dir, testDetail(
+		analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z"),
+		analyzedTest("TestOther", "junit.xml", "2026-07-23T12:00:00Z"),
+	))
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
 	service, err := NewService(t.Context(), dir, runner, Options{
 		MaxSessions: 2, MaxSessionsPerOwner: 1, MaxTurns: 1, MaxQuestionBytes: 8,
@@ -399,7 +392,8 @@ func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
+	otherRef := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestOther"}
+	if _, err := service.Create(otherRef, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("owner session limit error = %v", err)
 	}
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "123456789"); !errors.Is(err, ErrInvalidRequest) {
@@ -442,7 +436,7 @@ func TestServiceSerializesTurns(t *testing.T) {
 		done <- err
 	}()
 	<-runner.started
-	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "second"); !errors.Is(err, ErrSessionBusy) {
+	if _, err := service.Send(context.Background(), created.ID, "bob", testRequestID(t), "second"); !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("concurrent Send error = %v", err)
 	}
 	close(runner.release)
@@ -580,7 +574,10 @@ func TestServiceExpiryReleasesCapacity(t *testing.T) {
 
 func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	dir := t.TempDir()
-	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	writeJobDetail(t, dir, testDetail(
+		analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z"),
+		analyzedTest("TestOther", "junit.xml", "2026-07-23T12:00:00Z"),
+	))
 	var nowNanos atomic.Int64
 	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	nowNanos.Store(start.UnixNano())
@@ -611,7 +608,12 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	if _, err := service.Get(created.ID, "alice"); err != nil {
 		t.Fatalf("busy expired session should remain readable: %v", err)
 	}
-	if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
+	reused, err := service.Create(ref, "bob", testRequestID(t))
+	if err != nil || reused.ID != created.ID {
+		t.Fatalf("busy shared session reuse = %+v err=%v", reused, err)
+	}
+	otherRef := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestOther"}
+	if _, err := service.Create(otherRef, "alice", testRequestID(t)); !errors.Is(err, ErrSessionLimit) {
 		t.Fatalf("busy expired session should retain capacity, got %v", err)
 	}
 	close(runner.release)
@@ -630,7 +632,7 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 	}
 }
 
-func TestServiceDeleteDiscardsConversationAndReleasesCapacity(t *testing.T) {
+func TestServiceDeleteRemovesSharedConversationAndReleasesCapacity(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
@@ -647,11 +649,16 @@ func TestServiceDeleteDiscardsConversationAndReleasesCapacity(t *testing.T) {
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "question"); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Delete(created.ID, "bob"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("other owner Delete error = %v", err)
-	}
-	if err := service.Delete(created.ID, "Alice"); err != nil {
+	ctx, cancel := service.store.context()
+	if err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		state.Sessions[created.ID].FixSources = map[string]persistedTestFixSource{"preflight-only": {}}
+		return true, nil
+	}); err != nil {
 		t.Fatal(err)
+	}
+	cancel()
+	if err := service.Delete(created.ID, "bob"); err != nil {
+		t.Fatalf("shared delete error = %v", err)
 	}
 	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Get after delete error = %v", err)
@@ -671,60 +678,14 @@ func TestServiceDeleteDiscardsConversationAndReleasesCapacity(t *testing.T) {
 	}
 }
 
-func TestServiceDeleteCancelsInFlightTurn(t *testing.T) {
+func TestServiceDeleteRejectsActiveSharedSessionAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	created, err := service.Create(ref, "alice", testRequestID(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "in flight")
-		done <- err
-	}()
-	<-runner.started
-	if err := service.Delete(created.ID, "alice"); err != nil {
-		t.Fatal(err)
-	}
-	// The waiter observes the discarded session instead of polling the turn out.
-	if err := <-done; !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("in-flight Send after delete error = %v", err)
-	}
-	close(runner.release)
-	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := service.Wait(waitCtx); err != nil {
-		t.Fatalf("cancelled turn did not unwind: %v", err)
-	}
-	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("cancelled turn resurrected the session: %v", err)
-	}
-}
-
-// A delete handled by another replica cannot reach the running turn's local
-// cancel function, so the turn has to stop by observing the discarded session.
-func TestServiceDeleteFromAnotherInstanceStopsRunningTurn(t *testing.T) {
-	dir := t.TempDir()
-	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	runner := &fakeRunner{
-		reply:   Reply{Answer: "answer", Assessment: "explains"},
-		started: make(chan struct{}, 1), release: make(chan struct{}),
-	}
-	// A turn timeout far longer than the test budget means only cancellation
-	// can end the turn.
-	first, err := NewService(t.Context(), dir, runner, Options{
-		PollInterval: 5 * time.Millisecond, TurnTimeout: time.Hour,
-	})
+	first, err := NewService(t.Context(), dir, runner, Options{PollInterval: 5 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,16 +703,22 @@ func TestServiceDeleteFromAnotherInstanceStopsRunningTurn(t *testing.T) {
 		done <- err
 	}()
 	<-runner.started
-	if err := second.Delete(created.ID, "alice"); err != nil {
+	if err := second.Delete(created.ID, "bob"); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("delete active shared session error = %v", err)
+	}
+	observed, err := second.Get(created.ID, "bob")
+	if err != nil || observed.Active == nil || observed.Active.Actor != "alice" {
+		t.Fatalf("observed active session = %+v err=%v", observed.Active, err)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("in-flight Send after remote delete error = %v", err)
+	if err := second.Delete(created.ID, "bob"); err != nil {
+		t.Fatal(err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := first.Wait(waitCtx); err != nil {
-		t.Fatalf("remotely discarded turn kept running: %v", err)
+	if _, err := first.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("deleted session remained visible: %v", err)
 	}
 }
 
@@ -936,7 +903,7 @@ func TestServiceSerializesTurnsAcrossInstances(t *testing.T) {
 	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-shared", "question"); !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("same request while active error = %v", err)
 	}
-	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-other", "other question"); !errors.Is(err, ErrSessionBusy) {
+	if _, err := second.Send(context.Background(), created.ID, "bob", "turn-other", "other question"); !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("different request while active error = %v", err)
 	}
 	close(runner.release)
@@ -1436,8 +1403,8 @@ func TestServiceCancelAcrossInstances(t *testing.T) {
 		done <- err
 	}()
 	<-runner.started
-	if err := second.Cancel(created.ID, "bob", "turn-cancel"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("cross-owner cancel error = %v", err)
+	if err := second.Cancel(created.ID, "bob", "turn-cancel"); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("observer cancel error = %v", err)
 	}
 	if err := second.Cancel(created.ID, "alice", "turn-cancel"); err != nil {
 		t.Fatal(err)
@@ -1459,14 +1426,18 @@ func TestServiceCancelAcrossInstances(t *testing.T) {
 	if cancelledAttempt.Outcome != failureCancelled || cancelledAttempt.Question != "question" {
 		t.Fatalf("cancelled attempt = %+v", cancelledAttempt)
 	}
-	if _, err := second.Get(created.ID, "bob"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("cross-owner attempt history error = %v", err)
+	shared, err := second.Get(created.ID, "bob")
+	if err != nil || requireAttempt(t, shared, "turn-cancel").Actor != "alice" {
+		t.Fatalf("shared attempt history = %+v err=%v", shared.Attempts, err)
 	}
 }
 
 func TestServiceOwnerActiveTurnAndRateLimits(t *testing.T) {
 	dir := t.TempDir()
-	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	writeJobDetail(t, dir, testDetail(
+		analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z"),
+		analyzedTest("TestOther", "junit.xml", "2026-07-23T12:00:00Z"),
+	))
 	runner := &fakeRunner{
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
@@ -1485,7 +1456,7 @@ func TestServiceOwnerActiveTurnAndRateLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.Create(ref, "alice", "create-limit-2")
+	second, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestOther"}, "alice", "create-limit-2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1817,6 +1788,58 @@ func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
 		if _, err := service.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("ref %+v error = %v", ref, err)
 		}
+	}
+}
+
+func TestVersionTwoDuplicateSessionsCannotRunParallelAfterMigration(t *testing.T) {
+	dir := t.TempDir()
+	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
+	stateDir := filepath.Join(dir, ".shared-migration-chat")
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AnalysisRef{Scope: ScopeTest, JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	resolved, err := service.resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
+	legacy := &persistedState{
+		Version: 2,
+		Sessions: map[string]*persistedSession{
+			"alice-session": {
+				Owner: "alice", Resolved: persisted, ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "alice-session", Analysis: resolved.ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
+			},
+			"bob-session": {
+				Owner: "bob", Resolved: persisted, Turns: 1, ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "bob-session", Analysis: resolved.ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Minute).Format(time.RFC3339)},
+				Requests: map[string]persistedRequest{
+					"active": {QuestionHash: hashText("question"), Question: "question", Status: requestPending, Turn: 1},
+				},
+				Active: &persistedActiveTurn{RequestID: "active", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now},
+			},
+		},
+		OwnerRequests: map[string][]time.Time{},
+	}
+	if err := writePrivateJSON(service.store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Get("alice-session", "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("retired duplicate Get error = %v", err)
+	}
+	if _, err := restarted.Send(t.Context(), "alice-session", "alice", "old-tab-turn", "parallel question"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("retired duplicate Send error = %v", err)
+	}
+	shared, err := restarted.Find(ref, "alice")
+	if err != nil || shared.ID != "bob-session" || shared.Active == nil || shared.Active.Actor != "bob" {
+		t.Fatalf("canonical shared session = %+v err=%v", shared, err)
 	}
 }
 

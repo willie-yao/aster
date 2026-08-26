@@ -53,9 +53,12 @@ type FixCandidate struct {
 	SourceBranchKnown        bool
 }
 
-// AnalysisFixCandidate returns one owner-bound answer and its exact failed-test Fix target.
+// AnalysisFixCandidate returns one shared answer and its exact failed-test Fix target.
 func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return FixCandidate{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
 		return FixCandidate{}, err
@@ -67,7 +70,7 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(sessionID)]
-		if current == nil || current.Owner != owner {
+		if current == nil {
 			return changed, ErrSessionNotFound
 		}
 		if current.View.Analysis.Scope != ScopeTest && current.View.Analysis.Scope != ScopeCause {
@@ -216,9 +219,12 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 	return hashBytes(payload), nil
 }
 
-// FixCandidate returns one owner-bound evidence-backed assistant response.
+// FixCandidate returns one shared evidence-backed assistant response.
 func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return FixCandidate{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	patternID = strings.TrimSpace(patternID)
 	patternHash = strings.TrimSpace(patternHash)
 	if patternID == "" || patternHash == "" {
@@ -235,7 +241,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(sessionID)]
-		if current == nil || current.Owner != owner {
+		if current == nil {
 			return changed, ErrSessionNotFound
 		}
 		if current.View.Analysis.Scope == ScopeCause {
