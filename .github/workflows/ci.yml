@@ -42,6 +42,10 @@ jobs:
           fetch-depth: 0
       - name: Test change classification
         run: python3 hack/classify-ci-changes.py --self-test
+      - name: Test documentation link check
+        run: python3 hack/check-doc-links.py --self-test
+      - name: Check documentation links
+        run: make check-doc-links
       - name: Check onboarding release pins
         run: make check-onboarding-release-pins
       - name: Classify changes

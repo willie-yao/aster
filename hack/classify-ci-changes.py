@@ -366,6 +366,10 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             result["backend"] = True
             matched = True
 
+        if path == "hack/check-doc-links.py":
+            result["documentation"] = True
+            matched = True
+
         if not matched:
             # Unknown paths run the complete suite until they are classified.
             result["release_shared"] = True
@@ -417,6 +421,7 @@ def self_test() -> None:
         ),
         ("release notes", ["changelog/v1.2.3.md"], {"documentation"}),
         ("changelog index", ["CHANGELOG.md"], {"documentation"}),
+        ("documentation link check", ["hack/check-doc-links.py"], {"documentation"}),
         (".gitattributes release contract", [".gitattributes"], set(CLASSES)),
         (
             "frontend",
