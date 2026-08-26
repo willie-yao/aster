@@ -121,7 +121,7 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 	}
 	currentSource, sourceOK := resolveBuildSourceRepository(target.build, candidate.SourceRepositorySnapshot)
 	if !analysisFixConversationUsable(candidate.Analysis.Scope, analysis) ||
-		!sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis)) || candidate.FixTarget != target.ref ||
+		!sameBoundAnalysisSnapshot(candidate.Analysis.Scope, candidate.Original, analysisSnapshot(analysis)) || candidate.FixTarget != target.ref ||
 		target.testCase.AIAnalysis == nil || !models.AnalysisHasUsableDiagnosis(target.testCase.AIAnalysis) ||
 		candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(target.testCase) != candidate.AnalysisContentHash ||
 		sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK || currentSource != candidate.SourceRepositorySnapshot {
@@ -278,7 +278,8 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		return FixCandidate{}, err
 	}
 	analysis := resolved.testCase.AIAnalysis
-	if candidate.Analysis.Scope != ScopePattern && (analysis == nil || !sameAnalysisSnapshot(candidate.Original, analysisSnapshot(analysis))) {
+	if candidate.Analysis.Scope != ScopePattern &&
+		(analysis == nil || !sameBoundAnalysisSnapshot(candidate.Analysis.Scope, candidate.Original, analysisSnapshot(analysis))) {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	for _, pattern := range resolved.patterns {
@@ -313,6 +314,18 @@ func sameAnalysisSnapshot(left, right AnalysisSnapshot) bool {
 	return left.GeneratedAt == right.GeneratedAt && left.RootCause == right.RootCause &&
 		left.Severity == right.Severity && left.SuggestedFix == right.SuggestedFix &&
 		slices.Equal(left.RelevantFiles, right.RelevantFiles)
+}
+
+// sameBoundAnalysisSnapshot compares the analysis a conversation was bound to.
+// A cause-scoped conversation carries the pattern's generation timestamp, which
+// republishing moves without changing the cause, so identity there is the
+// pattern and causal-group hashes the resolve already verified. The remaining
+// fields still matter: a causal group's remediation is in neither hash.
+func sameBoundAnalysisSnapshot(scope string, left, right AnalysisSnapshot) bool {
+	if scope == ScopeCause {
+		left.GeneratedAt, right.GeneratedAt = "", ""
+	}
+	return sameAnalysisSnapshot(left, right)
 }
 
 func assistantResponse(messages []Message, requestID string) *Message {

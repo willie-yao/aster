@@ -98,8 +98,12 @@ type patternResponse struct {
 }
 
 type patternCacheData struct {
-	Version  int             `json:"version"`
-	Response patternResponse `json:"response"`
+	Version int `json:"version"`
+	// GeneratedAt records when the model produced this verdict so a cache hit
+	// republishes the timestamp it was generated with. Re-stamping it every
+	// pass would change the published pattern while its content is identical.
+	GeneratedAt string          `json:"generated_at,omitempty"`
+	Response    patternResponse `json:"response"`
 }
 
 type patternFailureCacheData struct {
@@ -395,7 +399,8 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				}
 				s.client.cache.Delete(failureKey)
 				usageOutcome = aiusage.OutcomeCacheHit
-				return buildPatternAnalysis(subject, len(failures), cachedData.Response, failures), nil
+				generatedAt := s.cachedPatternGeneratedAt(key, cachedData.GeneratedAt)
+				return buildPatternAnalysis(subject, len(failures), cachedData.Response, failures, generatedAt), nil
 			}
 		}
 		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
@@ -405,7 +410,8 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 			s.client.cache.Delete(failureKey)
 			usageOutcome = aiusage.OutcomeCacheHit
 			recordPatternParseTrace(ctx, "cache", stats, nil)
-			return buildPatternAnalysis(subject, len(failures), cached, failures), nil
+			generatedAt := s.cachedPatternGeneratedAt(key, "")
+			return buildPatternAnalysis(subject, len(failures), cached, failures, generatedAt), nil
 		}
 	}
 
@@ -441,8 +447,22 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	if err != nil {
 		return nil, err
 	}
-	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, Response: parsed})
-	return buildPatternAnalysis(subject, len(failures), parsed, failures), nil
+	generatedAt := s.patternGeneratedAt()
+	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, GeneratedAt: generatedAt, Response: parsed})
+	return buildPatternAnalysis(subject, len(failures), parsed, failures, generatedAt), nil
+}
+
+// cachedPatternGeneratedAt returns when a cached verdict was generated. Entries
+// written before the timestamp was recorded fall back to when they were cached,
+// which is stable across passes and does not renew the entry's age.
+func (s *Service) cachedPatternGeneratedAt(key, recorded string) string {
+	if recorded = strings.TrimSpace(recorded); recorded != "" {
+		return recorded
+	}
+	if entry, ok := s.client.cache.Lookup(key); ok && !entry.CreatedAt.IsZero() {
+		return entry.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	return s.patternGeneratedAt()
 }
 
 func (s *Service) patternFailureNow() time.Time {
@@ -450,6 +470,11 @@ func (s *Service) patternFailureNow() time.Time {
 		return time.Now().UTC()
 	}
 	return s.patternNow().UTC()
+}
+
+// patternGeneratedAt stamps a freshly generated verdict.
+func (s *Service) patternGeneratedAt() string {
+	return s.patternFailureNow().Format(time.RFC3339)
 }
 
 func (s *Service) patternFailureBackoff(key string) (patternFailureCacheData, bool) {
@@ -529,7 +554,7 @@ func ParsePatternResult(subject string, failures []PatternFailure, result string
 	if err != nil {
 		return nil, err
 	}
-	return buildPatternAnalysis(subject, len(failures), parsed, failures), nil
+	return buildPatternAnalysis(subject, len(failures), parsed, failures, time.Now().UTC().Format(time.RFC3339)), nil
 }
 
 // toolFreePatternVerdict forces one exact causal-group function call.
@@ -1050,7 +1075,7 @@ func collectRelevantFiles(failures []PatternFailure) []string {
 }
 
 // buildPatternAnalysis converts causal groups into the published model.
-func buildPatternAnalysis(subject string, builds int, p patternResponse, failures []PatternFailure) *models.PatternAnalysis {
+func buildPatternAnalysis(subject string, builds int, p patternResponse, failures []PatternFailure, generatedAt string) *models.PatternAnalysis {
 	relevantFiles := collectRelevantFiles(failures)
 	locationByBuild := make(map[string]*models.AnalysisCauseLocation, len(failures))
 	failureByBuild := make(map[string]PatternFailure, len(failures))
@@ -1111,7 +1136,7 @@ func buildPatternAnalysis(subject string, builds int, p patternResponse, failure
 	}
 
 	return &models.PatternAnalysis{
-		Subject: subject, GeneratedAt: time.Now().UTC().Format(time.RFC3339), BuildsAnalyzed: builds,
+		Subject: subject, GeneratedAt: generatedAt, BuildsAnalyzed: builds,
 		Recurrence: recurrence, CausalGroups: groups,
 		UnclassifiedBuilds: append([]string(nil), p.UnclassifiedBuilds...),
 		Systemic:           systemic, Confidence: confidence, SharedRootCause: rootCause, SharedBuilds: sharedBuilds,
