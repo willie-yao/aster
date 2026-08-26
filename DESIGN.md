@@ -276,9 +276,10 @@ minimum heights hold vertical rhythm: 48px major bands, 44px category bands,
 36px subsection bands, 52px ledger rows.
 
 Breakpoints are MUI defaults plus two content-driven ones: 1024px switches the
-ledger between its stacked and tabular layouts, and 1200px widens the ledger
+ledger between its stacked and tabular layouts, and 1240px widens the ledger
 grid. Below 1024px the ledger mounts card rows; at or above it mounts a table.
-Only one of the two is ever mounted.
+Only one of the two is ever mounted. Each of those two widths is the narrowest
+viewport its grid fits in, so a ledger never overflows the row it sits in.
 
 ### Named Rules
 

@@ -182,3 +182,56 @@ test("test analysis and run history reflow at mobile and zoom widths", () => {
   assert.match(timeline, /height: \{ xs: 44, sm: 32 \}/);
   assert.match(timeline, /formatAccessibleDate\(run\.started\)/);
 });
+
+test("each ledger grid fits the viewport at the width it engages", () => {
+  const ledger = source("src/components/JobHealthTable.tsx");
+  const rail = source("src/components/NavRail.tsx");
+  const railWidth = Number(/export const RAIL_WIDTH = (\d+)/.exec(rail)?.[1]);
+  assert.ok(railWidth);
+
+  // Every track's smallest possible width: a plain px track, or the floor of a
+  // minmax. The grid can never render narrower than their sum.
+  const trackFloors = (name: string) => {
+    const columns = new RegExp(`const ${name} = "([^"]+)"`).exec(ledger)?.[1] ?? "";
+    assert.ok(columns, `${name} not found`);
+    return (columns.match(/minmax\([^)]*\)|\S+/g) ?? []).map((track) => {
+      const min = /^minmax\((\d+)px,/.exec(track) ?? /^(\d+)px$/.exec(track);
+      assert.ok(min, `unrecognised track in ${name}: ${track}`);
+      return Number(min[1]);
+    });
+  };
+
+  const grids = [
+    {
+      name: "compactColumns",
+      // The compact grid engages as soon as the desktop ledger mounts.
+      engagesAt: Number(/const desktopQuery = "\(min-width: (\d+)px\)"/.exec(ledger)?.[1]),
+      rows: [...ledger.matchAll(/gridTemplateColumns: compactColumns,[\s\S]{0,400}?columnGap: ([\d.]+),\s*px: ([\d.]+)/g)],
+    },
+    {
+      name: "wideColumns",
+      engagesAt: Number(/const wideBreakpoint = "@media \(min-width: (\d+)px\)"/.exec(ledger)?.[1]),
+      rows: [...ledger.matchAll(/gridTemplateColumns: wideColumns,[\s\S]{0,400}?columnGap: ([\d.]+),\s*px: ([\d.]+)/g)],
+    },
+  ];
+
+  for (const grid of grids) {
+    assert.ok(grid.engagesAt, `${grid.name} has no breakpoint`);
+    // Both the header row and the data row lay out on each grid; a row that
+    // stops matching here would otherwise go unmeasured.
+    const declared = ledger.match(new RegExp(`gridTemplateColumns: ${grid.name},`, "g"))?.length ?? 0;
+    assert.equal(grid.rows.length, declared, `${grid.name}: ${declared} rows declared, ${grid.rows.length} measured`);
+
+    const floors = trackFloors(grid.name);
+    // MUI's Container pads 24px each side from sm up, and the rail is fixed.
+    const available = grid.engagesAt - railWidth - 24 * 2;
+    for (const [, gapUnits, padUnits] of grid.rows) {
+      const needed =
+        floors.reduce((a, b) => a + b, 0) + 8 * Number(gapUnits) * (floors.length - 1) + 8 * Number(padUnits) * 2;
+      assert.ok(
+        needed <= available,
+        `${grid.name} needs ${needed}px but has ${available}px at ${grid.engagesAt}px, so the ledger overflows its row`,
+      );
+    }
+  }
+});

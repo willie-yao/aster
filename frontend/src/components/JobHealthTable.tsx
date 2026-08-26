@@ -22,8 +22,12 @@ interface JobHealthTableProps {
 }
 
 const desktopQuery = "(min-width: 1024px)";
-const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "minmax(210px, 2fr) 76px 288px 76px 78px 58px 82px";
+// Each grid engages only where it fits. The compact tracks and gaps take 706px
+// and the wide ones 832px, so once the fixed 76px rail and the container's 48px
+// of padding are paid for, the wide grid needs a 1240px viewport. Engaging it
+// at 1200 pushed the status column 20px past the ledger's right border.
+const wideBreakpoint = "@media (min-width: 1240px)";
+const compactColumns = "minmax(168px, 2fr) 76px 288px 76px 78px 58px 82px";
 const wideColumns = "minmax(280px, 2.4fr) 104px 288px 88px 96px 64px 88px";
 const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Last run", "Duration", "Current"];
 
