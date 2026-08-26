@@ -122,7 +122,7 @@ agentSandbox:
       # creates, writes, or mounts it into dashboard workloads.
       existingClaim: ""
     clientServiceAccount:
-      # Kept separate from Fix and critic clients so scheduled workloads never
+      # Kept separate from Fix clients so scheduled workloads never
       # inherit analyzer RBAC.
       create: true
       name: ""
@@ -174,52 +174,6 @@ agentSandbox:
         cpu: "2"
         memory: 2Gi
         ephemeral-storage: 3Gi
-  causalCritic:
-    enabled: false
-    # Existing consumer-owned namespace containing private critic Sandboxes.
-    namespace: ""
-    runtimeClassName: ""
-    image:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
-    workloadServiceAccount:
-      create: false
-      name: ""
-    modelGateway:
-      # Internal HTTPS gateway only. Direct provider endpoints are rejected.
-      endpoint: ""
-      model: ""
-      protocolVersion: openai-chat-completions-v1
-    timeout: 5m
-    outputLimitBytes: 65536
-    maxPerRun: 1
-    pollInterval: 250ms
-    ledger:
-      # Existing private PVC. The chart does not create or share it with public data.
-      existingClaim: ""
-      mountPath: /private/causal-critic
-    networkPolicy:
-      # Required when enabled. For example, use cilium on AKS Cilium/Kata, where the
-      # Kubernetes NetworkPolicy service peer does not admit cross-node Kata traffic.
-      mode: kubernetes
-      enabled: false
-      gatewayNamespaceSelector: {}
-      gatewayPodSelector: {}
-      gatewayPort: 443
-      dnsNamespaceSelector:
-        kubernetes.io/metadata.name: kube-system
-      dnsPodSelector:
-        k8s-app: kube-dns
-    resources:
-      requests:
-        cpu: 50m
-        memory: 64Mi
-        ephemeral-storage: 32Mi
-      limits:
-        cpu: 500m
-        memory: 256Mi
-        ephemeral-storage: 32Mi
   analysisShadow:
     enabled: false
     # Existing dedicated namespace containing private shadow Sandboxes.
@@ -308,7 +262,7 @@ agentSandbox:
     create: true
     # Server identity for Fix Sandboxes.
     fixClientServiceAccountName: ""
-    # Worker and fetcher identity for scheduled critic and shadow Sandboxes.
+    # Worker and fetcher identity for scheduled shadow Sandboxes.
     scheduledClientServiceAccountName: ""
 
 # Shared volume holding fetcher output and the AI cache. It must be

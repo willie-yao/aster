@@ -1,5 +1,4 @@
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
-{{- include "aster.validateAgentSandboxCausalCritic" . -}}
 {{- include "aster.validateAnalysisRuntime" . -}}
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- include "aster.validateAI" . -}}
@@ -107,22 +106,9 @@ spec:
                 - -agent-analysis-shadow-provider-reasoning-effort={{ .Values.agentSandbox.analysisShadow.modelProvider.reasoningEffort }}
                 - -agent-analysis-shadow-provider-auth-type={{ .Values.agentSandbox.analysisShadow.modelProvider.auth.type }}
                 {{- end }}
-                {{- if .Values.agentSandbox.causalCritic.enabled }}
-                - -causal-critic-shadow
-                - -causal-critic-shadow-ledger={{ include "aster.causalCriticLedgerPath" . }}
-                - -causal-critic-shadow-max-per-run={{ .Values.agentSandbox.causalCritic.maxPerRun }}
-                - -causal-critic-shadow-timeout={{ .Values.agentSandbox.causalCritic.timeout }}
-                - -causal-critic-shadow-output-limit-bytes={{ .Values.agentSandbox.causalCritic.outputLimitBytes }}
-                - -causal-critic-shadow-gateway-endpoint={{ .Values.agentSandbox.causalCritic.modelGateway.endpoint }}
-                - -causal-critic-shadow-gateway-model={{ .Values.agentSandbox.causalCritic.modelGateway.model }}
-                - -causal-critic-shadow-gateway-protocol={{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion }}
-                {{- end }}
               env:
                 {{- if $shadow }}
                 {{- include "aster.agentAnalysisShadowEnv" . | nindent 16 }}
-                {{- end }}
-                {{- if .Values.agentSandbox.causalCritic.enabled }}
-                {{- include "aster.agentSandboxCriticEnv" . | nindent 16 }}
                 {{- end }}
                 {{- if .Values.ai.enabled }}
                 - name: AI_TOKEN
@@ -178,10 +164,6 @@ spec:
                 - name: agent-analysis-shadow-input
                   mountPath: {{ .Values.agentSandbox.analysisShadow.input.localRoot }}
                 {{- end }}
-                {{- if .Values.agentSandbox.causalCritic.enabled }}
-                - name: causal-critic-ledger
-                  mountPath: {{ .Values.agentSandbox.causalCritic.ledger.mountPath }}
-                {{- end }}
                 - name: project
                   mountPath: {{ .Values.project.mountPath }}
                   readOnly: true
@@ -212,11 +194,6 @@ spec:
             - name: agent-analysis-shadow-input
               emptyDir:
                 sizeLimit: {{ .Values.agentSandbox.analysisShadow.input.localSizeLimit }}
-            {{- end }}
-            {{- if .Values.agentSandbox.causalCritic.enabled }}
-            - name: causal-critic-ledger
-              persistentVolumeClaim:
-                claimName: {{ .Values.agentSandbox.causalCritic.ledger.existingClaim }}
             {{- end }}
             - name: project
               configMap:

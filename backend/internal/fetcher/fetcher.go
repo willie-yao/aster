@@ -23,7 +23,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
-	"github.com/willie-yao/aster/backend/internal/causalcritic"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/junit"
@@ -38,7 +37,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/resolve"
-	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -64,16 +62,6 @@ type ShadowAnalysisOptions struct {
 	ModelProvider         modelprovider.Config
 }
 
-// CausalCriticOptions configure the private sampled Agent Sandbox review path.
-type CausalCriticOptions struct {
-	Enabled          bool
-	LedgerPath       string
-	MaxPerRun        int
-	Timeout          time.Duration
-	OutputLimitBytes int64
-	ModelGateway     runtime.ModelGatewayConfig
-}
-
 // AnalysisRuntimeOptions select where single-failure analysis runs.
 type AnalysisRuntimeOptions struct {
 	Type string
@@ -87,7 +75,6 @@ type Options struct {
 	Timeout         time.Duration
 	AnalysisRuntime AnalysisRuntimeOptions
 	ShadowAnalysis  ShadowAnalysisOptions
-	CausalCritic    CausalCriticOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// The project discovery policy and this direct CLI override are combined.
 	IncludePresubmits    bool
@@ -129,9 +116,6 @@ type pipeline struct {
 	shadowNow            func() time.Time
 	shadowAgentNamespace string
 	shadowAgentRef       string
-	criticReviewer       causalcritic.Reviewer
-	criticFreeze         shadowEvidenceFreezer
-	criticNow            func() time.Time
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -178,7 +162,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
 	}
 	normalizeShadowAnalysisOptions(&opts.ShadowAnalysis)
-	normalizeCausalCriticOptions(&opts.CausalCritic)
 	if err := validateAnalysisRuntimeOptions(opts); err != nil {
 		return nil, err
 	}
@@ -198,9 +181,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	if enableAI && aiToken == "" {
 		if opts.ShadowAnalysis.Enabled {
 			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
-		}
-		if opts.CausalCritic.Enabled {
-			return nil, fmt.Errorf("causal critic shadow requires AI_TOKEN for authoritative in-process analysis")
 		}
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		enableAI = false
@@ -281,7 +261,6 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		}
 		p.completeProgressPhase()
 	}
-	p.runCausalCritic(fetchCtx, res)
 	p.runShadowAnalysis(ctx, res)
 	prepareCtx, prepareCancel := context.WithTimeout(ctx, 10*time.Minute)
 	p.prepareCauseFindings(prepareCtx, res.details)
@@ -291,9 +270,6 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 
 func validateAnalysisRuntimeOptions(opts Options) error {
 	if err := validateShadowAnalysisOptions(opts); err != nil {
-		return err
-	}
-	if err := validateCausalCriticOptions(opts); err != nil {
 		return err
 	}
 	if opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess {

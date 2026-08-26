@@ -290,7 +290,6 @@ Name of the Secret holding the AI token.
   {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.analysisShadow requires ai.enabled=true" -}}{{- end -}}
   {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analysisShadow requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
-  {{- if .Values.agentSandbox.causalCritic.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.causalCritic" -}}{{- end -}}
   {{- if .Values.agentSandbox.analyzer.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.analyzer" -}}{{- end -}}
   {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "agentSandbox.analysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
   {{- if or (gt (len $cfg.namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace)) -}}{{- fail "agentSandbox.analysisShadow.namespace is required and must be a lowercase DNS label" -}}{{- end -}}
@@ -472,7 +471,7 @@ key, or bot token).
 {{- end -}}
 {{- end -}}
 
-{{/* Worker and fetcher ServiceAccount for scheduled critic and shadow Sandboxes. */}}
+{{/* Worker and fetcher ServiceAccount for scheduled shadow Sandboxes. */}}
 {{- define "aster.agentSandboxScheduledClientServiceAccountName" -}}
 {{- if .Values.agentSandbox.rbac.scheduledClientServiceAccountName -}}
 {{- .Values.agentSandbox.rbac.scheduledClientServiceAccountName -}}
@@ -762,7 +761,6 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analyzer.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analyzer.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if and .Values.agentSandbox.fixRuntime.enabled (eq $cfg.namespace .Values.agentSandbox.fixRuntime.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.fixRuntime.namespace" -}}{{- end -}}
-  {{- if and .Values.agentSandbox.causalCritic.enabled (eq $cfg.namespace .Values.agentSandbox.causalCritic.namespace) -}}{{- fail "agentSandbox.analyzer.namespace must differ from agentSandbox.causalCritic.namespace" -}}{{- end -}}
   {{- if or (gt (len $cfg.namespace) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace)) -}}{{- fail "agentSandbox.analyzer.namespace must be a lowercase DNS label" -}}{{- end -}}
   {{- if or (gt (len $cfg.runtimeClassName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName)) -}}{{- fail "agentSandbox.analyzer.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
   {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.executorImage.repository) -}}{{- fail "agentSandbox.analyzer.executorImage.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
@@ -858,133 +856,10 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 {{- end -}}
 
 
-{{/* Immutable causal critic executor image. */}}
-{{- define "aster.agentSandboxCriticExecutorImage" -}}
-{{- printf "%s@%s" .Values.agentSandbox.causalCritic.image.repository .Values.agentSandbox.causalCritic.image.digest -}}
-{{- end -}}
-
-{{/* Tokenless ServiceAccount used inside critic Sandboxes. */}}
-{{- define "aster.agentSandboxCriticWorkloadServiceAccountName" -}}
-{{- .Values.agentSandbox.causalCritic.workloadServiceAccount.name -}}
-{{- end -}}
-
-{{/* Cluster-scoped critic admission policy name. */}}
-{{- define "aster.agentSandboxCriticAdmissionName" -}}
-{{- printf "%s-agent-sandbox-critic-%s" (include "aster.fullname" .) (include "aster.releaseScope" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{- define "aster.causalCriticLedgerPath" -}}
-{{- printf "%s/causal_critic.json" (trimSuffix "/" .Values.agentSandbox.causalCritic.ledger.mountPath) -}}
-{{- end -}}
-
-{{/* Non-secret critic runtime environment for scheduled fetcher or worker. */}}
-{{- define "aster.agentSandboxCriticEnv" -}}
-- name: AGENT_SANDBOX_CRITIC_NAMESPACE
-  value: {{ .Values.agentSandbox.causalCritic.namespace | quote }}
-- name: AGENT_SANDBOX_CRITIC_IMAGE
-  value: {{ include "aster.agentSandboxCriticExecutorImage" . | quote }}
-- name: AGENT_SANDBOX_CRITIC_SERVICE_ACCOUNT
-  value: {{ include "aster.agentSandboxCriticWorkloadServiceAccountName" . | quote }}
-- name: AGENT_SANDBOX_CRITIC_RUNTIME_CLASS
-  value: {{ .Values.agentSandbox.causalCritic.runtimeClassName | quote }}
-- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_ENDPOINT
-  value: {{ .Values.agentSandbox.causalCritic.modelGateway.endpoint | quote }}
-- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_MODEL
-  value: {{ .Values.agentSandbox.causalCritic.modelGateway.model | quote }}
-- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_PROTOCOL
-  value: {{ .Values.agentSandbox.causalCritic.modelGateway.protocolVersion | quote }}
-- name: AGENT_SANDBOX_CRITIC_MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS
-  value: "false"
-- name: AGENT_SANDBOX_CRITIC_TIMEOUT
-  value: {{ .Values.agentSandbox.causalCritic.timeout | quote }}
-- name: AGENT_SANDBOX_CRITIC_OUTPUT_LIMIT_BYTES
-  value: {{ printf "%d" (int64 .Values.agentSandbox.causalCritic.outputLimitBytes) | quote }}
-- name: AGENT_SANDBOX_CRITIC_POLL_INTERVAL
-  value: {{ .Values.agentSandbox.causalCritic.pollInterval | quote }}
-- name: AGENT_SANDBOX_CRITIC_CPU_REQUEST
-  value: {{ index .Values.agentSandbox.causalCritic.resources.requests "cpu" | quote }}
-- name: AGENT_SANDBOX_CRITIC_CPU_LIMIT
-  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "cpu" | quote }}
-- name: AGENT_SANDBOX_CRITIC_MEMORY_REQUEST
-  value: {{ index .Values.agentSandbox.causalCritic.resources.requests "memory" | quote }}
-- name: AGENT_SANDBOX_CRITIC_MEMORY_LIMIT
-  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "memory" | quote }}
-- name: AGENT_SANDBOX_CRITIC_EPHEMERAL_STORAGE_LIMIT
-  value: {{ index .Values.agentSandbox.causalCritic.resources.limits "ephemeral-storage" | quote }}
-{{- end -}}
-
-{{/* Validate the disabled-by-default private Agent Sandbox critic. */}}
-{{- define "aster.validateAgentSandboxCausalCritic" -}}
-{{- if .Values.agentSandbox.causalCritic.enabled -}}
-  {{- $cfg := .Values.agentSandbox.causalCritic -}}
-  {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.causalCritic requires ai.enabled=true" -}}{{- end -}}
-  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.causalCritic requires analysisRuntime.type=inprocess" -}}{{- end -}}
-  {{- if .Values.agentSandbox.analysisShadow.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with agentSandbox.analysisShadow" -}}{{- end -}}
-  {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.causalCritic cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
-  {{- if not $cfg.namespace -}}{{- fail "agentSandbox.causalCritic.namespace is required" -}}{{- end -}}
-  {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.causalCritic.namespace must differ from the dashboard release namespace" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.causalCritic.namespace must be a lowercase DNS label" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.runtimeClassName) -}}{{- fail "agentSandbox.causalCritic.runtimeClassName is required and must be a lowercase RuntimeClass name" -}}{{- end -}}
-  {{- if not (regexMatch "^[^[:space:]@]+$" $cfg.image.repository) -}}{{- fail "agentSandbox.causalCritic.image.repository is required without whitespace, credentials, or a digest" -}}{{- end -}}
-  {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $cfg.image.digest) -}}{{- fail "agentSandbox.causalCritic.image.digest must be an immutable sha256 digest" -}}{{- end -}}
-  {{- if ne $cfg.image.pullPolicy "IfNotPresent" -}}{{- fail "agentSandbox.causalCritic.image.pullPolicy must be IfNotPresent" -}}{{- end -}}
-  {{- $workloadSA := include "aster.agentSandboxCriticWorkloadServiceAccountName" . -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $workloadSA) -}}{{- fail "agentSandbox.causalCritic.workloadServiceAccount.name is required and must be a lowercase object name" -}}{{- end -}}
-  {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
-  {{- if and (not .Values.agentSandbox.rbac.create) (not .Values.agentSandbox.rbac.scheduledClientServiceAccountName) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName is required when chart-managed RBAC is disabled" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $clientSA) -}}{{- fail "agentSandbox.rbac.scheduledClientServiceAccountName must be a lowercase Kubernetes object name" -}}{{- end -}}
-  {{- include "aster.validateAgentSandboxClientIdentitySplit" . -}}
-  {{- if not $cfg.ledger.existingClaim -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim is required" -}}{{- end -}}
-  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $cfg.ledger.existingClaim) -}}{{- fail "agentSandbox.causalCritic.ledger.existingClaim must be a lowercase object name" -}}{{- end -}}
-  {{- if eq $cfg.ledger.existingClaim (include "aster.pvcName" .) -}}{{- fail "agentSandbox.causalCritic must use a PVC distinct from public dashboard data" -}}{{- end -}}
-  {{- if not (hasPrefix "/private/" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be under /private" -}}{{- end -}}
-  {{- if or (contains ".." $cfg.ledger.mountPath) (contains "//" $cfg.ledger.mountPath) -}}{{- fail "agentSandbox.causalCritic.ledger.mountPath must be canonical" -}}{{- end -}}
-  {{- if or (hasPrefix .Values.persistence.mountPath $cfg.ledger.mountPath) (hasPrefix $cfg.ledger.mountPath .Values.persistence.mountPath) -}}{{- fail "agentSandbox.causalCritic ledger must be separate from public dashboard persistence" -}}{{- end -}}
-  {{- $gateway := $cfg.modelGateway -}}
-  {{- if not (regexMatch "^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must be an absolute credential-free HTTPS URL" -}}{{- end -}}
-  {{- if not (regexMatch "^https://[^/]+[.](svc|svc[.]cluster[.]local|internal)(:[0-9]+)?(/[A-Za-z0-9._~!$&()*+,;=:@%/-]*)?$" $gateway.endpoint) -}}{{- fail "agentSandbox.causalCritic.modelGateway.endpoint must use internal service DNS" -}}{{- end -}}
-  {{- if or (not $gateway.model) (gt (len $gateway.model) 256) (contains "\n" $gateway.model) (contains "\r" $gateway.model) -}}{{- fail "agentSandbox.causalCritic.modelGateway.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
-  {{- if ne $gateway.protocolVersion "openai-chat-completions-v1" -}}{{- fail "agentSandbox.causalCritic.modelGateway.protocolVersion must be openai-chat-completions-v1" -}}{{- end -}}
-  {{- $timeoutText := printf "%v" $cfg.timeout -}}
-  {{- $timeoutSeconds := 0 -}}
-  {{- if regexMatch "^[1-9][0-9]*s$" $timeoutText -}}
-    {{- if gt (len $timeoutText) 5 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
-    {{- $timeoutSeconds = trimSuffix "s" $timeoutText | int -}}
-  {{- else if regexMatch "^[1-9][0-9]*m$" $timeoutText -}}
-    {{- if gt (len $timeoutText) 3 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
-    {{- $timeoutSeconds = mul (trimSuffix "m" $timeoutText | int) 60 -}}
-  {{- else -}}
-    {{- fail "agentSandbox.causalCritic.timeout must use positive whole seconds or minutes" -}}
-  {{- end -}}
-  {{- if gt $timeoutSeconds 1800 -}}{{- fail "agentSandbox.causalCritic.timeout must be at most 30m" -}}{{- end -}}
-  {{- $poll := printf "%v" $cfg.pollInterval -}}
-  {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.causalCritic.pollInterval must be a positive duration below 30s" -}}{{- end -}}
-  {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.causalCritic.pollInterval must be below 30s" -}}{{- end -}}
-  {{- if or (lt (int64 $cfg.outputLimitBytes) 4096) (gt (int64 $cfg.outputLimitBytes) 1048576) -}}{{- fail "agentSandbox.causalCritic.outputLimitBytes must be between 4096 and 1048576" -}}{{- end -}}
-  {{- if or (lt (int $cfg.maxPerRun) 1) (gt (int $cfg.maxPerRun) 10) -}}{{- fail "agentSandbox.causalCritic.maxPerRun must be between 1 and 10" -}}{{- end -}}
-  {{- if ne (index $cfg.resources.requests "ephemeral-storage") (index $cfg.resources.limits "ephemeral-storage") -}}{{- fail "agentSandbox.causalCritic ephemeral-storage request must equal its limit" -}}{{- end -}}
-  {{- if not $cfg.networkPolicy.enabled -}}{{- fail "agentSandbox.causalCritic.networkPolicy.enabled must be true" -}}{{- end -}}
-  {{- if not (has $cfg.networkPolicy.mode (list "kubernetes" "cilium")) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.mode must be kubernetes or cilium" -}}{{- end -}}
-  {{- if eq (len $cfg.networkPolicy.gatewayNamespaceSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayNamespaceSelector is required" -}}{{- end -}}
-  {{- if eq (len $cfg.networkPolicy.gatewayPodSelector) 0 -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPodSelector is required" -}}{{- end -}}
-  {{- if or (lt (int $cfg.networkPolicy.gatewayPort) 1) (gt (int $cfg.networkPolicy.gatewayPort) 65535) -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort is invalid" -}}{{- end -}}
-  {{- $gatewayAuthority := regexFind "^https://[^/]+" $gateway.endpoint -}}
-  {{- $explicitGatewayPort := regexFind ":[0-9]+$" $gatewayAuthority -}}
-  {{- $endpointGatewayPort := 443 -}}
-  {{- if $explicitGatewayPort -}}{{- $endpointGatewayPort = trimPrefix ":" $explicitGatewayPort | int -}}{{- end -}}
-  {{- if ne (int $cfg.networkPolicy.gatewayPort) $endpointGatewayPort -}}{{- fail "agentSandbox.causalCritic.networkPolicy.gatewayPort must match modelGateway.endpoint" -}}{{- end -}}
-  {{- if or (eq (len $cfg.networkPolicy.dnsNamespaceSelector) 0) (eq (len $cfg.networkPolicy.dnsPodSelector) 0) -}}{{- fail "agentSandbox.causalCritic DNS network selectors are required" -}}{{- end -}}
-  {{- if and (eq $cfg.networkPolicy.mode "cilium") (or (not (hasKey $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name")) (not (get $cfg.networkPolicy.dnsNamespaceSelector "kubernetes.io/metadata.name"))) -}}{{- fail "agentSandbox.causalCritic cilium mode requires dnsNamespaceSelector.kubernetes.io/metadata.name" -}}{{- end -}}
-  {{- range $env := concat .Values.server.extraEnv .Values.fetcher.extraEnv -}}
-    {{- if hasPrefix "AGENT_SANDBOX_CRITIC_" (default "" $env.name) -}}{{- fail (printf "extraEnv must not override reserved critic variable %s" $env.name) -}}{{- end -}}
-  {{- end -}}
-{{- end -}}
-{{- end -}}
-
 {{/* Whether any scheduled Agent Sandbox lifecycle needs the dashboard client identity.
 Fix generation is server-only and maintainer-initiated, so it never applies here. */}}
 {{- define "aster.agentSandboxScheduledEnabled" -}}
-{{- if or .Values.agentSandbox.causalCritic.enabled .Values.agentSandbox.analysisShadow.enabled -}}true
+{{- if .Values.agentSandbox.analysisShadow.enabled -}}true
 {{- else -}}false{{- end -}}
 {{- end -}}
 

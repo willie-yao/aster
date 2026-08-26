@@ -1,5 +1,5 @@
 # Multi-stage build producing the default engine image plus specialized
-# remote-fix, Agent Sandbox fix, analyzer, and causal-critic targets.
+# remote-fix, Agent Sandbox fix, and analyzer targets.
 
 # Stage 1: build the SPA. Default base path "/" suits server mode.
 FROM node:20-alpine AS web
@@ -22,7 +22,6 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/worker ./cmd/worker \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/server ./cmd/server \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/fixexecutor ./cmd/fixexecutor \
- && CGO_ENABLED=0 go build -o /out/criticexecutor ./cmd/criticexecutor \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/analysisexecutor ./cmd/analysisexecutor \
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/analysisstager ./cmd/analysisstager
 
@@ -218,16 +217,6 @@ LABEL org.opencontainers.image.source="https://github.com/willie-yao/aster" \
       org.opencontainers.image.revision=${COMMIT} \
       io.prow-ai-dashboard.image-tag=${IMAGE_TAG}
 ENTRYPOINT ["/usr/local/bin/analysisstager"]
-
-# Purpose-built credential-free causal critic for consumer-installed Agent Sandbox.
-# It contains no shell, Git, coding-agent harness, package manager, or write tools.
-FROM gcr.io/distroless/static-debian12:nonroot AS agent-sandbox-critic-executor
-COPY --from=build /out/criticexecutor /usr/local/bin/criticexecutor
-USER 65532:65532
-LABEL org.opencontainers.image.source="https://github.com/willie-yao/aster" \
-      org.opencontainers.image.title="Aster Agent Sandbox Critic Executor" \
-      org.opencontainers.image.url="https://github.com/willie-yao/aster"
-ENTRYPOINT ["/usr/local/bin/criticexecutor"]
 
 # Minimal git-capable engine for reconstructing patches returned by remote fix
 # runtimes such as Agent Sandbox. It intentionally omits any coding-agent harness.

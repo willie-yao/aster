@@ -97,7 +97,6 @@ DIRECT_DIRS = (
     "backend/cmd/analysisstager",
 )
 FORBIDDEN_IMPORTS = (
-    "backend/internal/causalcritic",
     "backend/internal/ai/evidenceplan",
 )
 FORBIDDEN_PHASE_SYMBOLS = (

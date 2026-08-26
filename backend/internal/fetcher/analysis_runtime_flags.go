@@ -26,13 +26,4 @@ func BindAnalysisRuntimeFlags(fs *flag.FlagSet, opts *Options) {
 	fs.StringVar(&shadow.ModelProvider.Model, "agent-analysis-shadow-provider-model", "", "shadow analysis model id")
 	fs.StringVar((*string)(&shadow.ModelProvider.ReasoningEffort), "agent-analysis-shadow-provider-reasoning-effort", "", "shadow analysis model reasoning effort")
 	fs.StringVar(&shadow.ModelProvider.Auth.Type, "agent-analysis-shadow-provider-auth-type", "", "shadow analysis model authentication type")
-	critic := &opts.CausalCritic
-	fs.BoolVar(&critic.Enabled, "causal-critic-shadow", false, "run private sampled Agent Sandbox causal review after authoritative publication")
-	fs.StringVar(&critic.LedgerPath, "causal-critic-shadow-ledger", "", "absolute private causal critic ledger path")
-	fs.IntVar(&critic.MaxPerRun, "causal-critic-shadow-max-per-run", 1, "maximum sampled causal critic reviews per pass")
-	fs.DurationVar(&critic.Timeout, "causal-critic-shadow-timeout", 5*time.Minute, "per-review Agent Sandbox timeout")
-	fs.Int64Var(&critic.OutputLimitBytes, "causal-critic-shadow-output-limit-bytes", 64<<10, "maximum critic executor result bytes")
-	fs.StringVar(&critic.ModelGateway.Endpoint, "causal-critic-shadow-gateway-endpoint", "", "internal HTTPS critic model gateway")
-	fs.StringVar(&critic.ModelGateway.Model, "causal-critic-shadow-gateway-model", "", "critic gateway model id")
-	fs.StringVar(&critic.ModelGateway.ProtocolVersion, "causal-critic-shadow-gateway-protocol", "openai-chat-completions-v1", "critic gateway protocol version")
 }

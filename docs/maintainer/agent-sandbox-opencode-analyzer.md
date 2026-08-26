@@ -200,8 +200,7 @@ provided and accepted:
   `maxPerRun`, timeout, turn, output, quota, and resource limits.
 
 Keep `retries: 0`. Start with `maxPerRun: 1`. The in-process analyzer must remain
-enabled and authoritative. Do not enable the stopped causal critic in the same
-deployment.
+enabled and authoritative.
 
 ### 3. Run matched cold comparisons
 
