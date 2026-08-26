@@ -1639,42 +1639,6 @@ func TestServiceLocalNotificationAvoidsPollDelay(t *testing.T) {
 	}
 }
 
-func TestServiceCorrectionCandidateAndValidation(t *testing.T) {
-	dir := t.TempDir()
-	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z")))
-	runner := &fakeRunner{reply: Reply{
-		Answer: "evidence challenges it", Assessment: "challenges",
-		Citations:        []Citation{{Path: "build-log.txt", Quote: "first failure"}},
-		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
-	}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-correction")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.Send(context.Background(), created.ID, "alice", "turn-correction", "check another cause"); err != nil {
-		t.Fatal(err)
-	}
-	candidate, err := service.CorrectionCandidate(created.ID, "alice", "turn-correction")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if candidate.Proposed.RootCause != "new cause" || candidate.Original.RootCause != "the controller stopped" || len(candidate.Citations) != 1 {
-		t.Fatalf("candidate = %+v", candidate)
-	}
-	if err := service.ValidateCorrectionCandidate(candidate); err != nil {
-		t.Fatal(err)
-	}
-	changed := analyzedTest("TestCluster", "junit.xml", "2026-07-24T13:00:00Z")
-	writeJobDetail(t, dir, testDetail(changed))
-	if err := service.ValidateCorrectionCandidate(candidate); !errors.Is(err, ErrAnalysisChanged) {
-		t.Fatalf("changed analysis validation error = %v", err)
-	}
-}
-
 func recurringPattern() models.PatternAnalysis {
 	pattern := models.PatternAnalysis{
 		Subject: "controller retry failures", JobID: "periodic-demo", GeneratedAt: "2026-07-25T12:00:00Z",
@@ -1802,67 +1766,6 @@ func TestServicePatternChatRejectsStaleContentHash(t *testing.T) {
 	}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrPatternChanged) {
 		t.Fatalf("stale pattern error = %v", err)
-	}
-}
-
-func TestPatternChatCannotPromoteTestCorrection(t *testing.T) {
-	dir := t.TempDir()
-	writeJobDetail(t, dir, patternDetail())
-	runner := &fakeRunner{reply: Reply{
-		Answer: "The pattern should be revised.", Assessment: "challenges",
-		Citations:        []Citation{{Path: "builds/104/build-log.txt", Quote: "terminal failure"}},
-		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
-	}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pattern := recurringPattern()
-	session, err := service.Create(AnalysisRef{
-		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
-	}, "Alice", testRequestID(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestID := testRequestID(t)
-	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Is this conclusion wrong?"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("correction error = %v", err)
-	}
-}
-
-func TestCauseChatCannotPromoteTestCorrection(t *testing.T) {
-	dir := t.TempDir()
-	pattern := causalPatternForChat([]models.PatternCausalGroup{{
-		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
-	}}, nil)
-	models.AssignPatternIdentity(&pattern)
-	writeJobDetail(t, dir, causalPatternDetail(pattern, "2", "1"))
-	runner := &fakeRunner{reply: Reply{
-		Answer: "The cause should be revised.", Assessment: "challenges",
-		Citations:        []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
-		ProposedRevision: &Revision{RootCause: "new cause", SuggestedFix: "new fix"},
-	}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	group := pattern.CausalGroups[0]
-	session, err := service.Create(AnalysisRef{
-		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
-		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
-	}, "Alice", testRequestID(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestID := testRequestID(t)
-	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Is this conclusion wrong?"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("correction error = %v", err)
 	}
 }
 

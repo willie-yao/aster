@@ -82,12 +82,11 @@ func TestActionWriteAuditPathIsHiddenByPreV5Rules(t *testing.T) {
 func TestHandler_DataReadParity(t *testing.T) {
 	dataDir := t.TempDir()
 	files := map[string]string{
-		"manifest.json":             `{"id":"demo"}`,
-		"dashboard.json":            `{"jobs":[]}`,
-		"flakiness.json":            `{"tests":[]}`,
-		"search-index.json":         `{"entries":[]}`,
-		"analysis_corrections.json": `{"corrections":{}}`,
-		"jobs/periodic-x.json":      `{"job_id":"periodic-x"}`,
+		"manifest.json":        `{"id":"demo"}`,
+		"dashboard.json":       `{"jobs":[]}`,
+		"flakiness.json":       `{"tests":[]}`,
+		"search-index.json":    `{"entries":[]}`,
+		"jobs/periodic-x.json": `{"job_id":"periodic-x"}`,
 	}
 	for rel, content := range files {
 		writeFile(t, dataDir, rel, content)
@@ -227,12 +226,12 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	writeFile(t, dataDir, "orka_analysis.json", `{"contract_hash":"private"}`)
 	writeFile(t, dataDir, "issue_state.json", `{"tracked":{}}`)
 	writeFile(t, dataDir, "fix_pr_state.json", `{"tracked":{}}`)
+	writeFile(t, dataDir, "analysis_correction_state.json", `{"corrections":{}}`)
 	writeFile(t, dataDir, "action_request_state.json", `{"requests":{}}`)
 	writeFile(t, dataDir, "action_preview_state.json", `{"previews":{}}`)
 	writeFile(t, dataDir, ".action-write-audit/state.json", `{"records":{}}`)
 	writeFile(t, dataDir, "remediation_state.json", `{"version":1,"remediations":{}}`)
 	writeFile(t, dataDir, "remediation_prow_catalog.json", `{"tests":{}}`)
-	writeFile(t, dataDir, "analysis_correction_state.json", `{"corrections":{}}`)
 	writeFile(t, dataDir, ".analysis-chat/sessions.json", `{"sessions":{}}`)
 	writeFile(t, dataDir, ".remediation-investigations/cache.json", `{"version":1}`)
 	writeFile(t, dataDir, "recurrence_ledger.json", `{"version":1,"entries":{}}`)
@@ -248,7 +247,7 @@ func TestHandler_HidesOperationalFiles(t *testing.T) {
 	if resp, _ := http.Get(srv.URL + "/data/dashboard.json"); resp.StatusCode != http.StatusOK {
 		t.Errorf("dashboard.json status = %d, want 200", resp.StatusCode)
 	}
-	for _, name := range []string{"ai_cache.json", "ai_traces.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "action_request_state.json", "action_preview_state.json", ".action-write-audit/state.json", "remediation_state.json", "remediation_prow_catalog.json", "analysis_correction_state.json", ".analysis-chat/sessions.json", ".remediation-investigations/cache.json", "recurrence_ledger.json"} {
+	for _, name := range []string{"ai_cache.json", "ai_traces.json", "issue_state.json", "fix_pr_state.json", "orka_analysis.json", "analysis_correction_state.json", "action_request_state.json", "action_preview_state.json", ".action-write-audit/state.json", "remediation_state.json", "remediation_prow_catalog.json", ".analysis-chat/sessions.json", ".remediation-investigations/cache.json", "recurrence_ledger.json"} {
 		resp, err := http.Get(srv.URL + "/data/" + name)
 		if err != nil {
 			t.Fatalf("GET %s: %v", name, err)

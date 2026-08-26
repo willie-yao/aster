@@ -100,7 +100,6 @@ backend/                         Go 1.25
     modelprovider/               Shared non-secret provider and credential-mode contract
     analysisruntime/             Wires the in-process failure-analysis runtime
     analysischat/                Bounded conversations about a published analysis
-    corrections/                 Promotes reviewed chat revisions without mutating output
     sourceinvestigation/         Read-only source verification helpers
     aitest/                      Record/replay chat-completions server for tests
 

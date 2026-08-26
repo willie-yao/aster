@@ -427,8 +427,6 @@ server:
     enabled: false
     # Per-turn model timeout. The server accepts values up to 30m.
     timeout: 10m
-    # Enables explicit review/confirmation of evidence-backed chat revisions.
-    correctionsEnabled: false
     sessionTTL: 2h
     maxSessions: 128
     maxSessionsPerOwner: 8

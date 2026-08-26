@@ -79,9 +79,8 @@ type Options struct {
 	Actions ActionRunner
 	// DisableFixActions keeps issue and resolution actions available while
 	// withholding Fix PR routes and capability advertisement.
-	DisableFixActions   bool
-	AnalysisChat        AnalysisChatRunner
-	AnalysisCorrections AnalysisCorrectionRunner
+	DisableFixActions bool
+	AnalysisChat      AnalysisChatRunner
 	// PullRequestEscalation runs on-demand analysis for a pull request failure
 	// the deterministic pass could not explain. Nil withholds the routes and
 	// the capability.
@@ -172,8 +171,7 @@ type Features struct {
 	// AIUsage enables the private token and cost API.
 	AIUsage bool `json:"ai_usage,omitempty"`
 	// AnalysisChat enables authenticated conversations about one published analysis.
-	AnalysisChat        bool `json:"analysis_chat,omitempty"`
-	AnalysisCorrections bool `json:"analysis_corrections,omitempty"`
+	AnalysisChat bool `json:"analysis_chat,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
 	ChatFix              bool   `json:"chat_fix,omitempty"`
 	JUnitChatFix         bool   `json:"junit_chat_fix,omitempty"`
@@ -286,18 +284,6 @@ func Handler(opts Options) (http.Handler, error) {
 			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
 				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(timeout, requests))))
 		}
-	}
-
-	if opts.Auth != nil && opts.AnalysisCorrections != nil {
-		caps.Features.AnalysisCorrections = true
-		trusted := trustedOriginSet(opts.TrustedOrigins)
-		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
-		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview",
-			auth.Middleware(opts.Auth, guard(previewAnalysisCorrectionHandler(opts.AnalysisCorrections))))
-		mux.Handle("POST /api/analysis-corrections/confirm",
-			auth.Middleware(opts.Auth, guard(confirmAnalysisCorrectionHandler(opts.AnalysisCorrections))))
-		mux.Handle("POST /api/analysis-corrections/{id}/revoke",
-			auth.Middleware(opts.Auth, guard(revokeAnalysisCorrectionHandler(opts.AnalysisCorrections))))
 	}
 
 	// On-demand pull request escalation requires both auth and a runner. The

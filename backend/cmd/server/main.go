@@ -36,7 +36,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/auth"
 	"github.com/willie-yao/aster/backend/internal/chatfix"
-	"github.com/willie-yao/aster/backend/internal/corrections"
 	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 
@@ -243,14 +242,6 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			log.Printf("🛠️ analysis chat fix previews disabled: no compatible runtime or source and fix repositories differ")
 		}
 	}
-	if features.AnalysisCorrections {
-		correctionService, err := corrections.NewService(dataDir, chatService, corrections.Options{})
-		if err != nil {
-			return fmt.Errorf("configuring analysis corrections: %w", err)
-		}
-		opts.AnalysisCorrections = correctionService
-		log.Printf("📝 analysis correction promotion enabled")
-	}
 	return nil
 }
 
@@ -277,7 +268,6 @@ func fixActionsEnabled(fixConfig project.FixPRs, authMode string) (bool, error) 
 type interactiveFeatures struct {
 	Actions               bool
 	AnalysisChat          bool
-	AnalysisCorrections   bool
 	PullRequestEscalation bool
 }
 
@@ -285,13 +275,6 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 	chat, err := optionalBoolEnv("ANALYSIS_CHAT_ENABLED", false)
 	if err != nil {
 		return interactiveFeatures{}, err
-	}
-	correctionsEnabled, err := optionalBoolEnv("ANALYSIS_CORRECTIONS_ENABLED", false)
-	if err != nil {
-		return interactiveFeatures{}, err
-	}
-	if correctionsEnabled && !chat {
-		return interactiveFeatures{}, fmt.Errorf("ANALYSIS_CORRECTIONS_ENABLED requires ANALYSIS_CHAT_ENABLED")
 	}
 	pullRequestEscalation, err := optionalBoolEnv("PULL_REQUEST_ESCALATION_ENABLED", false)
 	if err != nil {
@@ -302,7 +285,7 @@ func interactiveFeaturesFromEnv() (interactiveFeatures, error) {
 		return interactiveFeatures{}, err
 	}
 	return interactiveFeatures{
-		Actions: actions, AnalysisChat: chat, AnalysisCorrections: correctionsEnabled,
+		Actions: actions, AnalysisChat: chat,
 		PullRequestEscalation: pullRequestEscalation,
 	}, nil
 }

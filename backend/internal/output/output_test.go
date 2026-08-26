@@ -415,11 +415,16 @@ func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	}
 }
 
-func TestWriteAllRemovesRetiredPublicProjection(t *testing.T) {
+func TestWriteAllRemovesRetiredPublicProjections(t *testing.T) {
 	dir := t.TempDir()
-	stale := filepath.Join(dir, "remediations.json")
-	if err := os.WriteFile(stale, []byte(`{"remediations":{"pattern":{}}}`), 0o644); err != nil {
-		t.Fatal(err)
+	stale := []string{
+		filepath.Join(dir, "analysis_corrections.json"),
+		filepath.Join(dir, "remediations.json"),
+	}
+	for _, path := range stale {
+		if err := os.WriteFile(path, []byte(`{"stale":true}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	retained := filepath.Join(dir, "remediation_state.json")
 	if err := os.WriteFile(retained, []byte(`{"version":1}`), 0o644); err != nil {
@@ -428,8 +433,10 @@ func TestWriteAllRemovesRetiredPublicProjection(t *testing.T) {
 	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), nil, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("retired public projection still exists: %v", err)
+	for _, path := range stale {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("retired public projection %s still exists: %v", path, err)
+		}
 	}
 	if _, err := os.Stat(retained); err != nil {
 		t.Fatalf("retained private state was deleted: %v", err)

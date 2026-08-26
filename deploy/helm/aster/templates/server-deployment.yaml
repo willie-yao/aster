@@ -2,7 +2,6 @@
 {{- include "aster.validateNetworkSecurity" . -}}
 {{- $actions := .Values.server.actions.enabled -}}
 {{- $chat := .Values.server.chat.enabled -}}
-{{- $corrections := .Values.server.chat.correctionsEnabled -}}
 {{- $escalation := .Values.server.pullRequestEscalation.enabled -}}
 {{- $interactive := include "aster.serverInteractive" . -}}
 {{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled $actions -}}
@@ -71,9 +70,6 @@
 {{- end -}}
 {{- if and $escalation (not .Values.ai.enabled) -}}
 {{- fail "server.pullRequestEscalation.enabled requires ai.enabled" -}}
-{{- end -}}
-{{- if and $corrections (not $chat) -}}
-{{- fail "server.chat.correctionsEnabled requires server.chat.enabled" -}}
 {{- end -}}
 {{- if and $chat (le (int .Values.server.chat.maxSessions) 0) -}}
 {{- fail "server.chat.maxSessions must be positive" -}}
@@ -173,10 +169,6 @@ spec:
             {{- if $chat }}
             - name: ANALYSIS_CHAT_ENABLED
               value: "true"
-            {{- if $corrections }}
-            - name: ANALYSIS_CORRECTIONS_ENABLED
-              value: "true"
-            {{- end }}
             - name: ANALYSIS_CHAT_STATE_DIR
               value: {{ printf "%s/.analysis-chat" .Values.persistence.mountPath | quote }}
             - name: ANALYSIS_CHAT_TIMEOUT

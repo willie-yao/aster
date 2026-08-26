@@ -24,7 +24,6 @@ import {
   FactCheckOutlined,
   HelpOutlined,
   PsychologyAltOutlined,
-  PublishedWithChangesOutlined,
   ReportProblemOutlined,
   RestartAltOutlined,
   StopCircleOutlined,
@@ -65,7 +64,6 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
-import { AnalysisCorrectionAPIError, confirmAnalysisCorrection, previewAnalysisCorrection } from "../lib/analysisCorrections";
 import { soft, softChipSx } from "../theme";
 import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
 import type {
@@ -80,8 +78,6 @@ import type {
   AnalysisChatUnverifiedReason,
 } from "../types/analysisChat";
 import { RichText } from "./RichText";
-import { AnalysisCorrectionDialog } from "./AnalysisCorrectionDialog";
-import type { AnalysisCorrectionPreview } from "../types/corrections";
 import type { PatternAnalysis } from "../types/dashboard";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import { ChatFixDialog } from "./ChatFixDialog";
@@ -252,20 +248,16 @@ function AttemptSummary({ attempt }: { attempt: AnalysisChatAttempt }) {
 function AssistantMessage({
   message,
   fileCtx,
-  correctionEnabled,
   chatFixEnabled,
   fixEligible,
   fixIneligibleReason,
-  onReviewCorrection,
   onUseForFix,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
-  correctionEnabled: boolean;
   chatFixEnabled: boolean;
   fixEligible: boolean;
   fixIneligibleReason?: string;
-  onReviewCorrection: (requestID: string) => void;
   onUseForFix: () => void;
 }) {
   const assessment = message.assessment
@@ -462,18 +454,6 @@ function AssistantMessage({
             <Typography variant="body2" sx={{ mt: 0.25, lineHeight: 1.6 }}>
               <RichText text={message.proposed_revision.suggested_fix} steps fileCtx={fileCtx} />
             </Typography>
-            {correctionEnabled && !unverified && !partiallyVerified && message.request_id && (
-              <Button
-                size="small"
-                variant="text"
-                color="warning"
-                startIcon={<PublishedWithChangesOutlined sx={{ fontSize: 17 }} />}
-                onClick={() => onReviewCorrection(message.request_id!)}
-                sx={{ mt: 1.5, ml: -0.5 }}
-              >
-                Review correction
-              </Button>
-            )}
           </Box>
         )}
 
@@ -566,14 +546,12 @@ export function AnalysisChat({
   fileCtx,
   fixPatterns = [],
   fixTarget,
-  onCorrectionChanged,
   appearance = "default",
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
   fixTarget?: CausalGroupFixTarget;
-  onCorrectionChanged?: () => void;
   appearance?: "default" | "detail";
 }) {
   const { features } = useCapabilities();
@@ -593,10 +571,6 @@ export function AnalysisChat({
   const [validationRetries, setValidationRetries] = useState(0);
   const [maxValidationRetries, setMaxValidationRetries] = useState(0);
   const [cancelling, setCancelling] = useState(false);
-  const [correctionPreview, setCorrectionPreview] = useState<AnalysisCorrectionPreview | null>(null);
-  const [correctionOpen, setCorrectionOpen] = useState(false);
-  const [correctionBusy, setCorrectionBusy] = useState(false);
-  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [fixMessage, setFixMessage] = useState<AnalysisChatMessage | null>(null);
   const [fixOpen, setFixOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -609,7 +583,6 @@ export function AnalysisChat({
   const restoreControllerRef = useRef<AbortController | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const cancelControllerRef = useRef<AbortController | null>(null);
-  const correctionControllerRef = useRef<AbortController | null>(null);
   const resetControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -664,7 +637,6 @@ export function AnalysisChat({
     restoreControllerRef.current?.abort();
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
-    correctionControllerRef.current?.abort();
     resetControllerRef.current?.abort();
     setExpanded(false);
     setQuestion("");
@@ -680,10 +652,6 @@ export function AnalysisChat({
     setValidationRetries(0);
     setMaxValidationRetries(0);
     setCancelling(false);
-    setCorrectionPreview(null);
-    setCorrectionOpen(false);
-    setCorrectionBusy(false);
-    setCorrectionError(null);
     setFixMessage(null);
     setFixOpen(false);
     setResetOpen(false);
@@ -847,7 +815,6 @@ export function AnalysisChat({
     restoreControllerRef.current?.abort();
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
-    correctionControllerRef.current?.abort();
     resetControllerRef.current?.abort();
   }, []);
 
@@ -1043,62 +1010,6 @@ export function AnalysisChat({
     }
   }
 
-  async function reviewCorrection(requestID: string) {
-    if (!session) return;
-    const requestIdentity = identity;
-    correctionControllerRef.current?.abort();
-    const controller = new AbortController();
-    correctionControllerRef.current = controller;
-    setCorrectionBusy(true);
-    setCorrectionError(null);
-    try {
-      const preview = await previewAnalysisCorrection(session.id, requestID, controller.signal);
-      if (identityRef.current !== requestIdentity || correctionControllerRef.current !== controller) return;
-      setCorrectionPreview(preview);
-      setCorrectionOpen(true);
-    } catch (previewError) {
-      if (previewError instanceof Error && previewError.name === "AbortError") return;
-      if (identityRef.current === requestIdentity) setError(previewError instanceof Error ? previewError.message : "Could not prepare the correction.");
-    } finally {
-      if (correctionControllerRef.current === controller) {
-        correctionControllerRef.current = null;
-        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
-      }
-    }
-  }
-
-  async function publishCorrection() {
-    if (!correctionPreview) return;
-    const requestIdentity = identity;
-    correctionControllerRef.current?.abort();
-    const controller = new AbortController();
-    correctionControllerRef.current = controller;
-    setCorrectionBusy(true);
-    setCorrectionError(null);
-    try {
-      await confirmAnalysisCorrection(correctionPreview.token, controller.signal);
-      if (identityRef.current !== requestIdentity) return;
-      setCorrectionOpen(false);
-      setCorrectionPreview(null);
-      onCorrectionChanged?.();
-    } catch (confirmError) {
-      if (confirmError instanceof Error && confirmError.name === "AbortError") return;
-      if (identityRef.current !== requestIdentity) return;
-      if (!(confirmError instanceof AnalysisCorrectionAPIError)) {
-        setCorrectionOpen(false);
-        setCorrectionPreview(null);
-        onCorrectionChanged?.();
-      } else {
-        setCorrectionError(confirmError.message);
-      }
-    } finally {
-      if (correctionControllerRef.current === controller) {
-        correctionControllerRef.current = null;
-        if (identityRef.current === requestIdentity) setCorrectionBusy(false);
-      }
-    }
-  }
-
   async function cancelTurn() {
     if (!pendingTurn || cancelling) return;
     const cancelIdentity = identity;
@@ -1130,10 +1041,8 @@ export function AnalysisChat({
     const discarded = session;
     resetControllerRef.current?.abort();
     // A cancel that resolves after the reset would resubmit against the
-    // discarded session, and a correction preview would reopen its dialog over
-    // the fresh conversation.
+    // discarded session.
     cancelControllerRef.current?.abort();
-    correctionControllerRef.current?.abort();
     const controller = new AbortController();
     resetControllerRef.current = controller;
     setResetting(true);
@@ -1159,9 +1068,6 @@ export function AnalysisChat({
       setValidationRetries(0);
       setMaxValidationRetries(0);
       setCancelling(false);
-      setCorrectionPreview(null);
-      setCorrectionOpen(false);
-      setCorrectionError(null);
       setFixMessage(null);
       setFixOpen(false);
       setResetOpen(false);
@@ -1476,11 +1382,9 @@ export function AnalysisChat({
                     key={entry.key}
                     message={message}
                     fileCtx={fileCtx}
-                    correctionEnabled={!multiBuildScope && Boolean(features.analysis_corrections)}
                     chatFixEnabled={exactFixEnabled || Boolean(features.chat_fix && patternScope)}
                     fixEligible={exactFixEligible || legacyFixEligible}
                     fixIneligibleReason={fixIneligibleReason}
-                    onReviewCorrection={(requestID) => void reviewCorrection(requestID)}
                     onUseForFix={() => openFix(message)}
                   />
                 );
@@ -1607,14 +1511,6 @@ export function AnalysisChat({
           </Box>
         </Collapse>
       </Box>
-      <AnalysisCorrectionDialog
-        preview={correctionPreview}
-        open={correctionOpen}
-        busy={correctionBusy}
-        error={correctionError}
-        onClose={() => setCorrectionOpen(false)}
-        onConfirm={() => void publishCorrection()}
-      />
       <ChatFixDialog
         open={fixOpen}
         sessionID={session?.id ?? ""}

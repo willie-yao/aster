@@ -46,9 +46,6 @@ schema.
 | `POST /api/failures/{id}/unresolve` | Remove the resolved marker. Requires only an existing marker, so a resolution never strands. |
 | `POST /api/causes/{signature}/resolve` | Mark one cause of a recurring pattern resolved at that cause's watermark, leaving its siblings active. |
 | `POST /api/causes/{signature}/unresolve` | Remove a cause's resolved marker. Requires only an existing marker. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/correction/preview` | Preview an evidence-backed analysis correction. |
-| `POST /api/analysis-corrections/confirm` | Confirm and publish the correction overlay. |
-| `POST /api/analysis-corrections/{id}/revoke` | Revoke the overlay and restore the original analysis. |
 | `GET /api/auth/login` | OAuth mode: start GitHub sign-in. |
 | `GET /api/auth/callback` | OAuth mode: establish the encrypted session. |
 | `GET /api/auth/user` | Return the signed-in admin or `401`. |
@@ -60,7 +57,7 @@ schema.
 
 `GET /api/capabilities` is the only frontend feature-discovery seam. It exposes
 safe engine identity and additive flags for authentication, chat, action
-requests, issue actions, Fix actions, corrections, traces, usage, and related
+requests, issue actions, Fix actions, traces, usage, and related
 server features. The UI must not infer write capability from a visible button or
 from `/data/*` content.
 
@@ -139,9 +136,8 @@ citations are omitted individually. When verified citations remain, the answer
 is marked partially verified and may start a Fix investigation with only the
 validated citations carried as artifact evidence. An answer with no verified
 citation, or one that does not
-follow the response format, remains unverified and cannot start a Fix preview or
-a correction. Partially verified answers cannot promote corrections. A response
-that only announces the model's next step is
+follow the response format, remains unverified and cannot start a Fix preview. A
+response that only announces the model's next step is
 not an answer: the engine asks the model to take that step or conclude, and the
 turn fails if it does neither.
 
@@ -154,9 +150,8 @@ using one of the maintainer's admitted turns. Preparation failures never fail or
 roll back dashboard publication, and the remaining causes are retried on later
 runs.
 
-A proposed correction or Fix finding is still inert model output. Corrections
-require their own preview and confirmation. Source compatibility, patch
-generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff
+A proposed revision or Fix finding is still inert model output. Source
+compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff
 requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
 Sessions are stored in private owner-bound state, have bounded admitted turns,
@@ -198,14 +193,6 @@ Email delivery after a draft becomes ready is optional and does not change who
 may review or confirm it. SMTP configuration belongs in
 [Notifications](notifications.md).
 
-## Analysis corrections
-
-A challenged chat response may propose a complete evidence-backed revision.
-Preview validates the current published analysis, correction content, and cited
-evidence without changing `jobs/*.json`. Confirmation publishes a separate
-overlay, and revocation restores the original result. Correction state is
-private operational data and does not rewrite the authoritative analysis cache.
-
 ## Private data boundary
 
 Public `/data/*` serving uses an allowlist and rejects private files and hidden
@@ -213,7 +200,6 @@ directories. Private state includes:
 
 - analysis chat transcripts, prepared cause findings, and locks;
 - action requests, preview state, and write audit;
-- correction overlays;
 - analysis traces and pattern diagnostics;
 - fetch status and pass history;
 - AI usage ledgers;

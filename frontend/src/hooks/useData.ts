@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import type { AnalysisCorrectionState } from "../types/corrections";
 import type {
   Dashboard,
   JobDetail,
@@ -151,31 +150,4 @@ export function useResolved() {
   }, [nonce]);
 
   return { data, loading, refetch: () => setNonce((n) => n + 1) };
-}
-
-
-export function useAnalysisCorrections() {
-  const [nonce, setNonce] = useState(0);
-  const [data, setData] = useState<AnalysisCorrectionState>({ corrections: {} });
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${DATA_BASE}/analysis_corrections.json`, { cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 404) return { corrections: {} };
-        if (!response.ok) throw new Error(`Correction overlay returned HTTP ${response.status}`);
-        return response.json() as Promise<AnalysisCorrectionState>;
-      })
-      .then((value) => {
-        if (!cancelled) {
-          setData(value?.corrections ? value : { corrections: {} });
-          setError(null);
-        }
-      })
-      .catch((loadError) => {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Could not load analysis corrections.");
-      });
-    return () => { cancelled = true; };
-  }, [nonce]);
-  return { data, error, refetch: () => setNonce((value) => value + 1) };
 }
