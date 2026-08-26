@@ -17,7 +17,6 @@ The shadow has no authority over:
 - `dashboard.json`, `jobs/*.json`, or `flakiness.json`;
 - the normal analysis cache or cache acceptance policy;
 - recurring-pattern publication;
-- analysis corrections;
 - notifications, issues, Fix PRs, remediation, or resolution state.
 
 A Sandbox failure, malformed result, timeout, ledger error, or cleanup delay must

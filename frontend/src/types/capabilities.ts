@@ -15,7 +15,6 @@ export interface CapabilityFeatures {
   fetch_status?: boolean;
   pattern_diagnostics?: boolean;
   analysis_chat?: boolean;
-  analysis_corrections?: boolean;
   chat_fix?: boolean;
   junit_chat_fix?: boolean;
   pull_request_escalation?: boolean;

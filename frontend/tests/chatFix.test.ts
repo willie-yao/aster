@@ -36,7 +36,6 @@ test("partially verified chat findings keep validated evidence fix-eligible", ()
   assert.match(chat, /Some citations were omitted or could not be verified/);
   assert.match(chat, /The evidence shown below is verified/);
   assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
-  assert.match(chat, /correctionEnabled && !unverified && !partiallyVerified/);
   assert.match(chat, /validation repair/);
   assert.doesNotMatch(chat, /response-contract repair/);
   assert.doesNotMatch(chat, /The response contract was rejected/);

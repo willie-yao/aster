@@ -46,9 +46,11 @@ var NonPublishedFiles = []string{
 	// Retained so a stale file left in an existing data directory by a removed
 	// analysis runtime is never published.
 	"orka_analysis.json",
+	// Retained so private state left by the removed analysis corrections
+	// feature is never published from an existing data directory.
+	"analysis_correction_state.json",
 	"action_request_state.json",
 	"action_preview_state.json",
-	"analysis_correction_state.json",
 	"pr_escalation_state.json",
 	"shared_failure_escalation_state.json",
 	recurrenceledger.FileName,
@@ -196,7 +198,10 @@ func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, detai
 // retiredPublicFiles are public projections no longer produced by any feature.
 // A normal refresh removes them so an upgraded deployment cannot keep serving
 // stale data.
-var retiredPublicFiles = []string{"remediations.json"}
+var retiredPublicFiles = []string{
+	"analysis_corrections.json",
+	"remediations.json",
+}
 
 func removeRetiredPublicFiles(dir string) error {
 	for _, name := range retiredPublicFiles {

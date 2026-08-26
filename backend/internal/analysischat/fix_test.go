@@ -372,9 +372,6 @@ func TestServiceFixCandidateRejectsUnverifiedOnlyConversation(t *testing.T) {
 	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("unverified fix candidate error = %v", err)
 	}
-	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("unverified correction candidate error = %v", err)
-	}
 }
 
 func TestServiceFixCandidateAllowsPartiallyVerifiedAnswer(t *testing.T) {
@@ -396,9 +393,6 @@ func TestServiceFixCandidateAllowsPartiallyVerifiedAnswer(t *testing.T) {
 	}
 	if len(candidate.ArtifactCitations) != 1 || !slices.Equal(candidate.EvidenceWarnings, []string{"citation 2 line range was not returned by the cited artifact read"}) {
 		t.Fatalf("candidate = %+v", candidate)
-	}
-	if _, err := service.CorrectionCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("partial correction error = %v", err)
 	}
 }
 

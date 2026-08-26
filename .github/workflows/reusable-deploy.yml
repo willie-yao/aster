@@ -369,8 +369,8 @@ jobs:
       # state (they carry operational metadata, never dashboard data). The flat
       # files stay in sync with output.NonPublishedFiles; private status and
       # retired investigation cache files are hidden in dot-directories.
-      # remediations.json is a retired public projection stripped so a
-      # pre-fetched data directory cannot republish it.
+      # Retired public projections are stripped so a pre-fetched data
+      # directory cannot republish them.
       - name: Strip non-published data files
         run: |
           d=engine/frontend/dist/data
@@ -381,9 +381,9 @@ jobs:
             "$d"/notification_state.json "$d"/remediation_state.json \
             "$d"/pr_comment_state.json "$d"/pr_comment_state.json.lock \
             "$d"/remediation_prow_catalog.json "$d"/remediations.json \
-            "$d"/orka_analysis.json \
+            "$d"/analysis_corrections.json \
+            "$d"/orka_analysis.json "$d"/analysis_correction_state.json \
             "$d"/action_request_state.json "$d"/action_preview_state.json \
-            "$d"/analysis_correction_state.json \
             "$d"/pr_escalation_state.json \
             "$d"/shared_failure_escalation_state.json \
             "$d"/recurrence_ledger.json "$d"/.recurrence-ledger.lock \

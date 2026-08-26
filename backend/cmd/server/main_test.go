@@ -56,7 +56,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 	setDefaults := func(t *testing.T) {
 		t.Helper()
 		t.Setenv("ANALYSIS_CHAT_ENABLED", "")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "")
 		t.Setenv("ANALYSIS_SOURCE_INVESTIGATION_ENABLED", "")
 		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "")
 		t.Setenv("ACTIONS_ENABLED", "")
@@ -94,18 +93,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 			t.Fatalf("features = %+v", features)
 		}
 	})
-	t.Run("chat corrections", func(t *testing.T) {
-		setDefaults(t)
-		t.Setenv("ANALYSIS_CHAT_ENABLED", "true")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "true")
-		features, err := interactiveFeaturesFromEnv()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !features.AnalysisChat || !features.AnalysisCorrections || features.Actions {
-			t.Fatalf("features = %+v", features)
-		}
-	})
 	t.Run("escalation defaults writes off", func(t *testing.T) {
 		setDefaults(t)
 		t.Setenv("PULL_REQUEST_ESCALATION_ENABLED", "true")
@@ -127,14 +114,6 @@ func TestInteractiveFeaturesFromEnv(t *testing.T) {
 		}
 		if !features.Actions || !features.PullRequestEscalation {
 			t.Fatalf("features = %+v", features)
-		}
-	})
-	t.Run("corrections require chat", func(t *testing.T) {
-		setDefaults(t)
-		t.Setenv("ANALYSIS_CHAT_ENABLED", "false")
-		t.Setenv("ANALYSIS_CORRECTIONS_ENABLED", "true")
-		if _, err := interactiveFeaturesFromEnv(); err == nil {
-			t.Fatal("analysis corrections were accepted without chat")
 		}
 	})
 	t.Run("invalid", func(t *testing.T) {

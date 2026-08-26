@@ -1580,10 +1580,6 @@
               "type": "string",
               "description": "Per-turn model timeout. Defaults to 10m and accepts values up to 30m."
             },
-            "correctionsEnabled": {
-              "type": "boolean",
-              "description": "Enable reviewed chat corrections."
-            },
             "sessionTTL": {
               "type": "string",
               "description": "Persisted chat session lifetime."
@@ -1613,7 +1609,6 @@
           "required": [
             "enabled",
             "timeout",
-            "correctionsEnabled",
             "sessionTTL",
             "maxSessions",
             "maxSessionsPerOwner",

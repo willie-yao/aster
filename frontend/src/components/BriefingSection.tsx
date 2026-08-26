@@ -13,9 +13,8 @@ const briefingSectionClass = "briefing-section";
 // Every section preceded by another carries a rule. A root cause routinely runs
 // several hundred pixels, and the container gap alone did not read as a
 // boundary against a block that tall. The rule keys on a preceding sibling
-// section rather than on position, so neither an intervening non-section
-// sibling (the status row, the correction panel) nor a future sibling that
-// happens to be a section can change which block goes unruled.
+// section rather than on position, so neither the status row nor a future
+// sibling that happens to be a section can change which block goes unruled.
 export function BriefingSection({
   label,
   children,
