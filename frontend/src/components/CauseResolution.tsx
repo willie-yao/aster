@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -6,15 +6,14 @@ import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { Replay, TaskAltOutlined } from "@mui/icons-material";
 import { DialogHeader } from "./ActionDialog";
-import { dialogGutter, dialogPaperSx } from "../theme/overview";
+import { dialogGutter, dialogPaperSx, overviewTypography } from "../theme/overview";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { reopenFailure, resolveFailure } from "../lib/resolution";
+import { causeResolutionAvailable, reopenFailure, resolveFailure } from "../lib/resolution";
 import type { ResolvedEntry } from "../types/dashboard";
 
 // CauseResolution acknowledges one cause of a recurring pattern without touching
@@ -29,15 +28,15 @@ export function CauseResolution({
   signature,
   resolvedEntry,
   resolvable,
-  appearance = "card",
+  appearance = "bar",
   onResolvedChange,
 }: {
   signature?: string;
   resolvedEntry?: ResolvedEntry;
   resolvable: boolean;
-  // "card" separates the control from the cause body above it; "inline" drops
-  // that separator for callers that already sit in their own row.
-  appearance?: "card" | "inline";
+  // "bar" is an outlined control sized to sit beside the cause's other action;
+  // "inline" is a bare text control for callers that already own their row.
+  appearance?: "bar" | "inline";
   onResolvedChange: () => void;
 }) {
   const { features } = useCapabilities();
@@ -64,10 +63,16 @@ export function CauseResolution({
   }, [signature]);
 
   const resolved = Boolean(resolvedEntry);
-  if (!features.actions || status !== "authenticated" || !signature || (!resolvable && !resolved)) {
+  if (!causeResolutionAvailable({
+    actionsEnabled: Boolean(features.actions),
+    authenticated: status === "authenticated",
+    signature,
+    resolvable,
+    resolved,
+  })) {
     return null;
   }
-  const cause = signature;
+  const cause = signature as string;
 
   async function submit(run: () => Promise<void>, onDone?: () => void) {
     setBusy(true);
@@ -85,47 +90,67 @@ export function CauseResolution({
     }
   }
 
+  const bar = appearance === "bar";
+  // In the bar the control sits beside the cause's other action, so it matches
+  // that button's weight and never shrinks: the representative-failure label is
+  // the one that gives up width when the row is tight.
+  const buttonSx = bar
+    ? {
+        textTransform: "none" as const,
+        flexShrink: 0,
+        minHeight: { xs: 44, sm: 32 },
+        ...overviewTypography.secondaryBody,
+        fontWeight: 650,
+      }
+    : { textTransform: "none" as const, px: 0, minHeight: { xs: 44, sm: 36 } };
+
+  // The bar is a flex row that the control's parts join directly, so it stays a
+  // fragment. Inline callers place it in a row of their own that neither wraps
+  // nor stacks, so there it owns a column wrapper and the alert lands beneath
+  // the button rather than beside it.
+  const Wrapper = bar ? Fragment : InlineWrapper;
+
   return (
-    <Box sx={appearance === "card" ? { mt: 1.5, pt: 1.5, borderTop: "1px solid", borderColor: "divider" } : undefined}>
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-        {resolved ? (
-          <Button
-            size="small"
-            variant="text"
-            color="primary"
-            startIcon={<Replay sx={{ fontSize: 18 }} />}
-            disabled={busy}
-            onClick={() => submit(() => reopenFailure("cause", cause))}
-            sx={{ textTransform: "none", px: 0, minHeight: { xs: 44, sm: 36 } }}
-          >
-            Reopen failure
-          </Button>
-        ) : (
-          <Button
-            size="small"
-            variant="text"
-            color="primary"
-            startIcon={<TaskAltOutlined sx={{ fontSize: 18 }} />}
-            disabled={busy}
-            onClick={() => {
-              setError(null);
-              setOpen(true);
-            }}
-            sx={{ textTransform: "none", px: 0, minHeight: { xs: 44, sm: 36 } }}
-          >
-            Resolve failure
-          </Button>
-        )}
-        {resolvedEntry && appearance === "card" && (
-          <Typography variant="caption" color="textSecondary" sx={{ minWidth: 0 }}>
-            Resolved by {resolvedEntry.resolved_by}
-            {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}
-          </Typography>
-        )}
-      </Stack>
+    <Wrapper>
+      {resolved ? (
+        <Button
+          size="small"
+          variant={bar ? "outlined" : "text"}
+          color="primary"
+          startIcon={<Replay sx={{ fontSize: 18 }} />}
+          disabled={busy}
+          onClick={() => submit(() => reopenFailure("cause", cause))}
+          sx={buttonSx}
+        >
+          Reopen failure
+        </Button>
+      ) : (
+        <Button
+          size="small"
+          variant={bar ? "outlined" : "text"}
+          color="primary"
+          startIcon={<TaskAltOutlined sx={{ fontSize: 18 }} />}
+          disabled={busy}
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+          sx={buttonSx}
+        >
+          Resolve failure
+        </Button>
+      )}
+      {resolvedEntry && bar && (
+        <Typography variant="caption" color="textSecondary" sx={{ minWidth: 0 }}>
+          Resolved by {resolvedEntry.resolved_by}
+          {resolvedEntry.note ? `. ${resolvedEntry.note}` : ""}
+        </Typography>
+      )}
 
       {error && (
-        <Alert severity="error" sx={{ mt: 1 }}>
+        // In the bar the alert is a flex item beside the controls, so a full
+        // width forces it onto its own wrapped line. Inline it already has one.
+        <Alert severity="error" sx={{ mt: 1, ...(bar && { width: "100%" }) }}>
           <Typography variant="body2">{error}</Typography>
         </Alert>
       )}
@@ -184,6 +209,15 @@ export function CauseResolution({
           </Button>
         </DialogActions>
       </Dialog>
-    </Box>
+    </Wrapper>
+  );
+}
+
+// InlineWrapper stacks the control's parts for callers that place it in a row
+// which neither wraps nor stacks. The surrounding row still decides where the
+// column sits; this only keeps the alert off the button's line.
+function InlineWrapper({ children }: { children: ReactNode }) {
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>{children}</Box>
   );
 }

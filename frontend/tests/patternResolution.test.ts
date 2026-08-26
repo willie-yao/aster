@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import test from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement, type ReactNode } from "react";
@@ -10,7 +12,7 @@ import {
   unlistedCauseResolutions,
   unlistedPatternResolutions,
 } from "../src/lib/dashboardOverview.js";
-import type { FlakinessReport, PatternAnalysis, PatternRefreshStatus, ResolvedEntry, ResolvedState } from "../src/types/dashboard.js";
+import type { BuildResult, FlakinessReport, PatternAnalysis, PatternRefreshStatus, ResolvedEntry, ResolvedState } from "../src/types/dashboard.js";
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
@@ -26,6 +28,7 @@ const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBann
     pattern: PatternAnalysis;
     jobID?: string;
     refreshStatus?: PatternRefreshStatus;
+    runs?: BuildResult[];
   }) => ReturnType<typeof createElement>;
 };
 const { UnlistedResolutionRow } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
@@ -45,6 +48,10 @@ const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
 };
 const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
 await vite.close();
+
+function source(file: string): string {
+  return readFileSync(resolvePath(process.cwd(), file), "utf8");
+}
 
 const serverCapabilities: Capabilities = {
   mode: "server",
@@ -85,6 +92,7 @@ function render(
   auth: AuthState = admin,
   capabilities = serverCapabilities,
   refreshStatus?: PatternRefreshStatus,
+  runs?: BuildResult[],
 ): string {
   const tree: ReactNode = createElement(
     ThemeProvider,
@@ -98,7 +106,7 @@ function render(
         createElement(
           AuthContext.Provider,
           { value: auth },
-          createElement(PatternBanner, { pattern, jobID: pattern.job_id, refreshStatus }),
+          createElement(PatternBanner, { pattern, jobID: pattern.job_id, refreshStatus, runs }),
         ),
       ),
     ),
@@ -429,6 +437,13 @@ test("an unlisted cause resolution offers Reopen and names the cause it resolved
   // Reopening a cause must never offer a fresh resolution for it.
   assert.doesNotMatch(html, /Resolve failure/);
   assert.doesNotMatch(html, /<a /);
+
+  // The overview row is a flex row that neither wraps nor stacks, so the
+  // control owns a column here: a failed reopen would otherwise put its alert
+  // beside the button and crush it.
+  const control = source("src/components/CauseResolution.tsx");
+  assert.match(control, /const Wrapper = bar \? Fragment : InlineWrapper/);
+  assert.match(control, /flexDirection: "column"/);
 });
 
 test("reopening an unlisted resolution stays behind admin auth and the actions capability", () => {
@@ -439,4 +454,253 @@ test("reopening an unlisted resolution stays behind admin auth and the actions c
   assert.doesNotMatch(renderUnlisted(resolution(), admin, readOnly), /Reopen pattern/);
   assert.doesNotMatch(renderUnlisted(resolution(), anonymous, serverCapabilities, "cause"), /Reopen failure/);
   assert.doesNotMatch(renderUnlisted(resolution(), admin, readOnly, "cause"), /Reopen failure/);
+});
+
+function failingRun(buildID: string, testName: string): BuildResult {
+  return {
+    build_id: buildID,
+    job_name: "periodic-capz-e2e-main",
+    started: "2026-08-18T00:00:00Z",
+    finished: "2026-08-18T01:00:00Z",
+    passed: false,
+    result: "FAILURE",
+    duration_seconds: 3600,
+    commit: "abc123",
+    prow_url: "https://prow.example",
+    web_url: "https://gcsweb.example",
+    build_log_url: "https://gcsweb.example/build-log.txt",
+    tests_total: 1,
+    tests_passed: 0,
+    tests_failed: 1,
+    tests_skipped: 0,
+    test_cases: [{
+      name: testName,
+      status: "failed",
+      duration_seconds: 1,
+      junit_file: "artifacts/junit_01.xml",
+      ai_analysis: {
+        generated_at: "2026-08-18T00:00:00Z",
+        model: "test",
+        root_cause: "cause",
+        severity: "high",
+        suggested_fix: "fix",
+        disposition: "grounded",
+        // An analysis with no file links has no verified source path, so the
+        // Fix gate refuses it and no route would render.
+        file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
+      },
+    }],
+  };
+}
+
+// Both of a cause's actions belong in one bar. Before this they were split by
+// the chat accordion, with the route buried mid-body and the resolution below a
+// rule, so neither read as the card's set of actions.
+test("a cause offers its route and its resolution in one action bar", () => {
+  const fixCapable: Capabilities = {
+    mode: "server",
+    features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+    auth: { mode: "oauth" },
+  };
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [
+        { builds: ["100"], root_cause: "cni conflict", confidence: "high", signature: "sig-a" },
+      ],
+    }),
+    admin,
+    fixCapable,
+    undefined,
+    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+  );
+
+  // Both actions render as outlined controls, so the bar reads as a row of
+  // actions rather than one button beside a link. The route navigates, so it is
+  // an anchor; the resolution posts, so it is a button.
+  assert.match(
+    html,
+    /<button[^>]*class="[^"]*MuiButton-outlined[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*Resolve failure/,
+  );
+  // The label carries the humanized test title, so the route names what it
+  // opens even once it has shrunk to an ellipsis.
+  assert.match(
+    html,
+    /<a[^>]*class="[^"]*MuiButton-outlined[^"]*"[^>]*aria-label="Open representative failure: Highly available cluster in build 100"/,
+  );
+
+  // The bar wraps so a resolution error can take its own line, and a wrapping
+  // flex line breaks a too-wide item onto a new row rather than shrinking it.
+  // A zero basis is what keeps the route on the same row as the resolution and
+  // sends the overflow to its ellipsis instead.
+  const routing = source("src/components/CausalGroupFixRouting.tsx");
+  assert.match(routing, /flex: "1 1 0"/);
+  assert.match(routing, /minWidth: 0/);
+  assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: "wrap"/);
+
+  // They are siblings in one bar: nothing separates them, and the route no
+  // longer renders up in the body under the Next step heading.
+  const barStart = html.indexOf("Open representative failure");
+  const resolveAt = html.indexOf("Resolve failure");
+  assert.ok(barStart !== -1 && resolveAt > barStart, "the route precedes the resolution in the bar");
+  assert.ok(
+    html.indexOf("Next step") < barStart,
+    "the action bar sits after the body, not inside the Next step section",
+  );
+});
+
+// Only a resolved cause folds away, so an active one keeps its body on screen
+// and gets no toggle at all.
+test("an unresolved cause stays open and offers no toggle", () => {
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [
+        { builds: ["100"], root_cause: "cni conflict", confidence: "high", signature: "sig-a" },
+      ],
+    }),
+  );
+  assert.match(html, /cni conflict/);
+
+  const banner = source("src/components/PatternBanner.tsx");
+  // The toggle and the chevron both render only when collapsible, so an
+  // unresolved cause header is plain content rather than a control. An
+  // unresolved cause also ignores any override left behind, so a stale entry
+  // cannot hide a body that has no toggle left to reveal it.
+  assert.match(banner, /const expanded = collapsible \? expandedCauses\[overrideKey\] \?\? false : true/);
+  assert.match(banner, /\{collapsible \? \(/);
+  assert.match(banner, /\{collapsible && \(\s*\n\s*<ExpandMore/);
+});
+
+// The collapsed state depends on resolved.json, which useResolved fetches in an
+// effect that renderToStaticMarkup never runs, so the folding rules are pinned
+// at the source the same way the other resolved-state rendering is.
+test("a resolved cause folds itself away and can be opened again", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+
+  // Folding follows resolution state by default, so resolving folds the cause
+  // and reopening unfolds it without pinning either.
+  assert.match(banner, /const collapsible = Boolean\(causeResolutions\[index\]\)/);
+  assert.match(banner, /const expanded = collapsible \? expandedCauses\[overrideKey\] \?\? false : true/);
+  // Keyed by signature: the same identity the resolution itself is recorded
+  // under, so a refreshed group keeps its fold state.
+  assert.match(banner, /const causeKey = group\.signature \?\? group\.id \?\? String\(index\)/);
+  // The heading wraps the toggle rather than containing it, matching
+  // AnalysisChat: a heading is not valid phrasing content inside a button and
+  // assistive technology flattens that nesting inconsistently. The overlay is
+  // what keeps the whole header band clickable.
+  assert.match(banner, /<Typography component="h4"[\s\S]*<ButtonBase/);
+  assert.match(banner, /aria-expanded=\{expanded\}/);
+  assert.match(banner, /aria-controls=\{bodyID\}/);
+  assert.match(banner, /"&::after": \{ content: '""', position: "absolute", inset: 0 \}/);
+  // unmountOnExit removes the body while collapsed, so the id lives on a
+  // wrapper that always renders: otherwise aria-controls would point at nothing
+  // in exactly the state the control exists to describe.
+  assert.match(banner, /<Box id=\{bodyID\}>\s*\n\s*<Collapse in=\{expanded\}/);
+});
+
+// Ownership and the route now render from two different places on the card, so
+// this exercises the real composition rather than the halves. Suppressing
+// ownership whenever a route existed was a past bug: it made an upstream cause
+// indistinguishable from one the project can actually fix.
+test("an upstream-owned cause reports ownership in the body and still routes from the bar", () => {
+  const fixCapable: Capabilities = {
+    mode: "server",
+    features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+    auth: { mode: "oauth" },
+  };
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [{
+        builds: ["100"],
+        root_cause: "kubelet device manager panics",
+        confidence: "high",
+        signature: "sig-a",
+        cause_location: {
+          external: true,
+          repository: "kubernetes/kubernetes",
+          files: ["pkg/kubelet/cm/devicemanager/manager.go"],
+        },
+      }],
+    }),
+    admin,
+    fixCapable,
+    undefined,
+    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+  );
+
+  assert.match(html, /kubernetes\/kubernetes/);
+  assert.match(html, /pkg\/kubelet\/cm\/devicemanager\/manager\.go/);
+  assert.match(html, /aria-label="Open representative failure: Highly available cluster/);
+  // Ownership is a diagnosis, not a missing route, so the generic dead end must
+  // not appear alongside it.
+  assert.doesNotMatch(html, /meets the Fix eligibility requirements/);
+});
+
+// A cause with no route at all still explains why, from the body, while the bar
+// falls back to the resolution control on its own.
+test("a cause with no route keeps its dead-end explanation and still resolves", () => {
+  const fixCapable: Capabilities = {
+    mode: "server",
+    features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+    auth: { mode: "oauth" },
+  };
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [
+        { builds: ["100"], root_cause: "cni conflict", confidence: "high", signature: "sig-a" },
+      ],
+    }),
+    admin,
+    fixCapable,
+    undefined,
+    // A run whose failure carries no file links fails the Fix gate, so the
+    // cause is in the window but has no eligible representative.
+    [(() => {
+      const run = failingRun("100", "[It] Workload cluster creation Creating a highly available cluster");
+      delete run.test_cases[0].ai_analysis!.file_links;
+      return run;
+    })()],
+  );
+
+  assert.match(html, /meets the Fix eligibility requirements/);
+  assert.doesNotMatch(html, /aria-label="Open representative failure/);
+  assert.match(html, /Resolve failure/);
+});
+
+// The route moved to the action bar, so routing is no longer content for the
+// Next step section on its own. A cause with a route but nothing to say would
+// otherwise render a bare heading above the bar.
+test("a cause with a route but no remediation and no chat renders no Next step heading", () => {
+  const fixCapable: Capabilities = {
+    mode: "server",
+    features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+    auth: { mode: "oauth" },
+  };
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [
+        { builds: ["100"], root_cause: "cni conflict", confidence: "high", signature: "sig-a" },
+      ],
+    }),
+    admin,
+    fixCapable,
+    undefined,
+    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+  );
+
+  // The route still renders, from the bar.
+  assert.match(html, /aria-label="Open representative failure/);
+  assert.doesNotMatch(html, /Next step/);
+});
+
+// Resolving, reopening, then resolving again must fold the card away again.
+// Keying the override on the resolution event is what discards the stale one.
+test("an expansion override belongs to one resolution event", () => {
+  const banner = source("src/components/PatternBanner.tsx");
+
+  assert.match(
+    banner,
+    /const overrideKey = `\$\{causeKey\}:\$\{causeResolutions\[index\]\?\.resolved_at \?\? ""\}`/,
+  );
+  assert.match(banner, /expandedCauses\[overrideKey\] \?\? false/);
+  assert.match(banner, /\[overrideKey\]: !expanded/);
 });

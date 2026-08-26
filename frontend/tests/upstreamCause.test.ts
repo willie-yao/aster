@@ -20,15 +20,50 @@ const vite = await createServer({
   logLevel: "silent",
   ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
 });
-const { CausalGroupFixRouting } = (await vite.ssrLoadModule("/src/components/CausalGroupFixRouting.tsx")) as {
-  CausalGroupFixRouting: (props: {
+const { CausalGroupFixNotice, CausalGroupFixButton } = (await vite.ssrLoadModule("/src/components/CausalGroupFixRouting.tsx")) as {
+  CausalGroupFixNotice: (props: {
     jobID?: string;
     target: CausalGroupFixTarget | null;
     externalCause?: AnalysisCauseLocation | null;
-    stale?: boolean;
     evidencePresent?: boolean;
   }) => ReturnType<typeof createElement>;
+  CausalGroupFixButton: (props: {
+    jobID?: string;
+    target: CausalGroupFixTarget | null;
+    showBuild?: boolean;
+    stale?: boolean;
+  }) => ReturnType<typeof createElement>;
 };
+
+// The notice and the action are rendered in two places on a cause card: the
+// prose stays in the body while the button moves to the action bar. They are
+// exercised together here because the invariants under test are about what a
+// reader sees for one cause, not about which half renders it.
+function CausalGroupFixRouting(props: {
+  jobID?: string;
+  target: CausalGroupFixTarget | null;
+  externalCause?: AnalysisCauseLocation | null;
+  showBuild?: boolean;
+  stale?: boolean;
+  evidencePresent?: boolean;
+}) {
+  return createElement(
+    "div",
+    null,
+    createElement(CausalGroupFixNotice, {
+      jobID: props.jobID,
+      target: props.target,
+      externalCause: props.externalCause,
+      evidencePresent: props.evidencePresent,
+    }),
+    createElement(CausalGroupFixButton, {
+      jobID: props.jobID,
+      target: props.target,
+      showBuild: props.showBuild,
+      stale: props.stale,
+    }),
+  );
+}
 const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/PatternFixGuidance.tsx")) as {
   PatternFixGuidance: (props: {
     jobID: string;

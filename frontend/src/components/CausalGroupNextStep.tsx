@@ -1,7 +1,7 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import { RichText } from "./RichText";
-import { CausalGroupFixRouting } from "./CausalGroupFixRouting";
+import { CausalGroupFixNotice } from "./CausalGroupFixRouting";
 import { AnalysisChat } from "./AnalysisChat";
 import type { FileToUrlContext } from "../lib/utils";
 import type { CauseAnalysisChatReference } from "../types/analysisChat";
@@ -33,17 +33,21 @@ export function CausalGroupNextStep({
   // Omitted where no chat session on this deployment could start a fix.
   routing?: {
     target: CausalGroupFixTarget | null;
-    showBuild?: boolean;
     externalCause?: AnalysisCauseLocation | null;
     stale?: boolean;
     evidencePresent?: boolean;
   };
 }) {
   const suggested = group.remediation?.suggested_fix?.trim();
-  // Routing has nothing to point at without a job, which is the same condition
-  // CausalGroupFixRouting returns null on.
+  // Routing has nothing to explain without a job, which is the same condition
+  // CausalGroupFixNotice returns null on.
   const routable = routing && jobID ? routing : undefined;
-  if (!suggested && !routable && !chat) return null;
+  // The route itself now lives in the card's action bar, so routing only counts
+  // as content here when the notice will actually say something: a dependency
+  // owns the cause, or there is no route to offer. Otherwise a cause with a
+  // route but no remediation and no chat would render a bare heading.
+  const explains = Boolean(routable && (routable.externalCause || !routable.target));
+  if (!suggested && !explains && !chat) return null;
 
   return (
     <Box sx={{ mt: 1.5, minWidth: 0 }}>
@@ -66,12 +70,10 @@ export function CausalGroupNextStep({
         </Box>
       )}
       {routable && (
-        <CausalGroupFixRouting
+        <CausalGroupFixNotice
           jobID={jobID}
           target={routable.target}
-          showBuild={routable.showBuild}
           externalCause={routable.externalCause}
-          stale={routable.stale}
           evidencePresent={routable.evidencePresent}
         />
       )}

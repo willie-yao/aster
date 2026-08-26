@@ -237,7 +237,9 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
     banner,
     /causalGroups\.map\(\(group, index\)[\s\S]*<CausalGroupNextStep[\s\S]*routing=\{[\s\S]*fixCapable[\s\S]*target: causalFixTargets\[index\][\s\S]*externalCause: externalCause\(group\.cause_location\)/,
   );
-  assert.match(nextStep, /<CausalGroupFixRouting[\s\S]*target=\{routable\.target\}/);
+  // The prose half stays in the card body; the action half moved to the bar.
+  assert.match(nextStep, /<CausalGroupFixNotice[\s\S]*target=\{routable\.target\}/);
+  assert.match(banner, /<CausalGroupFixButton[\s\S]*target=\{causalFixTargets\[index\]\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
   assert.match(routing, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
 });
@@ -279,7 +281,7 @@ test("the build only joins the label where it is needed to tell two actions apar
   // on every action to cover that case is what made the label unreadable.
   assert.match(routing, /showBuild = false/);
   assert.match(routing, /\{showBuild && \(/);
-  assert.match(banner, /showBuild: fixTargetNeedsBuild\[index\]/);
+  assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
   assert.match(banner, /stale: !lifecycleActive/);
 
   // Counting the DISPLAYED label, not the canonical name: two canonical names
@@ -374,6 +376,7 @@ test("per-cause resolution is offered per causal group and keyed by signature", 
   const banner = source("src/components/PatternBanner.tsx");
   const cause = source("src/components/CauseResolution.tsx");
   const eligibility = source("src/lib/actionEligibility.ts");
+  const resolution = source("src/lib/resolution.ts");
 
   assert.match(banner, /<CauseResolution\s+signature=\{group\.signature\}/);
   assert.match(banner, /resolvedEntry=\{causeResolutions\[index\]\}/);
@@ -382,7 +385,11 @@ test("per-cause resolution is offered per causal group and keyed by signature", 
   // An unsigned group has no durable key, so it is never offered the control.
   assert.match(eligibility, /group\.signature\?\.trim\(\) &&/);
   // Reopening stays available once a fresh resolution would be refused.
-  assert.match(cause, /\(!resolvable && !resolved\)/);
+  assert.match(resolution, /signature && \(resolvable \|\| resolved\)/);
+  // The control and the action bar ask one gate, so the bar can never draw its
+  // rule above a row that renders nothing.
+  assert.match(cause, /if \(!causeResolutionAvailable\(\{/);
+  assert.match(banner, /causeResolutionAvailable\(\{/);
   // An anonymous viewer needs the pattern-level block for its sign-in prompt
   // wherever a signed-in one would see per-cause controls. A cause that is
   // already resolved still offers Reopen after it stops qualifying for a fresh
