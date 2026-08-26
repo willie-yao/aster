@@ -61,7 +61,7 @@ function NavLabel({ children }: { children: string }) {
   return (
     <Typography
       component="span"
-      sx={{ fontSize: "0.625rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+      sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
     >
       {children}
     </Typography>
@@ -131,7 +131,7 @@ export function NavRail({
           <Typography
             component="span"
             sx={{
-              fontSize: "0.625rem",
+              fontSize: "0.6875rem",
               fontWeight: 700,
               letterSpacing: "0.02em",
               maxWidth: "100%",

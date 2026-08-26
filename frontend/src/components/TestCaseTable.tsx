@@ -269,7 +269,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                             ml: 1,
                             height: 20,
                             borderRadius: "4px",
-                            fontSize: "0.625rem",
+                            fontSize: "0.6875rem",
                             verticalAlign: "middle",
                           }}
                         />
@@ -388,6 +388,9 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     component="div"
                     sx={{
                       color: "text.primary",
+                      // Analysis prose in a full-width results ledger, so it
+                      // is held to the same measure as the rest of the page.
+                      maxWidth: "74ch",
                       fontSize: "13.5px",
                       lineHeight: "20px",
                       fontWeight: 450,

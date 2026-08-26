@@ -235,6 +235,10 @@ shrinking type.
 - **Data** (mono, 500, 13px / 19px, `tnum` + `cv01`): durations, counts,
   percentages, timestamps, build IDs.
 - **Table Heading** (700, 13px / 18px): ledger column headers.
+- **Micro Label** (`0.6875rem`, 11.7px): the smallest role in the system, for
+  navigation labels, the keyboard hint, grid column dates, and the run-history
+  axis. It exists so those labels have a documented step at the floor instead of
+  drifting under it.
 
 ### Named Rules
 
@@ -505,19 +509,14 @@ That makes it normative going forward. New work is held to these rules, and the
 bundled detector reads this file to judge changed files. Existing code is being
 brought up to them incrementally rather than in one pass.
 
-Seven rules are not yet satisfied everywhere. Each is a tracked follow-up, listed
+Three rules are not yet satisfied everywhere. Each is a tracked follow-up, listed
 here so the document is not mistaken for a description of what already ships.
 
 | Rule | Current state |
 | --- | --- |
-| The Eleven Pixel Floor | `0.625rem` (10.6px) labels in `SearchBar`, `TestCaseTable`, `TestResultsGrid`, and the `ActionDraftPreview` micro-label; 10px run-history axis |
-| The Sixteen Pixel Input Rule | Filter input 14px, search input 0.875rem; both force-zoom on iOS |
-| The One Layout Rule | `JobHealthTable` mounts both layouts and hides one with `display: none` |
 | Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` and `ChatFixDialog` |
-| Composite widgets get roving tabindex | `Sparkline` puts roughly 300 run links in the overview tab order |
 | `aria-current="page"` on exact match only | `NavRail` marks the active section `page` on nested routes |
-| Buttons inherit the theme family | No `MuiButtonBase` override, so bare `ButtonBase` falls back to the user agent font |
-| The Tint Roles Rule | `soft()` is called at 16 distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
+| The Tint Roles Rule | `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
 
 The operator surfaces have not been audited. They are documented here from the
 implementation, but the accessibility, responsive, and performance pass that

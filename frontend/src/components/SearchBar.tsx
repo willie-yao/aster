@@ -268,7 +268,7 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
         {rail && (
           <Box
             component="span"
-            sx={{ fontSize: "0.625rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+            sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
           >
             Search
           </Box>
@@ -336,7 +336,7 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
                         px: 0.75,
                         py: 0.25,
                         typography: "label",
-                        fontSize: 10,
+                        fontSize: "0.6875rem",
                         color: "text.secondary",
                       }}
                     >

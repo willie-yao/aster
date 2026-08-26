@@ -250,6 +250,10 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
                 WebkitBoxOrient: "vertical",
                 WebkitLineClamp: 2,
                 overflow: "hidden",
+                // Failure text runs to hundreds of characters on a wide
+                // ledger, so it reads at the same measure as the expanded
+                // detail below it.
+                maxWidth: "74ch",
                 fontSize: "13.5px",
                 lineHeight: "20px",
               }}
@@ -771,7 +775,10 @@ export function FlakinessPage() {
             ...overviewTypography.secondaryBody,
           }}
         >
-          {activeDefinition.tooltip}
+          {/* The band spans the ledger; its sentence reads at prose measure. */}
+          <Box component="span" sx={{ display: "block", maxWidth: "74ch" }}>
+            {activeDefinition.tooltip}
+          </Box>
         </Typography>
 
         {activeTab === "build_failures" ? (

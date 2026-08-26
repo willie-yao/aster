@@ -29,7 +29,7 @@ export function ProfileMenu({ compact = false }: { compact?: boolean } = {}) {
         variant="caption"
         color="textSecondary"
         title={`Engine ${engine.commit} (${engine.image_tag})`}
-        sx={compact ? { fontSize: "0.5625rem", maxWidth: "100%", px: 0.5, overflow: "hidden", textOverflow: "ellipsis" } : undefined}
+        sx={compact ? { fontSize: "0.6875rem", maxWidth: "100%", px: 0.5, overflow: "hidden", textOverflow: "ellipsis" } : undefined}
       >
         {compact ? commit : `Engine ${commit}`}
       </Typography>

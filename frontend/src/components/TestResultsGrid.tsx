@@ -204,7 +204,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                       px: 1.5,
                       textAlign: "left",
                       typography: "label",
-                      fontSize: "0.625rem",
+                      fontSize: "0.6875rem",
                       fontWeight: 400,
                       color: "text.secondary",
                       whiteSpace: "nowrap",
@@ -275,7 +275,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
                       sx={{
                         px: 0.5,
                         typography: "label",
-                        fontSize: "0.625rem",
+                        fontSize: "0.6875rem",
                         fontWeight: 400,
                         color: "text.secondary",
                       }}
