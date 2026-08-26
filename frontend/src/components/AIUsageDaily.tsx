@@ -90,10 +90,29 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   const activeDay = selectedIndex === null ? null : days[selectedIndex];
   const activeX = selectedIndex === null ? null : xForIndex(selectedIndex);
   const tooltipTransform = selectedIndex !== null && selectedIndex <= Math.max(1, days.length * .2) ? "translateX(0)" : selectedIndex !== null && selectedIndex >= days.length * .8 ? "translateX(-100%)" : "translateX(-50%)";
+  const [scrollable, setScrollable] = useState(false);
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
-    scroller.scrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    // The chart holds a floor width so its labels stay legible, so it can
+    // overflow at desktop widths too. The hint follows real overflow rather
+    // than a breakpoint that would guess wrong on either side.
+    let wasScrollable = false;
+    const update = () => {
+      const overflowing = scroller.scrollWidth > scroller.clientWidth + 1;
+      // Snap to the newest dates when the chart starts overflowing, so the
+      // hint is not claiming they are in view while the oldest ones are.
+      // Someone already scrolled through an overflowing chart keeps position.
+      if (overflowing && !wasScrollable) {
+        scroller.scrollLeft = scroller.scrollWidth - scroller.clientWidth;
+      }
+      wasScrollable = overflowing;
+      setScrollable(overflowing);
+    };
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(scroller);
+    return () => observer?.disconnect();
   }, [days]);
 
   const clearActiveDay = () => {
@@ -133,7 +152,11 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
   if (availableIndexes.length === 0) return <Box sx={{ py: 5, textAlign: "center" }}><Typography color="textSecondary">No comparable single-currency daily cost values are available in this range.</Typography>{currencyPolicy.note && <Typography variant="caption" color="textSecondary">{currencyPolicy.note}</Typography>}</Box>;
   return <Box>
     <Box ref={scrollRef} sx={{ overflowX: "auto", pb: .5, overscrollBehaviorInline: "contain" }}>
-      <Box sx={{ position: "relative", minWidth: { xs: 720, md: 0 } }}>
+      {/* `meet` scales by the smaller of the two ratios, so the chart never
+          renders below the viewBox in either dimension: under 1:1 the SVG
+          shrinks its axis labels past the eleven pixel floor. The row already
+          scrolls horizontally. */}
+      <Box sx={{ position: "relative", minWidth: width }}>
         <Box
           component="svg"
         viewBox={`0 0 ${width} ${height}`}
@@ -147,7 +170,7 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         onFocus={(event) => selectDay(activeIndex !== null && availableIndexes.includes(activeIndex) ? activeIndex : availableIndexes.at(-1) ?? null, event.currentTarget)}
         onBlur={clearActiveDay}
         onKeyDown={selectKeyboardDay}
-        sx={{ width: "100%", height: { xs: 230, md: 285 }, display: "block", borderRadius: "4px", outline: "none", "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 } }}
+        sx={{ width: "100%", height: { xs: 230, md: 285 }, minHeight: height, display: "block", borderRadius: "4px", outline: "none", "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 } }}
       >
         <title id="daily-cost-chart-title">Daily AI cost estimates</title>
         <desc id="daily-cost-chart-desc">{seriesDescription}{currencyPolicy.note ? ` ${currencyPolicy.note}` : ""}</desc>
@@ -178,9 +201,9 @@ function DailyCostChart({ days, mixedCurrency }: { days: AIUsageDaily[]; mixedCu
         </Box>}
       </Box>
     </Box>
-    <Typography color="textSecondary" sx={{ display: { xs: "block", md: "none" }, mt: 0.5, ...overviewTypography.description }}>
+    {scrollable && <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.description }}>
       Newest dates are in view. Scroll left for earlier dates.
-    </Typography>
+    </Typography>}
     <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap", alignItems: "center", mt: .5 }}>
       {recordedPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px solid", borderColor: "primary.main", mr: .8, verticalAlign: "middle" }} />Recorded estimate (solid)</Typography>}
       {visibleCurrentPath && <Typography variant="caption"><Box component="span" sx={{ display: "inline-block", width: 22, borderTop: "3px dashed", borderColor: "warning.main", mr: .8, verticalAlign: "middle" }} />Current-rate estimate (dashed)</Typography>}

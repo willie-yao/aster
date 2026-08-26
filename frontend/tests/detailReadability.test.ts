@@ -1,11 +1,65 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(resolve(process.cwd(), dir), { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? sourceFiles(join(dir, entry.name))
+      : /\.tsx?$/.test(entry.name)
+        ? [join(dir, entry.name)]
+        : [],
+  );
+}
+
+// The Eleven Pixel Floor is a whole-system rule, so this walks every source
+// file rather than the handful a change happens to touch. The root is 17px,
+// which puts the floor at 0.647rem. Icon sizing also rides on `fontSize`, so a
+// deliberately tiny glyph would report here; none exists, and one should be
+// looked at rather than waved through.
+test("no functional text is declared below the eleven pixel floor", () => {
+  const offenders: string[] = [];
+  const tooSmall = (value: string, unit: string) =>
+    unit === "rem" ? Number(value) * 17 < 11 : Number(value) < 11;
+  for (const file of sourceFiles("src")) {
+    const text = readFileSync(resolve(process.cwd(), file), "utf8");
+    for (const [, value, unit] of text.matchAll(/fontSize: "?(\d+(?:\.\d+)?)(rem|px)?"?[,\s}]/g)) {
+      if (tooSmall(value, unit ?? "px")) offenders.push(`${file}: ${value}${unit ?? "px"}`);
+    }
+    // SVG chart labels set the attribute directly, e.g. fontSize="11".
+    for (const [, value] of text.matchAll(/fontSize="(\d+(?:\.\d+)?)"/g)) {
+      if (tooSmall(value, "px")) offenders.push(`${file}: ${value}px`);
+    }
+    // Responsive values hide their sizes one level down, e.g. { xs: 10, md: 14 }.
+    // A quoted value must carry rem or px so a unit this rule cannot judge,
+    // such as em, is skipped rather than read as pixels.
+    for (const [, block] of text.matchAll(/fontSize: \{([^{}]*)\}/g)) {
+      for (const [, quoted, unit, bare] of block.matchAll(/:\s*(?:"(\d+(?:\.\d+)?)(rem|px)"|(\d+(?:\.\d+)?))\s*[,}]?/g)) {
+        const value = quoted ?? bare;
+        if (value && tooSmall(value, unit ?? "px")) offenders.push(`${file}: responsive ${value}${unit ?? "px"}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test("prose on the trends and results ledgers is held to a measure", () => {
+  const trends = source("src/pages/FlakinessPage.tsx");
+  const testCases = source("src/components/TestCaseTable.tsx");
+  const ledger = source("src/components/ResultLedger.tsx");
+
+  // Failure text and analysis prose run to hundreds of characters on a wide
+  // ledger, so each is capped at the same measure the expanded detail uses.
+  assert.match(trends, /WebkitLineClamp: 2[\s\S]{0,400}?maxWidth: "74ch"/);
+  assert.match(trends, /maxWidth: "74ch"[\s\S]{0,200}?activeDefinition\.tooltip/);
+  assert.match(testCases, /maxWidth: "74ch"[\s\S]{0,200}?fontSize: "13\.5px"/);
+  assert.match(ledger, /maxWidth: "74ch"[\s\S]{0,200}?Skipped tests/);
+});
 
 test("detail headings use the enlarged readable scale", () => {
   const job = source("src/pages/JobDetailPage.tsx");

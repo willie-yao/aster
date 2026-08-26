@@ -128,7 +128,12 @@ test("historical usage fixture covers required cost and coverage scenarios", () 
 test("daily cost chart opens on the newest mobile dates and avoids duplicate lines", () => {
   const source = readFileSync(resolve(process.cwd(), "src/components/AIUsageDaily.tsx"), "utf8");
 
-  assert.match(source, /scrollLeft = Math\.max\(0, scroller\.scrollWidth - scroller\.clientWidth\)/);
+  // The chart snaps to the newest dates when it starts overflowing, so the hint
+  // below never claims they are in view while the oldest ones are.
+  assert.match(source, /if \(overflowing && !wasScrollable\)[\s\S]{0,160}?scrollLeft = scroller\.scrollWidth - scroller\.clientWidth/);
+  // Without this the chart would re-snap on every resize tick and fight a
+  // reader who had scrolled back through earlier dates.
+  assert.match(source, /wasScrollable = overflowing/);
   assert.match(source, /Newest dates are in view\. Scroll left for earlier dates\./);
   assert.match(source, /const matchingSeries =/);
   assert.match(source, /Current-rate estimate matches the recorded estimate\./);

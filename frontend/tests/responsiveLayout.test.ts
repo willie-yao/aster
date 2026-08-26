@@ -17,9 +17,9 @@ test("mobile branding link keeps an accessible home name", () => {
     layout,
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
-  // Both navs are rendered, so each must carry the full destination name as a
-  // description. The visible label stays the accessible name so speech control
-  // can target what it reads (WCAG 2.5.3).
+  // Layout mounts one nav per breakpoint, but both components must carry the
+  // full destination name as a description. The visible label stays the
+  // accessible name so speech control can target what it reads (WCAG 2.5.3).
   assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
   assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
   assert.match(navigation, /title: "Failure Trends"/);
@@ -35,10 +35,10 @@ test("primary navigation swaps between a rail and a bottom bar without a gap", (
   // Operator destinations render only a sign-in wall without a session, so the
   // rail must derive access from auth rather than the deployment flags alone.
   assert.match(layout, /operatorAccess: auth\.status === "authenticated"/);
-  // Exactly one primary nav is visible at any width: the rail from md up, the
-  // bottom bar below it.
-  assert.match(rail, /display: \{ xs: "none", md: "flex" \}/);
-  assert.match(rail, /display: \{ xs: "flex", md: "none" \}/);
+  // Exactly one primary nav is mounted at any width: the rail from md up, the
+  // bottom bar below it. Mounting decides it, so neither is in the DOM twice.
+  assert.match(layout, /\{railHostsControls && \(\s*<NavRail/);
+  assert.match(layout, /\{!railHostsControls && <NavBottomBar/);
   // The fixed bottom bar must not cover the end of the page.
   assert.match(layout, /BOTTOM_BAR_HEIGHT\}px \+ env\(safe-area-inset-bottom\)/);
   assert.match(rail, /pb: "env\(safe-area-inset-bottom\)"/);
@@ -56,8 +56,8 @@ test("search and account controls are placed once, never mounted twice", () => {
   // handlers and fight over focus. The breakpoint decides placement at render
   // time instead of hiding a second copy with CSS.
   assert.match(layout, /const railHostsControls = useMediaQuery\(theme\.breakpoints\.up\("md"\)\)/);
-  assert.match(layout, /search=\{railHostsControls \? <SearchBar variant="rail" \/> : undefined\}/);
-  assert.match(layout, /controls=\{railHostsControls \? controls : undefined\}/);
+  assert.match(layout, /search=\{<SearchBar variant="rail" \/>\}/);
+  assert.match(layout, /controls=\{controls\}/);
   // The top bar exists only when the rail is not hosting those controls.
   assert.match(layout, /\{!railHostsControls && \(\s*<AppBar/);
   assert.equal(layout.match(/<SearchBar/g)?.length, 2);
@@ -115,6 +115,40 @@ test("the deployment title identifies the instance on its home page", () => {
   assert.match(rail, /aria-label=\{brandLabel \? `\$\{brandLabel\} home` : homeLabel\}/);
 });
 
+test("mobile inputs clear the iOS zoom threshold and keep a 44px target", () => {
+  const search = source("src/components/SearchBar.tsx");
+  const filters = source("src/components/OverviewFilters.tsx");
+
+  // iOS and iPadOS Safari force-zoom a focused input under 16px, and a hybrid
+  // iPad reports a fine primary pointer while its screen still takes a finger.
+  assert.match(search, /"@media \(any-pointer: coarse\)": \{ fontSize: "16px" \}/);
+  assert.match(search, /height: \{ xs: 44, md: 36 \}/);
+  // The Select renders an inner box that takes the tap, and MUI's own rule wins
+  // over a class selector, so the 44px target is set inline on that box. It
+  // stays a block box so the selected value keeps its ellipsis.
+  assert.match(filters, /SelectDisplayProps=\{\{[\s\S]*?minHeight: 44/);
+  assert.doesNotMatch(filters, /SelectDisplayProps=\{\{[\s\S]*?display: "flex"/);
+  assert.match(filters, /height: 44/);
+});
+
+test("truncated ledger text recovers by touch and keyboard, not hover alone", () => {
+  const ledger = source("src/components/JobHealthTable.tsx");
+
+  // A title attribute is mouse-only, and the job description is not repeated
+  // anywhere else in the interface. The row's one focusable element carries the
+  // recovery through a Tooltip, which opens on hover, focus, and long press.
+  assert.match(ledger, /<Tooltip[\s\S]*?title=\{recovery\}/);
+  assert.doesNotMatch(ledger, /title=\{displayName\}/);
+  assert.doesNotMatch(ledger, /title=\{job\.description\}/);
+  assert.match(ledger, /const description = compact \? "" : job\.description/);
+  // The description must describe the link, not rename it. The tooltip stays
+  // hoverable for a pointer (WCAG 1.4.13) but clears on touch release, so it
+  // cannot sit over the next row's tap target.
+  assert.match(ledger, /describeChild=\{Boolean\(description\)\}/);
+  assert.doesNotMatch(ledger, /disableInteractive/);
+  assert.match(ledger, /leaveTouchDelay=\{0\}/);
+});
+
 test("run history remains contained on narrow detail pages", () => {
   const timeline = source("src/components/RunHistory.tsx");
   const jobDetail = source("src/pages/JobDetailPage.tsx");
@@ -147,4 +181,57 @@ test("test analysis and run history reflow at mobile and zoom widths", () => {
   assert.match(timeline, /width: \{ xs: 44, sm: 32 \}/);
   assert.match(timeline, /height: \{ xs: 44, sm: 32 \}/);
   assert.match(timeline, /formatAccessibleDate\(run\.started\)/);
+});
+
+test("each ledger grid fits the viewport at the width it engages", () => {
+  const ledger = source("src/components/JobHealthTable.tsx");
+  const rail = source("src/components/NavRail.tsx");
+  const railWidth = Number(/export const RAIL_WIDTH = (\d+)/.exec(rail)?.[1]);
+  assert.ok(railWidth);
+
+  // Every track's smallest possible width: a plain px track, or the floor of a
+  // minmax. The grid can never render narrower than their sum.
+  const trackFloors = (name: string) => {
+    const columns = new RegExp(`const ${name} = "([^"]+)"`).exec(ledger)?.[1] ?? "";
+    assert.ok(columns, `${name} not found`);
+    return (columns.match(/minmax\([^)]*\)|\S+/g) ?? []).map((track) => {
+      const min = /^minmax\((\d+)px,/.exec(track) ?? /^(\d+)px$/.exec(track);
+      assert.ok(min, `unrecognised track in ${name}: ${track}`);
+      return Number(min[1]);
+    });
+  };
+
+  const grids = [
+    {
+      name: "compactColumns",
+      // The compact grid engages as soon as the desktop ledger mounts.
+      engagesAt: Number(/const desktopQuery = "\(min-width: (\d+)px\)"/.exec(ledger)?.[1]),
+      rows: [...ledger.matchAll(/gridTemplateColumns: compactColumns,[\s\S]{0,400}?columnGap: ([\d.]+),\s*px: ([\d.]+)/g)],
+    },
+    {
+      name: "wideColumns",
+      engagesAt: Number(/const wideBreakpoint = "@media \(min-width: (\d+)px\)"/.exec(ledger)?.[1]),
+      rows: [...ledger.matchAll(/gridTemplateColumns: wideColumns,[\s\S]{0,400}?columnGap: ([\d.]+),\s*px: ([\d.]+)/g)],
+    },
+  ];
+
+  for (const grid of grids) {
+    assert.ok(grid.engagesAt, `${grid.name} has no breakpoint`);
+    // Both the header row and the data row lay out on each grid; a row that
+    // stops matching here would otherwise go unmeasured.
+    const declared = ledger.match(new RegExp(`gridTemplateColumns: ${grid.name},`, "g"))?.length ?? 0;
+    assert.equal(grid.rows.length, declared, `${grid.name}: ${declared} rows declared, ${grid.rows.length} measured`);
+
+    const floors = trackFloors(grid.name);
+    // MUI's Container pads 24px each side from sm up, and the rail is fixed.
+    const available = grid.engagesAt - railWidth - 24 * 2;
+    for (const [, gapUnits, padUnits] of grid.rows) {
+      const needed =
+        floors.reduce((a, b) => a + b, 0) + 8 * Number(gapUnits) * (floors.length - 1) + 8 * Number(padUnits) * 2;
+      assert.ok(
+        needed <= available,
+        `${grid.name} needs ${needed}px but has ${available}px at ${grid.engagesAt}px, so the ledger overflows its row`,
+      );
+    }
+  }
 });

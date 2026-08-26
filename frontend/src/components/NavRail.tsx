@@ -61,14 +61,14 @@ function NavLabel({ children }: { children: string }) {
   return (
     <Typography
       component="span"
-      sx={{ fontSize: "0.625rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+      sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
     >
       {children}
     </Typography>
   );
 }
 
-/** Vertical navigation rail. Hidden below `md`, where NavBottomBar takes over. */
+/** Vertical navigation rail. Layout mounts it from `md` up; below that it mounts NavBottomBar instead. */
 export function NavRail({
   destinations,
   homeLabel,
@@ -90,7 +90,7 @@ export function NavRail({
       component="nav"
       aria-label="Primary"
       sx={{
-        display: { xs: "none", md: "flex" },
+        display: "flex",
         flexDirection: "column",
         flexShrink: 0,
         width: RAIL_WIDTH,
@@ -131,7 +131,7 @@ export function NavRail({
           <Typography
             component="span"
             sx={{
-              fontSize: "0.625rem",
+              fontSize: "0.6875rem",
               fontWeight: 700,
               letterSpacing: "0.02em",
               maxWidth: "100%",
@@ -230,8 +230,8 @@ function ActiveBar() {
 
 /**
  * Bottom tab bar for small viewports, where a 76px rail would take a fifth of
- * the screen. Capacity is five destinations, which is the most the capability
- * flags can produce.
+ * the screen. Layout mounts it below `md`. Capacity is five destinations, which
+ * is the most the capability flags can produce.
  */
 export function NavBottomBar({ destinations }: { destinations: NavDestination[] }) {
   return (
@@ -239,7 +239,7 @@ export function NavBottomBar({ destinations }: { destinations: NavDestination[] 
       component="nav"
       aria-label="Primary"
       sx={{
-        display: { xs: "flex", md: "none" },
+        display: "flex",
         position: "fixed",
         left: 0,
         right: 0,

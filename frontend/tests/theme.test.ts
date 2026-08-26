@@ -92,6 +92,19 @@ test("overview typography uses the approved compact readable scale", () => {
   assert.equal(overviewLayout.ledgerRowMinHeight, 52);
 });
 
+test("buttons inherit the theme font instead of the user agent's", () => {
+  // ButtonBase sets no font of its own, so without this a bare button falls
+  // back to Arial. It showed up on the metric strip, the disclosure buttons,
+  // the result filters, and the rail's search label.
+  const root = defaultTheme.components?.MuiButtonBase?.styleOverrides?.root as Record<string, unknown>;
+  assert.equal(root.font, "inherit");
+  // The ripple is decorative interaction motion, so it goes when motion is
+  // reduced; press still reads through the surface change.
+  assert.deepEqual(root["@media (prefers-reduced-motion: reduce)"], {
+    "& .MuiTouchRipple-root": { display: "none" },
+  });
+});
+
 // Chip is the one MUI primitive that hardcodes a pill rather than reading
 // shape.borderRadius, so the whole app renders pills if this override is lost.
 test("chips square to the shape token instead of rendering as pills", () => {
@@ -147,4 +160,24 @@ test("tinted status chips keep their label readable in both schemes", () => {
       );
     }
   }
+});
+
+// Reduced motion neutralizes transitions but deliberately not animation. A
+// blanket animation rule runs a progress spinner exactly once and leaves it
+// frozen, which reports nothing; looping motion is stopped per element instead.
+test("reduced motion keeps progress feedback and stops decorative loops", () => {
+  const css = readFileSync(resolve(process.cwd(), "src/index.css"), "utf8");
+  const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  const globalRule = /@media \(prefers-reduced-motion: reduce\) \{\s*\*,[\s\S]*?\n\}/.exec(css)?.[0] ?? "";
+
+  assert.match(globalRule, /transition-duration: 0\.01ms !important/);
+  assert.doesNotMatch(globalRule, /animation-duration/);
+  assert.doesNotMatch(globalRule, /animation-iteration-count/);
+
+  // The two looping decorations carry nothing the interface would lose.
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\s*\.ai-aurora::before \{\s*animation: none/);
+  assert.match(chat, /analysisChatPulse[\s\S]{0,260}?"@media \(prefers-reduced-motion: reduce\)": \{ animation: "none" \}/);
+  // An explicit scroll behavior overrides the CSS rule, so the preference has
+  // to be read at the call site.
+  assert.match(chat, /behavior: reducedMotion \? "auto" : "smooth"/);
 });

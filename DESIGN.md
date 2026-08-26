@@ -69,6 +69,12 @@ typography:
     fontWeight: 600
     lineHeight: "20px"
     letterSpacing: "0"
+  micro-label:
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontSize: "0.6875rem"
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: "0.01em"
 rounded:
   dot: "2px"
   default: "4px"
@@ -235,6 +241,10 @@ shrinking type.
 - **Data** (mono, 500, 13px / 19px, `tnum` + `cv01`): durations, counts,
   percentages, timestamps, build IDs.
 - **Table Heading** (700, 13px / 18px): ledger column headers.
+- **Micro Label** (`0.6875rem`, 11.7px): the smallest role in the system, for
+  navigation labels, the keyboard hint, grid column dates, and the run-history
+  axis. It exists so those labels have a documented step at the floor instead of
+  drifting under it.
 
 ### Named Rules
 
@@ -272,9 +282,10 @@ minimum heights hold vertical rhythm: 48px major bands, 44px category bands,
 36px subsection bands, 52px ledger rows.
 
 Breakpoints are MUI defaults plus two content-driven ones: 1024px switches the
-ledger between its stacked and tabular layouts, and 1200px widens the ledger
+ledger between its stacked and tabular layouts, and 1240px widens the ledger
 grid. Below 1024px the ledger mounts card rows; at or above it mounts a table.
-Only one of the two is ever mounted.
+Only one of the two is ever mounted. Each of those two widths is the narrowest
+viewport its grid fits in, so a ledger never overflows the row it sits in.
 
 ### Named Rules
 
@@ -367,7 +378,7 @@ violet border on focus. 16px text on mobile, 14px from `sm` up.
 
 ### Navigation rail
 76px wide, `surface.container`, 1px right rule. Each destination is an icon over
-an 11px label, with the active one taking a violet tint and a 3px leading bar.
+a Micro Label, with the active one taking a violet tint and a 3px leading bar.
 `aria-current="page"` marks only an exact URL match; a section that stays
 highlighted for its nested pages reports `aria-current="true"`.
 
@@ -505,19 +516,14 @@ That makes it normative going forward. New work is held to these rules, and the
 bundled detector reads this file to judge changed files. Existing code is being
 brought up to them incrementally rather than in one pass.
 
-Seven rules are not yet satisfied everywhere. Each is a tracked follow-up, listed
+Three rules are not yet satisfied everywhere. Each is a tracked follow-up, listed
 here so the document is not mistaken for a description of what already ships.
 
 | Rule | Current state |
 | --- | --- |
-| The Eleven Pixel Floor | `0.625rem` (10.6px) labels in `SearchBar`, `TestCaseTable`, `TestResultsGrid`, and the `ActionDraftPreview` micro-label; 10px run-history axis |
-| The Sixteen Pixel Input Rule | Filter input 14px, search input 0.875rem; both force-zoom on iOS |
-| The One Layout Rule | `JobHealthTable` mounts both layouts and hides one with `display: none` |
 | Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` and `ChatFixDialog` |
-| Composite widgets get roving tabindex | `Sparkline` puts roughly 300 run links in the overview tab order |
 | `aria-current="page"` on exact match only | `NavRail` marks the active section `page` on nested routes |
-| Buttons inherit the theme family | No `MuiButtonBase` override, so bare `ButtonBase` falls back to the user agent font |
-| The Tint Roles Rule | `soft()` is called at 16 distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
+| The Tint Roles Rule | `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
 
 The operator surfaces have not been audited. They are documented here from the
 implementation, but the accessibility, responsive, and performance pass that

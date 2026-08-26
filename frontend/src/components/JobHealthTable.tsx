@@ -1,6 +1,8 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
@@ -19,9 +21,13 @@ interface JobHealthTableProps {
   sections: JobHealthSection[];
 }
 
-const desktopBreakpoint = "@media (min-width: 1024px)";
-const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "minmax(210px, 2fr) 76px 288px 76px 78px 58px 82px";
+const desktopQuery = "(min-width: 1024px)";
+// Each grid engages only where it fits. The compact tracks and gaps take 706px
+// and the wide ones 832px, so once the fixed 76px rail and the container's 48px
+// of padding are paid for, the wide grid needs a 1240px viewport. Engaging it
+// at 1200 pushed the status column 20px past the ledger's right border.
+const wideBreakpoint = "@media (min-width: 1240px)";
+const compactColumns = "minmax(168px, 2fr) 76px 288px 76px 78px 58px 82px";
 const wideColumns = "minmax(280px, 2.4fr) 104px 288px 88px 96px 64px 88px";
 const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Last run", "Duration", "Current"];
 
@@ -50,38 +56,62 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
   const { displayName } = jobValues(job);
+  const description = compact ? "" : job.description;
+  // Both lines truncate, and the description appears nowhere else in the
+  // interface. The row's one focusable element carries the recovery: a Tooltip
+  // opens on hover, on focus, and on touch long-press, where the title
+  // attribute it replaces was mouse-only.
+  const recovery = description ? (
+    <>
+      {/* Visible so a truncated name is still readable; hidden from the
+          description, which the link's own accessible name already carries. */}
+      <Box component="span" aria-hidden="true" sx={{ display: "block", fontWeight: 700 }}>{displayName}</Box>
+      {description}
+    </>
+  ) : (
+    displayName
+  );
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Link
-        component={RouterLink}
-        to={jobPath(job.job_id)}
-        underline="none"
-        title={displayName}
-        sx={{
-          minWidth: 0,
-          minHeight: compact ? 44 : 0,
-          display: compact ? "flex" : "block",
-          alignItems: compact ? "center" : undefined,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "text.primary",
-          ...overviewTypography.jobIdentifier,
-          "&:hover": { color: "primary.main", textDecoration: "underline" },
-          "&:focus-visible": {
-            outline: "2px solid",
-            outlineColor: "primary.main",
-            outlineOffset: 1,
-          },
-        }}
+      <Tooltip
+        title={recovery}
+        // Describing the link keeps its accessible name the job name; with no
+        // description the tooltip only repeats that name, so it stays a label.
+        describeChild={Boolean(description)}
+        // Readable for as long as the press is held, then gone, so an
+        // interactive tooltip can never sit over the next row's tap target.
+        // It stays hoverable for a pointer, which WCAG 1.4.13 requires.
+        leaveTouchDelay={0}
       >
-        {displayName}
-      </Link>
-      {!compact && job.description && (
+        <Link
+          component={RouterLink}
+          to={jobPath(job.job_id)}
+          underline="none"
+          sx={{
+            minWidth: 0,
+            minHeight: compact ? 44 : 0,
+            display: compact ? "flex" : "block",
+            alignItems: compact ? "center" : undefined,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "text.primary",
+            ...overviewTypography.jobIdentifier,
+            "&:hover": { color: "primary.main", textDecoration: "underline" },
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 1,
+            },
+          }}
+        >
+          {displayName}
+        </Link>
+      </Tooltip>
+      {description && (
         <Typography
           variant="caption"
           color="textSecondary"
-          title={job.description}
           sx={{
             display: "none",
             mt: 0.25,
@@ -92,7 +122,7 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
             [wideBreakpoint]: { display: "block" },
           }}
         >
-          {job.description}
+          {description}
         </Typography>
       )}
     </Box>
@@ -204,47 +234,56 @@ function CategoryBand({ section, headingID }: { section: JobHealthSection; headi
   );
 }
 
-export function JobHealthTable({ sections }: JobHealthTableProps) {
+function MobileLedger({ sections }: JobHealthTableProps) {
   return (
-    <>
-      <Box aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container", [desktopBreakpoint]: { display: "none" } }}>
-        {sections.map((section) => {
-          const headingID = `job-category-mobile-${section.id}`;
-          return (
-            <Box key={section.id} component="section" aria-labelledby={section.label ? headingID : undefined}>
-              {section.label && <CategoryBand section={section} headingID={headingID} />}
-              <Box role="list" aria-label={section.label ? `${section.label} jobs` : "Jobs"}>
-                {section.jobs.map((job) => <MobileJobRow key={job.job_id} job={job} />)}
-              </Box>
+    <Box aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container" }}>
+      {sections.map((section) => {
+        const headingID = `job-category-mobile-${section.id}`;
+        return (
+          <Box key={section.id} component="section" aria-labelledby={section.label ? headingID : undefined}>
+            {section.label && <CategoryBand section={section} headingID={headingID} />}
+            <Box role="list" aria-label={section.label ? `${section.label} jobs` : "Jobs"}>
+              {section.jobs.map((job) => <MobileJobRow key={job.job_id} job={job} />)}
             </Box>
-          );
-        })}
-      </Box>
-
-      <Box role="table" aria-label="Job health" sx={{ display: "none", borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container", [desktopBreakpoint]: { display: "block" } }}>
-        <Box role="row" sx={{ display: "grid", gridTemplateColumns: compactColumns, alignItems: "center", columnGap: 1, px: 1.5, py: 1, minHeight: 42, borderBottom: "1px solid", borderColor: "divider", bgcolor: "surface.containerHigh", [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 } }}>
-          {headers.map((header) => (
-            <Typography key={header} role="columnheader" variant="label" color="textSecondary" sx={overviewTypography.tableHeading}>
-              {header}
-            </Typography>
-          ))}
-        </Box>
-        {sections.map((section) => {
-          const headingID = `job-category-desktop-${section.id}`;
-          return (
-            <Box key={section.id} role="rowgroup">
-              {section.label && (
-                <Box role="row">
-                  <Box role="cell" aria-colspan={7}>
-                    <CategoryBand section={section} headingID={headingID} />
-                  </Box>
-                </Box>
-              )}
-              {section.jobs.map((job) => <DesktopJobRow key={job.job_id} job={job} />)}
-            </Box>
-          );
-        })}
-      </Box>
-    </>
+          </Box>
+        );
+      })}
+    </Box>
   );
+}
+
+function DesktopLedger({ sections }: JobHealthTableProps) {
+  return (
+    <Box role="table" aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container" }}>
+      <Box role="row" sx={{ display: "grid", gridTemplateColumns: compactColumns, alignItems: "center", columnGap: 1, px: 1.5, py: 1, minHeight: 42, borderBottom: "1px solid", borderColor: "divider", bgcolor: "surface.containerHigh", [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 } }}>
+        {headers.map((header) => (
+          <Typography key={header} role="columnheader" variant="label" color="textSecondary" sx={overviewTypography.tableHeading}>
+            {header}
+          </Typography>
+        ))}
+      </Box>
+      {sections.map((section) => {
+        const headingID = `job-category-desktop-${section.id}`;
+        return (
+          <Box key={section.id} role="rowgroup">
+            {section.label && (
+              <Box role="row">
+                <Box role="cell" aria-colspan={7}>
+                  <CategoryBand section={section} headingID={headingID} />
+                </Box>
+              </Box>
+            )}
+            {section.jobs.map((job) => <DesktopJobRow key={job.job_id} job={job} />)}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+export function JobHealthTable({ sections }: JobHealthTableProps) {
+  // Only the layout in use is mounted. The ledger carries dozens of jobs and a
+  // run strip each, so rendering both and hiding one doubles the overview DOM.
+  const desktop = useMediaQuery(desktopQuery);
+  return desktop ? <DesktopLedger sections={sections} /> : <MobileLedger sections={sections} />;
 }

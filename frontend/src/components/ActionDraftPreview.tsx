@@ -9,7 +9,7 @@ import type { ActionPreview } from "../types/actions";
 const sectionLabelSx = {
   display: "block",
   textTransform: "uppercase",
-  fontSize: "0.625rem",
+  fontSize: "0.6875rem",
   fontWeight: 700,
   letterSpacing: "0.06em",
   color: "text.secondary",

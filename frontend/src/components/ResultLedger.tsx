@@ -86,7 +86,11 @@ export function ResultLedger({
                 minHeight: 44,
                 borderRadius: "4px",
                 bgcolor: "background.default",
+                // iOS and iPadOS Safari force-zoom a focused input under 16px,
+                // and a hybrid iPad reports a fine pointer on a trackpad while
+                // its screen still takes a finger.
                 fontSize: "14px",
+                "@media (any-pointer: coarse)": { fontSize: "16px" },
               },
             },
           }}
@@ -155,7 +159,10 @@ export function ResultLedger({
         color="textSecondary"
         sx={{ m: 0, px: 1.5, py: 1, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.description }}
       >
-        Skipped tests and successful setup/teardown cases are summarized above and are not included in this ledger.
+        {/* The rule spans the ledger; the sentence reads at prose measure. */}
+        <Box component="span" sx={{ display: "block", maxWidth: "74ch" }}>
+          Skipped tests and successful setup/teardown cases are summarized above and are not included in this ledger.
+        </Box>
       </Typography>
     </Box>
   );

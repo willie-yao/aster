@@ -157,7 +157,7 @@ export function RunHistory({
                   sx={{
                     mt: 0.75,
                     visibility: showDate ? "visible" : "hidden",
-                    fontSize: "10px",
+                    fontSize: "0.6875rem",
                     lineHeight: "14px",
                     fontFamily: overviewTypography.data.fontFamily,
                   }}

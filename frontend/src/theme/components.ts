@@ -12,6 +12,23 @@ export function buildComponents(): Components<Theme> {
         },
       },
     },
+    MuiButtonBase: {
+      styleOverrides: {
+        // ButtonBase sets no font of its own, so a bare button falls back to
+        // the user agent's Arial. Every button-derived control picks up the
+        // surrounding family here; anything with its own typography, such as
+        // Button or Chip, still sets its own on top.
+        root: {
+          font: "inherit",
+          // The ripple is decorative interaction motion. Press is already
+          // carried by the hover and active surface change, so it is dropped
+          // rather than left expanding for half a second.
+          "@media (prefers-reduced-motion: reduce)": {
+            "& .MuiTouchRipple-root": { display: "none" },
+          },
+        },
+      },
+    },
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {

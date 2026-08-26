@@ -110,11 +110,38 @@ function job(overrides: Partial<JobSummary> = {}): JobSummary {
   };
 }
 
-function render(element: ReturnType<typeof createElement>): string {
+const desktopWidth = 1440;
+const mobileWidth = 390;
+
+// Without a window, MUI resolves useMediaQuery through ssrMatchMedia, so a
+// render can pick the width the component sees. The ledger and the nav mount
+// one layout per breakpoint, so a test has to say which one it is asserting.
+function queryMatchesWidth(query: string, width: number): boolean {
+  const min = /min-width:\s*([\d.]+)px/.exec(query);
+  const max = /max-width:\s*([\d.]+)px/.exec(query);
+  if (!min && !max) return false;
+  if (min && width < Number(min[1])) return false;
+  if (max && width > Number(max[1])) return false;
+  return true;
+}
+
+function themeAtWidth(width: number): Theme {
+  return {
+    ...defaultTheme,
+    components: {
+      ...defaultTheme.components,
+      MuiUseMediaQuery: {
+        defaultProps: { ssrMatchMedia: (query: string) => ({ matches: queryMatchesWidth(query, width) }) },
+      },
+    },
+  } as Theme;
+}
+
+function render(element: ReturnType<typeof createElement>, width = desktopWidth): string {
   return renderToStaticMarkup(
     createElement(
       ThemeProvider,
-      { theme: defaultTheme },
+      { theme: themeAtWidth(width) },
       createElement(MemoryRouter, null, element),
     ),
   );
@@ -163,15 +190,15 @@ test("run sparkline shows every configured run up to its cap, oldest first", () 
   const sparklineRuns = (html: string) =>
     [...html.matchAll(/aria-label="Run (\d+), /g)].map((match) => match[1]);
 
-  // Both surfaces render the mobile and desktop rows, so each run appears twice.
+  // One ledger layout is mounted per breakpoint, so each run appears once.
   const ledger = sparklineRuns(
     render(createElement(JobHealthTable, {
       sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(10) })] }],
     })),
   );
-  assert.equal(ledger.length, 20);
+  assert.equal(ledger.length, 10);
   // Newest run is rendered last so the sparkline reads left to right.
-  assert.deepEqual(ledger.slice(0, 10), ["191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
+  assert.deepEqual(ledger, ["191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
 
   // A deeper history is truncated to the newest runs rather than overflowing.
   const capped = sparklineRuns(
@@ -179,8 +206,64 @@ test("run sparkline shows every configured run up to its cap, oldest first", () 
       sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(20) })] }],
     })),
   );
-  assert.equal(capped.length, 24);
-  assert.deepEqual(capped.slice(0, 12), ["189", "190", "191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
+  assert.equal(capped.length, 12);
+  assert.deepEqual(capped, ["189", "190", "191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
+
+  // The mobile layout carries the same runs, not a second copy alongside it.
+  const mobile = sparklineRuns(
+    render(createElement(JobHealthTable, {
+      sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(10) })] }],
+    }), mobileWidth),
+  );
+  assert.deepEqual(mobile, ledger);
+});
+
+test("job health ledger mounts one layout per breakpoint", () => {
+  const sections = [{ id: "capz-e2e", label: "CAPZ E2E", jobs: [job()] }];
+  const desktop = render(createElement(JobHealthTable, { sections }));
+  const mobile = render(createElement(JobHealthTable, { sections }), mobileWidth);
+
+  // Rendering both and hiding one with CSS doubles the overview DOM, so each
+  // width mounts its own layout and nothing else.
+  assert.match(desktop, /role="table"/);
+  assert.doesNotMatch(desktop, /role="listitem"/);
+  assert.match(mobile, /role="listitem"/);
+  assert.doesNotMatch(mobile, /role="table"/);
+  // The category heading is rendered once, not once per hidden layout.
+  assert.equal(desktop.match(/<h3[^>]*>CAPZ E2E<\/h3>/g)?.length, 1);
+  assert.equal(mobile.match(/<h3[^>]*>CAPZ E2E<\/h3>/g)?.length, 1);
+});
+
+test("run sparkline is one composite tab stop with arrow-key movement", () => {
+  const runsOf = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      build_id: String(200 - i),
+      passed: i % 2 === 0,
+      timestamp: "2026-08-05T10:00:00Z",
+    }));
+  const strip = (width: number) => {
+    const html = render(createElement(JobHealthTable, {
+      sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(10) })] }],
+    }), width);
+    return [...html.matchAll(/<a\b[^>]*aria-label="Run \d+,[^"]*"[^>]*>/g)].map((m) => m[0]);
+  };
+
+  // Each strip exposes exactly one tabbable run, so a ledger of dozens of jobs
+  // costs one tab stop per strip instead of hundreds.
+  for (const width of [desktopWidth, mobileWidth]) {
+    const runLinks = strip(width);
+    assert.equal(runLinks.length, 10);
+    assert.equal(runLinks.filter((link) => /tabindex="0"/.test(link)).length, 1);
+    assert.equal(runLinks.filter((link) => /tabindex="-1"/.test(link)).length, 9);
+  }
+  assert.match(render(createElement(JobHealthTable, {
+    sections: [{ id: "capz-e2e", jobs: [job()] }],
+  })), /aria-label="Recent runs"/);
+
+  const sparkline = readFileSync(resolve(process.cwd(), "src/components/Sparkline.tsx"), "utf8");
+  for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+    assert.match(sparkline, new RegExp(`"${key}"`), `${key} moves focus within the strip`);
+  }
 });
 
 test("overview columns reserve a full-size target for every run the sparkline caps at", () => {
@@ -462,7 +545,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(sectionNav, /prefers-reduced-motion: reduce/);
   assert.match(sectionNav, /target\.focus\(\{ preventScroll: true \}\)/);
   assert.match(sectionNav, /target\.scrollIntoView/);
-  assert.match(ledger, /@media \(min-width: 1024px\)/);
+  assert.match(ledger, /\(min-width: 1024px\)/);
   assert.match(ledger, /JobHealthSection/);
   assert.match(ledger, /function MobileJobRow/);
   assert.match(ledger, /role="listitem"/);
