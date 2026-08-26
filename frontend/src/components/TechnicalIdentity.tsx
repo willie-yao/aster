@@ -6,7 +6,7 @@ import Typography from "@mui/material/Typography";
 import { ChevronRight } from "@mui/icons-material";
 import { useId, useState } from "react";
 import { DetailSectionBand } from "./DetailSectionBand";
-import { overviewTypography } from "../theme/overview";
+import { overviewTypography, touchTargetSx } from "../theme/overview";
 
 export interface TechnicalIdentityItem {
   label: string;
@@ -38,8 +38,7 @@ function CopyAction({ item }: { item: TechnicalIdentityItem }) {
       onClick={() => void copy()}
       aria-label={item.copyLabel}
       sx={{
-        minWidth: { xs: 44, sm: 36 },
-        minHeight: { xs: 44, sm: 32 },
+        ...touchTargetSx,
         px: 1,
         borderRadius: "4px",
         textTransform: "none",

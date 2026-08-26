@@ -164,9 +164,8 @@ export function FeaturedPatternRow({
         minHeight: lead ? 156 : 92,
         borderTop: "1px solid",
         borderColor: "divider",
-        boxShadow: lead
-          ? "inset 3px 0 0 var(--mui-palette-error-main)"
-          : "none",
+        // The lead entry is marked by its height and its position, not by the
+        // section band's accent edge.
         transition: "background-color 140ms ease",
         "&:hover, &:focus-within": { bgcolor: "surface.containerHigh" },
         [attentionDesktopBreakpoint]: {

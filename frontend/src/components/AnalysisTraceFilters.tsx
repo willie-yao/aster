@@ -16,7 +16,7 @@ import {
   analysisTraceFilterLabels,
 } from "../lib/analysisTraces";
 import { DetailSectionBand } from "./DetailSectionBand";
-import { overviewTypography } from "../theme/overview";
+import { overviewTypography, filterFieldSx, sectionBandSx } from "../theme/overview";
 
 function activeFilterLabel(count: number): string {
   return `${count} active`;
@@ -59,15 +59,7 @@ function FilterFields({
             name={key}
             label={analysisTraceFilterLabels[key]}
             defaultValue={searchParams.get(key) ?? ""}
-            sx={{
-              minWidth: 0,
-              "& .MuiOutlinedInput-root": {
-                minHeight: 44,
-                borderRadius: "4px",
-                bgcolor: "surface.containerLow",
-                ...overviewTypography.data,
-              },
-            }}
+            sx={filterFieldSx}
           />
         ))}
         <Stack
@@ -149,10 +141,8 @@ export function AnalysisTraceFilters({
           gridTemplateColumns: "minmax(0, 1fr) auto auto",
           alignItems: "center",
           gap: 1,
-          bgcolor: "surface.containerHigh",
+          ...sectionBandSx(),
           borderBlock: "1px solid",
-          borderColor: "divider",
-          boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
           color: "text.primary",
           textAlign: "left",
           "&:hover": { bgcolor: "surface.containerHighest" },

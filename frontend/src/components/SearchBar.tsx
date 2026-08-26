@@ -16,7 +16,7 @@ import { useManifest } from "../hooks/useManifest";
 import { jobPath, testPath } from "../lib/routes";
 import { createSearchFuse } from "../lib/search";
 import { shortJobName, shortTestName } from "../lib/utils";
-import { soft } from "../theme";
+import { soft, accentLabelSx } from "../theme";
 import { Panel } from "./Panel";
 import type { SearchEntry } from "../types/dashboard";
 
@@ -109,14 +109,14 @@ export function SearchResultButton({ entry, filePrefix, onSelect }: SearchResult
               size="small"
               color="error"
               label={`${Math.round(entry.fail_rate * 100)}% fail`}
-              sx={{
+              sx={(theme) => ({
                 flexShrink: 0,
                 height: 22,
-                bgcolor: (theme) => soft(theme, "error", 0.18),
-                color: "error.main",
+                bgcolor: soft(theme, "error", 0.18),
+                ...accentLabelSx(theme, "error"),
                 fontWeight: 600,
                 "& .MuiChip-label": { px: 0.75 },
-              }}
+              })}
             />
           )}
         </Box>

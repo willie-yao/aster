@@ -18,6 +18,7 @@ import Typography from "@mui/material/Typography";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { touchTargetSx, overlayPaperSx } from "../theme/overview";
 import {
   analysisProgressBreakdown,
   fetchStatusCompactPresentation,
@@ -400,7 +401,7 @@ function CopyableDebugRow({ label, value }: { label: string; value: string }) {
         size="small"
         onClick={() => void copy()}
         aria-label={`Copy ${label.toLowerCase()}`}
-        sx={{ minWidth: 44, minHeight: 32, px: 0.75, textTransform: "none" }}
+        sx={{ ...touchTargetSx, minWidth: 44, px: 0.75, textTransform: "none" }}
       >
         {copied ? "Copied" : "Copy"}
       </Button>
@@ -495,12 +496,7 @@ export function FetchStatusControl({ response, iconOnly = false }: FetchStatusCo
               maxHeight: "calc(100vh - 32px)",
               overflowY: "auto",
               overflowX: "hidden",
-              border: "1px solid",
-              borderColor: "divider",
-              borderRadius: "8px",
-              bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
-              backgroundImage: "none",
-              boxShadow: "0 18px 50px rgba(0, 0, 0, 0.28)",
+              ...overlayPaperSx,
             },
           },
         }}
@@ -599,7 +595,7 @@ export function FetchStatusControl({ response, iconOnly = false }: FetchStatusCo
               size="small"
               onClick={() => setAnchor(null)}
               endIcon={<ArrowForward sx={{ fontSize: 16 }} />}
-              sx={{ mt: 1.25, px: 0.5, textTransform: "none", alignSelf: "flex-start" }}
+              sx={{ ...touchTargetSx, mt: 1.25, px: 0.5, textTransform: "none", alignSelf: "flex-start" }}
             >
               Pipeline details
             </Button>
@@ -657,7 +653,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
             size="small"
             aria-label="Hide this fetch status update"
             onClick={() => onDismiss(stripKey)}
-            sx={{ color: "text.secondary" }}
+            sx={{ ...touchTargetSx, color: "text.secondary" }}
           >
             <Close sx={{ fontSize: 17 }} />
           </IconButton>

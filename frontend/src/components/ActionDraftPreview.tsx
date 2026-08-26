@@ -3,7 +3,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { CheckCircleOutlined, ErrorOutlined } from "@mui/icons-material";
 import type { Theme } from "@mui/material/styles";
-import { soft, type SoftColor } from "../theme";
+import { soft, accentLabelSx, type SoftColor } from "../theme";
 import type { ActionPreview } from "../types/actions";
 
 const sectionLabelSx = {
@@ -59,15 +59,15 @@ function VerifyBadge({
     >
       {passed ? (
         <CheckCircleOutlined
-          sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }}
+          sx={(theme) => ({ fontSize: 18, ...accentLabelSx(theme, accent), flexShrink: 0 })}
         />
       ) : (
         <ErrorOutlined
-          sx={{ fontSize: 18, color: `${accent}.main`, flexShrink: 0 }}
+          sx={(theme) => ({ fontSize: 18, ...accentLabelSx(theme, accent), flexShrink: 0 })}
         />
       )}
       <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
-        <Box component="span" sx={{ fontWeight: 600, color: `${accent}.main` }}>
+        <Box component="span" sx={(theme) => ({ fontWeight: 600, ...accentLabelSx(theme, accent) })}>
           {passed
             ? "Automated verification passed"
             : "Automated verification failed"}

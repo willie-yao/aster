@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -64,8 +64,8 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
-import { soft, softChipSx } from "../theme";
-import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
+import { soft, accentLabelSx, softChipSx } from "../theme";
+import { overviewLayout, overviewTypography, sectionBandSx, touchTargetSx } from "../theme/overview";
 import type {
   AnalysisChatAssessment,
   AnalysisChatAttempt,
@@ -200,14 +200,14 @@ function UserMessage({ content }: { content: string }) {
     <Box
       sx={{
         ml: { xs: 2, sm: 5 },
-        // A squared block with the page's own surface and divider, rather than
-        // an asymmetric chat bubble. The left accent is what marks it as the
-        // reader's turn, so the shape does not have to.
+        // A squared block on the page's own surface, rather than an asymmetric
+        // chat bubble. The indent and a 1px accent edge mark the reader's turn;
+        // the 3px edge is the section band's signature and is not borrowed here.
         borderRadius: 1,
         bgcolor: "surface.containerHigh",
         border: "1px solid",
         borderColor: "divider",
-        boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
+        borderInlineStartColor: "var(--mui-palette-primary-main)",
         px: 1.5,
         py: 1.1,
       }}
@@ -237,7 +237,14 @@ function AttemptSummary({ attempt }: { attempt: AnalysisChatAttempt }) {
             Question text is unavailable for this earlier attempt.
           </Typography>
         )}
-      <Alert severity={severity} variant="outlined" sx={{ py: 0.25 }}>
+      {/* Warning here means a cancelled or unknown past attempt, which is
+          history rather than an urgent event, so only errors interrupt. */}
+      <Alert
+        severity={severity}
+        role={severity === "error" ? "alert" : "status"}
+        variant="outlined"
+        sx={{ py: 0.25 }}
+      >
         <Typography variant="body2" sx={{ fontWeight: 700 }}>{status.label}</Typography>
         <Typography variant="caption" color="textSecondary">{status.detail}</Typography>
       </Alert>
@@ -311,7 +318,10 @@ function AssistantMessage({
         )}
         {unverified && (
           <Box>
-            <Typography variant="caption" sx={{ color: "warning.main", fontWeight: 650 }}>
+            <Typography
+              variant="caption"
+              sx={(theme) => ({ ...accentLabelSx(theme, "warning"), fontWeight: 650 })}
+            >
               {message.unverified_reason ? unverifiedReasonDetail[message.unverified_reason] : ""}
               {" "}
               Treat this answer as unproven and read the artifacts before acting on it.
@@ -347,7 +357,7 @@ function AssistantMessage({
               message.provider_ms ? `${(message.provider_ms / 1000).toFixed(1)}s provider` : null,
             ].filter(Boolean).join(" · ")}
             {message.validation_retries ? (
-              <Box component="span" sx={{ color: "warning.main" }}>
+              <Box component="span" sx={(theme) => accentLabelSx(theme, "warning")}>
                 {(message.elapsed_ms || message.provider_ms) ? " · " : ""}
                 {`${message.validation_retries} validation repair${message.validation_retries === 1 ? "" : "s"}`}
               </Box>
@@ -470,7 +480,9 @@ function AssistantMessage({
           </Button>
         )}
         {chatFixEnabled && !unverified && !fixEligible && fixIneligibleReason && message.request_id && (
-          <Alert severity="info" variant="outlined" sx={{ py: 0.25 }}>
+          // role="note": an eligibility explanation is not urgent, and the
+          // conversation log already announces it when the answer arrives.
+          <Alert severity="info" variant="outlined" role="note" sx={{ py: 0.25 }}>
             {fixIneligibleReason}
           </Alert>
         )}
@@ -508,7 +520,9 @@ function ThinkingState({
   const started = startedAt ? Date.parse(startedAt) : Number.NaN;
   const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
   return (
-    <Stack role="status" aria-live="polite" direction="row" spacing={1.25} sx={{
+    // No live role here. The message list is the conversation's one live region,
+    // and announcing this block again would double every progress update.
+    <Stack direction="row" spacing={1.25} sx={{
       alignItems: "center", borderRadius: 1, px: 1.5, py: 1.25,
       bgcolor: (theme) => soft(theme, "primary", 0.055),
     }}>
@@ -530,14 +544,18 @@ function ThinkingState({
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography variant="body2" sx={{ fontWeight: 650 }}>{copy.title}</Typography>
         <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>{copy.detail}</Typography>
-        <Typography variant="caption" color="textSecondary">
+        {/* The counter reads once a second. Announcing it would interrupt the
+            operator on every tick for the whole turn, so it stays visual. */}
+        <Typography variant="caption" color="textSecondary" aria-hidden="true">
           {elapsed !== null ? `${elapsed}s elapsed` : "Elapsed time unavailable"}
           {phase === "validation_retrying" && maxValidationRetries > 0
             ? ` · Validation retry ${validationRetries} of ${maxValidationRetries}` : ""}
         </Typography>
       </Box>
       <Button size="small" variant="outlined" color="inherit" startIcon={<StopCircleOutlined />}
-        onClick={onCancel} disabled={cancelling} sx={{ flexShrink: 0 }}>
+        onClick={() => { if (!cancelling) onCancel(); }}
+        aria-disabled={cancelling || undefined}
+        sx={{ flexShrink: 0, ...(cancelling && { opacity: 0.6 }) }}>
         {cancelling ? "Cancelling" : "Cancel"}
       </Button>
     </Stack>
@@ -560,6 +578,9 @@ export function AnalysisChat({
   const { features } = useCapabilities();
   const { status: authStatus, mode: authMode, signIn } = useAuth();
   const detailAppearance = appearance === "detail";
+  // Several chats render on one page, so the panel each toggle controls needs
+  // an id unique to that instance.
+  const chatContentId = useId();
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
@@ -589,6 +610,12 @@ export function AnalysisChat({
   const resetControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const turnLimitRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  // Whether focus currently sits inside the chat panel. Removing a node does
+  // not fire focusout, so this survives an in-flight control unmounting and is
+  // what distinguishes orphaned focus from focus the operator moved away.
+  const panelHadFocus = useRef(false);
   const analysisRefRef = useRef(analysisRef);
   const patternScope = analysisRef.scope === "pattern";
   const causeScope = analysisRef.scope === "cause";
@@ -830,10 +857,28 @@ export function AnalysisChat({
     }
   }, [authStatus, causeScope, expanded, features.analysis_chat, identity, preparedRetryNonce, restoring, session]);
 
+  const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
+
+  // Cancel, Continue and the composer itself come and go with the turn state,
+  // and a removed node leaves focus on the body. When focus was ours and ended
+  // up orphaned, put it on whatever still stands.
+  useEffect(() => {
+    if (!expanded || !panelHadFocus.current) return;
+    if (document.activeElement !== document.body) return;
+    panelHadFocus.current = false;
+    (turnLimitReached ? turnLimitRef.current : composerInputRef.current)?.focus();
+  }, [busy, expanded, pendingTurn, turnLimitReached]);
+
   if (!features.analysis_chat) return null;
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
-  const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
+  // A turn is in flight or the session is loading, so the composer accepts no
+  // input but keeps its focus. Nothing here is ever natively disabled: that
+  // drops the operator's focus to the document body mid-interaction.
+  const composerLocked = busy || restoring || pendingTurn !== null;
+  // Not composerLocked: a pending turn locks the field but leaves the button
+  // live, because that button is what resumes it.
+  const sendBlocked = busy || restoring || (pendingTurn?.question ?? question).trim() === "";
   const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
   const causeFixEnabled = causeScope && Boolean(fixTarget);
@@ -1214,7 +1259,7 @@ export function AnalysisChat({
               onClick={toggleChat}
               disabled={authStatus === "loading" || authStatus === "unavailable"}
               aria-expanded={expanded}
-              aria-controls="analysis-chat-content"
+              aria-controls={chatContentId}
               sx={{
                 minWidth: 0,
                 flex: 1,
@@ -1266,7 +1311,7 @@ export function AnalysisChat({
               disableRipple
               size="small"
               aria-label="This conversation does not change the published analysis"
-              sx={{ p: 0.5 }}
+              sx={{ ...touchTargetSx, p: 0.5 }}
             >
               <HelpOutlined sx={{ color: "text.secondary", fontSize: 17 }} />
             </IconButton>
@@ -1274,9 +1319,10 @@ export function AnalysisChat({
           <IconButton
             disableRipple
             size="small"
+            sx={touchTargetSx}
             aria-label={chatToggleLabel}
             aria-expanded={expanded}
-            aria-controls="analysis-chat-content"
+            aria-controls={chatContentId}
             onClick={toggleChat}
             disabled={authStatus === "loading" || authStatus === "unavailable"}
           >
@@ -1292,11 +1338,22 @@ export function AnalysisChat({
         </Stack>
 
         <Collapse in={expanded} appear>
-          <Box id="analysis-chat-content">
+          <Box
+            id={chatContentId}
+            onFocus={() => { panelHadFocus.current = true; }}
+            onBlur={(event) => {
+              // Moving between controls inside the panel is not leaving it.
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                panelHadFocus.current = false;
+              }
+            }}
+          >
             <Stack
               ref={messageListRef}
               spacing={1.25}
+              role="log"
               aria-live="polite"
+              aria-label="Analysis conversation"
               sx={{
                 p: { xs: 1.25, sm: 1.5 },
                 maxHeight: { xs: "min(62vh, 560px)", sm: "min(70vh, 680px)" },
@@ -1316,12 +1373,12 @@ export function AnalysisChat({
               }}
             >
               {restoring && (
-                <Typography role="status" variant="body2" color="textSecondary" sx={{ py: 0.5 }}>
+                <Typography variant="body2" color="textSecondary" sx={{ py: 0.5 }}>
                   Restoring conversation...
                 </Typography>
               )}
               {fixSourceUnavailable && (
-                <Alert severity="info" variant="outlined">
+                <Alert severity="info" variant="outlined" role="note">
                   Fix preview is not possible for this analysis: it has no verified immutable source path pinned to
                   the failing build's repository and commit. Questions still work, but no answer here can start a fix preview.
                 </Alert>
@@ -1352,7 +1409,7 @@ export function AnalysisChat({
                         variant="outlined"
                         sx={{
                           height: "auto",
-                          minHeight: 30,
+                          ...touchTargetSx,
                           borderColor: "divider",
                           "& .MuiChip-label": { whiteSpace: "normal", py: 0.55, fontSize: "0.72rem" },
                           "& .MuiChip-icon": { fontSize: 15 },
@@ -1409,9 +1466,20 @@ export function AnalysisChat({
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
             </Stack>
 
-            <Box sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
+            {/* aria-busy marks the composer, not the log: on the log it would
+                sit above the progress update and defer announcing it. */}
+            <Box aria-busy={composerLocked || restoring} sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
               {turnLimitReached ? (
-                <Alert severity="info" variant="outlined">
+                // Replacing the composer unmounts whatever the operator had
+                // focused, so this takes the focus and says why input is gone.
+                <Alert
+                  ref={turnLimitRef}
+                  role="status"
+                  tabIndex={-1}
+                  severity="info"
+                  variant="outlined"
+                  sx={{ "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 } }}
+                >
                   This conversation reached its attempt limit. Start a new conversation to keep asking.
                 </Alert>
               ) : (
@@ -1421,6 +1489,7 @@ export function AnalysisChat({
                     multiline
                     minRows={1}
                     maxRows={5}
+                    inputRef={composerInputRef}
                     value={question}
                     onChange={(event) => {
                       setContinueMode(false);
@@ -1429,20 +1498,30 @@ export function AnalysisChat({
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
-                        void submit();
+                        if (!composerLocked) void submit();
                       }
                     }}
-                    disabled={restoring || busy || pendingTurn !== null}
+                    // Read-only rather than disabled. Disabling the focused
+                    // field drops focus to the document body, which strands the
+                    // operator and puts Cancel out of reach.
                     placeholder="Ask why, challenge the cause, or test another hypothesis..."
                     slotProps={{
                       input: {
+                        readOnly: composerLocked,
                         sx: {
                           borderRadius: 1,
                           bgcolor: "background.paper",
                           fontSize: "0.875rem",
+                          // 16px wherever touch is available: iOS force-zooms a
+                          // focused input below it, at any viewport width.
+                          "@media (any-pointer: coarse)": { fontSize: "16px" },
+                          ...(composerLocked && { opacity: 0.6 }),
                         },
                       },
-                      htmlInput: { "aria-label": "Ask about this analysis" },
+                      htmlInput: {
+                        "aria-label": "Ask about this analysis",
+                        "aria-disabled": composerLocked || undefined,
+                      },
                     }}
                   />
                   <Tooltip title={pendingTurn || continueMode ? "Continue" : "Send question"}>
@@ -1450,8 +1529,11 @@ export function AnalysisChat({
                       <IconButton
                         color="primary"
                         aria-label={pendingTurn || continueMode ? "Continue" : "Send question"}
-                        onClick={() => void submit()}
-                        disabled={restoring || busy || (pendingTurn?.question ?? question).trim() === ""}
+                        onClick={() => {
+                          if (!sendBlocked) void submit();
+                        }}
+                        // Never natively disabled, for the same focus reason.
+                        aria-disabled={sendBlocked || undefined}
                         sx={{
                           width: 48,
                           height: 48,
@@ -1459,7 +1541,7 @@ export function AnalysisChat({
                           bgcolor: "primary.main",
                           color: "primary.contrastText",
                           "&:hover": { bgcolor: "primary.dark" },
-                          "&.Mui-disabled": { bgcolor: "action.disabledBackground" },
+                          ...(sendBlocked && { bgcolor: "action.disabledBackground", opacity: 0.6 }),
                         }}
                       >
                         <ArrowUpward fontSize="small" />
@@ -1471,8 +1553,8 @@ export function AnalysisChat({
                       <span>
                         <IconButton
                           aria-label="Cancel pending question"
-                          onClick={() => void cancelTurn()}
-                          disabled={cancelling}
+                          onClick={() => { if (!cancelling) void cancelTurn(); }}
+                          aria-disabled={cancelling || undefined}
                           sx={{
                             width: 48,
                             height: 48,
@@ -1480,6 +1562,7 @@ export function AnalysisChat({
                             border: "1px solid",
                             borderColor: "divider",
                             color: "text.secondary",
+                            ...(cancelling && { opacity: 0.6 }),
                           }}
                         >
                           <StopCircleOutlined fontSize="small" />
@@ -1502,7 +1585,7 @@ export function AnalysisChat({
                     startIcon={<RestartAltOutlined />}
                     onClick={() => setResetOpen(true)}
                     disabled={restoring || busy || resetting}
-                    sx={{ color: "text.secondary", fontSize: "0.75rem" }}
+                    sx={{ ...touchTargetSx, color: "text.secondary", fontSize: "0.75rem" }}
                   >
                     New conversation
                   </Button>
@@ -1538,8 +1621,11 @@ export function AnalysisChat({
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button onClick={() => setResetOpen(false)} disabled={resetting}>Keep conversation</Button>
+          <Button sx={touchTargetSx} onClick={() => setResetOpen(false)} disabled={resetting}>
+            Keep conversation
+          </Button>
           <Button
+            sx={touchTargetSx}
             variant="contained"
             color="warning"
             onClick={() => void startNewConversation()}

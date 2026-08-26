@@ -212,9 +212,17 @@ test("the pull request ledger follows the Overview structural language", () => {
   assert.match(ledger, /"&:hover": \{ bgcolor: "surface\.containerHigh" \}/);
   assert.match(ledger, /boxShadow: "inset 2px 0 0 var\(--mui-palette-primary-main\)"/);
   // Desktop table and mobile list are mutually exclusive, as on the Overview.
-  assert.match(ledger, /display: \{ xs: "none", lg: "block" \}/);
-  assert.match(ledger, /display: \{ xs: "block", lg: "none" \}/);
-  assert.match(ledger, /role="table"/);
+  // Only one is mounted: a layout that is not visible at the current width does
+  // not exist in the DOM, so hiding one with `display` is a regression.
+  assert.match(ledger, /const tabular = useMediaQuery\(theme\.breakpoints\.up\("lg"\)\)/);
+  // One regex for the whole flow: the list is returned when the query is false
+  // and the table is the only other return, so exactly one can ever mount.
+  assert.match(
+    ledger,
+    /if \(!tabular\) \{\s*return \(\s*<Box role="list"[\s\S]*?\);\s*\}\s*return \(\s*<Box role="table"/,
+  );
+  assert.doesNotMatch(ledger, /display: \{ xs: "none", lg: "block" \}/);
+  assert.doesNotMatch(ledger, /display: \{ xs: "block", lg: "none" \}/);
   assert.match(ledger, /role="columnheader"/);
 });
 

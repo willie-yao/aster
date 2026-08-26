@@ -35,7 +35,7 @@ import { patternActionEligibilityHint, patternActionRefreshBlocked, patternResol
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
-import { overviewTypography } from "../theme/overview";
+import { overviewTypography, touchTargetSx } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { CausalGroupFixButton } from "./CausalGroupFixRouting";
 import { CauseResolution } from "./CauseResolution";
@@ -43,6 +43,7 @@ import { causeResolutionAvailable } from "../lib/resolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
+import { accentLabelSx } from "../theme";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -222,7 +223,7 @@ export function PatternBanner({
         : recurrenceLabel;
   const metadata = `${buildsAnalyzedLabel(pattern, refreshStatus)} · ${pattern.confidence} confidence`;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
-    <Alert severity="warning" variant="outlined" sx={{ borderRadius: "4px" }}>
+    <Alert severity="warning" role="status" variant="outlined" sx={{ borderRadius: "4px" }}>
       Pattern from the last successful refresh at {refreshStatus.last_successful_at ?? "an earlier time"}.
       Current refresh status: {refreshStatus.failure_category ?? refreshStatus.state}.
       {patternCountOutdated(pattern, refreshStatus) &&
@@ -232,6 +233,7 @@ export function PatternBanner({
   const lifecycleNotice = lifecycle && !lifecycleActive ? (
     <Alert
       severity={lifecycle.state === "verified_fixed" ? "success" : "info"}
+      role="status"
       variant="outlined"
       sx={{ borderRadius: "4px" }}
     >
@@ -468,14 +470,14 @@ export function PatternBanner({
                         to={jobID ? jobRunPath(jobID, buildID) : "#"}
                         aria-label={`Open affected build ${buildID}`}
                         underline="none"
-                        sx={{
-                          minHeight: 32,
+                        sx={(theme) => ({
+                          ...touchTargetSx,
                           display: "inline-flex",
                           alignItems: "center",
                           px: 0.75,
                           borderRadius: "4px",
                           bgcolor: "action.selected",
-                          color: "primary.main",
+                          ...accentLabelSx(theme, "primary"),
                           ...overviewTypography.data,
                           "&:hover": { bgcolor: "surface.containerHigh" },
                           "&:focus-visible": {
@@ -483,7 +485,7 @@ export function PatternBanner({
                             outlineColor: "primary.main",
                             outlineOffset: 2,
                           },
-                        }}
+                        })}
                       >
                         {buildID}
                       </Link>
@@ -614,14 +616,14 @@ export function PatternBanner({
                 component={RouterLink}
                 to={jobID ? jobRunPath(jobID, buildID) : "#"}
                 underline="none"
-                sx={{
-                  minHeight: 32,
+                sx={(theme) => ({
+                  ...touchTargetSx,
                   display: "inline-flex",
                   alignItems: "center",
                   px: 0.75,
                   borderRadius: "4px",
                   bgcolor: "action.selected",
-                  color: "primary.main",
+                  ...accentLabelSx(theme, "primary"),
                   ...overviewTypography.data,
                   "&:hover": { bgcolor: "surface.containerHigh" },
                   "&:focus-visible": {
@@ -629,7 +631,7 @@ export function PatternBanner({
                     outlineColor: "primary.main",
                     outlineOffset: 2,
                   },
-                }}
+                })}
               >
                 {buildID}
               </Link>
@@ -662,7 +664,7 @@ export function PatternBanner({
       )}
 
       {chatAvailability === "stale" && (
-        <Alert severity="info" variant="outlined" sx={{ borderRadius: "4px" }}>
+        <Alert role="status" severity="info" variant="outlined" sx={{ borderRadius: "4px" }}>
           Recurring-pattern chat is unavailable because this dashboard data predates content hashing.
           Refresh the dashboard data to enable it.
         </Alert>

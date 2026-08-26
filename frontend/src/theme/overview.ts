@@ -101,3 +101,48 @@ export const dialogPaperSx = {
   borderColor: "divider",
   backgroundImage: "none",
 } as const;
+
+/**
+ * The one floating-overlay surface: popovers and menus that genuinely detach
+ * from the page. A detached layer needs the separation no border can give and a
+ * softer edge than an inline one, so it takes the overlay shadow and 8px rather
+ * than the console's 4px. Nothing inline may borrow it.
+ */
+export const overlayPaperSx = {
+  border: "1px solid",
+  borderColor: "divider",
+  borderRadius: "8px",
+  bgcolor: "surface.container",
+  backgroundImage: "none",
+  boxShadow: "0 18px 50px rgba(0, 0, 0, 0.28)",
+} as const;
+
+/**
+ * Interactive target from the buttons rule: 36px under a pointer, 44px wherever
+ * touch is available. Keyed to the input device rather than a breakpoint, so a
+ * landscape phone still gets a touch-sized target despite its width.
+ */
+export const touchTargetSx = {
+  minWidth: 36,
+  minHeight: 36,
+  "@media (any-pointer: coarse)": { minWidth: 44, minHeight: 44 },
+} as const;
+
+/**
+ * Operator filter field. Sizing follows the Inputs rule: 44px tall, 14px on a
+ * pointer, 16px wherever touch is available. The 16px is keyed to the input
+ * device rather than a breakpoint because iOS force-zooms a focused input below
+ * it and a landscape phone is wider than the `sm` breakpoint. The monospace
+ * family stays: these fields hold identifiers, and the rule governs size only.
+ */
+export const filterFieldSx = {
+  minWidth: 0,
+  "& .MuiOutlinedInput-root": {
+    minHeight: 44,
+    borderRadius: "4px",
+    bgcolor: "surface.containerLow",
+    ...overviewTypography.data,
+    fontSize: "14px",
+    "@media (any-pointer: coarse)": { fontSize: "16px" },
+  },
+} as const;

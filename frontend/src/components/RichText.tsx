@@ -1,6 +1,8 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import { Fragment, type ReactNode } from "react";
+import type { Theme } from "@mui/material/styles";
+import { accentLabelSx } from "../theme";
 import { formatSteps, fileToUrl, type FileToUrlContext } from "../lib/utils";
 
 interface RichTextProps {
@@ -28,12 +30,15 @@ const codeSx = {
   wordBreak: "break-word",
 } as const;
 
-const codeLinkSx = {
+// The pill sits on a neutral wash, which darkens the background enough that
+// primary.main falls under 4.5:1 in light mode. The label takes the accent's
+// dark ramp there, the same rule status labels follow on their own tint.
+const codeLinkSx = (theme: Theme) => ({
   ...codeSx,
-  color: "primary.main",
+  ...accentLabelSx(theme, "primary"),
   textDecorationColor: "transparent",
   "&:hover": { textDecorationColor: "inherit" },
-} as const;
+});
 
 // Bare paths use monospace link styling without a pill, so dense
 // prose with many paths stays readable.

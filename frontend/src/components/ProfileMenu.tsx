@@ -10,6 +10,7 @@ import Typography from "@mui/material/Typography";
 import { AccountCircle, GitHub, Logout } from "@mui/icons-material";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { overlayPaperSx } from "../theme/overview";
 
 // ProfileMenu is the account control. It appears only in oauth mode: a
 // "Sign in" button when signed out, or an account menu with the login and a
@@ -93,6 +94,7 @@ export function ProfileMenu({ compact = false }: { compact?: boolean } = {}) {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { sx: overlayPaperSx } }}
       >
         <Box sx={{ px: 2, py: 1 }}>
           <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
