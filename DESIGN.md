@@ -69,6 +69,12 @@ typography:
     fontWeight: 600
     lineHeight: "20px"
     letterSpacing: "0"
+  micro-label:
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif"
+    fontSize: "0.6875rem"
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: "0.01em"
 rounded:
   dot: "2px"
   default: "4px"

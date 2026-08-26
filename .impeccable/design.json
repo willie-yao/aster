@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-26T17:18:09Z",
+  "generatedAt": "2026-08-26T22:22:52Z",
   "title": "Design System: Aster",
   "extensions": {
     "colorMeta": {
@@ -138,6 +138,10 @@
       "identifier": {
         "displayName": "Identifier",
         "purpose": "Job names and test names, where characters must be compared exactly."
+      },
+      "micro-label": {
+        "displayName": "Micro Label",
+        "purpose": "The smallest role in the system: navigation labels, the keyboard hint, grid column dates, and the run-history axis. Sits at the eleven pixel floor rather than under it."
       }
     },
     "shadows": [
@@ -194,7 +198,7 @@
       },
       {
         "name": "wide",
-        "value": "1200px"
+        "value": "1240px"
       },
       {
         "name": "xl",
@@ -274,7 +278,7 @@
       "refersTo": "section-band",
       "description": "Icon over label, 76px rail. The active destination takes a violet tint and a 3px leading bar.",
       "html": "<a class=\"ds-nav ds-nav-active\" href=\"#\" aria-current=\"page\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z\"/></svg><span class=\"ds-nav-label\">Overview</span></a>",
-      "css": ".ds-nav { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 76px; height: 54px; color: #59636e; text-decoration: none; transition: color 140ms ease, background-color 140ms ease; } .ds-nav:hover { color: #1f2328; background: #f0f3f6; } .ds-nav-active { color: #7c3aed; background: color-mix(in srgb, #7c3aed 14%, transparent); } .ds-nav-active::before { content: \"\"; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: #7c3aed; } .ds-nav-label { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 11px; font-weight: 600; line-height: 1.2; letter-spacing: 0.01em; } .ds-nav:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } @media (prefers-reduced-motion: reduce) { .ds-nav { transition: none; } }"
+      "css": ".ds-nav { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 76px; height: 54px; color: #59636e; text-decoration: none; transition: color 140ms ease, background-color 140ms ease; } .ds-nav:hover { color: #1f2328; background: #f0f3f6; } .ds-nav-active { color: #7c3aed; background: color-mix(in srgb, #7c3aed 14%, transparent); } .ds-nav-active::before { content: \"\"; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: #7c3aed; } .ds-nav-label { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 0.6875rem; font-weight: 600; line-height: 1.2; letter-spacing: 0.01em; } .ds-nav:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } @media (prefers-reduced-motion: reduce) { .ds-nav { transition: none; } }"
     },
     {
       "name": "Action Bar",
@@ -400,14 +404,9 @@
     ],
     "provenance": "Aster was not built as an Impeccable project. The interface came first and this system was written by reading the implementation: the tokens in frontend/src/theme/, the components, and the rules already recorded in docs/brand.md. It is normative going forward while the code is brought up to it incrementally.",
     "knownGaps": [
-      "The Eleven Pixel Floor: 0.625rem (10.6px) labels in SearchBar, TestCaseTable, TestResultsGrid; 10px run-history axis.",
-      "The Sixteen Pixel Input Rule: filter input 14px, search input 0.875rem; both force-zoom on iOS.",
-      "The One Layout Rule: JobHealthTable mounts both layouts and hides one with display: none.",
       "Accent edge reserved for bands: 3px borderLeft on insets in LabeledBlock and ChatFixDialog.",
-      "Composite widgets get roving tabindex: Sparkline puts roughly 300 run links in the overview tab order.",
       "aria-current=\"page\" on exact match only: NavRail marks the active section page on nested routes.",
-      "Buttons inherit the theme family: no MuiButtonBase override, so bare ButtonBase falls back to the user agent font.",
-      "The Tint Roles Rule: soft() is called at 16 distinct alphas between 0.025 and 0.5; the three documented roles need consolidating.",
+      "The Tint Roles Rule: soft() is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating.",
       "The operator surfaces are documented from the implementation but have not been audited for accessibility, responsive behavior, or performance. Reach them locally with make dev-actions (AUTH_MODE=dev)."
     ],
     "operatorSurfaces": "Signing in adds the write surfaces, the analysis conversation, and two operator-only pages. They are the same console, not a separate product. The character is efficient rather than ceremonial: a maintainer reaching for Resolve failure already knows what they are doing, so actions sit inline next to their evidence, state what they change in one sentence, and get out of the way. Capability, not layout, decides what renders."
