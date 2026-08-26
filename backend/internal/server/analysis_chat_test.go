@@ -524,6 +524,7 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrRequestNotFound, http.StatusNotFound, "analysis chat request not found", "rejected"},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed", "rejected"},
 		{analysischat.ErrSessionBusy, http.StatusConflict, "analysis chat session is busy", "pending"},
+		{analysischat.ErrSessionReferenced, http.StatusConflict, "analysis chat session supports a fix request", "rejected"},
 		{analysischat.ErrRequestPending, http.StatusConflict, "analysis chat request is pending", "pending"},
 		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"},
 		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat outcome is unknown", "unknown"},

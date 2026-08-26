@@ -101,6 +101,11 @@ metadata:
     app.kubernetes.io/component: server
 spec:
   replicas: {{ .Values.server.replicaCount }}
+  {{- if $chat }}
+  # Chat state migrations require old replicas to stop before new replicas start.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "aster.selectorLabels" . | nindent 6 }}

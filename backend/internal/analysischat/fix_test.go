@@ -82,8 +82,9 @@ func TestServiceFixCandidateSelectsBoundedAnswer(t *testing.T) {
 		candidate.ProposedRevision == nil || len(candidate.ArtifactCitations) != 1 {
 		t.Fatalf("candidate answer = %+v", candidate)
 	}
-	if _, err := service.FixCandidate(session.ID, "Bob", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("cross-owner error = %v", err)
+	shared, err := service.FixCandidate(session.ID, "Bob", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash)
+	if err != nil || shared.ResponseHash != candidate.ResponseHash {
+		t.Fatalf("shared candidate = %+v err=%v", shared, err)
 	}
 }
 

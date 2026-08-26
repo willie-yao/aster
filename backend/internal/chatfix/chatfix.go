@@ -3,8 +3,10 @@ package chatfix
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +20,9 @@ type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error)
 	AnalysisFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
 	PreflightAnalysisFix(ctx context.Context, sessionID, owner, requestID string) error
+	ReserveAnalysisFix(sessionID, owner, requestID, reservationID string) error
+	CommitAnalysisFix(sessionID, owner, requestID, reservationID, referenceID string) error
+	ReleaseAnalysisFix(sessionID, owner, requestID, reservationID string) error
 }
 
 type fixPreviewer interface {
@@ -30,7 +35,7 @@ type analysisFixRequester interface {
 	CreateAnalysisFixRequest(actions.AnalysisFixInput, string, string, string, ...string) (actions.ActionRequestView, error)
 }
 
-// Service validates owner-bound chat context before fix generation.
+// Service validates shared chat context before fix generation.
 type Service struct {
 	chat     chatStore
 	fixes    fixPreviewer
@@ -109,7 +114,32 @@ func (s *Service) CreateAnalysisFixRequest(
 		return actions.ActionRequestView{}, err
 	}
 	input := exactAnalysisFixInput(candidate, instruction)
-	return s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction, replacesRequestIDs...)
+	reservationID, err := newFixReservationID()
+	if err != nil {
+		return actions.ActionRequestView{}, err
+	}
+	if err := s.chat.ReserveAnalysisFix(sessionID, owner, requestID, reservationID); err != nil {
+		return actions.ActionRequestView{}, err
+	}
+	request, err := s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction, replacesRequestIDs...)
+	if err != nil {
+		if releaseErr := s.chat.ReleaseAnalysisFix(sessionID, owner, requestID, reservationID); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("releasing analysis Fix reservation: %w", releaseErr))
+		}
+		return actions.ActionRequestView{}, err
+	}
+	if err := s.chat.CommitAnalysisFix(sessionID, owner, requestID, reservationID, request.ID); err != nil {
+		return actions.ActionRequestView{}, fmt.Errorf("committing analysis Fix reference: %w", err)
+	}
+	return request, nil
+}
+
+func newFixReservationID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", fmt.Errorf("creating analysis Fix reservation: %w", err)
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {
@@ -164,7 +194,7 @@ func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction st
 	return hex.EncodeToString(sum[:])
 }
 
-// ValidateAnalysisPreview rechecks the exact owner-bound chat response.
+// ValidateAnalysisPreview rechecks the exact shared chat response.
 func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, binding actions.AnalysisPreviewBinding) error {
 	candidate, err := s.chat.AnalysisFixCandidate(binding.ChatSessionID, owner, binding.ChatRequestID)
 	if err != nil {

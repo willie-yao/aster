@@ -52,7 +52,7 @@ a separate persistent asynchronous preview request. The selected finding must
 name an explicit backticked source symbol and satisfy all of these requirements:
 
 - the failed JUnit case still has a current accepted published analysis;
-- the owner-bound conversation contains validated artifact evidence;
+- the shared conversation contains validated artifact evidence;
 - build metadata resolves the exact repository and full commit;
 - the published analysis has verified source links for that repository and
   revision;
@@ -76,7 +76,7 @@ source revision, verified paths, or source snapshot requires a new session or
 preview.
 
 Closing the browser or losing the HTTP connection does not cancel an admitted
-Sandbox. Reopening the dialog restores the owner-bound request, and repeating the
+Sandbox. Reopening the dialog restores the initiating operator's request, and repeating the
 same admission input reconnects instead of creating another Sandbox.
 
 ### Preview, warnings, regeneration, and confirmation

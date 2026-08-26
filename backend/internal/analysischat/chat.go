@@ -45,15 +45,17 @@ var (
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
 	ErrSessionBusy = errors.New("analysis chat session is busy")
+	// ErrSessionReferenced means a Fix request still depends on the session.
+	ErrSessionReferenced = errors.New("analysis chat session supports a fix request")
 	// ErrRequestPending means this idempotent request is still running.
 	ErrRequestPending = errors.New("analysis chat request is pending")
 	// ErrRequestNotFound means the session has no request with this ID.
 	ErrRequestNotFound = errors.New("analysis chat request not found")
-	// ErrSessionLimit means the deployment or owner has too many live sessions.
+	// ErrSessionLimit means the deployment or creator has too many live sessions.
 	ErrSessionLimit = errors.New("analysis chat session limit reached")
-	// ErrActiveTurnLimit means an owner has too many concurrent turns.
+	// ErrActiveTurnLimit means an operator has too many concurrent turns.
 	ErrActiveTurnLimit = errors.New("analysis chat active turn limit reached")
-	// ErrRateLimit means an owner exceeded the admitted turn rate.
+	// ErrRateLimit means an operator exceeded the admitted turn rate.
 	ErrRateLimit           = errors.New("analysis chat rate limit reached") // ErrIdempotencyConflict means a request key was reused for different input.
 	ErrIdempotencyConflict = errors.New("analysis chat idempotency key conflict")
 	// ErrRequestOutcomeUnknown means a replica died before recording a turn result.
@@ -100,7 +102,7 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return GateMessage(e.Gate) }
 
-// GateMessage returns the owner-safe message for a response validation gate.
+// GateMessage returns the operator-safe message for a response validation gate.
 func GateMessage(gate string) string {
 	switch gate {
 	case GateCandidate:
@@ -197,6 +199,7 @@ type Reply struct {
 // Message is one user or assistant entry in a session transcript.
 type Message struct {
 	Role              string     `json:"role"`
+	Actor             string     `json:"actor,omitempty"`
 	RequestID         string     `json:"request_id,omitempty"`
 	Content           string     `json:"content"`
 	Assessment        string     `json:"assessment,omitempty"`
@@ -214,9 +217,10 @@ type Message struct {
 	CreatedAt         string     `json:"created_at"`
 }
 
-// Attempt is one owner-safe admitted model request.
+// Attempt is one operator-safe admitted model request.
 type Attempt struct {
 	RequestID   string `json:"request_id"`
+	Actor       string `json:"actor,omitempty"`
 	Question    string `json:"question,omitempty"`
 	Outcome     string `json:"outcome"`
 	FailureKind string `json:"failure_kind,omitempty"`
@@ -225,9 +229,10 @@ type Attempt struct {
 	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
-// SessionView is the owner-safe session representation returned by the API.
+// SessionView is the authenticated session representation returned by the API.
 type SessionView struct {
 	ID               string                          `json:"id"`
+	CreatedBy        string                          `json:"created_by"`
 	Analysis         AnalysisRef                     `json:"analysis"`
 	CreatedAt        string                          `json:"created_at"`
 	UpdatedAt        string                          `json:"updated_at"`
@@ -240,8 +245,9 @@ type SessionView struct {
 	SourceRepository *sourceinvestigation.Repository `json:"source_repository,omitempty"`
 }
 
-// ActiveTurn is the owner-safe state needed to resume an in-flight request.
+// ActiveTurn is the authenticated state for one in-flight request.
 type ActiveTurn struct {
+	Actor                string `json:"actor,omitempty"`
 	RequestID            string `json:"request_id"`
 	Question             string `json:"question,omitempty"`
 	Phase                string `json:"phase"`
@@ -251,7 +257,7 @@ type ActiveTurn struct {
 	MaxValidationRetries int    `json:"max_validation_retries,omitempty"`
 }
 
-// Progress is a persisted, owner-safe turn phase.
+// Progress is a persisted operator-safe turn phase.
 type Progress struct {
 	RequestID            string `json:"request_id"`
 	Phase                string `json:"phase"`
@@ -488,7 +494,7 @@ func (s *Service) preparedFinding(ref AnalysisRef) (PreparedCauseFinding, string
 	return finding, key, true
 }
 
-// Create resolves an analysis snapshot and starts an owner-bound session.
+// Create resolves an analysis snapshot and returns the shared session for it.
 func (s *Service) Create(ref AnalysisRef, owner, requestID string) (SessionView, error) {
 	return s.create(ref, owner, requestID, false)
 }
@@ -527,10 +533,6 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 		changed = changed || migrated
 		if current != nil {
 			existing = s.sessionView(current)
-			return changed, nil
-		}
-		if s.sessionLimitReached(state, owner) {
-			return changed, ErrSessionLimit
 		}
 		return changed, nil
 	})
@@ -567,6 +569,7 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 		Requests:             seedRequests,
 		View: SessionView{
 			ID:        id,
+			CreatedBy: owner,
 			Analysis:  resolved.ref,
 			CreatedAt: now.Format(time.RFC3339),
 			UpdatedAt: now.Format(time.RFC3339),
@@ -584,6 +587,9 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 			return changed, err
 		}
 		changed = changed || migrated
+		if current == nil {
+			current = s.latestSessionForAnalysis(state, resolved.ref)
+		}
 		if current != nil {
 			existing = s.sessionView(current)
 			return changed, nil
@@ -598,9 +604,12 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	return existing, err
 }
 
-// Get returns an owner-bound session.
+// Get returns a shared session to an authenticated operator.
 func (s *Service) Get(id, owner string) (SessionView, error) {
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return SessionView{}, fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	now := s.opts.Now().UTC()
 	var view SessionView
 	ctx, cancel := s.store.context()
@@ -608,7 +617,7 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(id)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		view = s.sessionView(current)
@@ -617,9 +626,7 @@ func (s *Service) Get(id, owner string) (SessionView, error) {
 	return view, err
 }
 
-// Delete discards an owner-bound session and cancels any turn still in flight.
-// A discarded conversation is unrecoverable, and its per-owner session slot is
-// released immediately.
+// Delete removes an idle shared session.
 func (s *Service) Delete(id, owner string) error {
 	owner = normalizeOwner(owner)
 	if owner == "" {
@@ -627,35 +634,26 @@ func (s *Service) Delete(id, owner string) error {
 	}
 	id = strings.TrimSpace(id)
 	now := s.opts.Now().UTC()
-	activeRequestID := ""
 	ctx, cancel := s.store.context()
 	defer cancel()
-	err := s.store.update(ctx, func(state *persistedState) (bool, error) {
+	return s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[id]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		if current.Active != nil {
-			activeRequestID = current.Active.RequestID
+			return changed, ErrSessionBusy
+		}
+		if hasFixDependency(current.FixSources) {
+			return changed, ErrSessionReferenced
 		}
 		delete(state.Sessions, id)
 		return true, nil
 	})
-	if err != nil {
-		return err
-	}
-	// The running turn observes the missing session and stops on its own, but
-	// waking its readers and cancelling the local run context ends it now
-	// instead of at the next lease or poll boundary.
-	if activeRequestID != "" {
-		s.notifyLocal(activeTurnKey(id, activeRequestID))
-		s.cancelLocal(id, activeRequestID)
-	}
-	return nil
 }
 
-// Find returns the latest owner-bound session for the current analysis.
+// Find returns the latest shared session for the current analysis.
 func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	owner = normalizeOwner(owner)
 	if owner == "" {
@@ -671,7 +669,7 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	defer cancel()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current := s.latestSessionForAnalysis(state, owner, resolved.ref)
+		current := s.latestSessionForAnalysis(state, resolved.ref)
 		if current == nil {
 			return changed, ErrSessionNotFound
 		}
@@ -681,25 +679,15 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	return view, err
 }
 
-func (s *Service) latestSessionForAnalysis(state *persistedState, owner string, ref AnalysisRef) *persistedSession {
+func (s *Service) latestSessionForAnalysis(state *persistedState, ref AnalysisRef) *persistedSession {
 	var latest *persistedSession
-	var latestActivity time.Time
-	for _, current := range state.Sessions {
-		if current == nil || current.Owner != owner || current.View.Analysis != ref {
+	latestID := ""
+	for id, current := range state.Sessions {
+		if current == nil || current.Retired || current.View.Analysis != ref {
 			continue
 		}
-		activity, err := time.Parse(time.RFC3339, current.View.UpdatedAt)
-		if err != nil {
-			activity, _ = time.Parse(time.RFC3339, current.View.CreatedAt)
-		}
-		if current.Active != nil && current.Active.UpdatedAt.After(activity) {
-			activity = current.Active.UpdatedAt
-		}
-		if latest == nil || activity.After(latestActivity) ||
-			activity.Equal(latestActivity) && current.ExpiresAt.After(latest.ExpiresAt) ||
-			activity.Equal(latestActivity) && current.ExpiresAt.Equal(latest.ExpiresAt) && current.View.ID > latest.View.ID {
-			latest = current
-			latestActivity = activity
+		if latest == nil || sharedSessionNewer(id, current, latestID, latest) {
+			latest, latestID = current, id
 		}
 	}
 	return latest
@@ -730,6 +718,9 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 		if current.Active != nil && !now.Before(current.Active.ExpiresAt) {
 			active := current.Active
 			previous := current.Requests[active.RequestID]
+			if previous.Actor == "" {
+				previous.Actor = active.Actor
+			}
 			if active.CancelRequested {
 				previous.Status = requestFailed
 				previous.FailureKind = failureCancelled
@@ -772,18 +763,18 @@ func (s *Service) sessionLimitReached(state *persistedState, owner string) bool 
 	if len(state.Sessions) >= s.opts.MaxSessions {
 		return true
 	}
-	count := 0
+	owned := 0
 	for _, current := range state.Sessions {
-		if current.Owner == owner {
-			count++
+		if current != nil && current.Owner == owner {
+			owned++
 		}
 	}
-	return count >= s.opts.MaxSessionsPerOwner
+	return owned >= s.opts.MaxSessionsPerOwner
 }
 
 func findCreateRequest(state *persistedState, owner, requestID, requestHash, legacyHash string) (*persistedSession, bool, error) {
 	for _, current := range state.Sessions {
-		if current.Owner != owner || current.CreateRequestID != requestID {
+		if current == nil || current.Retired || current.Owner != owner || current.CreateRequestID != requestID {
 			continue
 		}
 		if current.CreateRequestHash != requestHash {
@@ -1004,6 +995,7 @@ func cloneSessionView(view SessionView) SessionView {
 
 func (s *Service) sessionView(current *persistedSession) SessionView {
 	view := cloneSessionView(current.View)
+	view.CreatedBy = current.Owner
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns
 	view.MaxTurns = s.opts.MaxTurns
@@ -1014,7 +1006,7 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	}
 	if current.Active != nil {
 		view.Active = &ActiveTurn{
-			RequestID: current.Active.RequestID, Question: current.Active.Question, Phase: current.Active.Phase,
+			Actor: current.Active.Actor, RequestID: current.Active.RequestID, Question: current.Active.Question, Phase: current.Active.Phase,
 			StartedAt: optionalTimestamp(current.Active.StartedAt), UpdatedAt: current.Active.UpdatedAt.Format(time.RFC3339),
 			ValidationRetries: current.Active.ValidationRetries, MaxValidationRetries: 1,
 		}
@@ -1034,7 +1026,7 @@ func attemptViews(requests map[string]persistedRequest) []Attempt {
 	for requestID, request := range requests {
 		outcome, failureKind := safeAttemptOutcome(request.Status, request.FailureKind)
 		attempts = append(attempts, Attempt{
-			RequestID: requestID, Question: request.Question, Outcome: outcome,
+			RequestID: requestID, Actor: request.Actor, Question: request.Question, Outcome: outcome,
 			FailureKind: failureKind, Turn: request.Turn,
 			CreatedAt: safeAttemptTimestamp(request.CreatedAt), UpdatedAt: safeAttemptTimestamp(request.UpdatedAt),
 		})

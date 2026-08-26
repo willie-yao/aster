@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
+
+const analysisFixReferenceTTL = 25 * time.Hour
 
 // ConfigureTestFixPreflight binds the provider-free target source check.
 func (s *Service) ConfigureTestFixPreflight(
@@ -26,6 +29,9 @@ func (s *Service) ConfigureTestFixPreflight(
 // PreflightAnalysisFix verifies the selected failed-test Fix target without a provider request.
 func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, requestID string) error {
 	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
 	requestID, err := normalizeRequestID(requestID)
 	if err != nil {
 		return err
@@ -44,7 +50,7 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 	err = s.store.update(storeCtx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(sessionID)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		target := persistedAnalysisFixTarget(current.Resolved)
@@ -120,7 +126,7 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 	return s.store.update(persistCtx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(sessionID)]
-		if current == nil || current.Owner != owner {
+		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
 		}
 		currentTarget := persistedAnalysisFixTarget(current.Resolved)
@@ -149,6 +155,158 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 		current.FixSources[requestID] = binding
 		return true, nil
 	})
+}
+
+// ReserveAnalysisFix protects a source binding while action admission runs.
+func (s *Service) ReserveAnalysisFix(sessionID, owner, requestID, reservationID string) error {
+	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
+	requestID, err := normalizeRequestID(requestID)
+	if err != nil {
+		return err
+	}
+	reservationID, err = normalizeRequestID(reservationID)
+	if err != nil {
+		return err
+	}
+	now := s.opts.Now().UTC()
+	ctx, cancel := s.store.context()
+	defer cancel()
+	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[strings.TrimSpace(sessionID)]
+		if current == nil || current.Retired {
+			return changed, ErrSessionNotFound
+		}
+		binding, ok := current.FixSources[requestID]
+		if !ok {
+			return changed, ErrRequestNotFound
+		}
+		if binding.PendingReservations[reservationID] {
+			return changed, nil
+		}
+		if !hasFixDependency(current.FixSources) {
+			current.FixBaseExpiresAt = current.ExpiresAt
+		}
+		if binding.PendingReservations == nil {
+			binding.PendingReservations = map[string]bool{}
+		}
+		binding.PendingReservations[reservationID] = true
+		current.FixSources[requestID] = binding
+		retainUntil := now.Add(analysisFixReferenceTTL)
+		if current.ExpiresAt.Before(retainUntil) {
+			extendSessionExpiry(current, retainUntil)
+		}
+		return true, nil
+	})
+}
+
+// CommitAnalysisFix binds one admitted action request to the chat evidence.
+func (s *Service) CommitAnalysisFix(sessionID, owner, requestID, reservationID, referenceID string) error {
+	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
+	var err error
+	requestID, err = normalizeRequestID(requestID)
+	if err != nil {
+		return err
+	}
+	reservationID, err = normalizeRequestID(reservationID)
+	if err != nil {
+		return err
+	}
+	referenceID, err = normalizeRequestID(referenceID)
+	if err != nil {
+		return err
+	}
+	now := s.opts.Now().UTC()
+	ctx, cancel := s.store.context()
+	defer cancel()
+	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		current := state.Sessions[strings.TrimSpace(sessionID)]
+		if current == nil || current.Retired {
+			return changed, ErrSessionNotFound
+		}
+		binding, ok := current.FixSources[requestID]
+		if !ok || !binding.PendingReservations[reservationID] {
+			return changed, ErrRequestNotFound
+		}
+		delete(binding.PendingReservations, reservationID)
+		if len(binding.PendingReservations) == 0 {
+			binding.PendingReservations = nil
+		}
+		if binding.References == nil {
+			binding.References = map[string]bool{}
+		}
+		binding.References[referenceID] = true
+		current.FixSources[requestID] = binding
+		retainUntil := now.Add(analysisFixReferenceTTL)
+		if current.ExpiresAt.Before(retainUntil) {
+			extendSessionExpiry(current, retainUntil)
+		}
+		return true, nil
+	})
+}
+
+// ReleaseAnalysisFix rolls back one reservation when action admission fails.
+func (s *Service) ReleaseAnalysisFix(sessionID, owner, requestID, reservationID string) error {
+	owner = normalizeOwner(owner)
+	if owner == "" {
+		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
+	}
+	requestID, err := normalizeRequestID(requestID)
+	if err != nil {
+		return err
+	}
+	reservationID, err = normalizeRequestID(reservationID)
+	if err != nil {
+		return err
+	}
+	now := s.opts.Now().UTC()
+	ctx, cancel := s.store.context()
+	defer cancel()
+	return s.store.update(ctx, func(state *persistedState) (bool, error) {
+		current := state.Sessions[strings.TrimSpace(sessionID)]
+		if current == nil || current.Retired {
+			return false, ErrSessionNotFound
+		}
+		binding, ok := current.FixSources[requestID]
+		if !ok || !binding.PendingReservations[reservationID] {
+			return false, nil
+		}
+		delete(binding.PendingReservations, reservationID)
+		if len(binding.PendingReservations) == 0 {
+			binding.PendingReservations = nil
+		}
+		current.FixSources[requestID] = binding
+		if !hasFixDependency(current.FixSources) && !current.FixBaseExpiresAt.IsZero() {
+			restoreUntil := current.FixBaseExpiresAt
+			if normalUntil := now.Add(s.opts.SessionTTL); normalUntil.After(restoreUntil) {
+				restoreUntil = normalUntil
+			}
+			current.ExpiresAt = restoreUntil
+			current.View.ExpiresAt = restoreUntil.Format(time.RFC3339)
+			current.FixBaseExpiresAt = time.Time{}
+		}
+		return true, nil
+	})
+}
+
+func hasFixDependency(sources map[string]persistedTestFixSource) bool {
+	for _, source := range sources {
+		if hasFixBindingDependency(source) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFixBindingDependency(source persistedTestFixSource) bool {
+	return len(source.PendingReservations) > 0 || len(source.References) > 0
 }
 
 func persistedFixTargetSourceRepository(

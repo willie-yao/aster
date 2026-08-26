@@ -67,7 +67,7 @@ func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, a
 	return service, session, requestID, runner
 }
 
-func TestServiceAnalysisFixCandidateBindsExactOwnerAnalysisAndEvidence(t *testing.T) {
+func TestServiceAnalysisFixCandidateSharesExactAnalysisAndEvidence(t *testing.T) {
 	service, session, requestID := exactFixService(t, Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
 		Citations:        []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
@@ -83,8 +83,9 @@ func TestServiceAnalysisFixCandidateBindsExactOwnerAnalysisAndEvidence(t *testin
 		candidate.SourceRepositorySnapshot.Revision != exactFixSourceRevision || len(candidate.ArtifactCitations) != 1 {
 		t.Fatalf("candidate = %+v", candidate)
 	}
-	if _, err := service.AnalysisFixCandidate(session.ID, "Bob", requestID); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("wrong owner error = %v", err)
+	shared, err := service.AnalysisFixCandidate(session.ID, "Bob", requestID)
+	if err != nil || shared.ResponseHash != candidate.ResponseHash {
+		t.Fatalf("shared candidate = %+v err=%v", shared, err)
 	}
 }
 
@@ -369,6 +370,53 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	sourcePreflightErr = nil
 	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", requestID); err != nil {
 		t.Fatalf("Fix preflight error = %v", err)
+	}
+	if err := service.ReserveAnalysisFix(session.ID, "Alice", requestID, "failed-reservation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ReleaseAnalysisFix(session.ID, "Alice", requestID, "failed-reservation"); err != nil {
+		t.Fatal(err)
+	}
+	rolledBack, err := service.Get(session.ID, "Bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolledBackExpiry, err := time.Parse(time.RFC3339, rolledBack.ExpiresAt)
+	if err != nil || rolledBackExpiry.After(time.Now().UTC().Add(3*time.Hour)) {
+		t.Fatalf("rolled-back Fix expiry = %q, %v", rolledBack.ExpiresAt, err)
+	}
+	if err := service.ReserveAnalysisFix(session.ID, "Alice", requestID, "alice-reservation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ReserveAnalysisFix(session.ID, "Bob", requestID, "bob-reservation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.CommitAnalysisFix(session.ID, "Bob", requestID, "bob-reservation", "bob-action-request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ReleaseAnalysisFix(session.ID, "Alice", requestID, "alice-reservation"); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := service.Get(session.ID, "Bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, retained.ExpiresAt)
+	if err != nil || expiresAt.Before(time.Now().UTC().Add(24*time.Hour)) {
+		t.Fatalf("Fix-bound expiry = %q, %v", retained.ExpiresAt, err)
+	}
+	ctx, cancel := service.store.context()
+	if err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+		return service.cleanup(state, time.Now().UTC().Add(3*time.Hour)), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := service.AnalysisFixCandidate(session.ID, "Bob", requestID); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("retained pre-turn candidate error = %v", err)
+	}
+	if err := service.Delete(session.ID, "Bob"); !errors.Is(err, ErrSessionReferenced) {
+		t.Fatalf("shared session with admitted Fix delete error = %v", err)
 	}
 	generationBase = strings.Repeat("b", 40)
 	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {

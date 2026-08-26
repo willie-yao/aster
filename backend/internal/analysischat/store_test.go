@@ -124,20 +124,24 @@ func TestSessionStoreMigratesVersionOneTestSessions(t *testing.T) {
 	}
 }
 
-func TestSessionStoreVersionTwoActiveQuestionIsRollingCompatible(t *testing.T) {
+func TestSessionStoreVersionTwoActorsAreRollingSafe(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	current := &persistedState{
-		Version: stateVersion,
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	legacy := &persistedState{
+		Version: 2,
 		Sessions: map[string]*persistedSession{
 			"session": {
-				Owner: "alice", ExpiresAt: now.Add(time.Hour),
+				Owner: "Bob", ExpiresAt: now.Add(time.Hour),
 				View: SessionView{
 					ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"},
+					Messages: []Message{{Role: "user", RequestID: "request", Content: "question", CreatedAt: now.Format(time.RFC3339)}},
+				},
+				Requests: map[string]persistedRequest{
+					"request": {QuestionHash: hashText("question"), Question: "question", Status: requestPending},
 				},
 				Active: &persistedActiveTurn{
 					RequestID: "request", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute),
@@ -146,51 +150,113 @@ func TestSessionStoreVersionTwoActiveQuestionIsRollingCompatible(t *testing.T) {
 			},
 		},
 	}
-	if err := writePrivateJSON(store.statePath, current); err != nil {
+	if err := writePrivateJSON(store.statePath, legacy); err != nil {
 		t.Fatal(err)
 	}
-	loaded, migrated, err := store.load()
-	if err != nil {
+	ctx, cancel := store.context()
+	defer cancel()
+	if err := store.update(ctx, func(state *persistedState) (bool, error) {
+		session := state.Sessions["session"]
+		request := session.Requests["request"]
+		if state.Version != stateVersion || session.Owner != "bob" || session.View.CreatedBy != "bob" ||
+			session.View.Messages[0].Actor != "bob" || request.Actor != "bob" || session.Active.Actor != "bob" {
+			t.Fatalf("migrated shared state = %+v", state)
+		}
+		return false, nil
+	}); err != nil {
 		t.Fatal(err)
-	}
-	if migrated || loaded.Sessions["session"].Active.Question != "question" {
-		t.Fatalf("active question = %q", loaded.Sessions["session"].Active.Question)
 	}
 	data, err := os.ReadFile(store.statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var oldReader struct {
-		Version  int `json:"version"`
-		Sessions map[string]struct {
-			Active *struct {
-				RequestID string `json:"request_id"`
-			} `json:"active,omitempty"`
-		} `json:"sessions"`
-	}
-	if err := json.Unmarshal(data, &oldReader); err != nil {
+	var persisted persistedState
+	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if oldReader.Version != stateVersion || oldReader.Sessions["session"].Active.RequestID != "request" {
-		t.Fatalf("old reader state = %+v", oldReader)
+	if persisted.Version != stateVersion || persisted.Version == 2 || persisted.Sessions["session"].Active.Actor != "bob" {
+		t.Fatalf("persisted rolling state = %+v", persisted)
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	sessions := raw["sessions"].(map[string]any)
-	session := sessions["session"].(map[string]any)
-	active := session["active"].(map[string]any)
-	delete(active, "question")
-	if err := writePrivateJSON(store.statePath, raw); err != nil {
-		t.Fatal(err)
-	}
-	loaded, migrated, err = store.load()
+}
+
+func TestSessionStoreVersionTwoCanonicalizesDuplicateOwnerSessions(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if migrated || loaded.Version != stateVersion || loaded.Sessions["session"].Active.Question != "" {
-		t.Fatalf("old writer state = %+v", loaded)
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	ref := AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}
+	legacy := &persistedState{
+		Version: 2,
+		Sessions: map[string]*persistedSession{
+			"alice-session": {
+				Owner: "alice", ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "alice-session", Analysis: ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
+			},
+			"bob-session": {
+				Owner: "bob", ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "bob-session", Analysis: ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Minute).Format(time.RFC3339)},
+				Requests: map[string]persistedRequest{
+					"active": {QuestionHash: hashText("question"), Question: "question", Status: requestPending},
+				},
+				Active: &persistedActiveTurn{RequestID: "active", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now},
+			},
+		},
+	}
+	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := store.context()
+	defer cancel()
+	if err := store.update(ctx, func(state *persistedState) (bool, error) {
+		if len(state.Sessions) != 1 || state.Sessions["bob-session"] == nil || state.Sessions["alice-session"] != nil {
+			t.Fatalf("canonical shared sessions = %+v", state.Sessions)
+		}
+		if state.Sessions["bob-session"].Active.Actor != "bob" {
+			t.Fatalf("canonical active actor = %+v", state.Sessions["bob-session"].Active)
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionStoreVersionTwoRetainsFixBoundDuplicateAsRetired(t *testing.T) {
+	dir := t.TempDir()
+	store, err := newSessionStore(dir, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	ref := AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}
+	legacy := &persistedState{
+		Version: 2,
+		Sessions: map[string]*persistedSession{
+			"fix-session": {
+				Owner: "alice", ExpiresAt: now.Add(time.Hour),
+				View:       SessionView{ID: "fix-session", Analysis: ref, UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
+				FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}},
+			},
+			"current-session": {
+				Owner: "bob", ExpiresAt: now.Add(time.Hour),
+				View: SessionView{ID: "current-session", Analysis: ref, UpdatedAt: now.Format(time.RFC3339)},
+			},
+		},
+	}
+	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := store.context()
+	defer cancel()
+	if err := store.update(ctx, func(state *persistedState) (bool, error) {
+		retired := state.Sessions["fix-session"]
+		if len(state.Sessions) != 2 || retired == nil || !retired.Retired || state.Sessions["current-session"] == nil {
+			t.Fatalf("retained Fix sessions = %+v", state.Sessions)
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -252,7 +318,7 @@ func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
 	}
 }
 
-func TestSessionStoreBridgesVersionThreeToVersionTwo(t *testing.T) {
+func TestSessionStoreBridgesVersionThreeToCurrent(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
@@ -279,7 +345,7 @@ func TestSessionStoreBridgesVersionThreeToVersionTwo(t *testing.T) {
 	defer cancel()
 	if err := store.update(ctx, func(state *persistedState) (bool, error) {
 		active := state.Sessions["session"].Active
-		if state.Version != stateVersion || active == nil || active.Question != "question" {
+		if state.Version != stateVersion || active == nil || active.Question != "question" || active.Actor != "alice" {
 			t.Fatalf("bridged state = %+v", state)
 		}
 		return false, nil
@@ -294,7 +360,7 @@ func TestSessionStoreBridgesVersionThreeToVersionTwo(t *testing.T) {
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Version != stateVersion || persisted.Sessions["session"].Active.Question != "question" {
+	if persisted.Version != stateVersion || persisted.Sessions["session"].Active.Question != "question" || persisted.Sessions["session"].Active.Actor != "alice" {
 		t.Fatalf("persisted bridge state = %+v", persisted)
 	}
 }

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, test } from "node:test";
 
 import {
@@ -46,6 +48,7 @@ const analysis: AnalysisChatReference = {
 
 const session: AnalysisChatSession = {
   id: "session-1",
+  created_by: "alice",
   analysis,
   created_at: "2026-07-26T12:01:00Z",
   updated_at: "2026-07-26T12:02:00Z",
@@ -53,7 +56,7 @@ const session: AnalysisChatSession = {
   turns_used: 2,
   max_turns: 10,
   messages: [
-    { role: "user", content: "What proves this?", created_at: "2026-07-26T12:01:30Z" },
+    { role: "user", actor: "alice", content: "What proves this?", created_at: "2026-07-26T12:01:30Z" },
     { role: "assistant", content: "The log does.", created_at: "2026-07-26T12:02:00Z" },
   ],
 };
@@ -87,13 +90,22 @@ test("reload and remount restore the latest server session", async () => {
   }
 });
 
+
+test("shared observer refresh cannot overwrite a conversation reset", () => {
+  const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  assert.match(chat, /sessionGenerationRef\.current \+= 1;[\s\S]*await deleteAnalysisChatSession/);
+  assert.match(chat, /generation !== sessionGenerationRef\.current/);
+  assert.match(chat, /identityRef\.current !== refreshIdentity/);
+  assert.match(chat, /busy \|\| restoring \|\| resetting/);
+});
+
 test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 
   assert.equal(await findAnalysisChatSession(analysis), null);
 });
 
-test("discarding a conversation deletes the session and tolerates one already gone", async () => {
+test("removing a shared conversation tolerates one already gone", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   let status = 204;
   globalThis.fetch = async (input, init) => {
@@ -276,6 +288,7 @@ test("restored attempt history is safe, ordered, and does not duplicate successf
     ],
   );
   assert.equal(history.some((entry) => entry.kind === "attempt" && entry.attempt.request_id === "success"), false);
+  assert.equal(history[0]?.kind === "message" ? history[0].message.actor : undefined, "alice");
   assert.deepEqual(
     attempts.slice(1).map((attempt) => analysisChatAttemptStatus(attempt).label),
     [
