@@ -1,5 +1,4 @@
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
-{{- include "aster.validateAnalysisRuntime" . -}}
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- if eq .Values.mode "watch" }}
 {{- $shadow := .Values.agentSandbox.analysisShadow.enabled }}

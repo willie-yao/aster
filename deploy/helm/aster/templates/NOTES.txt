@@ -18,7 +18,7 @@ AI reasoning:     {{ default "provider default" .Values.ai.reasoningEffort }}
 {{- end }}
 Shared volume:    {{ include "aster.pvcName" . }} ({{ .Values.persistence.accessMode }})
 {{- if .Values.agentSandbox.analysisShadow.enabled }}
-Shadow analysis:  configured, authoritative runtime remains inprocess
+Shadow analysis:  configured, authoritative analysis remains in-process
 Shadow namespace: {{ .Values.agentSandbox.analysisShadow.namespace }}
 Private ledger:   {{ .Values.agentSandbox.analysisShadow.ledger.existingClaim }} (not mounted by server)
 Private input:    {{ .Values.agentSandbox.analysisShadow.input.existingClaim }} (publisher write, Sandbox read-only, cleanup Job delete)

@@ -41,10 +41,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
-// Options is the parsed invocation for a single fetcher run.
-// cmd/aster constructs it from flags before Run.
-const AnalysisRuntimeInProcess = "inprocess"
-
 // ShadowAnalysisOptions configure the private experimental Agent comparison
 // path. It runs on Agent Sandbox after authoritative in-process publication and
 // never changes public output.
@@ -62,19 +58,13 @@ type ShadowAnalysisOptions struct {
 	ModelProvider         modelprovider.Config
 }
 
-// AnalysisRuntimeOptions select where single-failure analysis runs.
-type AnalysisRuntimeOptions struct {
-	Type string
-}
-
 type Options struct {
-	ProjectDir      string
-	OutDir          string
-	BuildsPerJob    int
-	Workers         int
-	Timeout         time.Duration
-	AnalysisRuntime AnalysisRuntimeOptions
-	ShadowAnalysis  ShadowAnalysisOptions
+	ProjectDir     string
+	OutDir         string
+	BuildsPerJob   int
+	Workers        int
+	Timeout        time.Duration
+	ShadowAnalysis ShadowAnalysisOptions
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// The project discovery policy and this direct CLI override are combined.
 	IncludePresubmits    bool
@@ -158,11 +148,8 @@ func Run(ctx context.Context, opts Options) error {
 
 // setupPipeline loads config and resolves storage and AI settings.
 func setupPipeline(opts Options) (*pipeline, error) {
-	if opts.AnalysisRuntime.Type == "" {
-		opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
-	}
 	normalizeShadowAnalysisOptions(&opts.ShadowAnalysis)
-	if err := validateAnalysisRuntimeOptions(opts); err != nil {
+	if err := validateShadowAnalysisOptions(opts); err != nil {
 		return nil, err
 	}
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
@@ -266,16 +253,6 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	p.prepareCauseFindings(prepareCtx, res.details)
 	prepareCancel()
 	return jobs, nil
-}
-
-func validateAnalysisRuntimeOptions(opts Options) error {
-	if err := validateShadowAnalysisOptions(opts); err != nil {
-		return err
-	}
-	if opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess {
-		return fmt.Errorf("unsupported analysis runtime %q", opts.AnalysisRuntime.Type)
-	}
-	return nil
 }
 
 func (p *pipeline) setJobCatalog(catalog *jobconfig.Catalog) {

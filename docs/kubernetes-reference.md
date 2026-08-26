@@ -5,7 +5,8 @@ advanced chart configuration that do not belong in the first-run path. Start
 with the [Kubernetes quickstart](kubernetes.md) or the generated
 `deploy/README.md`.
 
-Authoritative failure analysis always runs in-process next to the worker or CronJob.
+Authoritative failure analysis always runs in-process next to the worker or
+CronJob. The chart has no failure-analysis runtime selector.
 
 ## Why run in-cluster
 

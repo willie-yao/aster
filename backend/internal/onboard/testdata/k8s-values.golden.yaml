@@ -96,10 +96,6 @@ fetcher:
   # tolerations: []
   # affinity: {}
 
-analysisRuntime:
-  # inprocess is the recommended default.
-  type: inprocess
-
   # rbac:
   #   create: true
   #   serviceAccountName: ""

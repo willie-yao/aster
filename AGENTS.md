@@ -98,7 +98,7 @@ backend/                         Go 1.25
     analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
     modelprovider/               Shared non-secret provider and credential-mode contract
-    analysisruntime/             Selects the failure-analysis runtime (in-process default)
+    analysisruntime/             Wires the in-process failure-analysis runtime
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output
     sourceinvestigation/         Read-only source verification helpers

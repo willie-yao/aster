@@ -224,6 +224,10 @@ if not isinstance(values, dict):
     raise SystemExit("merged Helm values must be an object")
 
 removed = []
+if "analysisRuntime" in values:
+    del values["analysisRuntime"]
+    removed.append("analysisRuntime")
+
 server = values.get("server")
 if isinstance(server, dict):
     actions = server.get("actions")

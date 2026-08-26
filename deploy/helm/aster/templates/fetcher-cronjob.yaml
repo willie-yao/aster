@@ -1,5 +1,4 @@
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
-{{- include "aster.validateAnalysisRuntime" . -}}
 {{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- include "aster.validateAI" . -}}
 {{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}

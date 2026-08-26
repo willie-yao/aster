@@ -288,7 +288,6 @@ Name of the Secret holding the AI token.
 {{- if .Values.agentSandbox.analysisShadow.enabled -}}
   {{- $cfg := .Values.agentSandbox.analysisShadow -}}
   {{- if not .Values.ai.enabled -}}{{- fail "agentSandbox.analysisShadow requires ai.enabled=true" -}}{{- end -}}
-  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analysisShadow requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.agentSandbox.fixRuntime.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.fixRuntime" -}}{{- end -}}
   {{- if .Values.agentSandbox.analyzer.enabled -}}{{- fail "agentSandbox.analysisShadow cannot run with agentSandbox.analyzer" -}}{{- end -}}
   {{- if and (eq .Values.mode "cron") (ne .Values.fetcher.concurrencyPolicy "Forbid") -}}{{- fail "agentSandbox.analysisShadow requires fetcher.concurrencyPolicy=Forbid in cron mode" -}}{{- end -}}
@@ -434,13 +433,6 @@ Name of the Secret holding the AI token.
 {{- $contextWindowInt := int64 $contextWindow -}}
 {{- if or (gt $contextWindowInt 1000000000) (and (gt $contextWindowInt 0) (lt $contextWindowInt 9217)) -}}
 {{- fail "ai.contextWindowTokens must be 0 or an integer from 9217 to 1000000000" -}}
-{{- end -}}
-{{- end -}}
-
-{{/* Validate the failure analysis runtime. */}}
-{{- define "aster.validateAnalysisRuntime" -}}
-{{- if ne .Values.analysisRuntime.type "inprocess" -}}
-{{- fail "analysisRuntime.type must be inprocess" -}}
 {{- end -}}
 {{- end -}}
 
@@ -615,7 +607,6 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- if ne (default "agent-sandbox" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
   {{- if not .Values.server.actions.enabled -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true; Fix generation is a maintainer-initiated server action" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}
-  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.fixRuntime requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.fixRuntime.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.fixRuntime.namespace must differ from the dashboard release namespace" -}}{{- end -}}
   {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cfg.namespace) -}}{{- fail "agentSandbox.fixRuntime.namespace must be a lowercase DNS label" -}}{{- end -}}
@@ -756,7 +747,6 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 {{- define "aster.validateAgentSandboxAnalyzer" -}}
 {{- if .Values.agentSandbox.analyzer.enabled -}}
   {{- $cfg := .Values.agentSandbox.analyzer -}}
-  {{- if ne .Values.analysisRuntime.type "inprocess" -}}{{- fail "agentSandbox.analyzer requires analysisRuntime.type=inprocess" -}}{{- end -}}
   {{- if .Values.agentSandbox.analysisShadow.enabled -}}{{- fail "agentSandbox.analyzer cannot run with agentSandbox.analysisShadow" -}}{{- end -}}
   {{- if not $cfg.namespace -}}{{- fail "agentSandbox.analyzer.namespace is required" -}}{{- end -}}
   {{- if eq $cfg.namespace .Release.Namespace -}}{{- fail "agentSandbox.analyzer.namespace must differ from the dashboard release namespace" -}}{{- end -}}

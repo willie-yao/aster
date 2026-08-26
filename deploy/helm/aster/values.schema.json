@@ -169,23 +169,6 @@
         "generation"
       ]
     },
-    "analysisRuntime": {
-      "type": "object",
-      "description": "Failure analysis runtime selection.",
-      "properties": {
-        "type": {
-          "type": "string",
-          "description": "Analysis runtime implementation.",
-          "enum": [
-            "inprocess"
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "type"
-      ]
-    },
     "agentSandbox": {
       "type": "object",
       "description": "Consumer-installed Kubernetes SIG Agent Sandbox integrations for Fix PR execution and private analysis experiments.",
@@ -2104,7 +2087,6 @@
     "fullnameOverride",
     "mode",
     "analysisCache",
-    "analysisRuntime",
     "agentSandbox",
     "persistence",
     "project",

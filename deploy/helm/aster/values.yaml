@@ -34,10 +34,6 @@ mode: watch
 analysisCache:
   generation: ""
 
-# Failure analysis runs in-process next to the fetcher.
-analysisRuntime:
-  type: inprocess
-
 # Agent Sandbox is a consumer-installed execution backend for private workloads.
 # The chart never installs the Agent Sandbox CRD/controller, a secure RuntimeClass,
 # execution namespace, provider Secret or gateway, input PVC, or node infrastructure.

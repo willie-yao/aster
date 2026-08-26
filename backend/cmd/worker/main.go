@@ -64,7 +64,7 @@ func parseOptions(args []string) (fetcher.Options, time.Duration, time.Duration,
 	fs.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	fs.DurationVar(&watchInterval, "watch-interval", 5*time.Minute, "how often to refresh data reusing the cached job list")
 	fs.DurationVar(&reconcileInterval, "reconcile-interval", time.Hour, "how often to rediscover jobs and run a full pass")
-	fetcher.BindAnalysisRuntimeFlags(fs, &opts)
+	fetcher.BindAnalysisFlags(fs, &opts)
 	if err := fs.Parse(args); err != nil {
 		return fetcher.Options{}, 0, 0, err
 	}
