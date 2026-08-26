@@ -1,0 +1,353 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-26T17:05:37Z",
+  "title": "Design System: Aster",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Signal Violet",
+        "canonical": "#7c3aed",
+        "tonalRamp": [
+          "#2e1065",
+          "#4c1d95",
+          "#5b21b6",
+          "#6d28d9",
+          "#7c3aed",
+          "#a78bfa",
+          "#c4b5fd",
+          "#ede9fe"
+        ]
+      },
+      "brand-to": {
+        "role": "tertiary",
+        "displayName": "Brand Pink",
+        "canonical": "#ec4899",
+        "tonalRamp": [
+          "#500724",
+          "#831843",
+          "#9d174d",
+          "#be185d",
+          "#ec4899",
+          "#f472b6",
+          "#f9a8d4",
+          "#fce7f3"
+        ]
+      },
+      "pass": {
+        "role": "secondary",
+        "displayName": "Pass Green",
+        "canonical": "#1a7f37",
+        "tonalRamp": [
+          "#04260f",
+          "#0a3d1c",
+          "#116329",
+          "#1a7f37",
+          "#2ea043",
+          "#3fb950",
+          "#7ee787",
+          "#dafbe1"
+        ]
+      },
+      "warn": {
+        "role": "secondary",
+        "displayName": "Warn Amber",
+        "canonical": "#9a6700",
+        "tonalRamp": [
+          "#2e1a00",
+          "#4d2d00",
+          "#7d4e00",
+          "#9a6700",
+          "#bb8009",
+          "#d29922",
+          "#e3b341",
+          "#fff8c5"
+        ]
+      },
+      "fail": {
+        "role": "secondary",
+        "displayName": "Fail Red",
+        "canonical": "#cf222e",
+        "tonalRamp": [
+          "#2d0709",
+          "#67060c",
+          "#a40e26",
+          "#cf222e",
+          "#da3633",
+          "#f85149",
+          "#ff7b72",
+          "#ffebe9"
+        ]
+      },
+      "on-surface": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1f2328",
+        "tonalRamp": [
+          "#0d1117",
+          "#161b22",
+          "#1f2328",
+          "#30363d",
+          "#59636e",
+          "#8b949e",
+          "#d0d7de",
+          "#f6f8fa"
+        ]
+      },
+      "outline-variant": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#d0d7de",
+        "tonalRamp": [
+          "#0d1117",
+          "#161b22",
+          "#21262d",
+          "#30363d",
+          "#57606a",
+          "#8b949e",
+          "#d0d7de",
+          "#ffffff"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Stat",
+        "purpose": "The single number a metric strip exists to deliver. Monospace with tabular figures."
+      },
+      "headline": {
+        "displayName": "Page Headline",
+        "purpose": "One per page."
+      },
+      "title": {
+        "displayName": "Major Heading",
+        "purpose": "Section bands such as Needs attention."
+      },
+      "body": {
+        "displayName": "Primary Body",
+        "purpose": "Analysis prose and failure summaries. Capped at 68ch."
+      },
+      "label": {
+        "displayName": "Table Heading",
+        "purpose": "Ledger column headers and small functional labels. Never below 11px."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "Durations, counts, percentages, timestamps, build IDs. Tabular figures so columns align."
+      },
+      "identifier": {
+        "displayName": "Identifier",
+        "purpose": "Job names and test names, where characters must be compared exactly."
+      }
+    },
+    "shadows": [
+      {
+        "name": "overlay",
+        "value": "0 18px 50px rgba(0, 0, 0, 0.28)",
+        "purpose": "Floating popovers and menus only. The one place a shadow is earned, because the layer genuinely detaches from the page."
+      },
+      {
+        "name": "focus-on-color",
+        "value": "0 0 0 5px var(--mui-palette-background-default), 0 0 0 7px var(--mui-palette-text-primary)",
+        "purpose": "Focus ring for a saturated status square, where a violet outline would not survive against the fill."
+      },
+      {
+        "name": "accent-edge",
+        "value": "inset 3px 0 0 var(--mui-palette-primary-main)",
+        "purpose": "The system signature. Leading edge of a section band. Reserved for bands; anywhere else it becomes the generic AI-callout tell."
+      },
+      {
+        "name": "focus-inset",
+        "value": "inset 2px 0 0 var(--mui-palette-primary-main)",
+        "purpose": "Keyboard position inside a ledger row, shown without moving layout."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "140ms ease",
+        "purpose": "Hover and active color transitions on navigation and rows."
+      },
+      {
+        "name": "shortest",
+        "value": "150ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Disclosure chevrons and small affordance changes."
+      },
+      {
+        "name": "reduced",
+        "value": "none",
+        "purpose": "Every transition has a prefers-reduced-motion counterpart that removes it."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "600px"
+      },
+      {
+        "name": "md",
+        "value": "900px"
+      },
+      {
+        "name": "ledger",
+        "value": "1024px"
+      },
+      {
+        "name": "wide",
+        "value": "1200px"
+      },
+      {
+        "name": "xl",
+        "value": "1536px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Confirms a maintainer-gated action. Squared, flat, no elevation.",
+      "html": "<button class=\"ds-btn-primary\">Back to overview</button>",
+      "css": ".ds-btn-primary { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 0.875rem; font-weight: 600; text-transform: none; color: #ffffff; background: #7c3aed; border: none; border-radius: 4px; padding: 6px 16px; min-height: 36px; cursor: pointer; transition: background-color 140ms ease; } .ds-btn-primary:hover { background: #6d28d9; } .ds-btn-primary:focus-visible { outline: 2px solid #7c3aed; outline-offset: 1px; } @media (prefers-reduced-motion: reduce) { .ds-btn-primary { transition: none; } }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-fail",
+      "description": "Carries run state. Always a word plus a color, never color alone.",
+      "html": "<span class=\"ds-chip-fail\"><span class=\"ds-chip-dot\"></span>Failing</span>",
+      "css": ".ds-chip-fail { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: 4px; background: #ffebe9; color: #cf222e; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 13px; font-weight: 600; } .ds-chip-dot { width: 8px; height: 8px; border-radius: 2px; background: #cf222e; } @media (forced-colors: active) { .ds-chip-dot { forced-color-adjust: none; outline: 1px solid CanvasText; } }"
+    },
+    {
+      "name": "Section Band",
+      "kind": "custom",
+      "refersTo": "section-band",
+      "description": "The system signature. Opens every detail section and every action dialog with a raised, ruled header carrying a 3px accent edge.",
+      "html": "<div class=\"ds-band\"><h2 class=\"ds-band-title\">Needs attention</h2><span class=\"ds-band-meta\">3 recurring patterns · 2 test alerts</span></div>",
+      "css": ".ds-band { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 12px; background: #f0f3f6; border-bottom: 1px solid #d0d7de; box-shadow: inset 3px 0 0 #7c3aed; } .ds-band-title { margin: 0; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 18px; line-height: 26px; font-weight: 680; color: #1f2328; } .ds-band-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 19px; font-weight: 500; color: #59636e; font-feature-settings: \"tnum\" 1; }"
+    },
+    {
+      "name": "Ledger Row",
+      "kind": "card",
+      "refersTo": "ledger-row",
+      "description": "The console's workhorse. Rows are divided by hairlines, not gaps, so a long ledger reads as one continuous table.",
+      "html": "<a class=\"ds-row\" href=\"#\"><span class=\"ds-row-id\">capz-periodic-e2e-main</span><span class=\"ds-row-data\">80%</span><span class=\"ds-row-data\">1h 55m</span></a>",
+      "css": ".ds-row { display: grid; grid-template-columns: minmax(0,1fr) 78px 58px; align-items: center; column-gap: 12px; min-height: 52px; padding: 8px 12px; background: #ffffff; border-bottom: 1px solid #d0d7de; text-decoration: none; transition: background-color 140ms ease; } .ds-row:hover { background: #f0f3f6; } .ds-row:focus-within, .ds-row:focus-visible { background: #f0f3f6; box-shadow: inset 2px 0 0 #7c3aed; outline: none; } .ds-row-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; line-height: 20px; font-weight: 600; color: #1f2328; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-row-data { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 19px; font-weight: 500; color: #59636e; font-feature-settings: \"tnum\" 1, \"cv01\" 1; } @media (prefers-reduced-motion: reduce) { .ds-row { transition: none; } }"
+    },
+    {
+      "name": "Run History Strip",
+      "kind": "custom",
+      "refersTo": "ledger-row",
+      "description": "One square per run, oldest to newest. A single composite tab stop: arrow keys move within it so a 28-job ledger does not put 300 links in the tab order.",
+      "html": "<div class=\"ds-runs\" role=\"group\" aria-label=\"Recent runs\"><a class=\"ds-run\" href=\"#\" tabindex=\"0\" aria-label=\"Run 2081719278, passed, Jul 27\"><span class=\"ds-run-dot ds-pass\"></span></a><a class=\"ds-run\" href=\"#\" tabindex=\"-1\" aria-label=\"Run 2082837153, passed, Jul 30\"><span class=\"ds-run-dot ds-pass\"></span></a><a class=\"ds-run\" href=\"#\" tabindex=\"-1\" aria-label=\"Run 2083945448, failed, Aug 2\"><span class=\"ds-run-dot ds-fail\"></span></a></div>",
+      "css": ".ds-runs { display: grid; grid-template-columns: repeat(3, 24px); align-items: center; } .ds-run { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px; border-radius: 4px; } .ds-run:hover { background: #f0f3f6; } .ds-run:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } .ds-run-dot { display: block; width: 8px; height: 8px; border-radius: 2px; } .ds-pass { background: #1a7f37; } .ds-fail { background: #cf222e; } @media (forced-colors: active) { .ds-run-dot { forced-color-adjust: none; outline: 1px solid CanvasText; } }"
+    },
+    {
+      "name": "Filter Input",
+      "kind": "input",
+      "refersTo": "input-filter",
+      "description": "Narrows a ledger. 16px on mobile so iOS Safari does not force-zoom on focus.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Filter tests by name or failure text\" aria-label=\"Filter test results\" />",
+      "css": ".ds-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; color: #1f2328; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 16px; } .ds-input::placeholder { color: #59636e; opacity: 0.6; } .ds-input:hover { border-color: #59636e; } .ds-input:focus-visible { border-color: #7c3aed; outline: 2px solid #7c3aed; outline-offset: 1px; } @media (min-width: 600px) { .ds-input { font-size: 14px; } }"
+    },
+    {
+      "name": "Navigation Rail Item",
+      "kind": "nav",
+      "refersTo": "section-band",
+      "description": "Icon over label, 76px rail. The active destination takes a violet tint and a 3px leading bar.",
+      "html": "<a class=\"ds-nav ds-nav-active\" href=\"#\" aria-current=\"page\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z\"/></svg><span class=\"ds-nav-label\">Overview</span></a>",
+      "css": ".ds-nav { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 76px; height: 54px; color: #59636e; text-decoration: none; transition: color 140ms ease, background-color 140ms ease; } .ds-nav:hover { color: #1f2328; background: #f0f3f6; } .ds-nav-active { color: #7c3aed; background: color-mix(in srgb, #7c3aed 14%, transparent); } .ds-nav-active::before { content: \"\"; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: #7c3aed; } .ds-nav-label { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 11px; font-weight: 600; line-height: 1.2; letter-spacing: 0.01em; } .ds-nav:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } @media (prefers-reduced-motion: reduce) { .ds-nav { transition: none; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Operator's Console",
+    "overview": "Aster is read by a maintainer who already knows something is broken. The interface exists to get them from a red square to a supported explanation without hand-assembling evidence from raw artifacts. It behaves like instrumentation rather than a document: dense, status-first, and honest about what it does and does not know.\n\nDensity is the point, not a compromise. An overview carries dozens of jobs and each job carries up to twenty runs, so the console is tuned for real payloads. Chrome recedes, rules and bands do the organizing, and monospace carries every identifier, duration, and count so numbers align into scannable columns. The brand appears in navigation, focus, and section accents; it never touches a pass/fail indicator.\n\nThe console is calm under load. Surfaces are flat, borders are one pixel, and nothing floats without cause. What draws the eye is status and hierarchy, which means an operator's attention goes where the failure is instead of where the styling is.",
+    "keyCharacteristics": [
+      "Status legibility outranks expression, always.",
+      "Tonal layering and hairline rules instead of shadows.",
+      "Monospace for identity and measurement; system UI for prose.",
+      "Violet chrome sits far from both pass green and fail red on the wheel.",
+      "Every claim on screen traces to evidence the analyzer actually read."
+    ],
+    "rules": [
+      {
+        "name": "The Status Sovereignty Rule",
+        "body": "Green, amber, and red mean pass, flake, and fail. They are never restyled toward the brand, never reused decoratively, and never the only carrier of meaning: status always has a label or text companion beside the color, and it must survive Windows High Contrast Mode.",
+        "section": "colors"
+      },
+      {
+        "name": "The Pink Endpoint Rule",
+        "body": "Pink is a gradient endpoint and nothing else. At 3.53:1 on white it fails AA as text, so it is never a link, label, or button.",
+        "section": "colors"
+      },
+      {
+        "name": "The Gradient Never Reads Rule",
+        "body": "The brand gradient belongs to the mark and to thin accents. It never runs behind body text, because gradient text cannot be held to a contrast ratio.",
+        "section": "colors"
+      },
+      {
+        "name": "The Measure Rule",
+        "body": "Prose caps at 65 to 75ch. Analysis briefings run 68ch; denser 13px secondary blocks run 74ch. No prose block spans a full desktop column.",
+        "section": "typography"
+      },
+      {
+        "name": "The Eleven Pixel Floor",
+        "body": "No functional text renders below 11px. Interactive labels, table cells, metadata, and axis ticks all sit at or above it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Sixteen Pixel Input Rule",
+        "body": "Text inputs render at 16px on mobile regardless of their desktop size. iOS Safari force-zooms a focused input below 16px, which breaks the layout around it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Monospace Earns It Rule",
+        "body": "Monospace marks code, paths, identifiers, and measurements. It is never applied to make ordinary prose look technical.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Console Rule",
+        "body": "If a surface does not float above the page, it gets a border and a tonal step, never a shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Layout Rule",
+        "body": "Responsive alternatives are mounted, not hidden. A layout that is not visible at the current width does not exist in the DOM.",
+        "section": "layout"
+      },
+      {
+        "name": "The Real Payload Rule",
+        "body": "Every layout is verified against production volumes: dozens of jobs, twenty runs each, multi-line failure text, and job names long enough to need truncation.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do carry status with a word and a color together, so it survives High Contrast Mode and color vision deficiency.",
+      "Do use monospace for identifiers, durations, counts, and paths, with tabular figures so columns align.",
+      "Do mount one responsive layout at a time and verify it against production data volumes.",
+      "Do keep prose between 65 and 75 characters per line.",
+      "Do give truncated content a recovery path that works by touch and keyboard. A title tooltip alone is desktop-only.",
+      "Do let capability absence remove an affordance cleanly. A read-only Pages deployment shows fewer buttons, never broken ones."
+    ],
+    "donts": [
+      "Don't put a shadow on anything that does not genuinely float.",
+      "Don't restyle a pass/fail indicator toward the brand, or reuse status colors decoratively.",
+      "Don't run the brand gradient behind text, or use pink as a text color.",
+      "Don't render functional text below 11px, or a text input below 16px on mobile.",
+      "Don't add a colored left border above 1px to a card or list item. The 3px accent edge is reserved for section bands.",
+      "Don't let a single control become one tab stop per data point. Composite widgets get roving tabindex.",
+      "Don't describe Aster as autonomous repair, self-healing, or guaranteed root-cause detection."
+    ],
+    "provenance": "Aster was not built as an Impeccable project. The interface came first and this system was written by reading the implementation: the tokens in frontend/src/theme/, the components, and the rules already recorded in docs/brand.md. It is normative going forward while the code is brought up to it incrementally.",
+    "knownGaps": [
+      "The Eleven Pixel Floor: 0.625rem (10.6px) labels in SearchBar, TestCaseTable, TestResultsGrid; 10px run-history axis.",
+      "The Sixteen Pixel Input Rule: filter input 14px, search input 0.875rem; both force-zoom on iOS.",
+      "The One Layout Rule: JobHealthTable mounts both layouts and hides one with display: none.",
+      "Accent edge reserved for bands: 3px borderLeft on insets in LabeledBlock and ChatFixDialog.",
+      "Composite widgets get roving tabindex: Sparkline puts roughly 300 run links in the overview tab order.",
+      "aria-current=\"page\" on exact match only: NavRail marks the active section page on nested routes.",
+      "Buttons inherit the theme family: no MuiButtonBase override, so bare ButtonBase falls back to the user agent font."
+    ]
+  }
+}

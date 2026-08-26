@@ -19,3 +19,6 @@ frontend/public/data/
 # Local env
 .env
 .env.local
+
+# Impeccable per-session detector cache; the design system itself is tracked
+.impeccable/hook.cache.json
