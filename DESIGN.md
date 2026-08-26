@@ -371,7 +371,7 @@ violet border on focus. 16px text on mobile, 14px from `sm` up.
 
 ### Navigation rail
 76px wide, `surface.container`, 1px right rule. Each destination is an icon over
-an 11px label, with the active one taking a violet tint and a 3px leading bar.
+a Micro Label, with the active one taking a violet tint and a 3px leading bar.
 `aria-current="page"` marks only an exact URL match; a section that stays
 highlighted for its nested pages reports `aria-current="true"`.
 
