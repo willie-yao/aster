@@ -38,3 +38,23 @@ export async function resolveFailure(
 export async function reopenFailure(scope: ResolutionScope, id: string): Promise<void> {
   await post(endpoint(scope, id, "unresolve"));
 }
+
+// causeResolutionAvailable reports whether the CauseResolution control will
+// render anything. The cause action bar needs the same answer to decide whether
+// it has a row to draw, so both ask here rather than keeping two gates that can
+// drift apart.
+export function causeResolutionAvailable({
+  actionsEnabled,
+  authenticated,
+  signature,
+  resolvable,
+  resolved,
+}: {
+  actionsEnabled: boolean;
+  authenticated: boolean;
+  signature?: string;
+  resolvable: boolean;
+  resolved: boolean;
+}): boolean {
+  return Boolean(actionsEnabled && authenticated && signature && (resolvable || resolved));
+}

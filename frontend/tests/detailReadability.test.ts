@@ -101,8 +101,10 @@ test("each cause is a bounded card with its own ordinal identity", () => {
   assert.match(cause, /causalGroups\.length > 1 \? `Cause \$\{index \+ 1\} of \$\{causalGroups\.length\}` : "Cause"/);
   assert.match(cause, /\{group\.confidence\} confidence/);
 
-  // The confidence row kept its xs column reflow; the band grid now owns it.
-  assert.match(cause, /gridTemplateAreas: \{ xs: '"cause" "confidence"', sm: '"cause confidence"' \}/);
+  // The confidence row kept its xs column reflow; the band grid now owns it,
+  // alongside the toggle a resolved cause folds itself away with.
+  assert.match(cause, /xs: '"cause toggle" "confidence confidence"'/);
+  assert.match(cause, /sm: '"cause confidence toggle"'/);
 });
 
 test("causal group rhythm and headings express the hierarchy", () => {

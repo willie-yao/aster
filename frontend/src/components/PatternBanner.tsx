@@ -1,11 +1,14 @@
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
+import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
-import { AutoAwesome } from "@mui/icons-material";
+import { AutoAwesome, ExpandMore } from "@mui/icons-material";
+import { useState } from "react";
 import type {
   BuildResult,
   FailureRecurrence,
@@ -34,7 +37,9 @@ import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverv
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
+import { CausalGroupFixButton } from "./CausalGroupFixRouting";
 import { CauseResolution } from "./CauseResolution";
+import { causeResolutionAvailable } from "../lib/resolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
@@ -60,6 +65,9 @@ export function PatternBanner({
   const { data: resolved, refetch: refetchResolved } = useResolved();
   const { features } = useCapabilities();
   const { status: authStatus } = useAuth();
+  // Explicit per-cause expansion overrides. Absent entries fall back to the
+  // resolution state, so a cause folds when resolved without pinning it there.
+  const [expandedCauses, setExpandedCauses] = useState<Record<string, boolean>>({});
   const analysisOnly = Boolean(pattern.recurrence_classification);
   const causalGroups = pattern.causal_groups ?? [];
   // Fix proposals start from an individual failed test, so the routing is
@@ -143,6 +151,21 @@ export function PatternBanner({
   );
   const causeResolvableFlags = causalGroups.map((group) =>
     causeResolvable(pattern, group, refreshStatus),
+  );
+  // The bar draws a rule above itself, so it renders only where at least one of
+  // the two controls will. Both gates are asked the same way their components
+  // ask them, so the rule can never appear above an empty row.
+  const causeActionsPresent = causalGroups.map((group, index) =>
+    Boolean(
+      (fixCapable && jobID && causalFixTargets[index]) ||
+      causeResolutionAvailable({
+        actionsEnabled: Boolean(features.actions),
+        authenticated: authStatus === "authenticated",
+        signature: group.signature,
+        resolvable: causeResolvableFlags[index],
+        resolved: Boolean(causeResolutions[index]),
+      }),
+    ),
   );
   // Per-cause resolution replaces the pattern-level control wherever it covers
   // every cause, so a maintainer is never offered two acknowledgements with
@@ -288,7 +311,24 @@ export function PatternBanner({
           {/* The gap between two causes is deliberately wider than any gap
               inside one, so vertical rhythm expresses the hierarchy on its own. */}
           <Stack spacing={2.5}>
-            {causalGroups.map((group, index) => (
+            {causalGroups.map((group, index) => {
+              // Only a resolved cause folds away, and it is keyed by the same
+              // signature its resolution is recorded under. The default follows
+              // resolution state, so resolving folds the cause and reopening
+              // unfolds it, while an explicit toggle overrides both.
+              // The override is scoped to one specific resolution event, so a
+              // cause that is reopened and then resolved again folds itself
+              // away instead of inheriting the expansion from last time.
+              const causeKey = group.signature ?? group.id ?? String(index);
+              const collapsible = Boolean(causeResolutions[index]);
+              const overrideKey = `${causeKey}:${causeResolutions[index]?.resolved_at ?? ""}`;
+              // Only a collapsible cause consults the override. An unresolved
+              // cause is always open, so a stale override left behind by
+              // collapsing a cause and then reopening it cannot strand the body
+              // hidden with no toggle left to show it.
+              const expanded = collapsible ? expandedCauses[overrideKey] ?? false : true;
+              const bodyID = `cause-body-${pattern.id ?? "pattern"}-${causeKey}`;
+              return (
               // Keying on group identity ties the remediation component instance
               // to one operation, so a refreshed group never inherits another
               // group's in-flight status or preview.
@@ -305,16 +345,23 @@ export function PatternBanner({
               >
                 <Box
                   sx={{
+                    position: "relative",
                     display: "grid",
-                    gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "auto minmax(0, 1fr)" },
-                    gridTemplateAreas: { xs: '"cause" "confidence"', sm: '"cause confidence"' },
+                    gridTemplateColumns: {
+                      xs: "minmax(0, 1fr) auto",
+                      sm: "auto minmax(0, 1fr) auto",
+                    },
+                    gridTemplateAreas: {
+                      xs: '"cause toggle" "confidence confidence"',
+                      sm: '"cause confidence toggle"',
+                    },
                     alignItems: "center",
                     columnGap: 1.5,
                     rowGap: 0.25,
                     px: 1.5,
                     py: 0.75,
                     bgcolor: "surface.containerHigh",
-                    borderBottom: "1px solid",
+                    borderBottom: expanded ? "1px solid" : 0,
                     borderColor: "divider",
                     boxShadow: "inset 3px 0 0 var(--mui-palette-primary-main)",
                   }}
@@ -324,8 +371,42 @@ export function PatternBanner({
                     spacing={1}
                     sx={{ gridArea: "cause", minWidth: 0, alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}
                   >
-                    <Typography component="h4" sx={{ minWidth: 0, ...overviewTypography.subsectionHeading }}>
-                      {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
+                    <Typography component="h4" sx={{ m: 0, minWidth: 0, ...overviewTypography.subsectionHeading }}>
+                      {collapsible ? (
+                        // The heading wraps the toggle rather than sitting
+                        // inside it: a heading is not valid phrasing content
+                        // within a button, and assistive technology exposes
+                        // that nesting inconsistently. The ::after overlay is
+                        // what keeps the whole header band clickable.
+                        <ButtonBase
+                          disableRipple
+                          aria-expanded={expanded}
+                          aria-controls={bodyID}
+                          onClick={() =>
+                            setExpandedCauses((current) => ({ ...current, [overrideKey]: !expanded }))
+                          }
+                          sx={{
+                            font: "inherit",
+                            color: "inherit",
+                            textAlign: "left",
+                            // ButtonBase is position: relative by default, which
+                            // would anchor the overlay to the label instead of
+                            // the header band it is meant to cover.
+                            position: "static",
+                            "&::after": { content: '""', position: "absolute", inset: 0 },
+                            "&:hover::after": { bgcolor: "action.hover" },
+                            "&:focus-visible::after": {
+                              outline: "2px solid",
+                              outlineColor: "primary.main",
+                              outlineOffset: -2,
+                            },
+                          }}
+                        >
+                          {causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"}
+                        </ButtonBase>
+                      ) : (
+                        causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"
+                      )}
                     </Typography>
                     {causeResolutions[index] && (
                       <Chip
@@ -355,7 +436,21 @@ export function PatternBanner({
                     {causalRecurrence[index] &&
                       ` · ${describeRecurrence(causalRecurrence[index])}`}
                   </Typography>
+                  {collapsible && (
+                    <ExpandMore
+                      aria-hidden
+                      sx={{
+                        gridArea: "toggle",
+                        fontSize: 20,
+                        color: "text.secondary",
+                        transform: expanded ? "rotate(180deg)" : "none",
+                        transition: "transform 150ms",
+                      }}
+                    />
+                  )}
                 </Box>
+                <Box id={bodyID}>
+                  <Collapse in={expanded} timeout="auto" unmountOnExit>
                 <Box sx={{ px: 1.5, py: 1.5, minWidth: 0 }}>
                   <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
                   <Typography
@@ -417,7 +512,6 @@ export function PatternBanner({
                       fixCapable
                         ? {
                             target: causalFixTargets[index],
-                            showBuild: fixTargetNeedsBuild[index],
                             externalCause: externalCause(group.cause_location),
                             // A target exists only where the cause's build is
                             // still readable, so the offer turns on the
@@ -431,15 +525,50 @@ export function PatternBanner({
                         : undefined
                     }
                   />
-                  <CauseResolution
-                    signature={group.signature}
-                    resolvedEntry={causeResolutions[index]}
-                    resolvable={causeResolvableFlags[index]}
-                    onResolvedChange={refetchResolved}
-                  />
+                  {causeActionsPresent[index] && (
+                    // Both of a cause's actions share one bar, so the card ends
+                    // with a single place to act rather than one control buried
+                    // mid-body and another below a rule. It wraps because the
+                    // resolution error takes its own line.
+                    <Stack
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1}
+                      sx={{
+                        mt: 1.5,
+                        pt: 1.5,
+                        borderTop: "1px solid",
+                        borderColor: "divider",
+                        // Narrow rows give each control its own line: the route's
+                        // build suffix and the resolution control both refuse to
+                        // shrink, so side by side they would overlap.
+                        alignItems: { xs: "stretch", sm: "center" },
+                        flexWrap: "wrap",
+                        rowGap: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      {fixCapable && (
+                        <CausalGroupFixButton
+                          jobID={jobID}
+                          target={causalFixTargets[index]}
+                          showBuild={fixTargetNeedsBuild[index]}
+                          stale={!lifecycleActive}
+                        />
+                      )}
+                      <CauseResolution
+                        signature={group.signature}
+                        resolvedEntry={causeResolutions[index]}
+                        resolvable={causeResolvableFlags[index]}
+                        onResolvedChange={refetchResolved}
+                      />
+                    </Stack>
+                  )}
+                </Box>
+                  </Collapse>
                 </Box>
               </Box>
-            ))}
+              );
+            })}
           </Stack>
         </BriefingSection>
       )}
