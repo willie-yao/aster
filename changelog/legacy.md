@@ -120,8 +120,8 @@ are kept for reference only.
   few minutes, full rediscovery hourly) writing to a shared volume the server
   reads. Ships as a single container image (fetcher + server + SPA) and a Helm
   chart (`deploy/helm/aster`: fetcher CronJob + server from a shared
-  RWX volume). See [docs/kubernetes.md](docs/kubernetes.md) and
-  [docs/server.md](docs/server.md).
+  RWX volume). See [docs/kubernetes.md](../docs/kubernetes.md) and
+  [docs/server.md](../docs/server.md).
 - **Admin-gated on-demand actions** (server mode). Signed-in admins can, per
   systemic failure, file a GitHub issue, propose a draft fix PR, or mark a
   pattern resolved, reusing the same engines as the scheduled path. Two auth
@@ -158,7 +158,7 @@ are kept for reference only.
   `dry_run` mode runs the full pipeline and writes proposed diffs to
   `fix_previews.json` without opening any PR. `fork: false` (default `true`)
   switches to a direct branch + same-repo PR for a source repo you own. See
-  [docs/fix-prs.md](docs/fix-prs.md).
+  [docs/fix-prs.md](../docs/fix-prs.md).
 - Optional **self-improving skills** (`ai.suggest_skills`): after each fetch,
   the engine drafts a diagnostic skill recipe for any systemic recurring pattern
   that no existing skill covers, and opens a **draft PR** adding
@@ -166,7 +166,7 @@ are kept for reference only.
   configured AI provider to decide coverage and draft the recipe, validates the
   draft against the skills schema before proposing, and dedupes by a hidden
   marker. Needs a `SKILL_TOKEN` secret. See
-  [docs/skills.md](docs/skills.md#auto-suggesting-recipes).
+  [docs/skills.md](../docs/skills.md#auto-suggesting-recipes).
 - New `aster onboard` subcommand scaffolds a new dashboard from a testgrid
   dashboard name or a storage bucket. It verifies discovery finds jobs, infers
   `categories` from the job names, and writes a ready-to-review scaffold
@@ -175,13 +175,13 @@ are kept for reference only.
   When AI creds are set it drafts `prompts/system.md` from the source repo's own
   docs; otherwise it writes a stub. Pass `-open-pr` to open a scaffold PR instead
   of writing locally, and `-mode k8s` to also scaffold a `deploy/` folder. See
-  [docs/onboarding-a-new-project.md](docs/onboarding-a-new-project.md#interactive-wizard).
+  [docs/onboarding-a-new-project.md](../docs/onboarding-a-new-project.md#interactive-wizard).
 - Optional **auto-filing of GitHub issues** for the dashboard's highest-signal
   findings: systemic recurring patterns and persistent failures (>=3 consecutive
   runs). Off by default; enable with an `issues:` block plus an `ISSUE_TOKEN`
   secret. Each finding maps to one issue, deduped by a hidden marker via local
   state plus an eviction-proof repo-side search. Recovered findings get a
-  "recovered" comment. See [docs/github-issues.md](docs/github-issues.md).
+  "recovered" comment. See [docs/github-issues.md](../docs/github-issues.md).
 - New internal `ghpr` helper extracts the one-commit "open a PR from a file-set"
   flow (GitHub Git Data API) shared by onboarding, skill suggestions, and fix
   PRs, with seams for draft, labels, commit author, and DCO sign-off.
@@ -258,7 +258,7 @@ are kept for reference only.
   genuinely recurs, then one extra tool-free model call. It surfaces as a banner
   at the top of the job page, and the systemic verdicts are aggregated across all
   jobs into the landing page's **Needs Attention** box. See
-  [docs/agentic.md](docs/agentic.md#pattern-analysis).
+  [docs/agentic.md](../docs/agentic.md#pattern-analysis).
 - Editing `prompts/system.md` now takes effect automatically: each analysis is
   fingerprinted with the prompt that produced it, and on the next run any failure
   whose prompt no longer matches is re-analyzed. No manual cache clear is needed.
