@@ -183,6 +183,31 @@ test("run sparkline shows every configured run up to its cap, oldest first", () 
   assert.deepEqual(capped.slice(0, 12), ["189", "190", "191", "192", "193", "194", "195", "196", "197", "198", "199", "200"]);
 });
 
+test("run sparkline is one composite tab stop with arrow-key movement", () => {
+  const runsOf = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      build_id: String(200 - i),
+      passed: i % 2 === 0,
+      timestamp: "2026-08-05T10:00:00Z",
+    }));
+  const html = render(createElement(JobHealthTable, {
+    sections: [{ id: "capz-e2e", jobs: [job({ recent_runs: runsOf(10) })] }],
+  }));
+  const runLinks = [...html.matchAll(/<a\b[^>]*aria-label="Run \d+,[^"]*"[^>]*>/g)].map((m) => m[0]);
+
+  // Both layouts render a strip, and each exposes exactly one tabbable run so a
+  // ledger of dozens of jobs costs one tab stop per strip instead of hundreds.
+  assert.equal(runLinks.length, 20);
+  assert.equal(runLinks.filter((link) => /tabindex="0"/.test(link)).length, 2);
+  assert.equal(runLinks.filter((link) => /tabindex="-1"/.test(link)).length, 18);
+  assert.match(html, /aria-label="Recent runs"/);
+
+  const sparkline = readFileSync(resolve(process.cwd(), "src/components/Sparkline.tsx"), "utf8");
+  for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+    assert.match(sparkline, new RegExp(`"${key}"`), `${key} moves focus within the strip`);
+  }
+});
+
 test("overview columns reserve a full-size target for every run the sparkline caps at", () => {
   const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
   const sparkline = source("src/components/Sparkline.tsx");
