@@ -37,13 +37,6 @@ type CommandPolicy struct {
 	Commands   []ExecutionCommand `json:"commands,omitempty"`
 }
 
-// ModelGatewayConfig identifies the tokenless gateway used by the causal critic.
-type ModelGatewayConfig struct {
-	Endpoint        string `json:"endpoint"`
-	Model           string `json:"model"`
-	ProtocolVersion string `json:"protocol_version"`
-}
-
 // ExecutionRequest is the non-secret contract sent to an external fix executor.
 type ExecutionRequest struct {
 	Version          int                  `json:"version"`

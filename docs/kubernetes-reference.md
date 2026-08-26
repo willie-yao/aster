@@ -429,7 +429,7 @@ Required platform properties:
 - exact admission identity, resource, mount, environment, and command policy.
 
 The Fix client ServiceAccount is separate from the scheduled client
-ServiceAccount that the worker and fetcher use for critic and shadow Sandboxes,
+ServiceAccount that the worker and fetcher use for shadow Sandboxes,
 so scheduled pods never hold Fix Sandbox authority. Both default names derive
 from the first 32 characters of the release fullname, so two releases sharing a
 namespace must have fullnames that differ within that prefix. Override them with
@@ -471,14 +471,6 @@ for workspace, evidence, evaluation, telemetry, and cleanup contracts.
 The lower-level `agentSandbox.analyzer` values retain the isolated stager and
 executor security boundary for explicit maintainer validation. They do not make
 the analyzer authoritative or expose a public result path.
-
-## Agent Sandbox causal critic status
-
-The causal-critic experiment stopped on August 10, 2026. Its disabled chart and
-implementation remain for inspection but must not be enabled for new
-evaluations. It never published a replacement diagnosis, entered normal cache,
-or participated in write actions. Do not treat the retained resources as a
-supported runtime.
 
 ## Related references
 

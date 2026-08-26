@@ -87,8 +87,7 @@ deployment do not inherently require Kata or any Agent Sandbox RuntimeClass. A
 secure runtime is required only when a configured feature creates Agent Sandbox
 workloads. Current examples are Fix execution, scheduled analysis shadowing, and the
 opt-in analyzer benchmark. When those features are disabled, Aster can run
-without Agent Sandbox or a sandbox RuntimeClass. The retained causal-critic
-implementation is stopped and must not be enabled for new evaluations.
+without Agent Sandbox or a sandbox RuntimeClass.
 
 Aster accepts the configured `runtimeClassName`; it does not hardcode Kata. The
 platform administrator must install and review the RuntimeClass handler, provide

@@ -53,7 +53,6 @@ func (p *pipeline) watchPass(ctx context.Context, jobs []models.ProwJob) error {
 		p.skipProgressSideEffects()
 		p.runPullRequestPass(fetchCtx, result)
 		p.runShadowAnalysis(ctx, result)
-		p.runCausalCritic(fetchCtx, result)
 	}
 	return err
 }

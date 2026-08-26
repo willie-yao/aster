@@ -120,30 +120,29 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		caBundle = &configured
 	}
 	payload, _ := json.Marshal(struct {
-		Backend            string                           `json:"backend"`
-		Namespace          string                           `json:"namespace"`
-		Image              string                           `json:"image"`
-		ServiceAccountName string                           `json:"service_account_name"`
-		RuntimeClassName   string                           `json:"runtime_class_name"`
-		ModelProvider      modelprovider.Config             `json:"model_provider,omitempty"`
-		ProviderSecretRef  ProviderSecretRef                `json:"provider_secret_ref,omitempty"`
-		ModelGateway       engineruntime.ModelGatewayConfig `json:"model_gateway,omitempty"`
-		PublicCAPrivateDNS bool                             `json:"public_ca_private_dns,omitempty"`
-		CABundle           *modelprovider.CABundleConfig    `json:"ca_bundle,omitempty"`
-		CABundleContract   string                           `json:"ca_bundle_contract,omitempty"`
-		Timeout            string                           `json:"timeout"`
-		OutputLimitBytes   int64                            `json:"output_limit_bytes"`
-		PollEvery          string                           `json:"poll_every"`
-		Resources          AgentSandboxResources            `json:"resources"`
-		AppArmorCapability string                           `json:"app_armor_capability"`
-		StagerImage        string                           `json:"stager_image,omitempty"`
-		StagerInputClaim   string                           `json:"stager_input_claim,omitempty"`
+		Backend            string                        `json:"backend"`
+		Namespace          string                        `json:"namespace"`
+		Image              string                        `json:"image"`
+		ServiceAccountName string                        `json:"service_account_name"`
+		RuntimeClassName   string                        `json:"runtime_class_name"`
+		ModelProvider      modelprovider.Config          `json:"model_provider,omitempty"`
+		ProviderSecretRef  ProviderSecretRef             `json:"provider_secret_ref,omitempty"`
+		PublicCAPrivateDNS bool                          `json:"public_ca_private_dns,omitempty"`
+		CABundle           *modelprovider.CABundleConfig `json:"ca_bundle,omitempty"`
+		CABundleContract   string                        `json:"ca_bundle_contract,omitempty"`
+		Timeout            string                        `json:"timeout"`
+		OutputLimitBytes   int64                         `json:"output_limit_bytes"`
+		PollEvery          string                        `json:"poll_every"`
+		Resources          AgentSandboxResources         `json:"resources"`
+		AppArmorCapability string                        `json:"app_armor_capability"`
+		StagerImage        string                        `json:"stager_image,omitempty"`
+		StagerInputClaim   string                        `json:"stager_input_claim,omitempty"`
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
 		ModelProvider: opts.ModelProvider, ProviderSecretRef: opts.ProviderSecretRef,
-		ModelGateway: opts.ModelGateway, PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
-		CABundle: caBundle, CABundleContract: caBundleContract(opts.CABundle),
+		PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
+		CABundle:           caBundle, CABundleContract: caBundleContract(opts.CABundle),
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
 		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
 	})
@@ -175,7 +174,6 @@ type AgentSandboxOptions struct {
 	RuntimeClassName   string
 	ModelProvider      modelprovider.Config
 	ProviderSecretRef  ProviderSecretRef
-	ModelGateway       engineruntime.ModelGatewayConfig
 	PublicCAPrivateDNS bool
 	CABundle           modelprovider.CABundleConfig
 	Timeout            time.Duration
@@ -267,51 +265,6 @@ func NewAgentSandboxProviderRunnerForBenchmarkFromEnv(prefix, kubeContext string
 		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
 	}
 	return newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext, false, false, expectedProvider, expectedTimeout, expectedOutputLimit)
-}
-
-// NewAgentSandboxRunnerFromEnv retains the tokenless causal-critic gateway runner.
-func NewAgentSandboxRunnerFromEnv(prefix string, expectedGateway engineruntime.ModelGatewayConfig, expectedPublicCAPrivateDNS bool, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
-	if err != nil {
-		return nil, err
-	}
-	prefix = strings.TrimSpace(prefix)
-	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
-	publicCAPrivateDNS := false
-	if value := env("MODEL_GATEWAY_PUBLIC_CA_PRIVATE_DNS"); value != "" {
-		publicCAPrivateDNS, err = strconv.ParseBool(value)
-		if err != nil {
-			return nil, fmt.Errorf("agent sandbox public CA private DNS setting is invalid")
-		}
-	}
-	opts.ModelGateway = engineruntime.ModelGatewayConfig{
-		Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
-	}
-	opts.PublicCAPrivateDNS = publicCAPrivateDNS
-	if opts.ModelGateway != expectedGateway || opts.PublicCAPrivateDNS != expectedPublicCAPrivateDNS || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
-		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
-	}
-	return finishAgentSandboxRunner(opts, "", true)
-}
-
-// NewAgentSandboxRunnerForBenchmarkFromEnv retains the tokenless causal-critic benchmark runner.
-func NewAgentSandboxRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedGateway engineruntime.ModelGatewayConfig, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	if strings.TrimSpace(kubeContext) == "" {
-		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
-	}
-	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
-	if err != nil {
-		return nil, err
-	}
-	prefix = strings.TrimSpace(prefix)
-	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
-	opts.ModelGateway = engineruntime.ModelGatewayConfig{
-		Endpoint: env("MODEL_GATEWAY_ENDPOINT"), Model: env("MODEL_GATEWAY_MODEL"), ProtocolVersion: env("MODEL_GATEWAY_PROTOCOL"),
-	}
-	if opts.ModelGateway != expectedGateway || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
-		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
-	}
-	return finishAgentSandboxRunner(opts, kubeContext, false)
 }
 
 func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterOnly, allowCABundle bool, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
@@ -469,37 +422,26 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	if opts.OutputLimitBytes < 4<<10 || opts.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("agent sandbox output limit must be between 4096 and 1048576")
 	}
-	hasProvider := opts.ModelProvider != (modelprovider.Config{})
-	hasGateway := opts.ModelGateway != (engineruntime.ModelGatewayConfig{})
-	if hasProvider == hasGateway {
-		return fmt.Errorf("agent sandbox requires exactly one model provider or legacy critic gateway")
+	if opts.ModelProvider == (modelprovider.Config{}) {
+		return fmt.Errorf("agent sandbox model provider is required")
 	}
-	if hasProvider {
-		if err := modelprovider.ValidateDeploymentEndpoint(opts.ModelProvider); err != nil {
-			return fmt.Errorf("agent sandbox model provider: %w", err)
+	if err := modelprovider.ValidateDeploymentEndpoint(opts.ModelProvider); err != nil {
+		return fmt.Errorf("agent sandbox model provider: %w", err)
+	}
+	if _, err := modelprovider.OpenCodeBaseURL(opts.ModelProvider); err != nil {
+		return fmt.Errorf("agent sandbox model provider: %w", err)
+	}
+	if opts.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway && !opts.testOnly {
+		if err := engineruntime.ValidateModelGatewayTrust(opts.ModelProvider.Endpoint, opts.ModelProvider.PublicCAPrivateDNS); err != nil {
+			return fmt.Errorf("agent sandbox model provider gateway: %w", err)
 		}
-		if _, err := modelprovider.OpenCodeBaseURL(opts.ModelProvider); err != nil {
-			return fmt.Errorf("agent sandbox model provider: %w", err)
+	}
+	if opts.ModelProvider.Auth.Type == modelprovider.AuthTypeBearer {
+		if len(k8svalidation.IsDNS1123Subdomain(opts.ProviderSecretRef.Name)) > 0 || len(k8svalidation.IsConfigMapKey(opts.ProviderSecretRef.Key)) > 0 {
+			return fmt.Errorf("agent sandbox provider Secret name and key are required and must be valid")
 		}
-		if opts.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway && !opts.testOnly {
-			if err := engineruntime.ValidateModelGatewayTrust(opts.ModelProvider.Endpoint, opts.ModelProvider.PublicCAPrivateDNS); err != nil {
-				return fmt.Errorf("agent sandbox model provider gateway: %w", err)
-			}
-		}
-		if opts.ModelProvider.Auth.Type == modelprovider.AuthTypeBearer {
-			if len(k8svalidation.IsDNS1123Subdomain(opts.ProviderSecretRef.Name)) > 0 || len(k8svalidation.IsConfigMapKey(opts.ProviderSecretRef.Key)) > 0 {
-				return fmt.Errorf("agent sandbox provider Secret name and key are required and must be valid")
-			}
-		} else if opts.ProviderSecretRef != (ProviderSecretRef{}) {
-			return fmt.Errorf("agent sandbox provider Secret settings require direct bearer auth")
-		}
-	} else {
-		if opts.ProviderSecretRef != (ProviderSecretRef{}) {
-			return fmt.Errorf("agent sandbox critic gateway must not carry a provider Secret reference")
-		}
-		if err := engineruntime.ValidateModelGatewayTrust(opts.ModelGateway.Endpoint, opts.PublicCAPrivateDNS); err != nil {
-			return fmt.Errorf("agent sandbox model gateway: %w", err)
-		}
+	} else if opts.ProviderSecretRef != (ProviderSecretRef{}) {
+		return fmt.Errorf("agent sandbox provider Secret settings require direct bearer auth")
 	}
 	for name, value := range map[string]string{"cpu request": opts.Resources.CPURequest, "cpu limit": opts.Resources.CPULimit, "memory request": opts.Resources.MemoryRequest, "memory limit": opts.Resources.MemoryLimit, "ephemeral storage limit": opts.Resources.EphemeralStorage} {
 		if _, err := resource.ParseQuantity(value); err != nil {
@@ -634,14 +576,9 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if r.opts.CABundle.Enabled() && spec.Purpose != "fix" {
 		return result, fmt.Errorf("agent sandbox model provider CA bundle is Fix-runtime only")
 	}
-	if r.opts.ModelProvider != (modelprovider.Config{}) {
-		result.Telemetry.ProviderCredentialMode = r.opts.ModelProvider.CredentialMode
-		result.Telemetry.ProviderAPI = r.opts.ModelProvider.API
-		result.Telemetry.ProviderReasoningEffort = string(r.opts.ModelProvider.ReasoningEffort)
-	} else {
-		result.Telemetry.ProviderCredentialMode = modelprovider.CredentialModeGateway
-		result.Telemetry.ProviderAPI = modelprovider.APIChatCompletions
-	}
+	result.Telemetry.ProviderCredentialMode = r.opts.ModelProvider.CredentialMode
+	result.Telemetry.ProviderAPI = r.opts.ModelProvider.API
+	result.Telemetry.ProviderReasoningEffort = string(r.opts.ModelProvider.ReasoningEffort)
 	contractHash := agentSandboxWorkloadHash(spec, r.opts)
 	executionID := strings.TrimSpace(spec.ExecutionID)
 	if executionID == "" {

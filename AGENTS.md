@@ -57,7 +57,6 @@ backend/                         Go 1.25
     analysisexecutor/            Runs one file-backed OpenCode analysis workload
     analysisstager/              Copies one sealed analyzer snapshot into the workspace
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
-    criticexecutor/              Runs one credential-free causal review workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
     fetcher/                     Orchestration invoked by cmd/aster and cmd/worker
@@ -99,8 +98,6 @@ backend/                         Go 1.25
     analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
     modelprovider/               Shared non-secret provider and credential-mode contract
-    causalcritic/                Disabled stopped causal-review contracts and runtime
-    criticexecutor/              Purpose-built read-only model-gateway critic executor
     analysisruntime/             Selects the failure-analysis runtime (in-process default)
     analysischat/                Bounded conversations about a published analysis
     corrections/                 Promotes reviewed chat revisions without mutating output

@@ -2,8 +2,7 @@
 {{- if .Values.agentSandbox.analysisShadow.enabled }}
 {{- $clientSA := include "aster.agentSandboxScheduledClientServiceAccountName" . -}}
 {{- $workloadSA := include "aster.agentAnalysisShadowWorkloadServiceAccountName" . -}}
-{{/* Critic shares this identity, so only one template may create it. */}}
-{{- if and .Values.agentSandbox.rbac.create (not .Values.agentSandbox.causalCritic.enabled) }}
+{{- if .Values.agentSandbox.rbac.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

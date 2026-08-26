@@ -555,68 +555,8 @@ if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQU
   exit 1
 fi
 
-expect_fail analysis-shadow-with-critic 'cannot run with agentSandbox.analysisShadow' \
-  -f "$tmp/analysis-shadow.yaml" --set agentSandbox.causalCritic.enabled=true
 expect_fail analysis-shadow-reserved-env 'reserved analysis shadow variable' \
   -f "$tmp/analysis-shadow.yaml" --set fetcher.extraEnv[0].name=AGENT_SANDBOX_ANALYSIS_SHADOW_IMAGE --set fetcher.extraEnv[0].value=attacker
-
-cat > "$tmp/causal-critic.yaml" <<'VALUES'
-ai:
-  enabled: true
-  endpoint: https://model.example.test/v1/chat/completions
-  model: fixture-model
-  token: test-token
-agentSandbox:
-  causalCritic:
-    enabled: true
-    namespace: critic-eval
-    runtimeClassName: kata-vm-isolation
-    image:
-      repository: local/critic-executor
-      digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      pullPolicy: IfNotPresent
-    workloadServiceAccount:
-      create: true
-      name: critic-workload
-    modelGateway:
-      endpoint: https://critic-gateway.platform.svc.cluster.local:8443/v1/chat/completions
-      model: critic-model
-      protocolVersion: openai-chat-completions-v1
-    timeout: 5m
-    outputLimitBytes: 65536
-    maxPerRun: 1
-    pollInterval: 250ms
-    ledger:
-      existingClaim: critic-ledger
-      mountPath: /private/causal-critic
-    networkPolicy:
-      mode: kubernetes
-      enabled: true
-      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
-      gatewayPodSelector: {app: critic-gateway}
-      gatewayPort: 8443
-      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
-      dnsPodSelector: {k8s-app: kube-dns}
-    resources:
-      requests: {cpu: 50m, memory: 64Mi, ephemeral-storage: 32Mi}
-      limits: {cpu: 500m, memory: 256Mi, ephemeral-storage: 32Mi}
-VALUES
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/causal-critic.yaml" > "$tmp/causal-critic-render.yaml"
-grep -Fq -- '-causal-critic-shadow' "$tmp/causal-critic-render.yaml"
-grep -Fq 'name: AGENT_SANDBOX_CRITIC_NAMESPACE' "$tmp/causal-critic-render.yaml"
-grep -Fq 'claimName: critic-ledger' "$tmp/causal-critic-render.yaml"
-grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/causal-critic-render.yaml"
-grep -Fq "serviceAccountName: $scheduled_client" "$tmp/causal-critic-render.yaml"
-grep -Fq "system:serviceaccount:dashboard-test:$scheduled_client" "$tmp/causal-critic-render.yaml"
-if grep -Fq "$fix_client" "$tmp/causal-critic-render.yaml"; then
-  echo 'Causal critic release referenced the Fix Agent Sandbox client ServiceAccount' >&2
-  exit 1
-fi
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/causal-critic.yaml" \
-  -s templates/agent-sandbox-causal-critic-rbac.yaml > "$tmp/causal-critic-rbac.yaml"
-grep -A3 -F 'subjects:' "$tmp/causal-critic-rbac.yaml" | grep -Fq "name: $scheduled_client"
-expect_fail causal-critic-with-shadow 'cannot run with agentSandbox.analysisShadow' \
-  -f "$tmp/causal-critic.yaml" --set agentSandbox.analysisShadow.enabled=true
 
 cat > "$tmp/analyzer.yaml" <<'VALUES'
 agentSandbox:

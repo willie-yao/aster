@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -69,10 +69,6 @@ agent-sandbox-analysis-executor-image:
 # Build the credential-free analyzer workspace stager image.
 agent-sandbox-analysis-stager-image:
 	docker build --target agent-sandbox-analysis-stager --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-analysis-stager:$(VERSION) .
-
-# Build the purpose-built credential-free causal critic image for Agent Sandbox.
-agent-sandbox-critic-executor-image:
-	docker build --target agent-sandbox-critic-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-critic-executor:$(VERSION) .
 
 # Run all Go tests
 test:
@@ -239,7 +235,6 @@ help:
 	@echo "  remote-fixer-image Build the minimal git-capable remote fix image"
 	@echo "  agent-sandbox-analysis-executor-image Build the file-backed analyzer executor image"
 	@echo "  agent-sandbox-analysis-stager-image  Build the credential-free analyzer stager image"
-	@echo "  agent-sandbox-critic-executor-image Build the credential-free critic executor image"
 	@echo "  agent-sandbox-fix-executor-image  Build the Agent Sandbox OpenCode executor"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"

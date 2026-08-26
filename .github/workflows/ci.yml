@@ -33,7 +33,6 @@ jobs:
       remote_fixer: ${{ steps.classify.outputs.remote_fixer }}
       fix_executor: ${{ steps.classify.outputs.fix_executor }}
       analysis_images: ${{ steps.classify.outputs.analysis_images }}
-      critic_image: ${{ steps.classify.outputs.critic_image }}
       documentation: ${{ steps.classify.outputs.documentation }}
       release_shared: ${{ steps.classify.outputs.release_shared }}
     steps:
@@ -101,7 +100,6 @@ jobs:
           REMOTE_FIXER: ${{ steps.classify.outputs.remote_fixer }}
           FIX_EXECUTOR: ${{ steps.classify.outputs.fix_executor }}
           ANALYSIS_IMAGES: ${{ steps.classify.outputs.analysis_images }}
-          CRITIC_IMAGE: ${{ steps.classify.outputs.critic_image }}
           DOCUMENTATION: ${{ steps.classify.outputs.documentation }}
           RELEASE_SHARED: ${{ steps.classify.outputs.release_shared }}
         run: |
@@ -117,7 +115,6 @@ jobs:
             echo "| Remote fixer image | $REMOTE_FIXER |"
             echo "| Agent Sandbox Fix executor | $FIX_EXECUTOR |"
             echo "| Agent Sandbox analysis images | $ANALYSIS_IMAGES |"
-            echo "| Agent Sandbox critic image | $CRITIC_IMAGE |"
             echo "| Documentation/repository metadata | $DOCUMENTATION |"
             echo "| Release/shared | $RELEASE_SHARED |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -260,14 +257,3 @@ jobs:
         run: |
           image_tag="sha-${SOURCE_REVISION::7}"
           hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci "$SOURCE_REVISION" "$image_tag"
-
-  agent-sandbox-critic-executor-image:
-    needs: changes
-    if: needs.changes.outputs.critic_image == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build
-        run: docker build --target agent-sandbox-critic-executor -t aster/agent-sandbox-critic-executor:ci .
-      - name: Test credential-free runtime
-        run: hack/test-agent-sandbox-critic-image.sh aster/agent-sandbox-critic-executor:ci

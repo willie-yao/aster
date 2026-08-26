@@ -19,7 +19,6 @@ CLASSES = (
     "remote_fixer",
     "fix_executor",
     "analysis_images",
-    "critic_image",
     "documentation",
     "release_shared",
 )
@@ -110,7 +109,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/artifacts",
     "backend/internal/auth",
     "backend/internal/buildsource",
-    "backend/internal/causalcritic",
     "backend/internal/causalfixpreview",
     "backend/internal/chatfix",
     "backend/internal/corrections",
@@ -171,32 +169,6 @@ ANALYSIS_BACKEND_PREFIXES = (
     "backend/internal/textutil",
 )
 
-CRITIC_BACKEND_PREFIXES = (
-    "backend/cmd/criticexecutor",
-    "backend/internal/actionverify",
-    "backend/internal/agentanalysis",
-    "backend/internal/agentsandbox",
-    "backend/internal/ai",
-    "backend/internal/aiusage",
-    "backend/internal/analysischat",
-    "backend/internal/analysisruntime",
-    "backend/internal/artifacts",
-    "backend/internal/buildsource",
-    "backend/internal/causalcritic",
-    "backend/internal/criticexecutor",
-    "backend/internal/modelprovider",
-    "backend/internal/models",
-    "backend/internal/output",
-    "backend/internal/project",
-    "backend/internal/prowbuild",
-    "backend/internal/redact",
-    "backend/internal/remediationpolicy",
-    "backend/internal/runtime",
-    "backend/internal/statefile",
-    "backend/internal/storage",
-    "backend/internal/textutil",
-)
-
 FIX_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
     "backend/internal/fixexecutor",
@@ -209,15 +181,12 @@ HELM_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
     "backend/cmd/analysisexecutor",
     "backend/cmd/analysisstager",
-    "backend/cmd/criticexecutor",
     "backend/internal/ai/skills",
     "backend/internal/ai/tools",
     "backend/internal/agentsandbox",
     "backend/internal/analysisexecutor",
     "backend/internal/analysisstager",
     "backend/internal/artifacts",
-    "backend/internal/causalcritic",
-    "backend/internal/criticexecutor",
     "backend/internal/fixexecutor",
     "backend/internal/kubernetesdeploy",
     "backend/internal/modelprovider",
@@ -293,7 +262,6 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                 "remote_fixer",
                 "fix_executor",
                 "analysis_images",
-                "critic_image",
             ):
                 result[name] = True
             matched = True
@@ -306,7 +274,6 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                     "remote_fixer",
                     "fix_executor",
                     "analysis_images",
-                    "critic_image",
                 ):
                     result[name] = True
             else:
@@ -316,8 +283,6 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                     result["fix_executor"] = True
                 if under_any(path, ANALYSIS_BACKEND_PREFIXES):
                     result["analysis_images"] = True
-                if under_any(path, CRITIC_BACKEND_PREFIXES):
-                    result["critic_image"] = True
 
             if under_any(path, HELM_BACKEND_PREFIXES):
                 result["helm_static"] = True
@@ -352,7 +317,6 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             "hack/test-remote-fixer-image.sh": "remote_fixer",
             "hack/test-agent-sandbox-fix-image.sh": "fix_executor",
             "hack/test-agent-sandbox-analysis-images.sh": "analysis_images",
-            "hack/test-agent-sandbox-critic-image.sh": "critic_image",
         }
         if path in image_test_paths:
             result[image_test_paths[path]] = True
@@ -431,7 +395,7 @@ def self_test() -> None:
         (
             "embedded analysis skill",
             ["backend/internal/agentanalysis/skill/failure-analysis.md"],
-            {"backend", "remote_fixer", "analysis_images", "critic_image"},
+            {"backend", "remote_fixer", "analysis_images"},
         ),
         (
             "embedded prompt-author skill",
@@ -461,18 +425,12 @@ def self_test() -> None:
                 "remote_fixer",
                 "fix_executor",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
             "analysis executor",
             ["backend/internal/analysisexecutor/executor.go"],
             {"backend", "helm_static", "analysis_images"},
-        ),
-        (
-            "critic executor",
-            ["backend/internal/criticexecutor/executor.go"],
-            {"backend", "helm_static", "critic_image"},
         ),
         (
             "remote runtime",
@@ -492,7 +450,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -503,7 +460,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -514,7 +470,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -525,7 +480,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -536,7 +490,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -547,7 +500,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -559,7 +511,6 @@ def self_test() -> None:
                 "remote_fixer",
                 "fix_executor",
                 "analysis_images",
-                "critic_image",
             },
         ),
         (
@@ -570,7 +521,6 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "analysis_images",
-                "critic_image",
             },
         ),
         ("release", [".github/workflows/release.yml"], set(CLASSES)),

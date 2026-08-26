@@ -381,15 +381,3 @@ ai:
 		t.Fatalf("error = %v", err)
 	}
 }
-
-func shadowTestBundle(t *testing.T, request ai.FailureAnalysisRequest, source sourceinvestigation.Repository) agentanalysis.EvidenceBundle {
-	t.Helper()
-	bundle, err := agentanalysis.NewEvidenceBundle(
-		request, source, agentanalysis.ArtifactScan{PathCount: 1}, nil,
-		[]agentanalysis.EvidenceExcerpt{{Path: "build-log.txt", Kind: "tail", Content: "failure"}}, strings.Repeat("b", 64),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return bundle
-}
