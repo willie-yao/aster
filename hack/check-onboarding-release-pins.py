@@ -22,7 +22,7 @@ EXPECTED_COUNTS = {
     "docs/github-pages.md": {"workflow": 3},
     "docs/notifications.md": {"workflow": 1},
     "docs/onboarding-a-new-project.md": {"go run": 3, "engine ref": 2},
-    "docs/onboarding-reference.md": {"go run": 3, "engine ref": 2},
+    "docs/onboarding-reference.md": {"go run": 1, "engine ref": 1},
     ".agents/skills/setup-aster-consumer/SKILL.md": {"go run": 2, "engine ref": 1},
     ".github/workflows/reusable-clear-cache.yml": {"workflow": 1},
     ".github/workflows/reusable-deploy.yml": {"workflow": 1},

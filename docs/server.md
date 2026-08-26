@@ -36,7 +36,7 @@ schema.
 | `POST /api/failures/{id}/create-issue/preview` | Preview an issue without filing it. |
 | `POST /api/failures/{id}/propose-fix/preview` | Preview a Fix PR without opening it. Registered only when Fix is enabled. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit a test- or cause-scoped chat finding, anchored to one exact JUnit failure, for asynchronous Fix preview generation. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Legacy synchronous pattern chat-to-fix preview. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Synchronous pattern chat-to-fix preview for direct API clients. |
 | `POST /api/failures/{id}/{action}/requests` | Create a persistent asynchronous issue or Fix draft request. |
 | `GET /api/action-requests/{id}` | Read the owner's pending, ready, failed, cancelled, or confirmed request. |
 | `POST /api/action-requests/{id}/confirm` | Confirm the exact persisted ready draft. |
@@ -52,6 +52,9 @@ schema.
 | `POST /api/auth/logout` | Clear the session. |
 | `GET /healthz` | Liveness and readiness. |
 | `GET /` | Serve the built SPA with deep-link fallback when `-static-dir` is set. |
+
+See [Pull request triage](pull-request-triage.md#optional-ai-escalation) for
+escalation eligibility, privacy, and deployment requirements.
 
 ## Capability contract
 

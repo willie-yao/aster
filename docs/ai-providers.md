@@ -232,5 +232,5 @@ Focused runtime guides:
 
 - Fix workflow and project example: [Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor)
 - Analysis-shadow authority and evaluation: [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
-- Exact project fields: [Project configuration](project-configuration.md#experimental-agent-sandbox-fix-runtime)
+- Exact project fields: [Project configuration](project-configuration.md#experimental-agent-sandbox-fix-configuration)
 - RuntimeClass, Secret, CA, and egress ownership: [Kubernetes platform setup](kubernetes-platform.md)

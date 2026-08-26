@@ -239,4 +239,4 @@ than the server: the optional bot comment on newly opened pull requests, which
 posts only when `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied as
 secrets. It is off by default and stays in dry run until `dry_run` is explicitly
 false. See
-[the reference](project-configuration.md#optional-bot-comment-on-new-pull-requests).
+[Pull request triage](pull-request-triage.md#optional-bot-comment).

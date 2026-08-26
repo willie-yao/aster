@@ -410,6 +410,7 @@ live deploy.
 
 - `docs/onboarding-a-new-project.md` - common onboarding and scaffold flow.
 - `docs/project-configuration.md` - strict project.yaml field reference.
+- `docs/pull-request-triage.md` - deterministic pull request attribution, shared failures, comments, and on-demand escalation.
 - `docs/github-pages.md` - GitHub Actions and Pages deployment.
 - `docs/troubleshooting.md` - first-deploy failures and checks.
 - `docs/architecture/in-process-analyzer.md` - authoritative analyzer architecture and contributor map.

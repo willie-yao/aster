@@ -47,6 +47,7 @@ basic dashboard is healthy.
 
 | Feature | Canonical guide | Boundary |
 | --- | --- | --- |
+| Pull request triage | [Pull request triage](pull-request-triage.md) | Deterministic cross-deployment view of open pull request failures, with optional bot comments and authenticated AI escalation. |
 | Analysis chat | [Server mode](server.md#analysis-chat) | Authenticated, read-only model conversation over published analysis. |
 | Cause-scoped analysis chat | [Server mode](server.md#analysis-chat) | Authenticated chat over exactly one causal group and its member builds. |
 | File Issue and Mark Resolved | [Server mode](server.md#admin-gated-actions) and [GitHub issues](github-issues.md) | Authenticated preview or lifecycle action. GitHub writes use a server-held `BOT_TOKEN`. |
@@ -57,11 +58,13 @@ basic dashboard is healthy.
 Recommended order:
 
 1. Deploy the read-only dashboard and verify current jobs and analysis.
-2. Add authentication and analysis chat if maintainers need interactive review.
-3. Add notifications, issue drafting, or resolution controls as separate needs.
-4. Evaluate Fix PR generation only after the Agent Sandbox platform contract is
+2. Enable pull request triage when maintainers need a repository-wide
+   presubmit view.
+3. Add authentication and analysis chat if maintainers need interactive review.
+4. Add notifications, issue drafting, or resolution controls as separate needs.
+5. Evaluate Fix PR generation only after the Agent Sandbox platform contract is
    installed and reviewed.
-5. Run analysis shadows only as an isolated maintainer evaluation. Shadow output
+6. Run analysis shadows only as an isolated maintainer evaluation. Shadow output
    never replaces the in-process result.
 
 ## Contribute and operate

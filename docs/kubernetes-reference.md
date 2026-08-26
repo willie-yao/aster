@@ -359,6 +359,9 @@ curl -fsSI https://dashboard.example.com/ | grep -i '^strict-transport-security:
 
 ## Optional server and automation features
 
+[Pull request triage](pull-request-triage.md) owns deterministic attribution,
+shared failures, bot-comment safety, and on-demand escalation behavior.
+
 Enable optional features only after the baseline writer, server, storage, and
 public data path are healthy.
 
@@ -464,7 +467,7 @@ shadow model limits so enabling the shadow does not silently rewrite
 authoritative provider configuration.
 
 Shadow output, lifecycle failures, and cleanup state cannot change public JSON,
-normal cache acceptance, patterns, corrections, or actions. The server never
+normal cache acceptance, patterns, or actions. The server never
 mounts the shadow claim. See the
 [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
 for workspace, evidence, evaluation, telemetry, and cleanup contracts.

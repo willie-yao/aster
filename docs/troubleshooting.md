@@ -24,11 +24,8 @@ cases below.
 | `Propose fix` reports unavailable | The Agent Sandbox runtime is disabled, misconfigured, or its executor rejected the request. | Verify `agentSandbox.fixRuntime` Helm values, the executor image digest, provider Secret or gateway, allowed commands, and admission policy. |
 | A Fix preview reports that the model provider rejected the sandbox credential | The provider answered the sandbox with 401 or 403, so no retry can succeed. | Fix the provider credential the sandbox uses, then request a new preview. The server log line for the request records the rejection, including the HTTP status when the provider reports one. |
 | Agent shadow does not run or records a failed status | The exact comparison was already claimed, Sandbox RBAC or admission denied creation, result validation failed, output or citations were invalid, the private ledger claim was unavailable, or cleanup remains pending. | Inspect worker or fetcher logs, the Sandbox status, admission denial, and the private `analysis_shadow.json` ledger. Do not clear authoritative cache or public data. |
-| Helm rejects `server.actions.oauth.scope`, `chatScope`, or `privateRepositories` | OAuth is identity-only and no longer carries repository access. | Use the guarded `deploy/helm/upgrade.sh`; it removes only known deprecated OAuth controls from its reviewed candidate. For a manual upgrade, remove the legacy keys and grant required repository access to `BOT_TOKEN`. |
 | OAuth actions report that `BOT_TOKEN` is missing or cannot access a repository | OAuth identifies the admin, but the bot credential performs writes. | Add `BOT_TOKEN` to the OAuth auth Secret and scope it to the configured action repositories and operations. |
 | Helm rejects `server.security.hsts.enabled=false` | HSTS cannot be disabled accidentally. | Keep HSTS enabled for deployments. For direct local HTTP only, set `server.development.allowInsecureHTTP=true`. |
-| A synchronous preview returns not found immediately after the bot-token upgrade | Preview state versions 1 through 4 used credential-derived ownership and are intentionally invalidated by v5. | Generate a new preview. Do not restore the legacy preview file. |
-| A pre-v5 rollback cannot read `action_preview_state.json` | Version 5 is intentionally outside the legacy reader's accepted range. | Prefer rolling forward. If rollback is required, move the private preview state aside only after confirming no action is in progress, then regenerate previews. Preserve `.action-write-audit/state.json`; its dot-prefixed directory remains hidden by pre-v5 servers. |
 | A confirmed bot write reports an audit persistence error | The external write may have succeeded, but the private audit could not be durably recorded. | Restore storage access and retry confirmation. The server reconciles the external result and records it as recovered before reporting success. |
 
 ## Useful checks
@@ -51,17 +48,6 @@ curl -fsS http://localhost:8080/api/capabilities
 
 For deeper AI-loop behavior, see the troubleshooting section in
 [Agentic analysis](agentic.md#troubleshooting).
-
-## OAuth access after the bot-token split
-
-OAuth always requests `read:user` and does not retain the user access token in
-the dashboard session. Enabled actions use the server-held `BOT_TOKEN`.
-
-When upgrading from per-user `public_repo` or `repo` access, add `BOT_TOKEN` to
-the OAuth auth Secret before enabling actions. Then have every admin sign out,
-revoke the old OAuth App grant, and sign in again. The chart rejects legacy
-`scope`, `chatScope`, `privateRepositories`, `OAUTH_SCOPE`, and
-`OAUTH_PRIVATE_REPOSITORIES` controls instead of retaining broad access.
 
 ## Login fails with "oauth token exchange failed"
 
@@ -207,4 +193,4 @@ apply whether or not `ai.enabled` is true. For a public `branding.source_repo`
 the token needs no repository privileges. `aster onboard doctor` reports the
 same gap as `pull request triage credential`. The Pages path already receives
 the Actions `GITHUB_TOKEN` from the reusable workflow, so this does not apply
-there. See [Pull request triage](project-configuration.md#pull-request-triage).
+there. See [Pull request triage](pull-request-triage.md).

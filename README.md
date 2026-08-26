@@ -66,6 +66,7 @@ opened pull request. Fix PR generation is not part of standard onboarding.
 - [Kubernetes](docs/kubernetes.md)
 - [Flux GitOps](docs/kubernetes-gitops.md)
 - [Project configuration](docs/project-configuration.md)
+- [Pull request triage](docs/pull-request-triage.md)
 - [Optional features and enablement order](docs/README.md#optional-features)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Complete documentation map and contributor guides](docs/README.md)

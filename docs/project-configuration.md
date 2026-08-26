@@ -164,384 +164,34 @@ discovery:
 
 ## Pull request triage
 
-The pull request view reports the presubmit results already published for the
-open pull requests of `branding.source_repo`. It answers "which of my open pull
-requests have failing tests, and which tests are they" without opening each one
-on GitHub. It is opt-in because every pass costs one GitHub listing plus
-per-check bucket reads.
+Pull request triage is optional and targets the open pull requests of
+`branding.source_repo`.
 
 ```yaml
 pull_requests:
   enabled: true
-  # Optional bounds; omit to use the engine defaults.
-  max: 100            # open pull requests per pass, most recently updated first
-  builds_per_job: 3   # builds listed per presubmit before the newest is selected
-```
-
-### Credentials (read this first)
-
-Triage reads the GitHub API on every pass, so it needs a read-only token:
-
-| Deployment | Where it runs | Credential |
-|---|---|---|
-| GitHub Pages | reusable workflow | `GITHUB_TOKEN`, already supplied |
-| Kubernetes | worker or fetcher | `GITHUB_READ_TOKEN` |
-
-`GITHUB_READ_TOKEN` is preferred and `GITHUB_TOKEN` is the fallback, so the
-Pages path is authenticated with no action from you. On the Kubernetes path,
-set `ai.githubReadToken` or `ai.githubReadTokenSecretName`; both apply whether
-or not `ai.enabled` is true, because triage costs no model calls.
-
-For a public `branding.source_repo` the token needs **no repository
-privileges**. Its only job is to lift the rate limit: GitHub allows anonymous
-callers 60 requests an hour against a shared per-IP budget, a personal access
-token 5,000, and the Actions `GITHUB_TOKEN` 1,000 per repository. One pass
-spends a paginated listing of open pull requests plus paginated changed-file
-reads for each pull request with a comparable failing check. On a busy
-repository a single pass exceeds 60 on its own, and the chart's default
-`fetcher.watchInterval: 5m` schedules 12 passes an hour. A Pages deploy runs on
-a cron, so its 1,000 is ample.
-
-Absence is never a startup error. The fetcher logs one warning at startup, then
-triage degrades to intermittent 403s while the dashboard keeps publishing, so
-the only symptom is a pull request view that stops updating. `aster onboard
-doctor` reports the same gap as a warning.
-
-`discovery.include_presubmits` is not a prerequisite for pull request triage, and
-turning it on does not improve attribution. Triage always resolves presubmits
-from the job catalog, and attribution reads base-branch history only, so a
-verdict is the same either way. The toggle only adds every presubmit to the main
-job dashboard, enlarging each fetch and any enabled analysis. Enable it when you
-want that dashboard coverage, not to get triage.
-
-Draft pull requests are excluded. Each pass writes `pull-requests.json`, one
-`pull-requests/<number>.json` per open pull request, and
-`pull-request-failures.json` for the failures several pull requests share, and
-removes detail files for pull requests that are no longer open.
-
-A few behaviors worth knowing:
-
-- Each failing test carries a deterministic **attribution** that compares it
-  against observed results. No verdict claims a pull request caused a failure,
-  because comparing observations can rule a pull request out but cannot rule one
-  in. The verdicts are:
-
-  | Verdict | Meaning |
-  | --- | --- |
-  | `pre_existing` | The same test is already failing on the base branch. |
-  | `widespread` | The same job and test is failing on at least two other open pull requests that target the same base branch. |
-  | `known_flake` | Base-branch flakiness history already classifies the test as flaky. |
-  | `touches_changed_code` | Nothing explains the failure and it fails in a file the pull request changes. |
-  | `unexplained` | Nothing observed rules the pull request out, so it needs investigation. |
-  | `inconclusive` | No base-branch data was available to compare against. |
-
-  Attribution runs with no model calls. It reuses the job details the same pass
-  already produced plus a flakiness report recomputed over base-branch jobs only,
-  so it costs nothing per failure. Presubmit history is excluded from both,
-  because it describes other pull requests rather than the base branch, which is
-  why publishing presubmits never changes a verdict. Cross-pull-request matching
-  keys on job name, test name, **and base branch**: a build-level failure carries
-  the same generic name on every job, so matching by name alone would correlate
-  unrelated jobs, and one job often runs on several release branches, so matching
-  without the base branch would correlate pull requests testing different code.
-- A single peer is recorded as **evidence** on the verdict that does apply rather
-  than issued as a `widespread` verdict of its own, except under `pre_existing`,
-  which is decided before peers are consulted because a failure the base branch
-  already explains does not need them. Two pull requests citing each other are
-  mutually uncorroborated, and evidence that weak must not preempt base-branch
-  evidence that the test passes, or take the failure out of escalation.
-  `widespread` is also a point-in-time comparison against the other pull
-  requests' newest builds in that pass, and its summary says so.
-- `touches_changed_code` compares the source locations JUnit reported for the
-  failure against the pull request's changed files. Both sides are observed, so
-  the verdict states overlap and explicitly says overlap is not proof that the
-  change is responsible. Every frame in the failure body is considered, because
-  a stack often enters a shared framework in another repository before reaching
-  the repository under test. Overlap is skipped, and its absence never claimed,
-  when the failing build tested a different head than the pull request's current
-  one, when the changed-file list is truncated, or when it could not be fetched.
-  Failure locations inside a dependency, and version-qualified locations that
-  name a tagged copy rather than the checked-out tree, are never sites.
-  Source locations are recovered only for Go tests under module paths the engine
-  maps to a GitHub repository, so this verdict does not apply to every project.
-- A check whose build tested an older head than the pull request's current head
-  is marked `stale`, so a green check on outdated code is not mistaken for a
-  green check on the current one.
-- A job that fails without any failing JUnit case, such as a build or verify
-  step, reports one synthesized `Prow job execution` failure so every failing
-  check names a subject. Those failures are never compared against the base
-  branch by name, only against the same job on other pull requests.
-- A pull request whose builds have aged out of the bucket's retention window
-  reports `UNKNOWN` with no checks. GitHub may still show statuses for those
-  runs because commit statuses outlive the artifacts.
-- A triage failure never aborts the pass. The previously written view is kept
-  and the dashboard still publishes.
-
-### Shared failures
-
-`pull-request-failures.json` publishes the cross-pull-request correlation as a
-first-class object, so a failure that is nobody's fault in particular has
-somewhere to be investigated. Without it, a `widespread` verdict points the
-reader at a peer pull request whose page points back, and the trail ends.
-
-- A failure is published as **shared** once **two or more** open pull requests
-  report it. That is lower than the three a `widespread` verdict needs, because
-  this view answers "what is hitting several pull requests" rather than "is this
-  mine".
-- The correlation key is the same one attribution uses: **base branch, job name,
-  and test name**. The published `id` is a hash of that key, so it is stable
-  across passes and survives pull requests joining and leaving the failure.
-- Each member records its pull request, the build that observed the failure, and
-  the verdict that member received. Members can differ: a base branch that
-  already fails the test explains the failure for that pull request before peers
-  are consulted.
-- `oldest_build_started` and `newest_build_started` bound the member builds the
-  **current pass** observed. A pass sees only the newest build per check, so
-  neither is a claim about when the failure first appeared, and the view says so.
-- `escalatable` reports that no member can already be analyzed from its own pull
-  request. It is the cost filter: when one member offers per-pull-request
-  escalation, that cheaper path is used instead of a second one here.
-
-Clustering runs after attribution, costs no model calls, and is published on
-both deploy paths. The GitHub Pages path therefore gets the aggregate view with
-no server; only the analysis below needs one.
-
-### Optional bot comment on new pull requests
-
-Aster can post one comment on each newly opened pull request, linking to that
-pull request's triage page. It reaches contributors who would never find the
-dashboard on their own, which is exactly why it needs care: it is the engine's
-**only unattended write that contacts a contributor's pull request**. The
-scheduled pass also comments on, and when configured closes, issues it already
-tracks whose finding has recovered, but that write only touches issues a
-maintainer confirmed first.
-
-It is therefore off by default, and turning it on does not post anything:
-
-```yaml
-pull_requests:
-  enabled: true
+  max: 100
+  builds_per_job: 3
   comment:
     enabled: true
-    dry_run: true     # default; logs the exact body and posts nothing
-    max_per_pass: 10  # default; hard cap so a bug cannot fan out
+    dry_run: true
+    max_per_pass: 10
 ```
 
-`dry_run` is true unless you explicitly set it to `false`. Read a real pass's
-logged bodies before you change it.
+| Field | Default | Purpose |
+| --- | ---: | --- |
+| `pull_requests.enabled` | `false` | Publish the pull request index, detail pages, and shared-failure view. |
+| `pull_requests.max` | `100` | Bound open pull requests per pass, most recently updated first. |
+| `pull_requests.builds_per_job` | `3` | Bound builds inspected per presubmit before selecting the newest applicable build. |
+| `pull_requests.comment.enabled` | `false` | Enable the GitHub App commenting pass. Requires triage. |
+| `pull_requests.comment.dry_run` | `true` | Log comment bodies without posting unless explicitly set to `false`. |
+| `pull_requests.comment.max_per_pass` | `10` | Bound comments posted in one pass. |
 
-#### The posting identity
-
-Comments post as a **GitHub App**, so contributors see a bot account rather
-than a person, and the credential is scoped to one repository and expires
-hourly. There is no shared Aster bot: the engine runs inside your own
-infrastructure, so a shared identity would mean shipping one private key that
-could write to every consumer's repository.
-
-Create the App under any account you control. It does **not** have to be owned
-by the organization that owns `branding.source_repo`:
-
-1. Create a GitHub App with **Repository permissions → Issues → Read and
-   write** and **Pull requests → Read-only**, and nothing else. Pull request
-   comments go through the issues API, so `issues` is what grants the write;
-   pull request read access is only needed to see them on a private repository.
-   Subscribe to no events; the engine polls and has no webhook receiver. Set
-   **Where can this GitHub App be installed** to any account if the App and the
-   repository are owned by different accounts.
-2. Install it on `branding.source_repo`.
-3. Generate a private key and note the App ID.
-
-**Installing the App requires admin access to `branding.source_repo`, and that
-is the real prerequisite.** Creating the App requires nothing special. A
-repository admin can normally install it, though organization policy can
-restrict installation to organization owners. Monitoring a repository you do not
-administer, which is the common case for an upstream project, therefore needs
-one of its maintainers to install the App for you.
-
-Until it is installed the commenting pass cannot mint a token, so it logs the
-failure and posts nothing. Dry run guards the step after installation: it logs
-the exact bodies, so you and the repository's maintainers can read them before
-any contributor sees one. User-token authentication is not supported for this
-feature.
-
-Then supply both to the fetcher:
-
-| Deployment | Where |
-|---|---|
-| GitHub Pages | `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` repository secrets |
-| Kubernetes | `fetcher.extraEnv` entries sourced from a Secret |
-
-The App's bot login is its slug plus `[bot]`, for example `aster-capz[bot]`.
-The fetcher logs the resolved identity at the start of every commenting pass, so
-you can confirm who will post before enabling the write. Installation tokens are
-minted per pass, scoped to the single repository, and expire within the hour.
-
-#### What it will and will not comment on
-
-A comment is posted at most once per pull request, and only for pull requests
-whose triage page this pass just published, so a comment can never link to a
-page the dashboard did not generate. The pass skips:
-
-- **every pull request that existed when commenting was first enabled.** The
-  first pass records the repository's highest pull request number, posts
-  nothing, and only higher numbers are ever eligible. That bound is read from
-  GitHub rather than from the triage listing, so a draft or a rarely-updated
-  pull request outside the listing cannot be treated as new later. Numbers are
-  assigned monotonically, so no clock is involved.
-- pull requests the bot has already commented on
-- pull requests Aster opened itself, matched by the marker in its fix pull
-  request bodies rather than by author, since those are opened under a different
-  credential
-- draft pull requests
-- pull requests that closed, merged, or became drafts since the pass began
-- pull requests that have failed to post several times, so one unpostable
-  thread cannot occupy the cap forever
-- anything beyond `max_per_pass` in a single pass
-
-Deduplication does not trust local state, which matters because the Pages path
-keeps its data directory only in an Actions cache that expires. Three layers
-each cover the one before: the activation watermark makes everything that
-existed at enable time permanently ineligible, local records skip what this
-deployment already posted, and every write is preceded by reading that pull
-request directly, which is authoritative even when local state was lost.
-
-Pages for pull requests that have already been commented on are kept even after
-they close, so a comment cannot turn into a broken link the moment the pull
-request merges. Such a page stops being refreshed and shows its own generated
-timestamp. A reset data directory recovers those records from GitHub when commenting
-re-activates, so the routine expiry of the Pages build cache does not drop them.
-Records, and the pages they hold, are dropped after 90 days, which bounds both
-the state file and the published data directory. Expiring one cannot cause a
-second comment, because the pull request itself is the authoritative check.
-
-Commenting requires that the dashboard published a triage page for **every**
-open pull request. If the listing was truncated, no comment is posted and the
-pass says so, because pages outside the published set are pruned and the link
-would break. Raise `pull_requests.max` above the repository's open pull request
-count before enabling commenting. The watermark is still recorded in that state,
-so raising the cap later does not silently skip everything opened meanwhile.
-
-Commenting is a GitHub write, so `-skip-side-effects` suppresses it along with
-issue recovery and notifications. A triage failure also suppresses it, because
-the pages a comment would link to were not refreshed.
-
-One caveat on the Pages path: comments are posted during the fetch step, before
-the site is built and deployed. If a later workflow step fails, a comment can
-point at a page that is not live until the next successful deploy republishes
-it.
-
-There is no per-pull-request opt-out. If contributors need one, disable the
-feature.
-
-### Optional AI escalation
-
-Every verdict above is computed without a model. When a failure stays
-`unexplained`, `touches_changed_code`, or `inconclusive`, a maintainer can
-escalate it for one on-demand analysis. Escalation is server-mode only and
-opt-in. On the Kubernetes path, turn it on with the chart value:
-
-```yaml
-server:
-  pullRequestEscalation:
-    enabled: true
-```
-
-The chart renders `PULL_REQUEST_ESCALATION_ENABLED` from that value and refuses
-to install when `ai.enabled` is not set. Setting the raw variable through
-`server.extraEnv` is rejected. Escalation also needs the `server.actions.mode`
-authentication settings, exactly like chat, and
-it neither enables writes nor requires `BOT_TOKEN`. Set
-`ai.githubReadTokenSecretName` so changed files are read authenticated rather
-than at the anonymous rate limit. Outside the chart the server reads the
-variable directly:
-
-```bash
-PULL_REQUEST_ESCALATION_ENABLED=true   # plus AI_TOKEN, AI_ENDPOINT, AI_MODEL
-```
-
-It requires `pull_requests.enabled`, an authenticated admin, and a server
-started with `-project-dir`. The Pages path never offers it. The server reads
-changed files with `GITHUB_READ_TOKEN`, `BOT_TOKEN`, or `GITHUB_TOKEN`, in that
-order, so the `BOT_TOKEN` that admin actions already require covers it.
-
-The contract is deliberately narrow:
-
-- **Only the residual set is eligible.** A failure the base branch, other pull
-  requests, or base-branch flakiness history already explained cannot be
-  escalated from its pull request, so the free pass is the cost filter. A stale
-  build is refused too, because change context would describe a different
-  revision.
-- **One escalation runs at a time**, no matter how many maintainers click, and
-  only a few more may queue behind it. That slot is shared with shared failure
-  escalation below, so the two kinds cannot run an analysis each. Admission is
-  reserved before any artifact or GitHub read, so a burst of clicks cannot fan
-  out into upstream requests; a start past the bound is rejected with `409`
-  instead of queueing. One deadline covers the whole accepted lifetime, so a
-  request that never reaches the slot fails as timed out rather than waiting
-  indefinitely, and can be retried. Results are shared between admins rather
-  than per-requester, so two maintainers looking at the same failure do not each
-  pay for an analysis.
-- **A failed escalation can be retried.** A provider error, a timeout, or a
-  restart that interrupted queued work leaves the failure retryable rather than
-  permanently un-analyzable, and the dashboard offers a retry in place. While a
-  request key is still in the server's bounded replay index, replaying it
-  returns the subject's current state instead of starting new work; the index is
-  in memory, so a restart drops it.
-- **The model never issues the pull request verdict.** It runs the ordinary
-  agentic failure analysis under a separate module, gated by the same critique
-  and judge rules, and is told explicitly not to claim the change caused the
-  failure. The changed-file list is supplied only to help it locate code.
-- **The analysis cache is isolated.** The module name is part of the agentic
-  cache key, so an escalation never returns the dashboard's analysis of the
-  same failure, or the reverse.
-- **Results are private and bounded.** They are stored in
-  `pr_escalation_state.json`, which is never published, retained under a cap,
-  and restored after a restart. An escalation that was in flight when the
-  process stopped is never restored as running: it comes back as whatever
-  terminal state was last persisted for that failure, or as never started, and
-  either way it can be escalated again.
-
-### Escalating a shared failure
-
-The same environment variable enables one escalation per **shared failure**, so
-the `widespread` verdict links to an analysis instead of a peer pull request.
-The two services construct independently and advertise separate capabilities, so
-a server can offer one without the other.
-
-- **The subject is the failure, not a pull request.** It is keyed by the shared
-  failure's `id`, so one analysis serves every affected pull request and
-  membership changes do not re-run it. The identity carries no build, so a
-  finished result is checked against the build a new request would read,
-  compared by repository, pull request, and build together. It is reused while
-  that build is unchanged. Once the evidence moves on, the stored result stops
-  being served and the dashboard offers a fresh analysis instead, so the same
-  test failing again months later for a different reason is never answered with
-  the old analysis.
-- **Only a failure with no cheaper path is eligible.** A shared failure whose
-  `escalatable` flag is false is refused, because one of its pull requests can
-  analyze it directly.
-- **One build supplies the evidence.** Artifacts exist per build, so the newest
-  member build that finished and tested its pull request's current head is read.
-  The result is attributed to the shared failure rather than to that pull
-  request, and it records which build it read, because the newest usable build
-  moves between passes while the shared failure keeps one identity. When no
-  member has such a build, the request is refused as transient rather than as a
-  verdict.
-- **The model is told the failure is shared.** It runs under its own
-  `sharedfailure` module: no diff is supplied, the prompt names the affected
-  pull requests, and it is directed at the common cause and told not to
-  attribute the failure to any pull request. The prompt also states that
-  correlating on base branch, job, and test does not establish that the pull
-  requests are independent, since one may be stacked on another, so the model is
-  not biased away from a change that really is responsible. The module name is
-  part of the agentic cache key, so the analysis never collides with the
-  dashboard's or a single pull request's.
-- **Everything else matches per-pull-request escalation**: admission reserved
-  before any upstream read, results shared between admins, failures retryable,
-  and results stored privately in `shared_failure_escalation_state.json`. The
-  two kinds share one analysis slot, so the server still runs a single analysis
-  at a time rather than one per kind, though each kind keeps its own queue
-  bound.
+GitHub credentials, attribution semantics, shared failures, bot-comment safety,
+and server-side AI escalation are documented in
+[Pull request triage](pull-request-triage.md). `discovery.include_presubmits` is
+not required for triage and changes only whether presubmit jobs appear in the
+main job dashboard.
 
 ## Categories
 
@@ -676,7 +326,7 @@ validation remain mandatory.
 Publication disposition is separate from cache policy. A draft whose causal claim
 has no validated artifact citation is published as `preliminary` with an
 `artifact_grounding_incomplete` warning under every policy, and a preliminary
-result cannot feed patterns, corrections, remediation, actions, or Fix. Cache
+result cannot feed patterns, actions, or Fix. Cache
 policy can still change which draft is published: it gates whether a draft
 reaches post-loop semantic review, and a policy-unaccepted semantic revision
 cannot replace the selected draft.
@@ -774,6 +424,42 @@ The focused feature guides own their credential, admission, timeout, and
 security contracts. Avoid duplicating those settings into a first-run
 `project.yaml`.
 
+## Experimental Agent Sandbox Fix configuration
+
+`ai.fix_prs.agent_runtime` configures the non-secret, portable part of the
+Agent Sandbox Fix executor. Agent Sandbox is disabled by default and is the only
+supported Fix runtime.
+
+| Field | Contract |
+| --- | --- |
+| `type` | Optional. Defaults to and accepts only `agent-sandbox`. |
+| `max_turns` | Defaults to `30`; must not exceed `1000`. |
+| `allow_bash` | Defaults to `false` and must remain false. |
+| `timeout` | Defaults to `10m`; must be positive and at most `30m`. |
+| `output_limit_bytes` | Defaults to `524288`; accepts `4096` through `1048576`. |
+| `allowed_commands` | Optional exact argv validators with explicit timeouts. Empty uses only the mandatory staged-diff check. |
+| `model_provider.credential_mode` | `direct` by default or explicit `gateway`. |
+| `model_provider.api` | `chat_completions` or `responses`. |
+| `model_provider.endpoint`, `model` | Required complete provider coordinates. |
+| `model_provider.reasoning_effort` | Optional `none`, `low`, `medium`, `high`, or `xhigh`. |
+| `model_provider.auth.type` | `bearer` or `none` for direct mode; `none` for gateway mode. |
+| `model_provider.public_ca_private_dns` | Fix-only acknowledgement for an explicit gateway using a privately resolved public FQDN. |
+
+Each validator is an `argv` list plus a timeout. Shell command strings, generic
+dispatchers, coding-agent re-entry, and shell interpretation are rejected. The
+final validator is always the exact staged-diff check. Generation is one-shot;
+validator failure cannot trigger model repair, `critique_retries` must be zero,
+and `ai.fix_prs.verify` is not supported by Agent Sandbox.
+
+Secret names, image digests, namespace, ServiceAccounts, resources, networking,
+CA trust, and RuntimeClass are Helm-owned deployment settings. See:
+
+- [Fix PR generation](fix-prs.md) for the complete maintainer workflow;
+- [Agent Sandbox provider compatibility](ai-providers.md#agent-sandbox-provider-compatibility)
+  for API, authentication, and endpoint constraints; and
+- [Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime)
+  for the deployment contract.
+
 ## Validate a config
 
 A one-build, discovery-only fetch validates the strict schema without making AI
@@ -788,63 +474,3 @@ Then inspect the job count:
 ```bash
 python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
 ```
-
-### Experimental Agent Sandbox fix runtime
-
-The Fix runtime is the bounded Agent Sandbox OpenCode executor described in
-[Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor). Agent Sandbox
-remains disabled by default. Once explicitly enabled, direct provider access is
-the default credential mode. The project owns generation bounds and the
-non-secret provider contract:
-
-- `max_turns`: total execution step budget, defaulting to 30;
-- `timeout`: positive and at most 30 minutes, defaulting to 10 minutes;
-- `output_limit_bytes`: 4096 through 1048576, defaulting to 524288;
-- `allowed_commands`: optional additional post-generation validators with exact
-  `argv` arrays and explicit timeouts. Aster uses only the mandatory staged-diff
-  check when the list is omitted;
-- `model_provider.credential_mode`: `direct` by default or explicit `gateway`;
-- `model_provider.api`: `chat_completions` or `responses`;
-- `model_provider.endpoint` and `model`;
-- `model_provider.reasoning_effort`: optional `none`, `low`, `medium`, `high`, or `xhigh`; pinned OpenCode 1.18.2 rejects `max`;
-- `model_provider.auth.type`: `bearer` or `none` for direct mode and `none` for
-  gateway mode. With pinned OpenCode 1.18.2, `responses` requires direct
-  bearer auth; and
-- `model_provider.public_ca_private_dns`, which is valid only for an explicit
-  gateway using a privately resolved public FQDN.
-
-Removed local and cluster backend fields (`model`, `network_domains`, `agent_ref`,
-`api`, `namespace`, `version`, and `retries`) are rejected. Secret name and key
-are Helm deployment settings, not project settings. Direct
-bearer mode requires `agentSandbox.fixRuntime.modelProvider.auth.existingSecret`
-and `tokenKey`. The Secret must already exist in the execution namespace and
-must hold a dedicated inference-only credential. The chart never creates,
-copies, reads, or prints the Secret value.
-
-Command strings are not accepted. Executables must be resolved through `PATH`;
-shells, generic command dispatchers, and coding-agent re-entry are rejected.
-Git is reserved for the exact final diff check. Arguments are passed directly
-without shell interpretation, so quoting syntax has no special meaning and an
-argument that contains spaces remains one `argv` element. The generic executor
-supports only commands whose binaries are installed in that image.
-
-The Agent Sandbox runtime is one-shot generation followed by validation. A
-validator failure cannot trigger model repair, `critique_retries` must be 0, and
-`ai.fix_prs.verify` is rejected for this runtime.
-
-Chat Completions uses `@ai-sdk/openai-compatible`. Responses uses
-`@ai-sdk/openai`, requests `store: false`, keeps complete conversation and tool
-history locally, and does not use `previous_response_id`. Responses support is
-endpoint- and model-dependent and deterministic tests do not establish live
-provider compatibility.
-Provider endpoints must use a complete HTTPS operation path matching the selected API.
-Embedded credentials, queries, fragments, literal provider tokens, and local
-OpenCode model fields are rejected. The Helm `agentSandbox` values must match
-the project provider mode, API, endpoint, model, auth type, and trust setting
-exactly while separately supplying the consumer-owned namespace, immutable
-image digest, Secret reference when needed, workload ServiceAccount, resources,
-and secure RuntimeClass.
-
-AppArmor is engine-owned rather than project-configurable. Production requests
-`RuntimeDefault`; no `agent_runtime` field can disable it or select
-`Unconfined`.
