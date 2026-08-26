@@ -31,9 +31,8 @@ assembled.
 - [v0.9.0-rc.4](changelog/v0.9.0-rc.4.md) - 2026-08-18
 - [v0.9.0-rc.3](changelog/v0.9.0-rc.3.md) - 2026-08-17
 - [v0.9.0-rc.2](changelog/v0.9.0-rc.2.md) - 2026-08-15
-- [v1.0.0-beta.7](changelog/v1.0.0-beta.7.md) - 2026-07-28
-- [v1.0.0-beta.6](changelog/v1.0.0-beta.6.md) - 2026-07-27
-- [v1.0.0-beta.5](changelog/v1.0.0-beta.5.md) - 2026-07-09
-- [v1.0.0-beta.4](changelog/v1.0.0-beta.4.md) - 2026-06-26
-- [v1.0.0-beta.3](changelog/v1.0.0-beta.3.md) - 2026-06-25
-- [v1.0.0-beta.2](changelog/v1.0.0-beta.2.md) - 2026-06-24
+
+Release notes carried over from `prow-ai-dashboard`, the repository Aster was
+migrated from, are archived in [changelog/legacy.md](changelog/legacy.md). The
+migration restarted the version line at `v0.9.0`, and none of those tags exist
+in this repository.

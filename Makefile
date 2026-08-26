@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-critic-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
        fe-install dev fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-all help
@@ -129,6 +129,10 @@ check-repo-map:
 check-onboarding-release-pins:
 	python3 hack/check-onboarding-release-pins.py
 
+# Check that relative links between Markdown files resolve.
+check-doc-links:
+	python3 hack/check-doc-links.py
+
 ## ─── Data Fetching ────────────────────────────────────────────
 
 # Fetch fresh test data from GCS into frontend/public/data/
@@ -211,6 +215,7 @@ help:
 	@echo "  helm-check         Lint and validate Helm chart renders"
 	@echo "  cleanroom-check     Validate the generated Kubernetes contributor contract"
 	@echo "  check-onboarding-release-pins  Validate current onboarding release references"
+	@echo "  check-doc-links    Validate relative links between Markdown files"
 	@echo ""
 	@echo "  fetch-data         Fetch data from GCS (8 builds/job)"
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"

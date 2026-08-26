@@ -195,6 +195,7 @@ make build           # cd backend && go build -o ../bin/aster ./cmd/aster/
 make test            # cd backend && go test ./... -count=1
 make tidy            # go mod tidy
 make check-repo-map  # AGENTS.md repo layout matches backend/cmd + backend/internal
+make check-doc-links # relative links between Markdown files resolve
 
 # Frontend (Node 20+, npm)
 make fe-install      # npm ci in frontend/

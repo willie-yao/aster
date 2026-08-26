@@ -36,6 +36,10 @@ since the previous tag. A prerelease covers everything since the previous tag; a
 stable release covers everything since the previous *stable* tag, so it tells the
 whole story of the versions that led up to it.
 
+Links to repository files resolve from `changelog/`, so a doc link is
+`../docs/<file>.md`. Rewrite any root-relative link copied out of a
+`release-note` block.
+
 ## Cutting a release
 
 1. Make sure `main` is green. Write `changelog/<tag>.md` from the `release-note`
