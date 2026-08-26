@@ -35,10 +35,10 @@ test("primary navigation swaps between a rail and a bottom bar without a gap", (
   // Operator destinations render only a sign-in wall without a session, so the
   // rail must derive access from auth rather than the deployment flags alone.
   assert.match(layout, /operatorAccess: auth\.status === "authenticated"/);
-  // Exactly one primary nav is visible at any width: the rail from md up, the
-  // bottom bar below it.
-  assert.match(rail, /display: \{ xs: "none", md: "flex" \}/);
-  assert.match(rail, /display: \{ xs: "flex", md: "none" \}/);
+  // Exactly one primary nav is mounted at any width: the rail from md up, the
+  // bottom bar below it. Mounting decides it, so neither is in the DOM twice.
+  assert.match(layout, /\{railHostsControls && \(\s*<NavRail/);
+  assert.match(layout, /\{!railHostsControls && <NavBottomBar/);
   // The fixed bottom bar must not cover the end of the page.
   assert.match(layout, /BOTTOM_BAR_HEIGHT\}px \+ env\(safe-area-inset-bottom\)/);
   assert.match(rail, /pb: "env\(safe-area-inset-bottom\)"/);
@@ -56,8 +56,8 @@ test("search and account controls are placed once, never mounted twice", () => {
   // handlers and fight over focus. The breakpoint decides placement at render
   // time instead of hiding a second copy with CSS.
   assert.match(layout, /const railHostsControls = useMediaQuery\(theme\.breakpoints\.up\("md"\)\)/);
-  assert.match(layout, /search=\{railHostsControls \? <SearchBar variant="rail" \/> : undefined\}/);
-  assert.match(layout, /controls=\{railHostsControls \? controls : undefined\}/);
+  assert.match(layout, /search=\{<SearchBar variant="rail" \/>\}/);
+  assert.match(layout, /controls=\{controls\}/);
   // The top bar exists only when the rail is not hosting those controls.
   assert.match(layout, /\{!railHostsControls && \(\s*<AppBar/);
   assert.equal(layout.match(/<SearchBar/g)?.length, 2);

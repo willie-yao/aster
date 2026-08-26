@@ -1,6 +1,7 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
@@ -19,7 +20,7 @@ interface JobHealthTableProps {
   sections: JobHealthSection[];
 }
 
-const desktopBreakpoint = "@media (min-width: 1024px)";
+const desktopQuery = "(min-width: 1024px)";
 const wideBreakpoint = "@media (min-width: 1200px)";
 const compactColumns = "minmax(210px, 2fr) 76px 288px 76px 78px 58px 82px";
 const wideColumns = "minmax(280px, 2.4fr) 104px 288px 88px 96px 64px 88px";
@@ -204,47 +205,56 @@ function CategoryBand({ section, headingID }: { section: JobHealthSection; headi
   );
 }
 
-export function JobHealthTable({ sections }: JobHealthTableProps) {
+function MobileLedger({ sections }: JobHealthTableProps) {
   return (
-    <>
-      <Box aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container", [desktopBreakpoint]: { display: "none" } }}>
-        {sections.map((section) => {
-          const headingID = `job-category-mobile-${section.id}`;
-          return (
-            <Box key={section.id} component="section" aria-labelledby={section.label ? headingID : undefined}>
-              {section.label && <CategoryBand section={section} headingID={headingID} />}
-              <Box role="list" aria-label={section.label ? `${section.label} jobs` : "Jobs"}>
-                {section.jobs.map((job) => <MobileJobRow key={job.job_id} job={job} />)}
-              </Box>
+    <Box aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container" }}>
+      {sections.map((section) => {
+        const headingID = `job-category-mobile-${section.id}`;
+        return (
+          <Box key={section.id} component="section" aria-labelledby={section.label ? headingID : undefined}>
+            {section.label && <CategoryBand section={section} headingID={headingID} />}
+            <Box role="list" aria-label={section.label ? `${section.label} jobs` : "Jobs"}>
+              {section.jobs.map((job) => <MobileJobRow key={job.job_id} job={job} />)}
             </Box>
-          );
-        })}
-      </Box>
-
-      <Box role="table" aria-label="Job health" sx={{ display: "none", borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container", [desktopBreakpoint]: { display: "block" } }}>
-        <Box role="row" sx={{ display: "grid", gridTemplateColumns: compactColumns, alignItems: "center", columnGap: 1, px: 1.5, py: 1, minHeight: 42, borderBottom: "1px solid", borderColor: "divider", bgcolor: "surface.containerHigh", [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 } }}>
-          {headers.map((header) => (
-            <Typography key={header} role="columnheader" variant="label" color="textSecondary" sx={overviewTypography.tableHeading}>
-              {header}
-            </Typography>
-          ))}
-        </Box>
-        {sections.map((section) => {
-          const headingID = `job-category-desktop-${section.id}`;
-          return (
-            <Box key={section.id} role="rowgroup">
-              {section.label && (
-                <Box role="row">
-                  <Box role="cell" aria-colspan={7}>
-                    <CategoryBand section={section} headingID={headingID} />
-                  </Box>
-                </Box>
-              )}
-              {section.jobs.map((job) => <DesktopJobRow key={job.job_id} job={job} />)}
-            </Box>
-          );
-        })}
-      </Box>
-    </>
+          </Box>
+        );
+      })}
+    </Box>
   );
+}
+
+function DesktopLedger({ sections }: JobHealthTableProps) {
+  return (
+    <Box role="table" aria-label="Job health" sx={{ borderBlock: "1px solid", borderColor: "divider", bgcolor: "surface.container" }}>
+      <Box role="row" sx={{ display: "grid", gridTemplateColumns: compactColumns, alignItems: "center", columnGap: 1, px: 1.5, py: 1, minHeight: 42, borderBottom: "1px solid", borderColor: "divider", bgcolor: "surface.containerHigh", [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 } }}>
+        {headers.map((header) => (
+          <Typography key={header} role="columnheader" variant="label" color="textSecondary" sx={overviewTypography.tableHeading}>
+            {header}
+          </Typography>
+        ))}
+      </Box>
+      {sections.map((section) => {
+        const headingID = `job-category-desktop-${section.id}`;
+        return (
+          <Box key={section.id} role="rowgroup">
+            {section.label && (
+              <Box role="row">
+                <Box role="cell" aria-colspan={7}>
+                  <CategoryBand section={section} headingID={headingID} />
+                </Box>
+              </Box>
+            )}
+            {section.jobs.map((job) => <DesktopJobRow key={job.job_id} job={job} />)}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+export function JobHealthTable({ sections }: JobHealthTableProps) {
+  // Only the layout in use is mounted. The ledger carries dozens of jobs and a
+  // run strip each, so rendering both and hiding one doubles the overview DOM.
+  const desktop = useMediaQuery(desktopQuery);
+  return desktop ? <DesktopLedger sections={sections} /> : <MobileLedger sections={sections} />;
 }

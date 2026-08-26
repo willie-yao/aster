@@ -99,13 +99,15 @@ export function Layout() {
         Skip to main content
       </MuiLink>
 
-      <NavRail
-        destinations={destinations}
-        homeLabel={homeLabel}
-        brandLabel={manifest.short_name ?? manifest.name}
-        search={railHostsControls ? <SearchBar variant="rail" /> : undefined}
-        controls={railHostsControls ? controls : undefined}
-      />
+      {railHostsControls && (
+        <NavRail
+          destinations={destinations}
+          homeLabel={homeLabel}
+          brandLabel={manifest.short_name ?? manifest.name}
+          search={<SearchBar variant="rail" />}
+          controls={controls}
+        />
+      )}
 
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       {!railHostsControls && (
@@ -224,7 +226,7 @@ export function Layout() {
       </Container>
       </Box>
 
-      <NavBottomBar destinations={destinations} />
+      {!railHostsControls && <NavBottomBar destinations={destinations} />}
     </Box>
     </FetchStatusContext.Provider>
   );
