@@ -17,9 +17,9 @@ test("mobile branding link keeps an accessible home name", () => {
     layout,
     /<Typography[\s\S]*?display: \{ xs: "none", sm: "block" \}/,
   );
-  // Both navs are rendered, so each must carry the full destination name as a
-  // description. The visible label stays the accessible name so speech control
-  // can target what it reads (WCAG 2.5.3).
+  // Layout mounts one nav per breakpoint, but both components must carry the
+  // full destination name as a description. The visible label stays the
+  // accessible name so speech control can target what it reads (WCAG 2.5.3).
   assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
   assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
   assert.match(navigation, /title: "Failure Trends"/);
@@ -113,6 +113,40 @@ test("the deployment title identifies the instance on its home page", () => {
   assert.match(layout, /brandLabel=\{manifest\.short_name \?\? manifest\.name\}/);
   // The accessible name must contain the visible short name (WCAG 2.5.3).
   assert.match(rail, /aria-label=\{brandLabel \? `\$\{brandLabel\} home` : homeLabel\}/);
+});
+
+test("mobile inputs clear the iOS zoom threshold and keep a 44px target", () => {
+  const search = source("src/components/SearchBar.tsx");
+  const filters = source("src/components/OverviewFilters.tsx");
+
+  // iOS and iPadOS Safari force-zoom a focused input under 16px, and a hybrid
+  // iPad reports a fine primary pointer while its screen still takes a finger.
+  assert.match(search, /"@media \(any-pointer: coarse\)": \{ fontSize: "16px" \}/);
+  assert.match(search, /height: \{ xs: 44, md: 36 \}/);
+  // The Select renders an inner box that takes the tap, and MUI's own rule wins
+  // over a class selector, so the 44px target is set inline on that box. It
+  // stays a block box so the selected value keeps its ellipsis.
+  assert.match(filters, /SelectDisplayProps=\{\{[\s\S]*?minHeight: 44/);
+  assert.doesNotMatch(filters, /SelectDisplayProps=\{\{[\s\S]*?display: "flex"/);
+  assert.match(filters, /height: 44/);
+});
+
+test("truncated ledger text recovers by touch and keyboard, not hover alone", () => {
+  const ledger = source("src/components/JobHealthTable.tsx");
+
+  // A title attribute is mouse-only, and the job description is not repeated
+  // anywhere else in the interface. The row's one focusable element carries the
+  // recovery through a Tooltip, which opens on hover, focus, and long press.
+  assert.match(ledger, /<Tooltip[\s\S]*?title=\{recovery\}/);
+  assert.doesNotMatch(ledger, /title=\{displayName\}/);
+  assert.doesNotMatch(ledger, /title=\{job\.description\}/);
+  assert.match(ledger, /const description = compact \? "" : job\.description/);
+  // The description must describe the link, not rename it. The tooltip stays
+  // hoverable for a pointer (WCAG 1.4.13) but clears on touch release, so it
+  // cannot sit over the next row's tap target.
+  assert.match(ledger, /describeChild=\{Boolean\(description\)\}/);
+  assert.doesNotMatch(ledger, /disableInteractive/);
+  assert.match(ledger, /leaveTouchDelay=\{0\}/);
 });
 
 test("run history remains contained on narrow detail pages", () => {

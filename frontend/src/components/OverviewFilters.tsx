@@ -101,6 +101,19 @@ export function OverviewFilters({
           value={branchFilter}
           onChange={(event) => onBranchChange(event.target.value)}
           inputProps={{ "aria-label": "Branch filter" }}
+          // Only the inner select box takes the tap, and MUI's own rule wins
+          // over a class selector here, so the 44px target is set inline. It
+          // stays a block box because MUI ellipsises the selected value as a
+          // text node, which a flex container would clip instead.
+          SelectDisplayProps={{
+            style: {
+              minHeight: 44,
+              boxSizing: "border-box",
+              lineHeight: "44px",
+              paddingTop: 0,
+              paddingBottom: 0,
+            },
+          }}
           sx={{
             height: 44,
             borderRadius: "4px",

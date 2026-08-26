@@ -352,7 +352,12 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
                 borderRadius: "4px",
                 bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
                 color: "text.primary",
+                // iOS and iPadOS Safari force-zoom a focused input under 16px.
+                // any-pointer catches the hybrid iPad, which reports a fine
+                // primary pointer on a trackpad while the screen still takes
+                // a finger.
                 fontSize: "0.875rem",
+                "@media (any-pointer: coarse)": { fontSize: "16px" },
                 "& fieldset": { borderColor: "divider" },
                 "&:hover fieldset": { borderColor: "text.secondary" },
                 "&.Mui-focused fieldset": { borderColor: "primary.main", borderWidth: 1 },

@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { Link as RouterLink } from "react-router-dom";
@@ -51,38 +52,62 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
   const { displayName } = jobValues(job);
+  const description = compact ? "" : job.description;
+  // Both lines truncate, and the description appears nowhere else in the
+  // interface. The row's one focusable element carries the recovery: a Tooltip
+  // opens on hover, on focus, and on touch long-press, where the title
+  // attribute it replaces was mouse-only.
+  const recovery = description ? (
+    <>
+      {/* Visible so a truncated name is still readable; hidden from the
+          description, which the link's own accessible name already carries. */}
+      <Box component="span" aria-hidden="true" sx={{ display: "block", fontWeight: 700 }}>{displayName}</Box>
+      {description}
+    </>
+  ) : (
+    displayName
+  );
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Link
-        component={RouterLink}
-        to={jobPath(job.job_id)}
-        underline="none"
-        title={displayName}
-        sx={{
-          minWidth: 0,
-          minHeight: compact ? 44 : 0,
-          display: compact ? "flex" : "block",
-          alignItems: compact ? "center" : undefined,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "text.primary",
-          ...overviewTypography.jobIdentifier,
-          "&:hover": { color: "primary.main", textDecoration: "underline" },
-          "&:focus-visible": {
-            outline: "2px solid",
-            outlineColor: "primary.main",
-            outlineOffset: 1,
-          },
-        }}
+      <Tooltip
+        title={recovery}
+        // Describing the link keeps its accessible name the job name; with no
+        // description the tooltip only repeats that name, so it stays a label.
+        describeChild={Boolean(description)}
+        // Readable for as long as the press is held, then gone, so an
+        // interactive tooltip can never sit over the next row's tap target.
+        // It stays hoverable for a pointer, which WCAG 1.4.13 requires.
+        leaveTouchDelay={0}
       >
-        {displayName}
-      </Link>
-      {!compact && job.description && (
+        <Link
+          component={RouterLink}
+          to={jobPath(job.job_id)}
+          underline="none"
+          sx={{
+            minWidth: 0,
+            minHeight: compact ? 44 : 0,
+            display: compact ? "flex" : "block",
+            alignItems: compact ? "center" : undefined,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: "text.primary",
+            ...overviewTypography.jobIdentifier,
+            "&:hover": { color: "primary.main", textDecoration: "underline" },
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: 1,
+            },
+          }}
+        >
+          {displayName}
+        </Link>
+      </Tooltip>
+      {description && (
         <Typography
           variant="caption"
           color="textSecondary"
-          title={job.description}
           sx={{
             display: "none",
             mt: 0.25,
@@ -93,7 +118,7 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
             [wideBreakpoint]: { display: "block" },
           }}
         >
-          {job.description}
+          {description}
         </Typography>
       )}
     </Box>
