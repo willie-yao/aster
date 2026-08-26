@@ -545,7 +545,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"mode: watch", "type: inprocess", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
+		"mode: watch", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
 		"# schedule:", "chat:\n    enabled: false", "actions:\n    enabled: false",
 		"Active values below are settings a new consumer commonly owns", "No engine source checkout",
 		"verified-aster-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
@@ -554,7 +554,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
 		}
 	}
-	for _, unwanted := range []string{"EMAIL_SMTP_PASSWORD", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN", "clientSecret:", "sessionKey:", "botToken:"} {
+	for _, unwanted := range []string{"analysisRuntime:", "EMAIL_SMTP_PASSWORD", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN", "clientSecret:", "sessionKey:", "botToken:"} {
 		if strings.Contains(values+readme, unwanted) {
 			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
 		}

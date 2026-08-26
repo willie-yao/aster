@@ -62,10 +62,6 @@ if grep -Fq 'AI_REASONING_EFFORT' "$tmp/default.yaml"; then
   echo 'default render included an unset reasoning effort' >&2
   exit 1
 fi
-if grep -Fq -- '-analysis-runtime=' "$tmp/default.yaml"; then
-  echo 'default render selected a non-default analysis runtime' >&2
-  exit 1
-fi
 if grep -Fq -- '-agent-analysis-shadow' "$tmp/default.yaml" || grep -Fq 'agent-sandbox-analysis-shadow' "$tmp/default.yaml"; then
   echo 'default render enabled analysis shadow resources' >&2
   exit 1
@@ -244,8 +240,6 @@ if grep -Fq 'BOT_TOKEN:' "$tmp/escalation-oauth.yaml"; then
   echo 'escalation-only OAuth rendered a write credential' >&2
   exit 1
 fi
-
-expect_fail invalid-runtime 'analysisRuntime.type must be inprocess' --set analysisRuntime.type=remote
 
 cat > "$tmp/agent-sandbox.yaml" <<'VALUES'
 mode: watch

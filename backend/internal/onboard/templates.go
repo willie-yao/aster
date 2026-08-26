@@ -242,10 +242,6 @@ fetcher:
   # tolerations: []
   # affinity: {}
 
-analysisRuntime:
-  # inprocess is the recommended default.
-  type: inprocess
-
   # rbac:
   #   create: true
   #   serviceAccountName: ""
@@ -363,7 +359,7 @@ Helm arguments.
 name and verify the non-secret key name.
 {{else}}AI is disabled. No provider Secret is required. Keep ai.existingSecret as a
 placeholder until AI is enabled through a reviewed configuration change.
-{{end}}Keep optional chat, write actions, ingress, and experimental runtimes disabled
+{{end}}Keep optional chat, write actions, ingress, and experimental Agent Sandbox features disabled
 until the baseline dashboard is healthy.
 
 ## Static validation and local render

@@ -256,11 +256,11 @@ mode: continuous
 VALUES
 expect_fail invalid-mode "$tmp/invalid-mode.yaml" /mode
 
-cat > "$tmp/invalid-runtime.yaml" <<'VALUES'
+cat > "$tmp/removed-analysis-runtime.yaml" <<'VALUES'
 analysisRuntime:
-  type: remote
+  type: inprocess
 VALUES
-expect_fail invalid-runtime "$tmp/invalid-runtime.yaml" /analysisRuntime/type
+expect_fail removed-analysis-runtime "$tmp/removed-analysis-runtime.yaml" "additional properties 'analysisRuntime' not allowed"
 
 cat > "$tmp/invalid-api.yaml" <<'VALUES'
 ai:

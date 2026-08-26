@@ -46,7 +46,6 @@ func TestWatchPassSkipsSideEffects(t *testing.T) {
 	t.Cleanup(func() { newEmailSender = oldEmailSender })
 	p := refreshLifecyclePipeline(t, dataDir, bucketDir, nil)
 	p.enableAI = false
-	p.opts.AnalysisRuntime.Type = AnalysisRuntimeInProcess
 	jobs, err := p.discover(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +276,6 @@ func refreshLifecyclePipeline(t *testing.T, dataDir, bucketDir string, analyzer 
 	p := &pipeline{
 		opts: Options{
 			OutDir: dataDir, BuildsPerJob: 1, Workers: 1, Timeout: time.Minute,
-			AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
 		},
 		cfg: cfg, client: &http.Client{}, backend: backend, enableAI: true,
 	}

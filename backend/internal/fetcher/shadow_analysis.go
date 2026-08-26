@@ -80,8 +80,6 @@ func validateShadowAnalysisOptions(opts Options) error {
 	switch {
 	case !opts.EnableAI:
 		return fmt.Errorf("agent analysis shadow requires -ai")
-	case opts.AnalysisRuntime.Type != AnalysisRuntimeInProcess:
-		return fmt.Errorf("agent analysis shadow requires authoritative inprocess analysis")
 	case strings.TrimSpace(cfg.LedgerPath) == "":
 		return fmt.Errorf("agent analysis shadow private ledger path is required")
 	case !filepath.IsAbs(cfg.LedgerPath):

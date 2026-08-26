@@ -5,9 +5,8 @@ import (
 	"time"
 )
 
-// BindAnalysisRuntimeFlags adds the analysis runtime flags used by fetcher and worker.
-func BindAnalysisRuntimeFlags(fs *flag.FlagSet, opts *Options) {
-	fs.StringVar(&opts.AnalysisRuntime.Type, "analysis-runtime", AnalysisRuntimeInProcess, "single-failure analysis runtime: inprocess")
+// BindAnalysisFlags adds the analysis flags used by fetcher and worker.
+func BindAnalysisFlags(fs *flag.FlagSet, opts *Options) {
 	fs.IntVar(&opts.AIMaxOutputTokens, "ai-max-output-tokens", 0, "optional authoritative analysis output-token cap; zero uses the provider default")
 	shadow := &opts.ShadowAnalysis
 	fs.BoolVar(&shadow.Enabled, "agent-analysis-shadow", false, "run private experimental Agent analysis after authoritative publication")

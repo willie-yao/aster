@@ -1,25 +1,21 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/willie-yao/aster/backend/internal/fetcher"
 )
 
-func TestParseOptionsDefaultsToInProcess(t *testing.T) {
-	opts, _, _, err := parseOptions(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if opts.AnalysisRuntime.Type != fetcher.AnalysisRuntimeInProcess {
-		t.Fatalf("analysis runtime = %q", opts.AnalysisRuntime.Type)
+func TestParseOptionsRejectsRemovedAnalysisRuntime(t *testing.T) {
+	_, _, _, err := parseOptions([]string{"-analysis-runtime=inprocess"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("removed analysis runtime flag error = %v", err)
 	}
 }
 
 func TestParseOptionsAgentAnalysisShadow(t *testing.T) {
 	opts, _, _, err := parseOptions([]string{
-		"-ai", "-analysis-runtime=inprocess", "-agent-analysis-shadow",
+		"-ai", "-agent-analysis-shadow",
 		"-agent-analysis-shadow-ledger=/private/analysis-shadow.json",
 		"-agent-analysis-shadow-input-root=/private/input",
 		"-agent-analysis-shadow-max-per-run=2",

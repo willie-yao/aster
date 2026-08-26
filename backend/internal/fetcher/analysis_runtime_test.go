@@ -15,16 +15,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
-func TestValidateAnalysisRuntimeOptions(t *testing.T) {
-	if err := validateAnalysisRuntimeOptions(Options{AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess}}); err != nil {
-		t.Fatal(err)
-	}
-	unknown := Options{AnalysisRuntime: AnalysisRuntimeOptions{Type: "remote"}}
-	if err := validateAnalysisRuntimeOptions(unknown); err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("unknown runtime error = %v", err)
-	}
-}
-
 func TestAnalyzeFailuresInProcessCancellationDoesNotPersistCheckpoint(t *testing.T) {
 	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "65536")
 	dataDir := t.TempDir()
@@ -38,7 +28,7 @@ func TestAnalyzeFailuresInProcessCancellationDoesNotPersistCheckpoint(t *testing
 		Storage: project.Storage{Provider: string(storage.ProviderLocal), Base: bucketDir},
 	}
 	p := &pipeline{
-		opts: Options{OutDir: dataDir, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess}},
+		opts: Options{OutDir: dataDir},
 		cfg:  cfg, client: &http.Client{}, backend: backend,
 		aiProject: &analysisruntime.Project{
 			Config: cfg,

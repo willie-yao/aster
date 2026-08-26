@@ -93,7 +93,7 @@ func shadowTestPipeline(t *testing.T) *pipeline {
 	}
 	p := &pipeline{
 		opts: Options{
-			OutDir: out, EnableAI: true, AIMaxOutputTokens: 8192, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
+			OutDir: out, EnableAI: true, AIMaxOutputTokens: 8192,
 			ShadowAnalysis: ShadowAnalysisOptions{
 				Enabled: true, LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), InputRoot: filepath.Join(t.TempDir(), "input"),
 				MaxPerRun: 1, MaxSteps: 20, Timeout: time.Minute, ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,
@@ -257,40 +257,35 @@ func TestRunShadowAnalysisAdvancesPastAttemptedCandidate(t *testing.T) {
 func TestValidateShadowAnalysisOptions(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "public")
 	valid := Options{
-		EnableAI: true, OutDir: out, AIMaxOutputTokens: 8192, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
+		EnableAI: true, OutDir: out, AIMaxOutputTokens: 8192,
 		ShadowAnalysis: ShadowAnalysisOptions{
 			Enabled: true, LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), InputRoot: filepath.Join(t.TempDir(), "input"),
 			MaxPerRun: 1, MaxSteps: 20, Timeout: time.Minute, ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,
 			ModelContextTokens: 200000, ModelOutputTokens: 8192, RequireSourceEvidence: true,
 		},
 	}
-	if err := validateAnalysisRuntimeOptions(valid); err != nil {
+	if err := validateShadowAnalysisOptions(valid); err != nil {
 		t.Fatal(err)
 	}
 	outputMismatch := valid
 	outputMismatch.AIMaxOutputTokens = 4096
-	if err := validateAnalysisRuntimeOptions(outputMismatch); err == nil || !strings.Contains(err.Error(), "explicit authoritative AI output cap") {
+	if err := validateShadowAnalysisOptions(outputMismatch); err == nil || !strings.Contains(err.Error(), "explicit authoritative AI output cap") {
 		t.Fatalf("output parity error = %v", err)
 	}
 	inside := valid
 	inside.ShadowAnalysis.LedgerPath = filepath.Join(out, "analysis_shadow.json")
-	if err := validateAnalysisRuntimeOptions(inside); err == nil || !strings.Contains(err.Error(), "inside public output") {
+	if err := validateShadowAnalysisOptions(inside); err == nil || !strings.Contains(err.Error(), "inside public output") {
 		t.Fatalf("inside ledger error = %v", err)
 	}
 	insideInput := valid
 	insideInput.ShadowAnalysis.InputRoot = filepath.Join(out, "analysis-input")
-	if err := validateAnalysisRuntimeOptions(insideInput); err == nil || !strings.Contains(err.Error(), "inside public output") {
+	if err := validateShadowAnalysisOptions(insideInput); err == nil || !strings.Contains(err.Error(), "inside public output") {
 		t.Fatalf("inside input error = %v", err)
 	}
 	badProvider := valid
 	badProvider.ShadowAnalysis.ModelProvider.Endpoint = "http://models.invalid/v1/chat/completions"
-	if err := validateAnalysisRuntimeOptions(badProvider); err == nil {
+	if err := validateShadowAnalysisOptions(badProvider); err == nil {
 		t.Fatal("plaintext provider endpoint was accepted")
-	}
-	container := valid
-	container.AnalysisRuntime.Type = "container"
-	if err := validateAnalysisRuntimeOptions(container); err == nil || !strings.Contains(err.Error(), "inprocess") {
-		t.Fatalf("container error = %v", err)
 	}
 }
 
@@ -370,7 +365,7 @@ ai:
 	t.Setenv("AI_TOKEN", "")
 	out := filepath.Join(t.TempDir(), "public")
 	_, err := setupPipeline(Options{
-		ProjectDir: projectDir, OutDir: out, EnableAI: true, AIMaxOutputTokens: 8192, AnalysisRuntime: AnalysisRuntimeOptions{Type: AnalysisRuntimeInProcess},
+		ProjectDir: projectDir, OutDir: out, EnableAI: true, AIMaxOutputTokens: 8192,
 		ShadowAnalysis: ShadowAnalysisOptions{
 			Enabled: true, LedgerPath: filepath.Join(t.TempDir(), "private", "ledger.json"), InputRoot: filepath.Join(t.TempDir(), "input"),
 			MaxPerRun: 1, MaxSteps: 20, Timeout: time.Minute, ModelProvider: shadowTestModelProvider(), OutputLimitBytes: 64 << 10,

@@ -66,7 +66,7 @@ func main() {
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issue recovery, or pull request comments")
-	fetcher.BindAnalysisRuntimeFlags(flag.CommandLine, &opts)
+	fetcher.BindAnalysisFlags(flag.CommandLine, &opts)
 	flag.Parse()
 
 	opts.Version = version

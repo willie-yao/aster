@@ -154,7 +154,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		log.Println("🤖 All failure analysis results are ready from reuse")
 	}
 	if len(work) > 0 {
-		log.Printf("🤖 Analyzing %d failures with %s...", len(work), p.opts.AnalysisRuntime.Type)
+		log.Printf("🤖 Analyzing %d failures...", len(work))
 	}
 
 	var analyzer ai.FailureAnalyzer

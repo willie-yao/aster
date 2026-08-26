@@ -41,7 +41,6 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 	root := parseYAMLMap(t, values)
 
 	assertYAMLValue(t, root, "watch", "mode")
-	assertYAMLValue(t, root, "inprocess", "analysisRuntime", "type")
 	assertYAMLValue(t, root, false, "server", "chat", "enabled")
 	assertYAMLValue(t, root, false, "server", "actions", "enabled")
 	assertYAMLValue(t, root, "ClusterIP", "server", "service", "type")
