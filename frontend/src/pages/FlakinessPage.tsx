@@ -170,13 +170,6 @@ function TestRow({ item, tab }: { item: TestFlakiness; tab: TestTab }) {
         borderTopWidth: "1px",
         borderTopStyle: "solid",
         borderTopColor: "var(--mui-palette-divider)",
-        boxShadow: `inset 3px 0 0 var(--mui-palette-${
-          item.classification === "persistent"
-            ? "error-main"
-            : item.classification === "flaky"
-              ? "warning-main"
-              : "divider"
-        })`,
       }}
     >
       <Box
@@ -459,9 +452,6 @@ function BuildFailureRow({ item }: { item: BuildFailureSummary }) {
         borderTopWidth: "1px",
         borderTopStyle: "solid",
         borderTopColor: "var(--mui-palette-divider)",
-        boxShadow: `inset 3px 0 0 var(--mui-palette-${
-          item.analysis_state === "succeeded" ? "error-main" : "warning-main"
-        })`,
       }}
     >
       <Box

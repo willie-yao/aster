@@ -37,6 +37,7 @@ import {
 } from "../lib/actionRequests";
 import { actionRequestPath } from "../lib/routes";
 import { overviewLayout, overviewTypography, sectionBandSx } from "../theme/overview";
+import { alertRole } from "../theme";
 
 const API_BASE = import.meta.env.BASE_URL;
 
@@ -279,7 +280,7 @@ export function ActionRequestPage() {
   if (!features.action_requests) {
     return (
       <ActionRequestPageFrame>
-        <Alert severity="warning">
+        <Alert severity="warning" role="status">
           Asynchronous action requests are unavailable on this deployment.
         </Alert>
       </ActionRequestPageFrame>
@@ -330,6 +331,13 @@ export function ActionRequestPage() {
   const canConfirm = actionRequestCanConfirm(request.status, Boolean(preview));
   const verificationTitle = actionRequestVerificationTitle(request);
   const verificationDetail = actionRequestVerificationDetail(request);
+  // Only the unverified outcome is a warning; the other two report success.
+  const verificationSeverity =
+    request.verification?.state === "unresolved"
+      ? "success"
+      : request.verification?.state === "already_present"
+        ? "info"
+        : "warning";
 
   return (
     <ActionRequestPageFrame breadcrumbs>
@@ -381,13 +389,8 @@ export function ActionRequestPage() {
           )}
           {verificationTitle && request.status !== "pending" && (
             <Alert
-              severity={
-                request.verification?.state === "unresolved"
-                  ? "success"
-                  : request.verification?.state === "already_present"
-                    ? "info"
-                    : "warning"
-              }
+              severity={verificationSeverity}
+              role={alertRole(verificationSeverity)}
               variant="outlined"
               sx={{ mb: 2 }}
             >
@@ -458,13 +461,13 @@ export function ActionRequestPage() {
           )}
 
           {request.status === "cancelled" && (
-            <Alert severity="info">This request was cancelled.</Alert>
+            <Alert role="status" severity="info">This request was cancelled.</Alert>
           )}
           {request.status === "unknown" && (
             <Alert severity="warning">GitHub may have accepted this action. Check the GitHub result before doing anything else.</Alert>
           )}
           {request.status === "expired" && (
-            <Alert severity={request.result_url ? "info" : "warning"}>
+            <Alert severity={request.result_url ? "info" : "warning"} role="status">
               {request.result_url ? (
                 <>
                   This request expired after the GitHub item was created.{" "}
@@ -478,7 +481,7 @@ export function ActionRequestPage() {
             </Alert>
           )}
           {request.status === "confirmed" && request.result_url && (
-            <Alert severity="success" icon={<CheckCircle />}>
+            <Alert role="status" severity="success" icon={<CheckCircle />}>
               Created:{" "}
               <Link href={request.result_url} target="_blank" rel="noopener">
                 {request.result_url}

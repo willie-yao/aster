@@ -1,6 +1,8 @@
 import Box from "@mui/material/Box";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import { useTheme } from "@mui/material/styles";
 import { Link as RouterLink } from "react-router-dom";
 import type { PullRequestSummary } from "../types/pullRequests";
 import { shortSHA } from "../lib/pullRequests";
@@ -220,48 +222,56 @@ function MobileRow({ pull }: { pull: PullRequestSummary }) {
   );
 }
 
+// Only the layout for the current width is mounted. Rendering both and hiding
+// one builds a second copy of every row that nobody can read, and this ledger
+// carries every open pull request at once.
 export function PullRequestLedger({ pulls }: { pulls: PullRequestSummary[] }) {
-  return (
-    <>
-      <Box role="table" aria-label="Open pull requests" sx={{ display: { xs: "none", lg: "block" } }}>
-        <Box
-          role="row"
-          sx={{
-            display: "grid",
-            gridTemplateColumns: compactColumns,
-            columnGap: 1,
-            px: 1.5,
-            py: 1,
-            borderBottom: "1px solid",
-            borderColor: "divider",
-            bgcolor: "surface.containerHigh",
-            [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 },
-          }}
-        >
-          {headers.map((header, index) => (
-            <Typography
-              key={header}
-              role="columnheader"
-              color="textSecondary"
-              sx={{
-                ...overviewTypography.tableHeading,
-                justifySelf: index === headers.length - 1 ? "end" : "start",
-              }}
-            >
-              {header}
-            </Typography>
-          ))}
-        </Box>
-        {pulls.map((pull) => (
-          <DesktopRow key={pull.number} pull={pull} />
-        ))}
-      </Box>
+  const theme = useTheme();
+  const tabular = useMediaQuery(theme.breakpoints.up("lg"));
 
-      <Box role="list" aria-label="Open pull requests" sx={{ display: { xs: "block", lg: "none" } }}>
+  if (!tabular) {
+    return (
+      <Box role="list" aria-label="Open pull requests">
         {pulls.map((pull) => (
           <MobileRow key={pull.number} pull={pull} />
         ))}
       </Box>
-    </>
+    );
+  }
+
+  return (
+    <Box role="table" aria-label="Open pull requests">
+      <Box
+        role="row"
+        sx={{
+          display: "grid",
+          gridTemplateColumns: compactColumns,
+          columnGap: 1,
+          px: 1.5,
+          py: 1,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          bgcolor: "surface.containerHigh",
+          [wideBreakpoint]: { gridTemplateColumns: wideColumns, columnGap: 1.5, px: 2 },
+        }}
+      >
+        {headers.map((header, index) => (
+          <Typography
+            key={header}
+            role="columnheader"
+            color="textSecondary"
+            sx={{
+              ...overviewTypography.tableHeading,
+              justifySelf: index === headers.length - 1 ? "end" : "start",
+            }}
+          >
+            {header}
+          </Typography>
+        ))}
+      </Box>
+      {pulls.map((pull) => (
+        <DesktopRow key={pull.number} pull={pull} />
+      ))}
+    </Box>
   );
 }

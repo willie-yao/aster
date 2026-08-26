@@ -40,6 +40,7 @@ import { ActionDraftPreview } from "./ActionDraftPreview";
 import { DialogHeader } from "./ActionDialog";
 import { dialogGutter, dialogPaperSx } from "../theme/overview";
 import { RichText } from "./RichText";
+import { alertRole } from "../theme";
 
 function EvidenceList({
   citations,
@@ -384,9 +385,9 @@ export function ChatFixDialog({
 
       <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
         {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
-        {observationMessage && <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
+        {observationMessage && <Alert role="status" severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
         {url && (
-          <Alert severity="success" icon={<CheckCircleOutlined />} sx={{ mb: 2 }}>
+          <Alert role="status" severity="success" icon={<CheckCircleOutlined />} sx={{ mb: 2 }}>
             Draft PR opened: <Link href={url} target="_blank" rel="noopener noreferrer">{url}</Link>
           </Alert>
         )}
@@ -394,7 +395,11 @@ export function ChatFixDialog({
         {!preview && !url && (
           <Stack spacing={2.5}>
             {requestPresentation && busy === null && !observationMessage && (
-              <Alert severity={requestPresentation.severity} variant="outlined">
+              <Alert
+                severity={requestPresentation.severity}
+                role={alertRole(requestPresentation.severity)}
+                variant="outlined"
+              >
                 {requestPresentation.message}
               </Alert>
             )}
@@ -403,7 +408,7 @@ export function ChatFixDialog({
                 {request.warning}
               </Alert>
             )}
-            <Alert severity="info" variant="outlined">
+            <Alert role="status" severity="info" variant="outlined">
               {causeScope
                 ? "Only the representative failed JUnit target for this cause, this cause-scoped response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
                 : exactAnalysis
@@ -472,7 +477,7 @@ export function ChatFixDialog({
             </ContextSection>}
 
             <ContextSection title="Selected chat finding" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "success.main" }} />}>
-              <Box sx={{ borderLeft: "3px solid", borderColor: "primary.main", pl: 1.5, py: 0.2 }}>
+              <Box sx={{ borderLeft: "1px solid", borderColor: "primary.main", pl: 1.5, py: 0.2 }}>
                 <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
                   <RichText text={message.content} steps />
                 </Typography>
@@ -496,7 +501,7 @@ export function ChatFixDialog({
 
             {exactAnalysis && (
               <ContextSection title="Immutable source verification" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
-                <Alert severity="info" variant="outlined">
+                <Alert role="status" severity="info" variant="outlined">
                   The server resolves the exact repository revision from build metadata, verifies the published source paths at that revision, and rejects the preview if the target branch has moved.
                 </Alert>
               </ContextSection>

@@ -378,7 +378,9 @@ export function JobDetailPage() {
         type="button"
         onClick={() => setGridOpen((value) => !value)}
         aria-expanded={gridOpen}
-        aria-controls="cross-run-test-grid"
+        // The panel unmounts when collapsed, so the relationship is only
+        // claimed while its target exists.
+        aria-controls={gridOpen ? "cross-run-test-grid" : undefined}
         sx={{
           width: "100%",
           minHeight: 48,

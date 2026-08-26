@@ -55,6 +55,7 @@ import {
 } from "../lib/actionRequests";
 import { actionEligibilityTitle, eligibilityForState, selectActionEligibility } from "../lib/actionEligibility";
 import { reopenFailure, resolveFailure } from "../lib/resolution";
+import { alertRole } from "../theme";
 
 function requestedAction(value: string | null): Action | null {
   return value === "create-issue" || value === "propose-fix" ? value : null;
@@ -663,6 +664,13 @@ export function FailureActions({
   const verificationDetail = request
     ? actionRequestVerificationDetail(request)
     : null;
+  // Only the unverified outcome is a warning; the other two report success.
+  const verificationSeverity =
+    request?.verification?.state === "unresolved"
+      ? "success"
+      : request?.verification?.state === "already_present"
+        ? "info"
+        : "warning";
 
   return (
     <Box>
@@ -870,7 +878,7 @@ export function FailureActions({
       </Dialog>
 
       {url && (
-        <Alert severity="success" sx={{ mt: 1 }}>
+        <Alert role="status" severity="success" sx={{ mt: 1 }}>
           Opened:{" "}
           <Link href={url} target="_blank" rel="noopener">
             {url}
@@ -966,13 +974,8 @@ export function FailureActions({
           )}
           {request && verificationTitle && request.status !== "pending" && (
             <Alert
-              severity={
-                request.verification?.state === "unresolved"
-                  ? "success"
-                  : request.verification?.state === "already_present"
-                    ? "info"
-                    : "warning"
-              }
+              severity={verificationSeverity}
+              role={alertRole(verificationSeverity)}
               variant="outlined"
               sx={{ mb: 2 }}
             >
@@ -995,7 +998,7 @@ export function FailureActions({
           )}
 
           {request?.status === "cancelled" && (
-            <Alert severity="info">This request was cancelled.</Alert>
+            <Alert role="status" severity="info">This request was cancelled.</Alert>
           )}
           {request?.status === "unknown" && (
             <Alert severity="warning">GitHub may have accepted this action. Use Check GitHub result; do not regenerate or cancel it.</Alert>

@@ -22,7 +22,7 @@ import type { TestCase } from "../types/dashboard";
 import { testPath, testRunPath } from "../lib/routes";
 import { formatDuration, highlightStackTrace } from "../lib/utils";
 import { RichText } from "./RichText";
-import { soft } from "../theme";
+import { soft, accentLabelSx } from "../theme";
 import { AiAnalysisPanel } from "./AiAnalysisPanel";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { overviewTypography } from "../theme/overview";
@@ -330,7 +330,7 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                       onClick={() => toggleRow(idx)}
                       aria-label={isExpanded ? `Hide inline evidence for ${tc.name}` : `Show inline evidence for ${tc.name}`}
                       aria-expanded={isExpanded}
-                      aria-controls={`test-result-details-${idx}`}
+                      aria-controls={isExpanded ? `test-result-details-${idx}` : undefined}
                       sx={{
                         width: "100%",
                         minWidth: 0,
@@ -427,18 +427,18 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                     {tc.failure_message && (
                       <Box
                         component="pre"
-                        sx={{
+                        sx={(t) => ({
                           m: 0,
                           p: 2,
                           borderRadius: "4px",
-                          bgcolor: (t) => soft(t, "error", 0.08),
-                          color: "error.main",
+                          bgcolor: soft(t, "error", 0.08),
+                          ...accentLabelSx(t, "error"),
                           fontFamily: "monospace",
                           fontSize: "0.75rem",
                           lineHeight: 1.6,
                           whiteSpace: "pre-wrap",
                           overflowX: "auto",
-                        }}
+                        })}
                       >
                         {tc.failure_message}
                       </Box>

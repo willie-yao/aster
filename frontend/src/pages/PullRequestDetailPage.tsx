@@ -35,7 +35,7 @@ import {
 import { findSharedFailureFor } from "../lib/sharedFailures";
 import { jobPath, pullRequestsPath, sharedFailurePath } from "../lib/routes";
 import { formatDuration } from "../lib/utils";
-import { soft } from "../theme";
+import { soft, accentLabelSx } from "../theme";
 import { overviewTypography } from "../theme/overview";
 import type {
   FailureAttribution,
@@ -64,18 +64,18 @@ function StaleBadge() {
     <Box
       component="span"
       title="This build tested an older head than the pull request's current one"
-      sx={{
+      sx={(theme) => ({
         px: 0.75,
         py: 0.125,
         borderRadius: "4px",
         border: "1px solid",
-        borderColor: (theme) => soft(theme, "warning", 0.24),
-        bgcolor: (theme) => soft(theme, "warning", 0.1),
-        color: "warning.main",
+        borderColor: soft(theme, "warning", 0.24),
+        bgcolor: soft(theme, "warning", 0.1),
+        ...accentLabelSx(theme, "warning"),
         fontSize: "0.6875rem",
         fontWeight: 600,
         whiteSpace: "nowrap",
-      }}
+      })}
     >
       Stale
     </Box>
@@ -132,11 +132,13 @@ function AttributionBanner({
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexWrap: "wrap" }}>
         <Typography
           component="span"
-          sx={{
-            color: neutral ? "text.secondary" : `${tone}.main`,
+          sx={(theme) => ({
+            ...(tone === "default"
+              ? { color: "text.secondary" }
+              : accentLabelSx(theme, tone)),
             ...overviewTypography.tableHeading,
             fontWeight: 700,
-          }}
+          })}
         >
           {attributionLabel(attribution.verdict)}
         </Typography>

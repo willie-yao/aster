@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
 import Chip, { type ChipProps } from "@mui/material/Chip";
-import { statusToMuiColor, soft } from "../theme";
+import { statusToMuiColor, soft, accentLabelSx } from "../theme";
 
 interface StatusChipProps extends Omit<ChipProps, "color" | "label"> {
   /** Dashboard status such as "PASSING", "FAILING", "FLAKY", or "passed". */
@@ -43,19 +43,19 @@ export function StatusChip({ status, label, sx, ...rest }: StatusChipProps) {
           fontSize: "0.6875rem",
           "& .MuiChip-icon": { ml: "7px", mr: "-2px" },
           "& .MuiChip-label": { px: 0.875 },
-          ...(isDefault
-            ? {
-                bgcolor: "surface.containerHigh",
-                color: "text.secondary",
-                border: "1px solid",
-                borderColor: "divider",
-              }
-            : {
-                bgcolor: (theme) => soft(theme, color, 0.1),
-                color: `${color}.main`,
-                border: (theme) => `1px solid ${soft(theme, color, 0.24)}`,
-              }),
         },
+        isDefault
+          ? {
+              bgcolor: "surface.containerHigh",
+              color: "text.secondary",
+              border: "1px solid",
+              borderColor: "divider",
+            }
+          : (theme) => ({
+              bgcolor: soft(theme, color, 0.1),
+              ...accentLabelSx(theme, color),
+              border: `1px solid ${soft(theme, color, 0.24)}`,
+            }),
         ...(Array.isArray(sx) ? sx : [sx]),
       ]}
       {...rest}

@@ -2,7 +2,9 @@ export { defaultTheme, themes, type ThemeName } from "./themes";
 export { createAppTheme } from "./createAppTheme";
 export {
   soft,
+  accentLabelSx,
   softChipSx,
+  alertRole,
   statusToMuiColor,
   dotColorFor,
   type SoftColor,

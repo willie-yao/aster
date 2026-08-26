@@ -22,7 +22,7 @@ import {
 } from "../lib/analysisTraces";
 import type { AnalysisTrace, AnalysisTraceEvent } from "../types/traces";
 import { DetailSectionBand } from "./DetailSectionBand";
-import { overviewTypography } from "../theme/overview";
+import { overviewTypography, touchTargetSx } from "../theme/overview";
 
 export interface AnalysisTraceLedgerItem {
   trace: AnalysisTrace;
@@ -102,9 +102,10 @@ export function TraceNotice({
         bgcolor: "surface.container",
         borderBlock: "1px solid",
         borderColor: "divider",
-        boxShadow: `inset 3px 0 0 var(--mui-palette-${severity === "error" ? "error" : severity === "warning" ? "warning" : "primary"}-main)`,
       }}
     >
+      {/* The square carries severity. A 3px edge would repeat it in the band's
+          reserved signature, on a notice that is not a band. */}
       <Box aria-hidden="true" sx={{ width: 8, height: 8, mt: 0.75, borderRadius: "2px", bgcolor: color }} />
       <Box sx={{ minWidth: 0 }}>
         <Typography sx={{ fontSize: "14px", lineHeight: "20px", fontWeight: 700 }}>{title}</Typography>
@@ -154,9 +155,8 @@ export function CopyIdentifierAction({
         onClick={onCopy}
         aria-label={copied ? `${label} ${value} copied` : `Copy ${label.toLowerCase()} ${value}`}
         sx={{
+          ...touchTargetSx,
           alignSelf: "stretch",
-          minWidth: { xs: 44, md: 36 },
-          minHeight: { xs: 44, md: 34 },
           px: 1,
           borderInlineStart: "1px solid",
           borderInlineStartColor: "divider",
