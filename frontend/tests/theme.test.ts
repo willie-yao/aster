@@ -92,6 +92,14 @@ test("overview typography uses the approved compact readable scale", () => {
   assert.equal(overviewLayout.ledgerRowMinHeight, 52);
 });
 
+test("buttons inherit the theme font instead of the user agent's", () => {
+  // ButtonBase sets no font of its own, so without this a bare button falls
+  // back to Arial. It showed up on the metric strip, the disclosure buttons,
+  // the result filters, and the rail's search label.
+  const root = defaultTheme.components?.MuiButtonBase?.styleOverrides?.root;
+  assert.deepEqual(root, { font: "inherit" });
+});
+
 // Chip is the one MUI primitive that hardcodes a pill rather than reading
 // shape.borderRadius, so the whole app renders pills if this override is lost.
 test("chips square to the shape token instead of rendering as pills", () => {

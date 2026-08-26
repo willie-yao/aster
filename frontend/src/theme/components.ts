@@ -12,6 +12,15 @@ export function buildComponents(): Components<Theme> {
         },
       },
     },
+    MuiButtonBase: {
+      styleOverrides: {
+        // ButtonBase sets no font of its own, so a bare button falls back to
+        // the user agent's Arial. Every button-derived control picks up the
+        // surrounding family here; anything with its own typography, such as
+        // Button or Chip, still sets its own on top.
+        root: { font: "inherit" },
+      },
+    },
     MuiButton: {
       defaultProps: { disableElevation: true },
       styleOverrides: {
