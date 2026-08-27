@@ -94,12 +94,13 @@ export function CausalGroupFixButton({
         aria-label={accessibleName}
         sx={{
           minHeight: { xs: 44, sm: 32 },
-          // Sized to its content so it uses the width it has and ellipsizes
-          // only once the row genuinely runs out. minWidth: 0 is what permits
-          // shrinking below the label's intrinsic width.
-          flex: "0 1 auto",
+          // A zero basis keeps this from ever forcing a wrap, so the route and
+          // the resolution stay on one row and this ellipsizes instead. The
+          // max-content cap is what stops it growing past its own label to fill
+          // the row. minWidth: 0 permits shrinking below the label's width.
+          flex: "1 1 0",
           minWidth: 0,
-          maxWidth: "100%",
+          maxWidth: "max-content",
           px: 0,
           justifyContent: "flex-start",
           textAlign: "left",
