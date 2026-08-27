@@ -15,6 +15,10 @@ const maxRuns = 12;
 // Each dot is a link to its run, so keep targets 24px apart per WCAG 2.5.8.
 const desktopCell = 24;
 
+// Dot size within that cell. Sized to read as a near-continuous pass/fail
+// ribbon, matching the run history strip on the job and test detail pages.
+const dotSize = 18;
+
 interface SparklineProps {
   runs: RunSummary[];
   jobID: string;
@@ -101,8 +105,8 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
                 component="span"
                 sx={{
                   display: "block",
-                  width: 8,
-                  height: 8,
+                  width: dotSize,
+                  height: dotSize,
                   borderRadius: "2px",
                   bgcolor: (theme) => dotColorFor(theme, run.passed, run.result),
                 }}

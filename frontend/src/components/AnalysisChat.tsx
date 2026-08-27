@@ -8,7 +8,7 @@ import Collapse from "@mui/material/Collapse";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
+import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
@@ -67,7 +67,8 @@ import {
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
 import { soft, accentLabelSx, softChipSx } from "../theme";
-import { overviewLayout, overviewTypography, sectionBandSx, touchTargetSx } from "../theme/overview";
+import { dialogGutter, dialogPaperSx, overviewLayout, overviewTypography, sectionBandSx, touchTargetSx } from "../theme/overview";
+import { DialogHeader } from "./ActionDialog";
 import type {
   AnalysisChatAssessment,
   AnalysisChatAttempt,
@@ -99,6 +100,10 @@ function analysisChatIntentStorage(): Storage | null {
     return null;
   }
 }
+
+// Width of the strip `scrollbar-gutter: stable` reserves on the message log.
+// Platform-dependent; this matches the thin scrollbar Chromium renders.
+const chatScrollbarGutter = 11;
 
 // The first prompt names an artifact source, because an artifact-grounded turn
 // is what produces verified citations and makes an answer fix-eligible.
@@ -479,15 +484,22 @@ function AssistantMessage({
 
 
         {chatFixEnabled && !unverified && fixEligible && message.request_id && (
-          <Button
-            size="small"
-            variant="text"
-            startIcon={<BuildOutlined sx={{ fontSize: 17 }} />}
+          <Chip
+            label="Use this finding in a fix proposal"
             onClick={onUseForFix}
-            sx={{ alignSelf: "flex-start", ml: -0.5 }}
-          >
-            Use this finding in a fix proposal
-          </Button>
+            icon={<BuildOutlined />}
+            variant="outlined"
+            sx={{
+              // The message column stretches its children, and a chip that
+              // spans the full width stops reading as a chip.
+              alignSelf: "flex-start",
+              height: "auto",
+              ...touchTargetSx,
+              borderColor: "divider",
+              "& .MuiChip-label": { whiteSpace: "normal", py: 0.55, fontSize: "0.72rem" },
+              "& .MuiChip-icon": { fontSize: 15 },
+            }}
+          />
         )}
         {chatFixEnabled && !unverified && !fixEligible && fixIneligibleReason && message.request_id && (
           // role="note": an eligibility explanation is not urgent, and the
@@ -1439,6 +1451,14 @@ export function AnalysisChat({
               aria-label="Analysis conversation"
               sx={{
                 p: { xs: 1.25, sm: 1.5 },
+                // scrollbarGutter reserves a strip on the right that the
+                // composer below does not lose, so the two would otherwise end
+                // on different edges. Spend the right padding on that strip
+                // instead and the message column matches the composer.
+                pr: {
+                  xs: `max(0px, calc(10px - ${chatScrollbarGutter}px))`,
+                  sm: `max(0px, calc(12px - ${chatScrollbarGutter}px))`,
+                },
                 maxHeight: { xs: "min(62vh, 560px)", sm: "min(70vh, 680px)" },
                 minHeight: 0,
                 overflowY: "auto",
@@ -1502,7 +1522,7 @@ export function AnalysisChat({
                   </Stack>
                 </Box>
               )}
-
+  
               {history.map((entry) => {
                 if (entry.kind === "attempt") {
                   return <AttemptSummary key={entry.key} attempt={entry.attempt} />;
@@ -1535,7 +1555,7 @@ export function AnalysisChat({
                   />
                 );
               })}
-
+  
               {(session?.active || (busy && pendingTurn)) && (
                 <ThinkingState
                   phase={progressPhase}
@@ -1549,10 +1569,50 @@ export function AnalysisChat({
               )}
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
             </Stack>
-
+  
             {/* aria-busy marks the composer, not the log: on the log it would
                 sit above the progress update and defer announcing it. */}
-            <Box aria-busy={composerLocked || restoring} sx={{ px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}>
+            <Box
+              aria-busy={composerLocked || restoring}
+              sx={{
+                px: { xs: 1.25, sm: 1.5 },
+                pb: 1.5,
+                // Field and Send read as one control, so the border lives on
+                // the row and the field inside it is bare.
+                "& > .MuiStack-root:first-of-type": {
+                  alignItems: "flex-end",
+                  gap: 0.5,
+                  px: 0.75,
+                  py: 0.625,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  borderRadius: 1,
+                  bgcolor: "background.default",
+                  "&:focus-within": { borderColor: "primary.main" },
+                },
+                // Matching the field's minimum to the Send button centres a
+                // single line against it; the row still bottom-aligns once the
+                // field grows past one line.
+                "& .MuiOutlinedInput-root": {
+                  bgcolor: "transparent",
+                  p: 0,
+                  px: 1,
+                  minHeight: 34,
+                  display: "flex",
+                  alignItems: "center",
+                },
+                "& .MuiOutlinedInput-notchedOutline": { border: 0 },
+                // This sizes the composer's buttons; their own sx cannot, since
+                // a descendant selector outranks it. Touch keeps the 44px
+                // target, keyed to the pointer rather than a breakpoint.
+                "& .MuiIconButton-root": {
+                  width: 34,
+                  height: 34,
+                  borderRadius: 1,
+                  "@media (any-pointer: coarse)": { width: 44, height: 44 },
+                },
+              }}
+            >
               {turnLimitReached ? (
                 // Replacing the composer unmounts whatever the operator had
                 // focused, so this takes the focus and says why input is gone.
@@ -1619,9 +1679,6 @@ export function AnalysisChat({
                         // Never natively disabled, for the same focus reason.
                         aria-disabled={sendBlocked || undefined}
                         sx={{
-                          width: 48,
-                          height: 48,
-                          borderRadius: 1,
                           bgcolor: "primary.main",
                           color: "primary.contrastText",
                           "&:hover": { bgcolor: "primary.dark" },
@@ -1640,9 +1697,6 @@ export function AnalysisChat({
                           onClick={() => { if (!cancelling) void cancelTurn(); }}
                           aria-disabled={cancelling || undefined}
                           sx={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: 1,
                             border: "1px solid",
                             borderColor: "divider",
                             color: "text.secondary",
@@ -1669,7 +1723,7 @@ export function AnalysisChat({
                     startIcon={<RestartAltOutlined />}
                     onClick={() => setResetOpen(true)}
                     disabled={restoring || busy || resetting || Boolean(session.active)}
-                    sx={{ ...touchTargetSx, color: "text.secondary", fontSize: "0.75rem" }}
+                    sx={{ ...touchTargetSx, color: "text.secondary", fontSize: "0.875rem", fontWeight: 600 }}
                   >
                     New conversation
                   </Button>
@@ -1693,24 +1747,35 @@ export function AnalysisChat({
         causeScope={causeScope}
         onClose={() => setFixOpen(false)}
       />
-      <Dialog open={resetOpen} onClose={resetting ? undefined : () => setResetOpen(false)} fullWidth maxWidth="xs">
-        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          <RestartAltOutlined color="warning" />
-          Start a new conversation
-        </DialogTitle>
-        <DialogContent>
+      <Dialog
+        open={resetOpen}
+        onClose={resetting ? undefined : () => setResetOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        slotProps={{ paper: { sx: dialogPaperSx } }}
+      >
+        {/* Primary band like every other action dialog, so only the confirm
+            button carries the destructive colour. */}
+        <DialogHeader
+          icon={<RestartAltOutlined sx={{ fontSize: 18 }} />}
+          accent="primary"
+          title="Start a new conversation"
+        />
+        <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary">
             This removes the shared conversation for every operator. The transcript cannot be recovered, and the published analysis is unchanged.
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5 }}>
-          <Button sx={touchTargetSx} onClick={() => setResetOpen(false)} disabled={resetting}>
+        <DialogActions sx={{ px: dialogGutter, py: 2 }}>
+          <Button sx={touchTargetSx} color="inherit" onClick={() => setResetOpen(false)} disabled={resetting}>
             Keep conversation
           </Button>
           <Button
             sx={touchTargetSx}
             variant="contained"
             color="warning"
+            disableElevation
+            startIcon={resetting ? <CircularProgress size={16} color="inherit" /> : undefined}
             onClick={() => void startNewConversation()}
             disabled={resetting || restoring || busy || Boolean(session?.active)}
           >

@@ -522,24 +522,25 @@ test("a cause offers its route and its resolution in one action bar", () => {
     /<button[^>]*class="[^"]*MuiButton-outlined[^"]*"[^>]*>(?:(?!<\/button>)[\s\S])*Resolve failure/,
   );
   // The label carries the humanized test title, so the route names what it
-  // opens even once it has shrunk to an ellipsis.
+  // opens even once it has shrunk to an ellipsis. It reads as a link, leaving
+  // the bordered treatment to the resolution beside it.
   assert.match(
     html,
-    /<a[^>]*class="[^"]*MuiButton-outlined[^"]*"[^>]*aria-label="Open representative failure: Highly available cluster in build 100"/,
+    /<a[^>]*class="[^"]*MuiButton-text[^"]*"[^>]*aria-label="Highly available cluster in build 100, open representative failure"/,
   );
 
   // The bar wraps so a resolution error can take its own line, and a wrapping
   // flex line breaks a too-wide item onto a new row rather than shrinking it.
-  // A zero basis is what keeps the route on the same row as the resolution and
-  // sends the overflow to its ellipsis instead.
+  // The route is sized to its content so it takes only the width it needs, and
+  // minWidth: 0 is what still lets it shrink to its ellipsis.
   const routing = source("src/components/CausalGroupFixRouting.tsx");
-  assert.match(routing, /flex: "1 1 0"/);
+  assert.match(routing, /flex: "0 1 auto"/);
   assert.match(routing, /minWidth: 0/);
   assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: "wrap"/);
 
   // They are siblings in one bar: nothing separates them, and the route no
   // longer renders up in the body under the Next step heading.
-  const barStart = html.indexOf("Open representative failure");
+  const barStart = html.indexOf("open representative failure");
   const resolveAt = html.indexOf("Resolve failure");
   assert.ok(barStart !== -1 && resolveAt > barStart, "the route precedes the resolution in the bar");
   assert.ok(
@@ -581,8 +582,10 @@ test("a resolved cause folds itself away and can be opened again", () => {
   assert.match(banner, /const collapsible = Boolean\(causeResolutions\[index\]\)/);
   assert.match(banner, /const expanded = collapsible \? expandedCauses\[overrideKey\] \?\? false : true/);
   // Keyed by signature: the same identity the resolution itself is recorded
-  // under, so a refreshed group keeps its fold state.
-  assert.match(banner, /const causeKey = group\.signature \?\? group\.id \?\? String\(index\)/);
+  // under, so a refreshed group keeps its fold state. The summary rail's jump
+  // link derives the anchor from the same helper.
+  assert.match(banner, /return group\.signature \?\? group\.id \?\? String\(index\)/);
+  assert.match(banner, /const causeKey = causeKeyFor\(group, index\)/);
   // The heading wraps the toggle rather than containing it, matching
   // AnalysisChat: a heading is not valid phrasing content inside a button and
   // assistive technology flattens that nesting inconsistently. The overlay is
@@ -629,7 +632,7 @@ test("an upstream-owned cause reports ownership in the body and still routes fro
 
   assert.match(html, /kubernetes\/kubernetes/);
   assert.match(html, /pkg\/kubelet\/cm\/devicemanager\/manager\.go/);
-  assert.match(html, /aria-label="Open representative failure: Highly available cluster/);
+  assert.match(html, /aria-label="Highly available cluster in build 100, open representative failure"/);
   // Ownership is a diagnosis, not a missing route, so the generic dead end must
   // not appear alongside it.
   assert.doesNotMatch(html, /meets the Fix eligibility requirements/);
@@ -662,7 +665,7 @@ test("a cause with no route keeps its dead-end explanation and still resolves", 
   );
 
   assert.match(html, /meets the Fix eligibility requirements/);
-  assert.doesNotMatch(html, /aria-label="Open representative failure/);
+  assert.doesNotMatch(html, /aria-label="[^"]*, open representative failure/);
   assert.match(html, /Resolve failure/);
 });
 
@@ -688,7 +691,7 @@ test("a cause with a route but no remediation and no chat renders no Next step h
   );
 
   // The route still renders, from the bar.
-  assert.match(html, /aria-label="Open representative failure/);
+  assert.match(html, /aria-label="[^"]*, open representative failure/);
   assert.doesNotMatch(html, /Next step/);
 });
 

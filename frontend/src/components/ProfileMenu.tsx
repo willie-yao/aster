@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import ButtonBase from "@mui/material/ButtonBase";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
@@ -15,8 +16,9 @@ import { overlayPaperSx } from "../theme/overview";
 // ProfileMenu is the account control. It appears only in oauth mode: a
 // "Sign in" button when signed out, or an account menu with the login and a
 // sign-out action when signed in. Proxy and static modes render nothing.
-// `compact` renders icon-only for the navigation rail, whose 76px column
-// cannot fit the labelled control.
+// `compact` stacks the glyph over the label to match the navigation rail's
+// destination items, so the control reads as an action rather than a link to
+// the project's GitHub page.
 export function ProfileMenu({ compact = false }: { compact?: boolean } = {}) {
   const { status, login, mode, signIn, signOut } = useAuth();
   const { engine } = useCapabilities();
@@ -40,19 +42,37 @@ export function ProfileMenu({ compact = false }: { compact?: boolean } = {}) {
   if (status === "anonymous") {
     if (compact) {
       return (
-        <IconButton
-          aria-label="Sign in"
-          size="small"
+        <ButtonBase
+          aria-label="Sign in with GitHub"
+          title="Sign in with GitHub"
           onClick={signIn}
           sx={{
-            width: 44,
-            height: 44,
+            width: "100%",
+            height: 54,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 0.375,
             color: "text.secondary",
-            "&:hover": { color: "text.primary" },
+            transition: "color 140ms ease, background-color 140ms ease",
+            "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+            "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
+            "&.Mui-focusVisible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            },
           }}
         >
-          <GitHub sx={{ fontSize: 18 }} />
-        </IconButton>
+          <GitHub aria-hidden="true" sx={{ fontSize: 20 }} />
+          <Typography
+            component="span"
+            sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+          >
+            Sign in
+          </Typography>
+        </ButtonBase>
       );
     }
     return (

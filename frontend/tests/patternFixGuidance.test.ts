@@ -250,7 +250,10 @@ test("fix routing reads as an action and names the test it opens", () => {
   // The old treatment was the monospace data token, which is exactly how build
   // ID chips render a few lines above it in the same cause.
   assert.match(routing, /<Button/);
-  assert.match(routing, /variant=\{stale \? "text" : "outlined"\}/);
+  // Both states read as links; the demotion is carried by the underline and the
+  // muted colour rather than by the MUI variant.
+  assert.match(routing, /variant="text"/);
+  assert.match(routing, /textUnderlineOffset: 3/);
   assert.match(routing, /stale \? <VisibilityOutlined aria-hidden \/> : <AutoFixHigh aria-hidden \/>/);
   assert.doesNotMatch(routing, /overviewTypography\.data/);
   assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
@@ -260,16 +263,18 @@ test("fix routing reads as an action and names the test it opens", () => {
   // the test ledger shows rather than the raw JUnit name. The label names the
   // navigation it performs: "Fix" read as an action the button never took.
   assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
-  assert.match(routing, /const actionLabel = "Open representative failure"/);
+  assert.match(routing, /const actionLabel = "open representative failure"/);
   assert.doesNotMatch(routing, /"View affected failure"|: "Fix"/);
-  assert.match(routing, /\{actionLabel\}: \{testName\}/);
+  // The icon carries the verb, so the visible label is only the test; the verb
+  // trails the same text in the accessible name.
+  assert.match(routing, /^\s*\{testName\}$/m);
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
   // A long test name truncates inline, and the full value stays reachable on
   // hover and on keyboard focus rather than through a hover-only native title.
   assert.match(routing, /textOverflow: "ellipsis"/);
-  assert.match(routing, /<Tooltip title=\{subject\}>/);
-  assert.match(routing, /aria-label=\{subject\}/);
+  assert.match(routing, /<Tooltip title=\{accessibleName\}>/);
+  assert.match(routing, /aria-label=\{accessibleName\}/);
   assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
 });
 
@@ -290,10 +295,12 @@ test("the build only joins the label where it is needed to tell two actions apar
   assert.match(banner, /parseTestDisplayName\(target\.testName\)\.displayName/);
   assert.match(banner, /const fixTargetLabelCounts = fixTargetLabels\.reduce/);
 
-  // One suffix backs both strings, so the visible label cannot drift out of
-  // being a literal prefix of the accessible name.
+  // One suffix backs both strings, and the accessible name leads with the
+  // visible subject, so the visible label cannot drift out of being a literal
+  // prefix of the accessible name.
   assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
-  assert.match(routing, /const subject = `\$\{actionLabel\}: \$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /const subject = `\$\{testName\}\$\{buildSuffix\}`/);
+  assert.match(routing, /const accessibleName = `\$\{subject\}, \$\{actionLabel\}`/);
   assert.match(routing, /whiteSpace: "pre"/);
   assert.doesNotMatch(routing, /\\u00a0/);
 });

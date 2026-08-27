@@ -229,7 +229,11 @@ export function TestDetailPage() {
   if (!testFound) {
     return (
       <Stack spacing={3}>
-        <Breadcrumbs separator="›" aria-label="Breadcrumb">
+        <Breadcrumbs
+          separator="›"
+          aria-label="Breadcrumb"
+          sx={overviewTypography.description}
+        >
           <Link component={RouterLink} to="/" color="textSecondary" underline="hover">
             Overview
           </Link>
@@ -241,7 +245,7 @@ export function TestDetailPage() {
           >
             {jobDisplayName}
           </Link>
-          <Typography color="textPrimary" noWrap>
+          <Typography variant="inherit" color="textPrimary" noWrap sx={{ fontWeight: 600 }}>
             {parsedTitle.displayName}
           </Typography>
         </Breadcrumbs>
@@ -759,7 +763,7 @@ export function TestDetailPage() {
         >
           {jobDisplayName}
         </Link>
-        <Typography color="textPrimary" noWrap sx={{ maxWidth: 420 }}>
+        <Typography variant="inherit" color="textPrimary" noWrap sx={{ maxWidth: 420, fontWeight: 600 }}>
           {parsedTitle.displayName}
         </Typography>
       </Breadcrumbs>

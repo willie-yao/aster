@@ -12,31 +12,56 @@ import { overviewTypography } from "../theme/overview";
 
 function BriefingBody({
   summary,
+  summaryAside,
   details,
 }: {
   summary: ReactNode;
+  // Rendered beside the summary on wide rows. The prose keeps its reading
+  // measure, so the space left over carries something useful instead of
+  // widening lines past what is comfortable to read.
+  summaryAside?: ReactNode;
   details?: ReactNode;
 }) {
+  const proseSx = {
+    maxWidth: "68ch",
+    color: "text.primary",
+    fontSize: "16px",
+    lineHeight: "25px",
+    fontWeight: 550,
+    overflowWrap: "anywhere" as const,
+  };
+
   return (
     <Box sx={{ px: { xs: 1.5, sm: 2 }, py: { xs: 1.75, sm: 2 } }}>
-      <Box
-        sx={{
-          maxWidth: "68ch",
-          color: "text.primary",
-          fontSize: "16px",
-          lineHeight: "25px",
-          fontWeight: 550,
-          overflowWrap: "anywhere",
-        }}
-      >
-        {summary}
-      </Box>
+      {/* Narrative prose only. The details below carry cards, chips, and file
+          paths, which have no reading measure to hold them to. */}
+      {summaryAside ? (
+        <Box
+          sx={{
+            display: "grid",
+            gap: 2.5,
+            alignItems: "start",
+            gridTemplateColumns: "minmax(0, 1fr)",
+            "@media (min-width: 1100px)": {
+              // The aside is sized to its content and anchored to the right
+              // edge, so the row's leftover width reads as a gutter between two
+              // columns rather than an empty tail inside one.
+              gridTemplateColumns: "minmax(0, 68ch) max-content",
+              justifyContent: "space-between",
+            },
+          }}
+        >
+          <Box sx={proseSx}>{summary}</Box>
+          {summaryAside}
+        </Box>
+      ) : (
+        <Box sx={proseSx}>{summary}</Box>
+      )}
       {details && (
         <>
           <Divider sx={{ my: 2.25, borderColor: "divider" }} />
           <Box
             sx={{
-              maxWidth: "68ch",
               display: "flex",
               flexDirection: "column",
               gap: 2.25,
@@ -57,6 +82,7 @@ export function AnalysisBriefing({
   icon,
   metadata,
   summary,
+  summaryAside,
   mobileTitle,
   mobileSynopsis,
   mobileMetadata,
@@ -70,6 +96,7 @@ export function AnalysisBriefing({
   icon?: ReactNode;
   metadata?: ReactNode;
   summary: ReactNode;
+  summaryAside?: ReactNode;
   mobileTitle?: string;
   mobileSynopsis?: ReactNode;
   mobileMetadata?: ReactNode;
@@ -98,7 +125,11 @@ export function AnalysisBriefing({
         }}
       >
         <DetailSectionBand title={title} icon={icon} metadata={metadata} />
-        <BriefingBody summary={summary} details={details} />
+        <BriefingBody
+          summary={summary}
+          summaryAside={summaryAside}
+          details={details}
+        />
         {actions && (
           <Box sx={{ px: 2, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
             {actions}
