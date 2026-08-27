@@ -71,6 +71,7 @@ export interface AnalysisFixFailure {
   category: AnalysisFixFailureCategory;
   detail?: AnalysisFixFailureDetail;
   terminal_state?: "succeeded" | "failed" | "timed_out" | "cancelled";
+  operator_summary?: string;
   command_results?: SafeCommandResult[];
   changed_files?: string[];
 }

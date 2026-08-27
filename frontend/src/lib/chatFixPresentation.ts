@@ -57,7 +57,7 @@ function noReviewablePatchMessage(request: ChatFixRequest): string {
     return `${detail} Add a narrower maintainer instruction and regenerate.`;
   }
   if (request.failure?.detail === "no_repository_change") {
-    return `${detail} If the remedy belongs in this repository, add a more specific maintainer instruction and regenerate. If it is external or operational, no patch can be generated.`;
+    return "The coding agent completed, but no repository change was generated. If the remedy belongs in this repository, revise the maintainer instruction and regenerate. If it is external or operational, no patch can be generated.";
   }
   return `${detail} Regenerate only if a different instruction could produce a reviewable repository change.`;
 }

@@ -186,7 +186,10 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /Open draft PR with warnings/);
   assert.match(dialog, /Regenerate with feedback/);
   assert.match(dialog, /request\.warning/);
-  assert.match(dialog, /instruction\.trim\(\) === submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /instruction\.trim\(\) !== submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /Change the previous instruction to enable regeneration/);
+  assert.match(dialog, /Source verification warning/);
+  assert.match(dialog, /Coding agent summary/);
   assert.match(dialog, /cancelAnalysisChatFixRequest\(request\.id\)/);
   assert.match(dialog, /clearStoredChatFixRequest[\s\S]*createAnalysisChatFixRequest/);
   assert.match(api, /fix\/requests/);
@@ -274,11 +277,14 @@ test("exact JUnit request presentation separates recoverable hard and observatio
   const recoverable = chatFixRequestPresentation({
     ...base, status: "failed", reason_code: "no_reviewable_patch",
     error: "The coding agent completed without changing repository files.",
-    failure: { category: "no_reviewable_patch", detail: "no_repository_change", terminal_state: "succeeded" },
+    failure: {
+      category: "no_reviewable_patch", detail: "no_repository_change", terminal_state: "succeeded",
+      operator_summary: "No deterministic repository edit was available.",
+    },
   });
   assert.deepEqual(recoverable, {
     severity: "warning",
-    message: "The coding agent completed without changing repository files. If the remedy belongs in this repository, add a more specific maintainer instruction and regenerate. If it is external or operational, no patch can be generated.",
+    message: "The coding agent completed, but no repository change was generated. If the remedy belongs in this repository, revise the maintainer instruction and regenerate. If it is external or operational, no patch can be generated.",
     canRegenerate: true,
     shouldObserve: false,
   });
@@ -314,7 +320,20 @@ test("exact JUnit regeneration is one explicit replacement with changed feedback
   assert.match(regenerate, /if \(!recoverableTerminal\) \{[\s\S]*cancelAnalysisChatFixRequest/);
   assert.equal((regenerate.match(/createAnalysisChatFixRequest\(/g) ?? []).length, 1);
   assert.match(regenerate, /recoverableTerminal \? request\.id : undefined/);
-  assert.match(dialog, /!instruction\.trim\(\) \|\| instruction\.trim\(\) === submittedInstruction\.trim\(\)/);
+  assert.match(dialog, /disabled=\{busy !== null \|\| !hasRevisedInstruction\}/);
   assert.match(dialog, /!request && !preview && !url/);
   assert.match(dialog, /Review fix preview/);
+});
+
+test("recoverable no-patch feedback is grouped with regeneration controls", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const finding = dialog.indexOf("Source verification warning");
+  const noPatch = dialog.indexOf("Generation completed without a patch");
+  const instruction = dialog.indexOf('label="Maintainer instruction (optional)"');
+  const regenerate = dialog.indexOf("Regenerate with feedback");
+  assert.ok(finding > dialog.indexOf('title="Selected chat finding"'));
+  assert.ok(noPatch > finding);
+  assert.ok(noPatch < instruction);
+  assert.ok(instruction < regenerate);
+  assert.match(dialog, /requestPresentation && !requestPresentation\.canRegenerate/);
 });

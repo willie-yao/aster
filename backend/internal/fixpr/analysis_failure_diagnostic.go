@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -30,13 +31,15 @@ const (
 	AnalysisFailureDetailReviewScopeExceeded AnalysisFailureDetail = "review_scope_exceeded"
 )
 
-// AnalysisFailureDiagnostic retains only public-safe exact-JUnit failure metadata.
+// AnalysisFailureDiagnostic retains bounded exact-JUnit failure metadata.
 type AnalysisFailureDiagnostic struct {
-	Category       AnalysisFailureCategory
-	Detail         AnalysisFailureDetail
-	TerminalState  runtime.TerminalState
-	CommandResults []runtime.CommandResult
-	ChangedFiles   []string
+	Category      AnalysisFailureCategory
+	Detail        AnalysisFailureDetail
+	TerminalState runtime.TerminalState
+	// OperatorSummary is a redacted no-change explanation for the owning admin.
+	OperatorSummary string
+	CommandResults  []runtime.CommandResult
+	ChangedFiles    []string
 }
 
 type analysisGenerationError struct {
@@ -57,8 +60,12 @@ func AnalysisFailureDiagnosticOf(err error) (AnalysisFailureDiagnostic, bool) {
 }
 
 func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentConfig, result runtime.GenerateResult, cause error) error {
+	detail := analysisFailureDetail(category, result, cause)
 	diagnostic := AnalysisFailureDiagnostic{
-		Category: category, Detail: analysisFailureDetail(category, result, cause), TerminalState: result.TerminalState,
+		Category: category, Detail: detail, TerminalState: result.TerminalState,
+	}
+	if detail == AnalysisFailureDetailNoRepositoryChange {
+		diagnostic.OperatorSummary = redact.OperatorText(result.StdoutSummary)
 	}
 	if agent != nil && agent.RequireCommandResults && runtime.ValidateCommandResults(agent.CommandPolicy.Commands, result.CommandResults) == nil {
 		diagnostic.CommandResults = cloneCommandResults(result.CommandResults)
@@ -100,7 +107,7 @@ func classifyAnalysisRuntimeFailure(result runtime.GenerateResult, err error) An
 
 func cloneAnalysisFailureDiagnostic(in AnalysisFailureDiagnostic) AnalysisFailureDiagnostic {
 	return AnalysisFailureDiagnostic{
-		Category: in.Category, Detail: in.Detail, TerminalState: in.TerminalState,
+		Category: in.Category, Detail: in.Detail, TerminalState: in.TerminalState, OperatorSummary: in.OperatorSummary,
 		CommandResults: cloneCommandResults(in.CommandResults), ChangedFiles: slices.Clone(in.ChangedFiles),
 	}
 }

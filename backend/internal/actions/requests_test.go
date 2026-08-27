@@ -2096,9 +2096,10 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 		return PreviewResult{}, &classifiedAnalysisFixError{
 			failure: &AnalysisFixFailureView{
 				Category: AnalysisFixFailureNoReviewablePatch, Detail: AnalysisFixFailureDetailNoRepositoryChange,
-				TerminalState: runtime.TerminalSucceeded,
+				TerminalState:   runtime.TerminalSucceeded,
+				OperatorSummary: "No deterministic repository edit was available. https://private.example token=secret-value",
 			},
-			cause: withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "The coding agent completed without changing repository files."),
+			cause: withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "The coding agent completed, but no repository change was generated."),
 		}
 	}
 	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
@@ -2112,8 +2113,17 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 	if failed.ReasonCode != ReasonNoReviewablePatch {
 		t.Fatalf("reason code = %q", failed.ReasonCode)
 	}
-	if failed.Error != "The coding agent completed without changing repository files." {
+	if failed.Error != "The coding agent completed, but no repository change was generated." {
 		t.Fatalf("error = %q", failed.Error)
+	}
+	wantSummary := "No deterministic repository edit was available. [redacted-url] token=[redacted]"
+	if failed.Failure == nil || failed.Failure.OperatorSummary != wantSummary {
+		t.Fatalf("failure = %+v", failed.Failure)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	restored, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || restored.Failure == nil || restored.Failure.OperatorSummary != failed.Failure.OperatorSummary {
+		t.Fatalf("restored=%+v err=%v", restored, err)
 	}
 }
 

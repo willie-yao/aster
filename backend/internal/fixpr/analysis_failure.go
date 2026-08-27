@@ -167,7 +167,7 @@ func generateAnalysisWithAgent(ctx context.Context, gp genParams, failure Analys
 	}
 	if len(res.Files) == 0 {
 		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,
-			fmt.Errorf("the coding agent completed without changing repository files"))
+			fmt.Errorf("the coding agent completed, but no repository change was generated"))
 	}
 	if gp.maxFiles > 0 && len(res.Files) > gp.maxFiles {
 		return nil, newAnalysisGenerationError(AnalysisFailureNoReviewablePatch, a, res,

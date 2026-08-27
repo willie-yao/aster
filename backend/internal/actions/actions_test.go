@@ -2280,9 +2280,9 @@ func TestExactAnalysisFixFailureClassificationIsPublicSafe(t *testing.T) {
 
 	noChange := fixpr.AnalysisFailureDiagnostic{
 		Category: fixpr.AnalysisFailureNoReviewablePatch, Detail: fixpr.AnalysisFailureDetailNoRepositoryChange,
-		TerminalState: runtime.TerminalSucceeded,
+		TerminalState: runtime.TerminalSucceeded, OperatorSummary: "No deterministic repository edit was available.",
 	}
-	if message := analysisFixFailureMessage(noChange); message != "The coding agent completed without changing repository files." {
+	if message := analysisFixFailureMessage(noChange); message != "The coding agent completed, but no repository change was generated." {
 		t.Fatalf("no-change message = %q", message)
 	}
 	tooBroad := fixpr.AnalysisFailureDiagnostic{
@@ -2291,10 +2291,13 @@ func TestExactAnalysisFixFailureClassificationIsPublicSafe(t *testing.T) {
 	if message := analysisFixFailureMessage(tooBroad); message != "The coding agent returned changes outside the allowed review scope." {
 		t.Fatalf("too-broad message = %q", message)
 	}
-	public := withReason(ReasonNoReviewablePatch, errors.New("private runtime output"), "The coding agent completed without changing repository files.")
+	public := withReason(ReasonNoReviewablePatch, errors.New("private runtime output"), "The coding agent completed, but no repository change was generated.")
 	failure := &AnalysisFixFailureView{
 		Category: AnalysisFixFailureNoReviewablePatch, Detail: AnalysisFixFailureDetailNoRepositoryChange,
-		TerminalState: runtime.TerminalSucceeded,
+		TerminalState: runtime.TerminalSucceeded, OperatorSummary: noChange.OperatorSummary,
+	}
+	if cloned := cloneAnalysisFixFailureView(failure); cloned.OperatorSummary != noChange.OperatorSummary {
+		t.Fatalf("cloned failure = %+v", cloned)
 	}
 	if message := generationFailureMessage(true, ReasonNoReviewablePatch, failure, public); message != public.Error() || strings.Contains(message, "private runtime output") {
 		t.Fatalf("public generation failure message = %q", message)

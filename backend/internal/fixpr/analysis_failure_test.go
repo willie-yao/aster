@@ -290,6 +290,7 @@ func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
 	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
 		TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
 		Files: map[string]string{}, CommandResults: results,
+		StdoutSummary: "No deterministic repository edit was available.\nhttps://private.example/path token=secret-value",
 	}}
 	config := &AgentConfig{Runtime: agent, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands}}
 	_, err := generateAnalysisWithAgent(t.Context(), genParams{
@@ -298,7 +299,7 @@ func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected no-change failure")
 	}
-	if err.Error() != "the coding agent completed without changing repository files" || strings.Contains(err.Error(), "external or operational") {
+	if err.Error() != "the coding agent completed, but no repository change was generated" || strings.Contains(err.Error(), "external or operational") {
 		t.Fatalf("no-change error = %q", err)
 	}
 	diagnostic, ok := AnalysisFailureDiagnosticOf(err)
@@ -307,6 +308,9 @@ func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
 	}
 	if agent.calls != 1 || len(diagnostic.CommandResults) != len(commands) {
 		t.Fatalf("calls=%d diagnostic=%+v", agent.calls, diagnostic)
+	}
+	if diagnostic.OperatorSummary != "No deterministic repository edit was available. [redacted-url] token=[redacted]" {
+		t.Fatalf("operator summary = %q", diagnostic.OperatorSummary)
 	}
 	for _, result := range diagnostic.CommandResults {
 		if result.Stdout != "" || result.Stderr != "" {
@@ -371,7 +375,9 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			agent := &fakeAgentRuntime{res: tt.result, err: tt.err}
+			result := tt.result
+			result.StdoutSummary = "private agent output"
+			agent := &fakeAgentRuntime{res: result, err: tt.err}
 			config := &AgentConfig{Runtime: agent, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands}}
 			_, err := generateAnalysisWithAgent(t.Context(), genParams{
 				owner: "up", repo: "stream", maxFiles: tt.maxFiles, agent: config,
@@ -388,6 +394,9 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			}
 			if len(diagnostic.ChangedFiles) != 0 {
 				t.Fatalf("diagnostic exposed changed files: %v", diagnostic.ChangedFiles)
+			}
+			if diagnostic.OperatorSummary != "" {
+				t.Fatalf("diagnostic exposed agent summary: %q", diagnostic.OperatorSummary)
 			}
 		})
 	}
