@@ -531,10 +531,17 @@ test("a cause offers its route and its resolution in one action bar", () => {
 
   // The bar wraps so a resolution error can take its own line, and a wrapping
   // flex line breaks a too-wide item onto a new row rather than shrinking it.
-  // The route is sized to its content so it takes only the width it needs, and
-  // minWidth: 0 is what still lets it shrink to its ellipsis.
+  // A zero basis is what keeps the route on the same row as the resolution and
+  // sends the overflow to its ellipsis instead; the max-content cap is what
+  // stops that basis growing the route past its own label.
   const routing = source("src/components/CausalGroupFixRouting.tsx");
-  assert.match(routing, /flex: "0 1 auto"/);
+  assert.match(routing, /flex: "1 1 0"/);
+  assert.match(routing, /maxWidth: "max-content"/);
+  // Stack's margin-based spacing outranks a child's sx, so the resolution's
+  // auto margin only survives when the bar spaces with a real gap.
+  assert.match(source("src/components/PatternBanner.tsx"), /useFlexGap/);
+  assert.match(source("src/components/CauseResolution.tsx"), /ml: \{ sm: "auto" \}/);
+  assert.doesNotMatch(source("src/components/PatternBanner.tsx"), /justifyContent: "space-between"/);
   assert.match(routing, /minWidth: 0/);
   assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: "wrap"/);
 

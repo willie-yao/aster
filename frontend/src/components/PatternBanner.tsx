@@ -549,6 +549,10 @@ export function PatternBanner({
                     <Stack
                       direction={{ xs: "column", sm: "row" }}
                       spacing={1}
+                      // Spacing has to be a real gap here: Stack's default
+                      // margin-based spacing outranks a child's own sx, which
+                      // would overwrite the resolution's auto margin.
+                      useFlexGap
                       sx={{
                         mt: 1.5,
                         pt: 1.5,
@@ -558,10 +562,6 @@ export function PatternBanner({
                         // build suffix and the resolution control both refuse to
                         // shrink, so side by side they would overlap.
                         alignItems: { xs: "stretch", sm: "center" },
-                        // The route reads from the start of the bar and the
-                        // action anchors its end, so a wide row has no gap
-                        // sitting between the two.
-                        justifyContent: "space-between",
                         flexWrap: "wrap",
                         rowGap: 1,
                         minWidth: 0,

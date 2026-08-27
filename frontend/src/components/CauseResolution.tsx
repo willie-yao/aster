@@ -93,11 +93,15 @@ export function CauseResolution({
   const bar = appearance === "bar";
   // In the bar the control sits beside the cause's other action, so it matches
   // that button's weight and never shrinks: the representative-failure label is
-  // the one that gives up width when the row is tight.
+  // the one that gives up width when the row is tight. The auto margin anchors
+  // it to the end of its flex line, which holds whether the route is present,
+  // absent, or wrapped onto a line of its own; justifyContent could not, since
+  // it puts a lone item at the start.
   const buttonSx = bar
     ? {
         textTransform: "none" as const,
         flexShrink: 0,
+        ml: { sm: "auto" },
         minHeight: { xs: 44, sm: 32 },
         ...overviewTypography.secondaryBody,
         fontWeight: 650,
