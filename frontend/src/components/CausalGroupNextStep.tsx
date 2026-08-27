@@ -29,6 +29,8 @@ export function CausalGroupNextStep({
   chat?: {
     ref: CauseAnalysisChatReference;
     fileCtx: FileToUrlContext;
+    preparedFinding?: boolean;
+    onPreparedResolved?: (ready: boolean) => void;
   };
   // Omitted where no chat session on this deployment could start a fix.
   routing?: {
@@ -83,6 +85,8 @@ export function CausalGroupNextStep({
             key={`${chat.ref.job_id}\u0000${chat.ref.pattern_id}\u0000${chat.ref.causal_group_id}\u0000${chat.ref.causal_group_hash}`}
             analysisRef={chat.ref}
             fileCtx={chat.fileCtx}
+            preparedFinding={chat.preparedFinding}
+            onPreparedResolved={chat.onPreparedResolved}
             fixTarget={routable && !routable.stale ? routable.target ?? undefined : undefined}
           />
         </Box>

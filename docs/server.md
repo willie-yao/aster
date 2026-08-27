@@ -23,6 +23,7 @@ schema.
 | `GET /api/ai-usage/download` | Attachment form of the same usage report. |
 | `POST /api/analysis-chat/sessions` | Start or restore the shared chat for one current published analysis. |
 | `POST /api/analysis-chat/sessions/lookup` | Restore the shared non-expired conversation for one current analysis. |
+| `POST /api/analysis-chat/prepared/lookup` | Read-only batch check of which causes already have a prepared finding waiting, so a collapsed cause control can say so without opening a shared session. |
 | `GET /api/analysis-chat/sessions/{id}` | Read a shared conversation and its current active turn. |
 | `DELETE /api/analysis-chat/sessions/{id}` | Remove an idle shared conversation unless a Fix proposal depends on it, so the next question starts a new one. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |

@@ -7,6 +7,7 @@ import "./patternChat.test.js";
 import "./patternFixGuidance.test.js";
 import "./causalFixRouting.test.js";
 import "./causalNextStep.test.js";
+import "./preparedFinding.test.js";
 import "./briefingSection.test.js";
 import "./upstreamCause.test.js";
 import "./patternResolution.test.js";

@@ -28,6 +28,46 @@ type AnalysisChatRunner interface {
 	Send(context.Context, string, string, string, string) (analysischat.SessionView, error)
 	Stream(context.Context, string, string, string, string, func(analysischat.Progress) error) (analysischat.SessionView, error)
 	Cancel(string, string, string) error
+	PreparedAvailable([]analysischat.AnalysisRef) []bool
+}
+
+// preparedLookupRequest is a bounded batch of cause references to test for a
+// waiting prepared finding.
+type preparedLookupRequest struct {
+	Refs []analysischat.AnalysisRef `json:"refs"`
+}
+
+type preparedLookupResponse struct {
+	Prepared []bool `json:"prepared"`
+}
+
+const maxPreparedLookupRefs = 64
+
+// lookupPreparedFindingsHandler answers, read-only, which of the given causes
+// already have a prepared finding waiting. Creating a session would attribute a
+// shared investigation to whoever loaded the page first, so the collapsed
+// indicator cannot use the create path.
+func lookupPreparedFindingsHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFrom(r.Context()); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var request preparedLookupRequest
+		if err := decodeAnalysisChatBody(w, r, &request, maxAnalysisChatReferenceBodyBytes); err != nil {
+			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
+			return
+		}
+		if len(request.Refs) > maxPreparedLookupRefs {
+			http.Error(w, fmt.Sprintf("at most %d analysis references may be looked up at once", maxPreparedLookupRefs), http.StatusBadRequest)
+			return
+		}
+		prepared := run.PreparedAvailable(request.Refs)
+		if len(prepared) != len(request.Refs) {
+			prepared = make([]bool, len(request.Refs))
+		}
+		writeAnalysisChatJSON(w, http.StatusOK, preparedLookupResponse{Prepared: prepared})
+	})
 }
 
 func findAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {

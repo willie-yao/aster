@@ -255,6 +255,8 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(createAnalysisChatSessionHandler(opts.AnalysisChat))))
 		mux.Handle("POST /api/analysis-chat/sessions/lookup",
 			auth.Middleware(opts.Auth, guard(findAnalysisChatSessionHandler(opts.AnalysisChat))))
+		mux.Handle("POST /api/analysis-chat/prepared/lookup",
+			auth.Middleware(opts.Auth, guard(lookupPreparedFindingsHandler(opts.AnalysisChat))))
 		mux.Handle("GET /api/analysis-chat/sessions/{id}",
 			auth.Middleware(opts.Auth, getAnalysisChatSessionHandler(opts.AnalysisChat)))
 		mux.Handle("DELETE /api/analysis-chat/sessions/{id}",

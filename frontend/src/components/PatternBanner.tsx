@@ -8,7 +8,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink } from "react-router-dom";
 import { AutoAwesome, ExpandMore } from "@mui/icons-material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   BuildResult,
   FailureRecurrence,
@@ -16,7 +16,7 @@ import type {
   PatternCausalGroup,
   PatternRefreshStatus,
 } from "../types/dashboard";
-import type { AnalysisChatReference } from "../types/analysisChat";
+import type { AnalysisChatReference, CauseAnalysisChatReference } from "../types/analysisChat";
 import {
   fileSortKey,
   fileToUrl,
@@ -33,6 +33,7 @@ import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
+import { lookupPreparedAnalysisChatFindings, applyPreparedFindingResolution, type PreparedFindingResult } from "../lib/analysisChat";
 import { patternActionEligibilityHint, patternActionRefreshBlocked, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
@@ -61,6 +62,14 @@ function causeCardID(pattern: PatternAnalysis, causeKey: string): string {
 function causeKeyFor(group: PatternCausalGroup, index: number): string {
   return group.signature ?? group.id ?? String(index);
 }
+
+// Identity of one cause within a prepared-finding lookup result, so the answer
+// survives the causal groups being reordered between request and response.
+function preparedCauseKey(ref: CauseAnalysisChatReference): string {
+  return `${ref.causal_group_id}\u0000${ref.causal_group_hash}`;
+}
+
+const noPreparedCauses: Record<string, boolean> = {};
 
 export function PatternBanner({
   pattern,
@@ -104,6 +113,37 @@ export function PatternBanner({
         }
       : null,
   );
+  // One read-only batch for every cause on the page. Asking per card through
+  // the create path would open shared sessions for causes nobody looked at.
+  const preparedLookupKey = JSON.stringify(causeChatRefs.filter((ref) => ref !== null));
+  const [preparedResult, setPreparedResult] = useState<PreparedFindingResult>(
+    { key: "", causes: noPreparedCauses },
+  );
+  useEffect(() => {
+    if (!features.analysis_chat || authStatus !== "authenticated") return;
+    const refs = JSON.parse(preparedLookupKey) as CauseAnalysisChatReference[];
+    if (refs.length === 0) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const prepared = await lookupPreparedAnalysisChatFindings(refs, controller.signal);
+        if (controller.signal.aborted) return;
+        setPreparedResult({
+          key: preparedLookupKey,
+          causes: Object.fromEntries(refs.map((ref, index) => [preparedCauseKey(ref), prepared[index]])),
+        });
+      } catch {
+        // The marker is advisory. A failed lookup leaves the control unmarked
+        // rather than surfacing an error the operator cannot act on.
+      }
+    })();
+    return () => controller.abort();
+  }, [authStatus, features.analysis_chat, preparedLookupKey]);
+  const preparedCauses = preparedResult.key === preparedLookupKey ? preparedResult.causes : noPreparedCauses;
+  const causePreparedKeys = causeChatRefs.map((ref) => (ref ? preparedCauseKey(ref) : ""));
+  const recordPrepared = (cause: string, ready: boolean) => {
+    setPreparedResult((current) => applyPreparedFindingResolution(current, preparedLookupKey, cause, ready));
+  };
   // Correlation only ever sees the current window, so a cause it reports as new
   // may have been failing for months.
   const causalRecurrence = causalGroups.map((group) =>
@@ -521,6 +561,8 @@ export function PatternBanner({
                               ),
                               fileLinks: pattern.file_links,
                             },
+                            preparedFinding: preparedCauses[causePreparedKeys[index]],
+                            onPreparedResolved: (ready: boolean) => recordPrepared(causePreparedKeys[index], ready),
                           }
                         : undefined
                     }

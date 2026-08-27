@@ -42,6 +42,19 @@ type fakeAnalysisChatRunner struct {
 	deleteOwner      string
 	sendDelay        time.Duration
 	view             analysischat.SessionView
+	// preparedRefs records the last batch the prepared lookup received, and
+	// preparedCauses names the causal groups the fake reports as ready.
+	preparedRefs   []analysischat.AnalysisRef
+	preparedCauses map[string]bool
+}
+
+func (f *fakeAnalysisChatRunner) PreparedAvailable(refs []analysischat.AnalysisRef) []bool {
+	f.preparedRefs = refs
+	available := make([]bool, len(refs))
+	for i, ref := range refs {
+		available[i] = f.preparedCauses[ref.CausalGroupID]
+	}
+	return available
 }
 
 func (f *fakeAnalysisChatRunner) Find(ref analysischat.AnalysisRef, owner string) (analysischat.SessionView, error) {
@@ -740,4 +753,79 @@ func TestAnalysisChatUnclassifiedRejectionHasNoReasonHeader(t *testing.T) {
 	if body := recorder.Body.String(); !strings.Contains(body, "invalid analysis chat request") {
 		t.Errorf("body = %q", body)
 	}
+}
+
+func TestHandlerPreparedFindingLookup(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{preparedCauses: map[string]bool{"cause-2": true}}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		AnalysisChat: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	post := func(body string, authenticate bool) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/analysis-chat/prepared/lookup", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if authenticate {
+			req.Header.Set("Authorization", "ok")
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	cause := func(id string) string {
+		return fmt.Sprintf(`{"scope":"cause","job_id":"job","pattern_id":"p","pattern_hash":"ph","causal_group_id":%q,"causal_group_hash":"gh"}`, id)
+	}
+
+	anonymous := post(`{"refs":[]}`, false)
+	if anonymous.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous status = %d", anonymous.StatusCode)
+	}
+	_ = anonymous.Body.Close()
+
+	malformed := post(`{"refs":[],"unexpected":1}`, true)
+	if malformed.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed status = %d", malformed.StatusCode)
+	}
+	_ = malformed.Body.Close()
+
+	// The answer stays aligned with the request order, so the caller can map a
+	// result back to the card it asked about by index.
+	ordered := post(fmt.Sprintf(`{"refs":[%s,%s,%s]}`, cause("cause-1"), cause("cause-2"), cause("cause-3")), true)
+	orderedBody := readBody(t, ordered)
+	if ordered.StatusCode != http.StatusOK {
+		t.Fatalf("lookup status=%d body=%s", ordered.StatusCode, orderedBody)
+	}
+	if !strings.Contains(orderedBody, `"prepared":[false,true,false]`) {
+		t.Fatalf("lookup body = %s", orderedBody)
+	}
+	if len(runner.preparedRefs) != 3 || runner.preparedRefs[1].CausalGroupID != "cause-2" {
+		t.Fatalf("runner refs = %+v", runner.preparedRefs)
+	}
+
+	empty := post(`{"refs":[]}`, true)
+	emptyBody := readBody(t, empty)
+	if empty.StatusCode != http.StatusOK || !strings.Contains(emptyBody, `"prepared":[]`) {
+		t.Fatalf("empty status=%d body=%s", empty.StatusCode, emptyBody)
+	}
+
+	refs := make([]string, maxPreparedLookupRefs+1)
+	for i := range refs {
+		refs[i] = cause(fmt.Sprintf("cause-%d", i))
+	}
+	oversized := post(fmt.Sprintf(`{"refs":[%s]}`, strings.Join(refs, ",")), true)
+	if oversized.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized status = %d", oversized.StatusCode)
+	}
+	_ = oversized.Body.Close()
 }
