@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/willie-yao/aster/backend/internal/fixpr"
+	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -40,11 +41,12 @@ const (
 
 // AnalysisFixFailureView reports a bounded exact-JUnit generation failure.
 type AnalysisFixFailureView struct {
-	Category       AnalysisFixFailureCategory `json:"category"`
-	Detail         AnalysisFixFailureDetail   `json:"detail,omitempty"`
-	TerminalState  runtime.TerminalState      `json:"terminal_state,omitempty"`
-	CommandResults []SafeCommandResult        `json:"command_results,omitempty"`
-	ChangedFiles   []string                   `json:"changed_files,omitempty"`
+	Category        AnalysisFixFailureCategory `json:"category"`
+	Detail          AnalysisFixFailureDetail   `json:"detail,omitempty"`
+	TerminalState   runtime.TerminalState      `json:"terminal_state,omitempty"`
+	OperatorSummary string                     `json:"operator_summary,omitempty"`
+	CommandResults  []SafeCommandResult        `json:"command_results,omitempty"`
+	ChangedFiles    []string                   `json:"changed_files,omitempty"`
 }
 
 type classifiedAnalysisFixError struct {
@@ -79,7 +81,7 @@ func analysisFixFailureMessage(diagnostic fixpr.AnalysisFailureDiagnostic) strin
 	}
 	switch diagnostic.Detail {
 	case fixpr.AnalysisFailureDetailNoRepositoryChange:
-		return "The coding agent completed without changing repository files."
+		return "The coding agent completed, but no repository change was generated."
 	case fixpr.AnalysisFailureDetailReviewScopeExceeded:
 		return "The coding agent returned changes outside the allowed review scope."
 	default:
@@ -133,8 +135,9 @@ func analysisFixFailureView(err error) *AnalysisFixFailureView {
 	if diagnostic, ok := fixpr.AnalysisFailureDiagnosticOf(err); ok {
 		view := &AnalysisFixFailureView{
 			Category: AnalysisFixFailureCategory(diagnostic.Category), Detail: AnalysisFixFailureDetail(diagnostic.Detail),
-			TerminalState: diagnostic.TerminalState,
-			ChangedFiles:  append([]string(nil), diagnostic.ChangedFiles...),
+			TerminalState:   diagnostic.TerminalState,
+			OperatorSummary: redact.OperatorText(diagnostic.OperatorSummary),
+			ChangedFiles:    append([]string(nil), diagnostic.ChangedFiles...),
 		}
 		view.CommandResults = make([]SafeCommandResult, len(diagnostic.CommandResults))
 		for index, result := range diagnostic.CommandResults {
@@ -163,7 +166,7 @@ func cloneAnalysisFixFailureView(in *AnalysisFixFailureView) *AnalysisFixFailure
 	}
 	out := &AnalysisFixFailureView{
 		Category: in.Category, Detail: in.Detail, TerminalState: in.TerminalState,
-		ChangedFiles: append([]string(nil), in.ChangedFiles...),
+		OperatorSummary: redact.OperatorText(in.OperatorSummary), ChangedFiles: append([]string(nil), in.ChangedFiles...),
 	}
 	out.CommandResults = make([]SafeCommandResult, len(in.CommandResults))
 	for index, result := range in.CommandResults {

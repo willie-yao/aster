@@ -145,6 +145,12 @@ export function ChatFixDialog({
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
   const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
+  const hasRevisedInstruction = Boolean(
+    instruction.trim() && instruction.trim() !== submittedInstruction.trim(),
+  );
+  const instructionHelperText = requestPresentation?.canRegenerate && !hasRevisedInstruction
+    ? `Change the previous instruction to enable regeneration. ${chatFixInstructionBytes(instruction)}/4096 bytes`
+    : `${chatFixInstructionBytes(instruction)}/4096 bytes`;
 
   const firstPatternID = eligiblePatterns[0]?.id ?? "";
 
@@ -394,18 +400,13 @@ export function ChatFixDialog({
 
         {!preview && !url && (
           <Stack spacing={2.5}>
-            {requestPresentation && busy === null && !observationMessage && (
+            {requestPresentation && !requestPresentation.canRegenerate && busy === null && !observationMessage && (
               <Alert
                 severity={requestPresentation.severity}
                 role={alertRole(requestPresentation.severity)}
                 variant="outlined"
               >
                 {requestPresentation.message}
-              </Alert>
-            )}
-            {request?.warning && !preview && (
-              <Alert severity="warning" variant="outlined">
-                {request.warning}
               </Alert>
             )}
             <Alert role="status" severity="info" variant="outlined">
@@ -497,6 +498,14 @@ export function ChatFixDialog({
                   <EvidenceList citations={message.citations} />
                 </Box>
               )}
+              {request?.warning && !preview && (
+                <Alert severity="warning" variant="outlined" sx={{ mt: 1.2 }}>
+                  <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
+                    Source verification warning
+                  </Typography>
+                  <Typography variant="body2">{request.warning}</Typography>
+                </Alert>
+              )}
             </ContextSection>
 
             {exactAnalysis && (
@@ -505,6 +514,25 @@ export function ChatFixDialog({
                   The server resolves the exact repository revision from build metadata, verifies the published source paths at that revision, and rejects the preview if the target branch has moved.
                 </Alert>
               </ContextSection>
+            )}
+
+            {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
+              <Alert severity={requestPresentation.severity} role="status" variant="outlined">
+                <Typography variant="body2" sx={{ fontWeight: 750, mb: 0.4 }}>
+                  Generation completed without a patch
+                </Typography>
+                <Typography variant="body2">{requestPresentation.message}</Typography>
+                {request?.failure?.operator_summary && (
+                  <Box sx={{ mt: 1.1 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
+                      Coding agent summary
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      {request.failure.operator_summary}
+                    </Typography>
+                  </Box>
+                )}
+              </Alert>
             )}
 
             <TextField
@@ -516,13 +544,13 @@ export function ChatFixDialog({
               maxRows={5}
               value={instruction}
               onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
-              helperText={`${chatFixInstructionBytes(instruction)}/4096 bytes`}
+              helperText={instructionHelperText}
             />
             {requestPresentation?.canRegenerate && (
               <Button
                 variant="outlined"
                 onClick={() => void regeneratePreview()}
-                disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
+                disabled={busy !== null || !hasRevisedInstruction}
                 sx={{ alignSelf: "flex-start" }}
               >
                 {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
@@ -555,7 +583,10 @@ export function ChatFixDialog({
           <Stack spacing={2.25}>
             {request?.warning && (
               <Alert severity="warning" variant="outlined">
-                {request.warning}
+                <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
+                  Source verification warning
+                </Typography>
+                <Typography variant="body2">{request.warning}</Typography>
               </Alert>
             )}
             <Button

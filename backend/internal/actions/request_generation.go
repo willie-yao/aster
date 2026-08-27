@@ -109,6 +109,15 @@ func logGenerationFailure(id string, code ReasonCode, failure *AnalysisFixFailur
 	if failure != nil && failure.Category != "" {
 		category = string(failure.Category)
 	}
+	if failure != nil && failure.Category == AnalysisFixFailureNoReviewablePatch &&
+		failure.Detail == AnalysisFixFailureDetailNoRepositoryChange && failure.TerminalState == runtime.TerminalSucceeded {
+		if failure.OperatorSummary != "" {
+			log.Printf("action request %s: generation completed without a reviewable patch (reason=%s category=%s): %s; agent_summary=%q", id, code, category, detail, failure.OperatorSummary)
+			return
+		}
+		log.Printf("action request %s: generation completed without a reviewable patch (reason=%s category=%s): %s", id, code, category, detail)
+		return
+	}
 	log.Printf("action request %s: generation failed (reason=%s category=%s): %s", id, code, category, detail)
 }
 
