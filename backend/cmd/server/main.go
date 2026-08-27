@@ -62,11 +62,13 @@ func main() {
 		dataDir    string
 		staticDir  string
 		projectDir string
+		mock       bool
 	)
 	flag.StringVar(&addr, "addr", ":8080", "listen address")
 	flag.StringVar(&dataDir, "data-dir", "data", "directory of fetcher JSON output served at /data")
 	flag.StringVar(&staticDir, "static-dir", "", "optional built frontend (dist) served at / with SPA fallback")
 	flag.StringVar(&projectDir, "project-dir", "", "project.yaml directory; enables admin features when set with AUTH_MODE")
+	flag.BoolVar(&mock, "mock", false, "serve every admin feature from in-memory fakes for local frontend development; never use outside a developer machine")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -86,12 +88,17 @@ func main() {
 
 	// Enable admin-gated features only when a project config and an auth mode are
 	// both provided. Otherwise the server stays read-only.
-	if projectDir != "" && os.Getenv("AUTH_MODE") != "" {
+	switch {
+	case mock:
+		if err := enableMockFeatures(&opts, projectDir, dataDir); err != nil {
+			log.Fatalf("server: enabling mock features: %v", err)
+		}
+	case projectDir != "" && os.Getenv("AUTH_MODE") != "":
 		if err := enableInteractiveFeatures(ctx, &opts, projectDir, dataDir); err != nil {
 			log.Fatalf("server: enabling interactive features: %v", err)
 		}
 		log.Printf("🔐 admin features enabled (auth mode: %s)", opts.AuthMode)
-	} else {
+	default:
 		log.Println("interactive features disabled (set -project-dir and AUTH_MODE to enable)")
 	}
 

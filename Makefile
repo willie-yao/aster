@@ -1,7 +1,7 @@
 .PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
-       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick \
-       fe-install dev fe-build fe-check fe-test fe-lint \
-       dist dist-ai clean clean-cache clean-all help
+       fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick snapshot-data \
+       fe-install dev dev-mock mock-server fe-build fe-check fe-test fe-lint \
+       dist dist-ai clean clean-cache clean-mock clean-all help
 
 # Path to a consumer project directory containing project.yaml + prompts/system.md.
 # Override on the command line, e.g.:
@@ -11,6 +11,11 @@ PROJECT_DIR ?= configs/example
 # Container image coordinates for `make image`.
 IMAGE ?= ghcr.io/willie-yao/aster
 VERSION ?= dev
+
+# Host and port the mock API server listens on, and the origin the Vite proxy
+# forwards to. Loopback by default: the mock server grants admin to any caller.
+MOCK_HOST ?= 127.0.0.1
+MOCK_PORT ?= 8080
 
 # Default target
 all: build
@@ -52,7 +57,6 @@ dev-actions: build-server fe-build
 #   make image IMAGE=ghcr.io/you/aster VERSION=v1.2.3
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
-
 # Build the sandboxed local OpenCode image for fix generation.
 # Build the minimal git-capable image for remote fix runtimes.
 remote-fixer-image:
@@ -147,6 +151,14 @@ fetch-data-ai: build
 fetch-data-ai-quick: build
 	./bin/aster -project-dir=$(PROJECT_DIR) -builds=3 -workers=5 -out=frontend/public/data -timeout=5m -ai
 
+# Mirror the public JSON of a deployed dashboard into frontend/public/data.
+# Faster than a local fetch and, unlike one, it carries published AI analyses,
+# recurring patterns, and pull request triage. SITE is required:
+#   make snapshot-data SITE=https://your-dashboard
+snapshot-data:
+	@test -n "$(SITE)" || { echo "SITE is required: make snapshot-data SITE=https://your-dashboard"; exit 1; }
+	python3 hack/snapshot-dashboard-data.py $(SITE) --out frontend/public/data
+
 ## ─── Frontend ─────────────────────────────────────────────────
 
 # Install frontend dependencies
@@ -156,6 +168,23 @@ fe-install:
 # Start the Vite dev server
 dev: fe-install
 	cd frontend && npm run dev
+
+# Vite dev server with HMR, backed by the mock API server: every admin feature
+# the deployed dashboard advertises is reachable, with drafting, chat, and
+# escalation answered from in-memory fakes rather than a model provider,
+# GitHub, or Kubernetes. Populate frontend/public/data first (snapshot-data or
+# fetch-data-quick). The API server is stopped when Vite exits.
+dev-mock: build-server fe-install
+	@./bin/server -mock -addr=$(MOCK_HOST):$(MOCK_PORT) -data-dir=frontend/public/data -project-dir=$(PROJECT_DIR) & \
+	server_pid=$$!; \
+	trap 'kill $$server_pid 2>/dev/null' EXIT INT TERM; \
+	cd frontend && VITE_MOCK_API=http://$(MOCK_HOST):$(MOCK_PORT) npm run dev
+
+# Run only the mock API server, for pointing an already-running frontend at it
+# or for exercising the endpoints with curl. Add -static-dir=frontend/dist to
+# serve a built SPA from the same origin.
+mock-server: build-server
+	./bin/server -mock -addr=$(MOCK_HOST):$(MOCK_PORT) -data-dir=frontend/public/data -project-dir=$(PROJECT_DIR)
 
 # Build the frontend for production
 fe-build: fe-install
@@ -191,8 +220,14 @@ clean:
 clean-cache:
 	rm -f frontend/public/data/ai_cache.json
 
+# Remove the fabricated operational files so `make dev-mock` reseeds them.
+clean-mock:
+	rm -rf frontend/public/data/.fetch-status frontend/public/data/ai_cache.json \
+		frontend/public/data/ai_traces.json frontend/public/data/ai_usage_fetcher.json \
+		frontend/public/data/ai_usage_server.json
+
 # Clean everything including cache
-clean-all: clean clean-cache
+clean-all: clean clean-cache clean-mock
 
 ## ─── Help ─────────────────────────────────────────────────────
 
@@ -203,6 +238,7 @@ help:
 	@echo "  build-server       Build Go API server binary"
 	@echo "  serve              Serve fetched data + capabilities over HTTP"
 	@echo "  dev-actions        Serve SPA + API with admin actions enabled (local auth)"
+	@echo "  mock-server        Serve every admin feature from in-memory fakes"
 	@echo "  test               Run Go tests"
 	@echo "  test-v             Run Go tests (verbose)"
 	@echo "  lint               Run golangci-lint"
@@ -217,6 +253,7 @@ help:
 	@echo "  fetch-data-quick   Fetch minimal data (3 builds/job)"
 	@echo "  fetch-data-ai      Fetch data + AI analysis (needs AI_TOKEN)"
 	@echo "  fetch-data-ai-quick  Fetch minimal data + AI analysis"
+	@echo "  snapshot-data      Mirror a deployed dashboard's public JSON (needs SITE=...)"
 	@echo ""
 	@echo "    Override PROJECT_DIR to point at a consumer repo, e.g.:"
 	@echo "      make fetch-data PROJECT_DIR=../your-consumer-repo"
@@ -224,6 +261,7 @@ help:
 	@echo ""
 	@echo "  fe-install         Install frontend npm dependencies"
 	@echo "  dev                Start Vite dev server"
+	@echo "  dev-mock           Vite dev server + mock API (all admin features)"
 	@echo "  fe-build           Production build of frontend"
 	@echo "  fe-check           TypeScript type check"
 	@echo "  fe-test            Run frontend unit tests"
@@ -238,4 +276,5 @@ help:
 	@echo "  agent-sandbox-fix-executor-image  Build the Agent Sandbox OpenCode executor"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"
+	@echo "  clean-mock         Remove fabricated mock operational files"
 	@echo "  clean-all          Clean everything including cache"

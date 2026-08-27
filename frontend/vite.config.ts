@@ -7,6 +7,14 @@ import { fileURLToPath, URL } from 'node:url'
 // gh-pages prefix). Defaults to "/" for local dev.
 const basePath = process.env.VITE_BASE_PATH || '/'
 
+// VITE_MOCK_API points /api at a local `server -mock` process, so the dev
+// server keeps HMR while the authenticated features light up. The proxy leaves
+// the Host header alone: the server's CSRF guard compares it against the
+// browser's Origin, and rewriting it would make every write look cross-origin.
+// /data is not proxied because Vite already serves public/data, which is the
+// same directory the mock server reads.
+const mockAPI = process.env.VITE_MOCK_API
+
 export default defineConfig({
   plugins: [react()],
   base: basePath,
@@ -20,5 +28,8 @@ export default defineConfig({
   },
   server: {
     strictPort: false,
+    proxy: mockAPI
+      ? { '/api': { target: mockAPI, changeOrigin: false } }
+      : undefined,
   },
 })
