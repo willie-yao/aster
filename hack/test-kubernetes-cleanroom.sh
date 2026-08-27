@@ -373,6 +373,40 @@ markdown_files = [
 for path in markdown_files + [chart]:
     validate_markdown(path, repository_root)
 
+retired_feature_terms = [
+    "analysis correction",
+    "remediation investigation",
+]
+for path in markdown_tree(root / "docs"):
+    visible = markdown_without_fenced_code(path.read_text()).lower()
+    for term in retired_feature_terms:
+        if term in visible:
+            raise SystemExit(f"{path} still documents removed feature {term!r}")
+
+pull_request_guide = root / "docs" / "pull-request-triage.md"
+for value in [
+    "## Deterministic attribution",
+    "## Shared failures",
+    "## Optional bot comment",
+    "## Optional AI escalation",
+    "GITHUB_READ_TOKEN",
+    "ASTER_APP_PRIVATE_KEY",
+    "server.pullRequestEscalation.enabled",
+]:
+    if value not in pull_request_guide.read_text():
+        raise SystemExit(f"pull request triage guide missing {value!r}")
+for path in [root / "docs" / "README.md", root / "docs" / "project-configuration.md"]:
+    if "pull-request-triage.md" not in path.read_text():
+        raise SystemExit(f"{path} does not link the pull request triage guide")
+for heading in [
+    "### Shared failures",
+    "### Optional bot comment on new pull requests",
+    "### Optional AI escalation",
+    "### Escalating a shared failure",
+]:
+    if heading in (root / "docs" / "project-configuration.md").read_text():
+        raise SystemExit(f"project configuration duplicates pull request guide section {heading!r}")
+
 link_fixtures = fixture_root / "markdown-link-contract"
 link_fixtures.mkdir()
 outside = Path("/etc/hosts")

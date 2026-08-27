@@ -321,6 +321,7 @@ patterns, evidence patterns, or recipe source text.
 
 ## Auto-suggesting recipes
 
-The former `ai.suggest_skills` automation was removed. Consumers still author
-and review recipe files under `skills/*.yaml`; their presence is the opt-in.
-There is no scheduled recipe-generation feature or `SKILL_TOKEN` secret.
+Aster does not generate or activate recipes on a schedule. Consumers author and
+review files under `skills/*.yaml`; their presence is the opt-in. Diagnostic
+authoring may place proposals under `proposals/skills/`, but activation remains a
+separate maintainer decision.

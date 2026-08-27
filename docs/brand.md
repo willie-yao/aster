@@ -36,10 +36,8 @@ Brand and status colors do different jobs. The brand ramp is violet to pink; the
 status colors stay green, amber, and red because they carry CI meaning. Never
 restyle a pass/fail indicator to match the brand.
 
-Violet is also the safer chrome color here: it sits about 94 degrees from the
-fail red and 125 degrees from the pass green on the color wheel, where the
-previous blue was only 75 degrees from green. Navigation and buttons therefore
-never read as state.
+Use violet for navigation and buttons so brand chrome remains visually distinct
+from green pass and red failure states.
 
 The canonical values live in
 [`frontend/src/theme/tokens.ts`](../frontend/src/theme/tokens.ts); treat that

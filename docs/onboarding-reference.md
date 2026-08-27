@@ -184,19 +184,10 @@ handoff artifacts outside the consumer destination.
 
 Add `-non-interactive` when missing values must fail rather than prompt.
 
-Pages example:
-
-```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard \
-  -engine-ref v0.9.0-rc.9 \
-  -non-interactive \
-  -testgrid "<testgrid-dashboard>" \
-  -dashboard-repo "<owner>/<dashboard-repo>" \
-  -source-repo "<owner>/<source-repo>" \
-  -artifact-access public \
-  -deployment-reason "Artifacts and provider are reachable from GitHub Actions." \
-  -out ./my-dashboard
-```
+The common Pages command is in
+[Non-interactive CLI onboarding](onboarding-a-new-project.md#non-interactive-cli-onboarding).
+Use the options below only when the automation contract differs from that common
+path.
 
 Kubernetes automation requires a CLI whose `onboard -h` output includes
 `-k8s-storage-class` and `-k8s-existing-claim`. Use a current clean engine
@@ -267,12 +258,8 @@ Onboarding does not guess:
 
 ## Validate an existing consumer
 
-```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 \
-  onboard doctor \
-  -project-dir ./my-dashboard
-```
-
+Run the read-only `onboard doctor` command from the
+[onboarding quickstart](onboarding-a-new-project.md#validate-with-onboard-doctor).
 Doctor checks strict project parsing, a non-empty prompt, Pages or Kubernetes
 coordinates, and a real nonzero Prow discovery sweep. Warnings identify values
 that cannot be resolved offline. It does not call the provider or inspect a

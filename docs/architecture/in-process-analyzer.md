@@ -26,7 +26,7 @@ participate in normal analysis cache acceptance.
 Safe structured output has a separate publication disposition:
 
 - `preliminary` is displayable with bounded warnings but remains eligible for
-  reanalysis and cannot feed patterns, corrections, remediation, actions, or Fix;
+  reanalysis and cannot feed patterns, actions, or Fix;
 - `grounded` has verified artifact citations and no unresolved grounding or
   quality warnings;
 - rejected output has no usable `AIAnalysis` and follows the existing unavailable
@@ -254,69 +254,17 @@ data-serving path.
 
 ## Downstream and separate operations
 
-- **Recurring causal-group correlation** is owned by
-  `backend/internal/patterns` with model contracts in
-  `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, and
-  `backend/internal/ai/pattern_verification.go`. It consumes representative
-  failed tests with an attached `AIAnalysis`, groups evidence across builds, and
-  publishes analysis-only recurrence projections. The attached analysis may be
-  newly accepted or a prior real result preserved when reanalysis is
-  unavailable. Correlation does not rewrite the per-build diagnosis, and
-  `patterns.MergeLastGood` isolates per-job correlation failures before public
-  output. Correlation is intentionally tool-free: `submit_causal_groups` is a
-  terminal structured response contract, not an executable evidence tool.
-  Pattern verdicts and bounded repairs use the shared forced-structured attempt
-  machinery in `backend/internal/ai/structured.go`.
-- **Analysis chat** resolves a published test, pattern, or causal group into a
-  bounded private session under `backend/internal/analysischat`. Evidence
-  gathering uses the shared bounded tool loop, and finalization uses the shared
-  structured-completion machinery. Cause scope
-  exposes exactly the selected group's member builds. Chat replies do not change
-  job JSON. A separately enabled, explicitly confirmed correction workflow can
-  publish an overlay without mutating fetcher output.
-- **Actions** are authenticated server operations over current published
-  subjects with independent lifecycle and quality gates. File Issue and Fix PR
-  use preview-confirm workflows. Resolve is a direct lifecycle state change
-  gated on a current, systemic, lifecycle-active pattern with a usable build
-  watermark rather than on the remediation contract, so a maintainer can resolve
-  a causal-group failure. It has two scopes: a pattern resolution keyed by
-  pattern id, and a cause resolution keyed by the causal group's artifact-derived
-  signature, which acknowledges one cause and leaves its siblings active. A group
-  without a signature has no durable key and is covered by the pattern scope
-  instead. Unresolve only revokes an existing acknowledgement at either scope, so
-  it requires nothing beyond an entry in `resolved.json` and never strands a
-  resolution whose subject went stale or aged out. Asynchronous action requests
-  have their own request, confirmation, cancellation, and result state.
-  Causal-group patterns remain categorically ineligible for File Issue and Fix
-  PR through `models.PatternAllowsActions`, even after a remediation
-  investigation reaches the public `actionable` state.
-- **Fix PR generation** consumes an eligible action subject and verified source
-  through `backend/internal/fixpr` and `backend/internal/fixruntime`. Exact JUnit
-  chat handoff binds one accepted published analysis and one cited shared-chat
-  response to an immutable build revision and deterministic source snapshot.
-  Pattern actions keep their separate `PatternAllowsActions` gate. The coding
-  agent, review, validation, and PR state are independent of failure-analysis
-  tools and cache acceptance.
-- **Scheduled analysis shadows** use the same file-backed OpenCode contract as
-  the analyzer benchmark. After authoritative publication, the fetcher freezes
-  a local verification copy, computes the prompt, skill-plan, source, artifact,
-  and request identities, then asks `analysispublisher` to run a tokenless
-  namespace-local Job. That Job publishes the identical snapshot to private
-  input storage and is deleted before the Agent Sandbox starts. The Sandbox
-  stager reconstructs the sealed request from bounded fixed chunks into a
-  dedicated request volume, validates it against the stage identity, and copies
-  the input into a fresh read-only workspace. The executor mounts the request and
-  workspace read-only, returns one bounded result, and the dashboard independently validates it against the
-  retained local copy. A second tokenless Job removes the leased remote input.
-  Only the private ledger is updated; public output and the authoritative cache
-  cannot change.
-- **Agent Sandbox OpenCode analyzer** uses workspace contracts under
-  `backend/internal/agentanalysis`, namespace-local input lifecycle under
-  `backend/internal/analysispublisher`, the stager under
-  `backend/internal/analysisstager`, and the executor under
-  `backend/internal/analysisexecutor`. The benchmark and scheduled shadow share
-  this exact runtime and differ only in how the already frozen input is
-  published to the private claim.
+The analyzer publishes evidence and diagnosis. Other packages consume that
+output through separate authority and lifecycle gates:
+
+| Surface | Owner and boundary | Guide |
+| --- | --- | --- |
+| Recurring causal groups | `backend/internal/patterns` correlates representative published failures. It cannot rewrite a per-build diagnosis, and per-job failures are isolated by last-known-good publication. | [Agentic analysis](../agentic.md#pattern-analysis) |
+| Analysis chat | `backend/internal/analysischat` resolves one published test, pattern, or causal group into a bounded private conversation. Cause scope exposes only that group's member builds. Chat does not mutate job JSON. | [Server mode](../server.md#analysis-chat) |
+| Resolution and actions | `backend/internal/actions` and `backend/internal/resolve` operate on current published subjects. Issue and Fix writes use preview and confirmation. Pattern and cause resolution update private lifecycle state. | [Server mode](../server.md#admin-gated-actions) |
+| Fix PR generation | `backend/internal/fixpr` and `backend/internal/fixruntime` bind an eligible subject, immutable source, a canonical patch, validation, review, and confirmation. | [Fix PR generation](../fix-prs.md) |
+| Pull request triage | `backend/internal/prtriage`, `prattribution`, `prescalation`, and `prcomment` own deterministic attribution, shared failures, optional escalation, and the separately gated GitHub App comment. | [Pull request triage](../pull-request-triage.md) |
+| Agent Sandbox analysis shadow | `backend/internal/fetcher`, `agentanalysis`, `analysispublisher`, `analysisstager`, and `analysisexecutor` compare a private sampled result after authoritative publication. Shadow output and cleanup state cannot change public output or normal cache acceptance. | [Agent Sandbox OpenCode analyzer](../maintainer/agent-sandbox-opencode-analyzer.md) |
 
 ## Contributor map
 
