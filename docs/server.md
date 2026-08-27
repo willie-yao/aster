@@ -146,14 +146,15 @@ response that only announces the model's next step is
 not an answer: the engine asks the model to take that step or conclude, and the
 turn fails if it does neither.
 
-After each initial or reconciliation AI publication, the fetcher prepares up to three active,
-Fix-eligible causal groups that do not already have a current finding. These
-best-effort findings use the same cause-scoped artifact tools and citation
-validation as interactive chat. They are cached by cause, model, prompt, and AI
-cache generation. A prepared finding seeds a new cause conversation without
-using one of the maintainer's admitted turns. Preparation failures never fail or
-roll back dashboard publication, and the remaining causes are retried on later
-runs.
+After each initial or reconciliation AI publication, the fetcher prepares up to
+three active causal groups that do not already have a current finding,
+preferring causes on published recurring patterns so the budget reaches the
+causes a maintainer can open. These best-effort findings use the same
+cause-scoped artifact tools and citation validation as interactive chat. They
+are cached by cause, model, prompt, and AI cache generation. A prepared finding
+seeds a new cause conversation without using one of the maintainer's admitted
+turns. Preparation failures never fail or roll back dashboard publication, and
+the remaining causes are retried on later runs.
 
 A proposed revision or Fix finding is still inert model output. Source
 compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff

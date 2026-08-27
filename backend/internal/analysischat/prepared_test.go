@@ -29,18 +29,29 @@ func TestPreparedCauseGenerationChangesWithRuntime(t *testing.T) {
 	}
 }
 
-func TestPreparedCauseTurnRequiresActionableCause(t *testing.T) {
+func TestPreparedCauseTurnWithoutFixTarget(t *testing.T) {
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{Builds: []string{"1"}, RootCause: "cause", Confidence: "high"}}, nil)
 	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleActive}
 	models.AssignPatternIdentity(&pattern)
 	detail := causalPatternDetail(pattern, "1")
 	group := pattern.CausalGroups[0]
-	_, err := PreparedCauseTurn(AnalysisRef{
+	ref := AnalysisRef{
 		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
 		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
-	}, detail)
-	if err == nil {
-		t.Fatal("cause without an eligible failed test was prepared")
+	}
+	resolved, err := resolveCauseAnalysis(ref, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.fixTarget != nil {
+		t.Fatal("fixture unexpectedly has a Fix target")
+	}
+	turn, err := PreparedCauseTurn(ref, detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Scope != ScopeCause || turn.Question != PreparedCauseQuestion || turn.Pattern == nil || len(turn.EvidenceBuilds) == 0 {
+		t.Fatalf("turn = %+v", turn)
 	}
 }
 

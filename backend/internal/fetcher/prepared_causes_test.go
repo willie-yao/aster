@@ -3,6 +3,8 @@ package fetcher
 import (
 	"context"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,13 +16,33 @@ import (
 
 type recordingPreparedCauseRunner struct {
 	calls int
+	turns []analysischat.Turn
 	reply analysischat.Reply
 	err   error
 }
 
-func (r *recordingPreparedCauseRunner) Reply(context.Context, analysischat.Turn) (analysischat.Reply, error) {
+func (r *recordingPreparedCauseRunner) Reply(_ context.Context, turn analysischat.Turn) (analysischat.Reply, error) {
 	r.calls++
+	r.turns = append(r.turns, turn)
 	return r.reply, r.err
+}
+
+func installPreparedCauseRunner(t *testing.T, runner preparedCauseRunner) {
+	t.Helper()
+	previous := newPreparedCauseRunner
+	previousFingerprint := preparedCauseRuntimeFingerprint
+	newPreparedCauseRunner = func(context.Context, *pipeline) (preparedCauseRunner, error) { return runner, nil }
+	preparedCauseRuntimeFingerprint = func(context.Context, *pipeline) (string, error) { return "runtime", nil }
+	t.Cleanup(func() { newPreparedCauseRunner = previous; preparedCauseRuntimeFingerprint = previousFingerprint })
+}
+
+func preparedCausePipeline(dir string) *pipeline {
+	return &pipeline{
+		opts: Options{OutDir: dir, PrepareCauseFindings: true}, enableAI: true,
+		aiProject: &analysisruntime.Project{
+			Provider: project.AIProvider{Model: "model"}, CacheGenerationFingerprint: "cache", SystemPrompt: "prompt",
+		},
+	}
 }
 
 func preparedCauseDetail() models.JobDetail {
@@ -48,23 +70,43 @@ func preparedCauseDetail() models.JobDetail {
 	}
 }
 
+// preparedCauseJob builds a job whose causes have no Fix target: the
+// representative failure carries no file links.
+func preparedCauseJob(jobID string, systemic bool, lifecycle models.PatternLifecycleState, rootCauses ...string) models.JobDetail {
+	detail := models.JobDetail{Name: jobID, JobID: jobID, JobType: models.JobTypePeriodic}
+	pattern := models.PatternAnalysis{
+		Subject: "failure", JobID: jobID, GeneratedAt: "2026-08-25T00:00:00Z", Systemic: systemic,
+		Lifecycle: &models.PatternLifecycle{State: lifecycle},
+	}
+	for index, rootCause := range rootCauses {
+		buildID := strconv.Itoa(index + 1)
+		pattern.CausalGroups = append(pattern.CausalGroups, models.PatternCausalGroup{
+			Builds: []string{buildID}, RootCause: rootCause, Confidence: "high",
+		})
+		detail.Runs = append(detail.Runs, models.BuildResult{
+			BuildInfo: models.BuildInfo{BuildID: buildID, JobName: jobID},
+			TestCases: []models.TestCase{{
+				Name: "TestCluster", Status: "failed", JUnitFile: "junit.xml",
+				AIAnalysis: &models.AIAnalysis{
+					GeneratedAt: "2026-08-25T00:00:00Z", RootCause: rootCause, Severity: "High",
+					Disposition: models.AnalysisDispositionGrounded,
+				},
+			}},
+		})
+	}
+	models.AssignPatternIdentity(&pattern)
+	detail.PatternAnalyses = []models.PatternAnalysis{pattern}
+	return detail
+}
+
 func TestPrepareCauseFindingsCachesSuccessfulAnswer(t *testing.T) {
 	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
 		Answer: "Change the controller.", Assessment: "supports",
 		Citations: []analysischat.Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
 	}}
-	previous := newPreparedCauseRunner
-	previousFingerprint := preparedCauseRuntimeFingerprint
-	newPreparedCauseRunner = func(context.Context, *pipeline) (preparedCauseRunner, error) { return runner, nil }
-	preparedCauseRuntimeFingerprint = func(context.Context, *pipeline) (string, error) { return "runtime", nil }
-	t.Cleanup(func() { newPreparedCauseRunner = previous; preparedCauseRuntimeFingerprint = previousFingerprint })
+	installPreparedCauseRunner(t, runner)
 	dir := t.TempDir()
-	p := &pipeline{
-		opts: Options{OutDir: dir, PrepareCauseFindings: true}, enableAI: true,
-		aiProject: &analysisruntime.Project{
-			Provider: project.AIProvider{Model: "model"}, CacheGenerationFingerprint: "cache", SystemPrompt: "prompt",
-		},
-	}
+	p := preparedCausePipeline(dir)
 	details := []models.JobDetail{preparedCauseDetail()}
 	p.prepareCauseFindings(t.Context(), details)
 	p.prepareCauseFindings(t.Context(), details)
@@ -84,4 +126,48 @@ func TestPrepareCauseFindingsCachesSuccessfulAnswer(t *testing.T) {
 			t.Fatalf("finding = %+v err=%v", finding, err)
 		}
 	}
+}
+
+func TestPrepareCauseFindingsPrefersPublishedCauses(t *testing.T) {
+	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
+		Answer: "Change the controller.", Assessment: "supports",
+		Citations: []analysischat.Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
+	}}
+	installPreparedCauseRunner(t, runner)
+	p := preparedCausePipeline(t.TempDir())
+	p.prepareCauseFindings(t.Context(), []models.JobDetail{
+		preparedCauseJob("unpublished", false, models.PatternLifecycleActive, "unpublished cause a", "unpublished cause b"),
+		preparedCauseJob("published", true, models.PatternLifecycleActive, "published cause a", "published cause b"),
+	})
+	if runner.calls != maxPreparedCauseFindingsPerRun {
+		t.Fatalf("calls = %d", runner.calls)
+	}
+	if prepared := preparedJobIDs(runner); !slices.Equal(prepared, []string{"published", "published", "unpublished"}) {
+		t.Fatalf("prepared jobs = %v", prepared)
+	}
+}
+
+func TestPrepareCauseFindingsSkipsInactivePatterns(t *testing.T) {
+	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
+		Answer: "Change the controller.", Assessment: "supports",
+		Citations: []analysischat.Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
+	}}
+	installPreparedCauseRunner(t, runner)
+	p := preparedCausePipeline(t.TempDir())
+	p.prepareCauseFindings(t.Context(), []models.JobDetail{
+		preparedCauseJob("verified-fixed", true, models.PatternLifecycleVerifiedFixed, "repaired cause"),
+		preparedCauseJob("recovered", true, models.PatternLifecycleRecovered, "recovered cause"),
+		preparedCauseJob("active", true, models.PatternLifecycleActive, "active cause"),
+	})
+	if prepared := preparedJobIDs(runner); !slices.Equal(prepared, []string{"active"}) {
+		t.Fatalf("prepared jobs = %v", prepared)
+	}
+}
+
+func preparedJobIDs(runner *recordingPreparedCauseRunner) []string {
+	prepared := make([]string, 0, len(runner.turns))
+	for _, turn := range runner.turns {
+		prepared = append(prepared, turn.JobID)
+	}
+	return prepared
 }

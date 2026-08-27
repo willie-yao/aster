@@ -94,7 +94,10 @@ func SavePreparedCauseFindings(path string, state PreparedCauseFindings) error {
 	return statefile.WritePrivateJSONDurable(path, state)
 }
 
-// PreparedCauseTurn builds the stateless first turn for one actionable cause.
+// PreparedCauseTurn builds the stateless first turn for one cause. It resolves
+// exactly what an interactive cause conversation resolves: a prepared finding is
+// a read-only evidence answer, and whether the cause can later start a Fix is
+// decided by the Fix path against fresher state.
 func PreparedCauseTurn(ref AnalysisRef, detail models.JobDetail) (Turn, error) {
 	ref, err := normalizeAnalysisRef(ref)
 	if err != nil || ref.Scope != ScopeCause {
@@ -103,9 +106,6 @@ func PreparedCauseTurn(ref AnalysisRef, detail models.JobDetail) (Turn, error) {
 	resolved, err := resolveCauseAnalysis(ref, detail)
 	if err != nil {
 		return Turn{}, err
-	}
-	if resolved.fixTarget == nil {
-		return Turn{}, fmt.Errorf("%w: cause has no eligible failed-test Fix target", ErrInvalidRequest)
 	}
 	return Turn{
 		Scope: resolved.ref.Scope, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
