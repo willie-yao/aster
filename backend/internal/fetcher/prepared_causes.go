@@ -16,10 +16,13 @@ import (
 const maxPreparedCauseFindingsPerRun = 3
 
 type preparedCauseCandidate struct {
-	key   string
-	ref   analysischat.AnalysisRef
-	turn  analysischat.Turn
-	retry bool
+	key  string
+	ref  analysischat.AnalysisRef
+	turn analysischat.Turn
+	// published marks a cause on a recurring pattern the dashboard publishes, so
+	// the per-run budget is spent where a maintainer can open the finding.
+	published bool
+	retry     bool
 }
 
 type preparedCauseRunner interface {
@@ -67,6 +70,10 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 	candidates := make([]preparedCauseCandidate, 0)
 	for _, detail := range details {
 		for _, pattern := range detail.PatternAnalyses {
+			if !models.PatternIsActive(pattern) {
+				continue
+			}
+			published := pattern.Systemic
 			for _, group := range pattern.CausalGroups {
 				ref := analysischat.AnalysisRef{
 					Scope: analysischat.ScopeCause, JobID: detail.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
@@ -91,7 +98,7 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 					}
 					retry = true
 				}
-				candidates = append(candidates, preparedCauseCandidate{key: key, ref: ref, turn: turn, retry: retry})
+				candidates = append(candidates, preparedCauseCandidate{key: key, ref: ref, turn: turn, published: published, retry: retry})
 			}
 		}
 	}
@@ -110,7 +117,12 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 		log.Printf("Warning: prepared cause findings cache save failed: %v", err)
 		return
 	}
-	sort.SliceStable(candidates, func(i, j int) bool { return !candidates[i].retry && candidates[j].retry })
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].published != candidates[j].published {
+			return candidates[i].published
+		}
+		return !candidates[i].retry && candidates[j].retry
+	})
 	if len(candidates) > maxPreparedCauseFindingsPerRun {
 		candidates = candidates[:maxPreparedCauseFindingsPerRun]
 	}
