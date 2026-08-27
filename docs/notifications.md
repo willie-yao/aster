@@ -113,7 +113,7 @@ workflow:
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.9
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
     with:
       project_dir: .
     secrets:

@@ -35,7 +35,7 @@ the token from a repository Secret:
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.9
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
     with:
       project-dir: .
       ai-api: ${{ vars.AI_API }}

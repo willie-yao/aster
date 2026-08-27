@@ -50,8 +50,8 @@ fork coordinate because the generated workflow hardcodes
 The default published pair is:
 
 ```text
-<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9
-<engine-ref> = v0.9.0-rc.9
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10
+<engine-ref> = v0.9.0-rc.10
 ```
 
 This published pair is the default for Pages setup. It predates the Kubernetes
@@ -112,7 +112,7 @@ checkout can be deployed by the reusable workflow.
 Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard ...
 ```
 
 Use one form consistently as `<aster>` for discovery, planning, application,

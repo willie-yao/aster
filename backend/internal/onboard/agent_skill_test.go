@@ -48,7 +48,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
 		"separate workspaces, plans, handoffs", "fetch the canonical", "stale or fork-only local engine", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
-		"@v0.9.0-rc.9", "<engine-ref>", "-engine-ref <engine-ref>", "default for Pages setup", "predates the Kubernetes",
+		"@v0.9.0-rc.10", "<engine-ref>", "-engine-ref <engine-ref>", "default for Pages setup", "predates the Kubernetes",
 		"exact release tag or full commit SHA", "<engine-repository> = willie-yao/aster",
 		"<engine-repository-url> = https://github.com/willie-yao/aster",
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml",
@@ -66,7 +66,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"api-experimental", "rm -rf", "--no-verify", "backend/cmd/aster@latest",
-		"-engine-ref v0.9.0-rc.9", "recorded engine revision is the commit resolved from that exact ref",
+		"-engine-ref v0.9.0-rc.10", "recorded engine revision is the commit resolved from that exact ref",
 		"configured Aster Git remote", "configured GitHub remote", "available on the configured GitHub remote",
 	} {
 		if strings.Contains(text, forbidden) {

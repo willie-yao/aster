@@ -27,8 +27,8 @@ From a checkout of the repository whose jobs you want to monitor, run the
 guided wizard at an exact released version:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 onboard \
-  -engine-ref v0.9.0-rc.9
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard \
+  -engine-ref v0.9.0-rc.10
 ```
 
 The wizard discovers matching Prow jobs, reviews deployment and AI choices,
