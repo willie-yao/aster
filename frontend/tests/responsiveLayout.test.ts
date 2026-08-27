@@ -81,8 +81,10 @@ test("rail-hosted controls stay inside the 76px column", () => {
   // The status label is the widest part of the control and must be hidden too,
   // or a 44px button still overflows the rail.
   assert.match(fetchStatus, /display: iconOnly \? "none" : \{ xs: "none", md: "inline" \}/);
-  // Signed out, the labelled "Sign in" button becomes an icon button.
-  assert.match(profile, /if \(compact\) \{[\s\S]*?aria-label="Sign in"/);
+  // Signed out, the rail's sign-in stacks glyph over label like the rail's
+  // destination items, and fills the column rather than sizing to its content.
+  assert.match(profile, /if \(compact\) \{[\s\S]*?aria-label="Sign in with GitHub"/);
+  assert.match(profile, /if \(compact\) \{[\s\S]*?width: "100%"/);
 });
 
 test("the rail keeps every destination reachable on a short viewport", () => {
@@ -156,7 +158,7 @@ test("run history remains contained on narrow detail pages", () => {
   assert.match(timeline, /width: "100%"[\s\S]*minWidth: 0[\s\S]*maxWidth: "100%"[\s\S]*overflowX: "auto"/);
   assert.match(timeline, /width: "max-content"[\s\S]*minWidth: "100%"/);
   assert.match(jobDetail, /<RunHistory[\s\S]*metadata=\{`\$\{historyRuns\.length\} recent/);
-  assert.match(jobDetail, /gridTemplateColumns: \{ xs: "minmax\(0, 1fr\)"[\s\S]*minWidth: 0/);
+  assert.match(jobDetail, /gridTemplateColumns: \{\s*xs: "minmax\(0, 1fr\)"[\s\S]*minWidth: 0/);
 });
 
 test("test analysis and run history reflow at mobile and zoom widths", () => {

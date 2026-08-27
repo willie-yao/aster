@@ -125,7 +125,7 @@ function decode(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-const actionPrefix = "Open representative failure:";
+const actionSuffix = ", open representative failure";
 
 interface FixAction {
   visible: string;
@@ -136,7 +136,7 @@ function fixActions(html: string): FixAction[] {
   const actions: FixAction[] = [];
   for (const match of html.matchAll(/<a\b[^>]*aria-label="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gu)) {
     const accessible = decode(match[1]);
-    if (!accessible.startsWith(actionPrefix)) continue;
+    if (!accessible.endsWith(actionSuffix)) continue;
     // Emotion inlines a <style> block inside the first rendered anchor, so its
     // CSS text has to go before tags are stripped or it lands in the label.
     const body = match[2].replace(/<style\b[\s\S]*?<\/style>/gu, "");
@@ -173,9 +173,9 @@ test("routing actions stay distinguishable when two causes humanize to one title
     visible.map((label) => label.includes(" in build ")),
     [true, true, false],
   );
-  assert.ok(visible[0].startsWith(`${actionPrefix} Highly available cluster in build 100`));
-  assert.ok(visible[1].startsWith(`${actionPrefix} Highly available cluster in build 250`));
-  assert.equal(visible[2], `${actionPrefix} Conformance tests should pass`);
+  assert.ok(visible[0].startsWith("Highly available cluster in build 100"));
+  assert.ok(visible[1].startsWith("Highly available cluster in build 250"));
+  assert.equal(visible[2], "Conformance tests should pass");
 });
 
 test("the routing action names the test the way the rest of the page does", () => {

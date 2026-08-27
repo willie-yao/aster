@@ -104,9 +104,11 @@ export function JobDetailPrimaryLayout({
       <Box
         sx={{
           display: "grid",
+          // Same as the analysis layout: the rail holds fixed-size evidence, so
+          // a pinned width beats splitting the row by ratio on a wide screen.
           gridTemplateColumns: {
             xs: "minmax(0, 1fr)",
-            lg: "minmax(0, 1fr) minmax(360px, 0.8fr)",
+            lg: "minmax(0, 1fr) 380px",
           },
           gap: 2,
           minWidth: 0,
@@ -126,9 +128,11 @@ export function JobDetailPrimaryLayout({
     <Box
       sx={{
         display: "grid",
+        // The rail holds fixed-size evidence, so pinning its width gives the
+        // analysis column the rest rather than splitting the row by ratio.
         gridTemplateColumns: {
           xs: "minmax(0, 1fr)",
-          lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
+          lg: "minmax(0, 1fr) 380px",
         },
         gap: 2,
         minWidth: 0,
@@ -483,9 +487,16 @@ export function JobDetailPage() {
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
-          alignItems: "start",
-          gap: { xs: 1, sm: 2 },
+          // From md up the status sits beside the title it describes. A
+          // trailing `auto` column would strand it against the far page edge.
+          gridTemplateColumns: {
+            xs: "minmax(0, 1fr)",
+            sm: "minmax(0, 1fr) auto",
+            md: "auto auto",
+          },
+          justifyContent: { md: "start" },
+          alignItems: { xs: "start", md: "center" },
+          gap: { xs: 1, sm: 2, md: 3 },
         }}
       >
         <Box sx={{ minWidth: 0 }}>

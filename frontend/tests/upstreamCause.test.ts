@@ -206,7 +206,7 @@ test("a cause owned by a dependency reports it even when a Fix route exists", ()
   assert.match(html, /kubernetes\/kubernetes/);
   assert.match(html, /project-side mitigation/);
   // The action itself is unchanged and still opens the failing test.
-  assert.match(html, /aria-label="Open representative failure: fails in build 208060"/i);
+  assert.match(html, /aria-label="fails in build 208060, open representative failure"/i);
 
   const owned = render(
     createElement(CausalGroupFixRouting, {
@@ -215,7 +215,7 @@ test("a cause owned by a dependency reports it even when a Fix route exists", ()
       externalCause: null,
     }),
   );
-  assert.match(owned, /aria-label="Open representative failure: fails in build 208060"/i);
+  assert.match(owned, /aria-label="fails in build 208060, open representative failure"/i);
   assert.doesNotMatch(owned, /dependency/);
 });
 
@@ -232,12 +232,14 @@ test("stale causes point to evidence without offering it as the live route", () 
     stale: true,
   }));
 
-  // The button navigates either way, so the wording does not change. The
-  // demotion is carried by the variant, which has to actually differ.
-  assert.match(html, /aria-label="Open representative failure: fails in build 208060"/i);
-  assert.match(live, /MuiButton-outlined/);
-  assert.doesNotMatch(html, /MuiButton-outlined/);
+  // The button navigates either way, so the wording does not change. Both read
+  // as links now, so the demotion is carried by the underline, which still has
+  // to actually differ.
+  assert.match(html, /aria-label="fails in build 208060, open representative failure"/i);
+  assert.match(live, /MuiButton-text/);
   assert.match(html, /MuiButton-text/);
+  assert.match(live, /text-underline-offset:3px/);
+  assert.doesNotMatch(html, /text-underline-offset:3px/);
 });
 
 test("the pattern panel only points at a chat that is on the page", () => {

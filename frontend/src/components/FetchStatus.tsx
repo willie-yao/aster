@@ -16,6 +16,7 @@ import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { Theme } from "@mui/material/styles";
 import { Link as RouterLink } from "react-router-dom";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { touchTargetSx, overlayPaperSx } from "../theme/overview";
@@ -125,6 +126,20 @@ export function FetchActivityIcon({ size }: { size: number }) {
     </Box>
   );
 }
+
+// The rail hosts this control in a 76px column, too narrow for the popover's
+// phase headline, so the active phase gets a short label of its own.
+const railPhaseLabels: Record<string, string> = {
+  setup: "Preparing",
+  discovery: "Discovering",
+  artifacts: "Fetching",
+  aggregation: "Building",
+  "analysis-planning": "Planning",
+  analysis: "Analyzing",
+  patterns: "Patterns",
+  publication: "Publishing",
+  "side-effects": "Follow-up",
+};
 
 function stateIcon(response: FetchStatusResponse, size = 18, severity?: "info" | "warning" | "error" | "success"): ReactNode {
   switch (response.state) {
@@ -431,52 +446,130 @@ export function FetchStatusControl({ response, iconOnly = false }: FetchStatusCo
       ? "The latest published dashboard remains available."
       : "The last published dashboard remains available.";
 
+  // In the rail the label is hidden, so an active refresh would otherwise
+  // render as a bare spinning arc. Every active phase names itself; only the
+  // two that count work carry the count and the bar.
+  const railActive = iconOnly && response.state === "active";
+  const railLabel = railPhaseLabels[status.phase] ?? "Refreshing";
+  const railPercent = Math.round(progress ?? 0);
+  const railDone = presentation.determinateCompleted;
+  const railTotal = presentation.determinateTotal ?? 0;
+  const railDeterminate = progress !== null;
+
+  const countSx = {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: "0.6875rem",
+    fontWeight: 500,
+    lineHeight: 1.2,
+    color: "text.secondary",
+  } as const;
+
+  const railButtonSx = {
+    width: "100%",
+    minWidth: 0,
+    minHeight: 44,
+    px: 0.5,
+    py: 0.5,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 0.25,
+    borderRadius: 1,
+    textTransform: "none",
+    boxShadow: "none",
+    color: "text.secondary",
+    "&:hover": { bgcolor: (theme: Theme) => soft(theme, "primary", 0.08) },
+    "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
+  } as const;
+
+  const defaultControl = (
+    <Button
+      size="small"
+      aria-label={compact.ariaLabel}
+      aria-haspopup="dialog"
+      aria-controls={popoverID}
+      aria-expanded={Boolean(anchor)}
+      onClick={(event) => setAnchor(event.currentTarget)}
+      endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
+      sx={{
+        // The rail hosts this in a 76px column, so it stays icon-only there.
+        minWidth: iconOnly ? 44 : { xs: 44, md: "auto" },
+        width: iconOnly ? 44 : { xs: 44, md: "auto" },
+        height: iconOnly ? 44 : { xs: 44, md: 34 },
+        px: iconOnly ? 0 : { xs: 0, md: 1.1 },
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 999,
+        color: `${compact.severity}.main`,
+        bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
+        textTransform: "none",
+        whiteSpace: "nowrap",
+        boxShadow: "none",
+        "& .MuiButton-endIcon": { display: iconOnly ? "none" : { xs: "none", md: "inherit" } },
+        "&:hover": {
+          borderColor: `${compact.severity}.main`,
+          bgcolor: (theme) => soft(theme, compact.severity, 0.08),
+        },
+      }}
+    >
+      <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: iconOnly ? 0 : { xs: 0, md: 1 } }}>
+        {stateIcon(response, 18, presentation.severity)}
+        <Box
+          component="span"
+          sx={{
+            display: iconOnly ? "none" : { xs: "none", md: "inline" },
+            color: "text.primary",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+          }}
+        >
+          {compact.label}
+        </Box>
+      </Box>
+    </Button>
+  );
+
+  const railTrigger = (
+    <Button
+      size="small"
+      aria-label={compact.ariaLabel}
+      aria-haspopup="dialog"
+      aria-controls={popoverID}
+      aria-expanded={Boolean(anchor)}
+      onClick={(event) => setAnchor(event.currentTarget)}
+      sx={railButtonSx}
+    >
+      <Box component="span" sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, color: "text.primary" }}>
+        {railLabel}
+      </Box>
+      {railDeterminate && (
+        <Box component="span" sx={countSx}>
+          {railDone}/{railTotal}
+        </Box>
+      )}
+      <LinearProgress
+        variant={railDeterminate ? "determinate" : "indeterminate"}
+        value={railDeterminate ? railPercent : undefined}
+        aria-hidden="true"
+        sx={{
+          width: "100%",
+          mt: 0.25,
+          height: 3,
+          borderRadius: 999,
+          bgcolor: "surface.containerHighest",
+          // A refresh in progress is chrome activity, not a CI outcome, so the
+          // bar takes the brand hue and leaves green, amber, and red to mean
+          // pass, flake, and fail. It is the only coloured mark here.
+          "& .MuiLinearProgress-bar": { bgcolor: "primary.main" },
+        }}
+      />
+    </Button>
+  );
+
   return (
     <>
-      <Button
-        size="small"
-        aria-label={compact.ariaLabel}
-        aria-haspopup="dialog"
-        aria-controls={popoverID}
-        aria-expanded={Boolean(anchor)}
-        onClick={(event) => setAnchor(event.currentTarget)}
-        endIcon={<ExpandMore sx={{ fontSize: 16 }} />}
-        sx={{
-          // The rail hosts this in a 76px column, so it stays icon-only there.
-          minWidth: iconOnly ? 44 : { xs: 44, md: "auto" },
-          width: iconOnly ? 44 : { xs: 44, md: "auto" },
-          height: iconOnly ? 44 : { xs: 44, md: 34 },
-          px: iconOnly ? 0 : { xs: 0, md: 1.1 },
-          border: "1px solid",
-          borderColor: "divider",
-          borderRadius: 999,
-          color: `${compact.severity}.main`,
-          bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
-          textTransform: "none",
-          whiteSpace: "nowrap",
-          boxShadow: "none",
-          "& .MuiButton-endIcon": { display: iconOnly ? "none" : { xs: "none", md: "inherit" } },
-          "&:hover": {
-            borderColor: `${compact.severity}.main`,
-            bgcolor: (theme) => soft(theme, compact.severity, 0.08),
-          },
-        }}
-      >
-        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: iconOnly ? 0 : { xs: 0, md: 1 } }}>
-          {stateIcon(response, 18, presentation.severity)}
-          <Box
-            component="span"
-            sx={{
-              display: iconOnly ? "none" : { xs: "none", md: "inline" },
-              color: "text.primary",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-            }}
-          >
-            {compact.label}
-          </Box>
-        </Box>
-      </Button>
+      {railActive ? railTrigger : defaultControl}
       <Box component="span" role="status" aria-live="polite" aria-atomic="true" sx={visuallyHidden}>
         {presentation.announcement}
       </Box>

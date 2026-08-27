@@ -13,6 +13,7 @@ import type {
   BuildResult,
   FailureRecurrence,
   PatternAnalysis,
+  PatternCausalGroup,
   PatternRefreshStatus,
 } from "../types/dashboard";
 import type { AnalysisChatReference } from "../types/analysisChat";
@@ -20,6 +21,7 @@ import {
   fileSortKey,
   fileToUrl,
   meetsConfidenceFloor,
+  timeAgo,
   type FileToUrlContext,
 } from "../lib/utils";
 import { RichText } from "./RichText";
@@ -48,6 +50,16 @@ import { accentLabelSx } from "../theme";
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
   return match?.[0].trim() || value.trim();
+}
+
+// The summary rail links to a cause card, so both sides derive the anchor here
+// rather than restating the key and drifting apart.
+function causeCardID(pattern: PatternAnalysis, causeKey: string): string {
+  return `cause-card-${pattern.id ?? "pattern"}-${causeKey}`;
+}
+
+function causeKeyFor(group: PatternCausalGroup, index: number): string {
+  return group.signature ?? group.id ?? String(index);
 }
 
 export function PatternBanner({
@@ -321,7 +333,7 @@ export function PatternBanner({
               // The override is scoped to one specific resolution event, so a
               // cause that is reopened and then resolved again folds itself
               // away instead of inheriting the expansion from last time.
-              const causeKey = group.signature ?? group.id ?? String(index);
+              const causeKey = causeKeyFor(group, index);
               const collapsible = Boolean(causeResolutions[index]);
               const overrideKey = `${causeKey}:${causeResolutions[index]?.resolved_at ?? ""}`;
               // Only a collapsible cause consults the override. An unresolved
@@ -330,12 +342,14 @@ export function PatternBanner({
               // hidden with no toggle left to show it.
               const expanded = collapsible ? expandedCauses[overrideKey] ?? false : true;
               const bodyID = `cause-body-${pattern.id ?? "pattern"}-${causeKey}`;
+              const cardID = causeCardID(pattern, causeKey);
               return (
               // Keying on group identity ties the remediation component instance
               // to one operation, so a refreshed group never inherits another
               // group's in-flight status or preview.
               <Box
                 key={`${group.id ?? ""}:${group.content_hash ?? ""}:${group.builds.join("-")}-${group.root_cause}`}
+                id={cardID}
                 sx={{
                   minWidth: 0,
                   border: "1px solid",
@@ -544,6 +558,10 @@ export function PatternBanner({
                         // build suffix and the resolution control both refuse to
                         // shrink, so side by side they would overlap.
                         alignItems: { xs: "stretch", sm: "center" },
+                        // The route reads from the start of the bar and the
+                        // action anchors its end, so a wide row has no gap
+                        // sitting between the two.
+                        justifyContent: "space-between",
                         flexWrap: "wrap",
                         rowGap: 1,
                         minWidth: 0,
@@ -700,6 +718,49 @@ export function PatternBanner({
     </Stack>
   ) : undefined;
 
+  const causeCount = causalGroups.length > 0 ? String(causalGroups.length) : "None isolated";
+
+  // The band beside the title already carries builds and confidence, so this
+  // rail answers what it does not: when the analysis ran, and a way into the
+  // causes without scrolling for them.
+  const summaryFacts = (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.25,
+        // The rule only reads as a rail when the stack sits beside the prose.
+        "@media (min-width: 1100px)": { borderLeft: 1, borderColor: "divider", pl: 2.5 },
+      }}
+    >
+      {[
+        { label: "Analysed", value: timeAgo(pattern.generated_at) },
+        {
+          label: "Distinct causes",
+          value: causalGroups.length > 0 ? (
+            <Link
+              href={`#${causeCardID(pattern, causeKeyFor(causalGroups[0], 0))}`}
+              underline="hover"
+              sx={{ color: "primary.main" }}
+            >
+              {causeCount}
+            </Link>
+          ) : causeCount,
+        },
+        { label: "Confidence", value: pattern.confidence },
+      ].map((fact) => (
+        <Box key={fact.label}>
+          <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700 }}>
+            {fact.label}
+          </Typography>
+          <Typography component="div" sx={{ ...overviewTypography.data, color: "text.primary" }}>
+            {fact.value}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+
   return (
     <AnalysisBriefing
       id={pattern.id ? `pattern-${pattern.id}` : undefined}
@@ -710,6 +771,7 @@ export function PatternBanner({
       mobileMetadata={staleNotice ? `Last successful refresh · ${metadata}` : metadata}
       mobileNotice={mobileNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
+      summaryAside={summaryFacts}
       mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
       details={details}
       actions={actions}

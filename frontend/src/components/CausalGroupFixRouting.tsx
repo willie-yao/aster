@@ -69,39 +69,54 @@ export function CausalGroupFixButton({
   // The same humanized title the test ledger uses, so the action names the test
   // the way the rest of the page does instead of repeating the raw JUnit name.
   const testName = parseTestDisplayName(target.testName).displayName;
-  // One suffix backs both the accessible name and the optional visible segment,
-  // so the visible label is always a literal prefix of the accessible name.
   const buildSuffix = ` in build ${target.buildID}`;
-  // The button navigates, so one label covers both states. A stale route stays
-  // reachable but is demoted to a text button, so it never reads as the live
-  // action beside the cause's other control.
-  const actionLabel = "Open representative failure";
-  const subject = `${actionLabel}: ${testName}${buildSuffix}`;
+  // The icon carries the verb, so the visible label is only the test. Spelling
+  // it out as well pushed the label past any width the bar has and forced it to
+  // ellipsize even on a wide screen. The accessible name therefore leads with
+  // that same visible text and trails the verb, so it still starts with what is
+  // on screen and speech input can match it (WCAG 2.5.3). The build suffix is
+  // always in the accessible name and visible only when two causes collide,
+  // which keeps the visible label a prefix of it either way.
+  // A stale route keeps the muted, undecorated treatment, so it never reads as
+  // the live action beside the cause's other control.
+  const actionLabel = "open representative failure";
+  const subject = `${testName}${buildSuffix}`;
+  const accessibleName = `${subject}, ${actionLabel}`;
 
   return (
-    <Tooltip title={subject}>
+    <Tooltip title={accessibleName}>
       <Button
         component={RouterLink}
         to={testRunPath(jobID, target.testName, target.buildID)}
-        variant={stale ? "text" : "outlined"}
+        variant="text"
         size="small"
         startIcon={stale ? <VisibilityOutlined aria-hidden /> : <AutoFixHigh aria-hidden />}
-        aria-label={subject}
+        aria-label={accessibleName}
         sx={{
           minHeight: { xs: 44, sm: 32 },
-          // A zero basis keeps this item from ever forcing a wrap, so it grows
-          // into the space the resolution control leaves and ellipsizes its
-          // label instead of dropping onto its own line. minWidth: 0 is what
-          // permits shrinking below the label's intrinsic width.
-          flex: "1 1 0",
+          // Sized to its content so it uses the width it has and ellipsizes
+          // only once the row genuinely runs out. minWidth: 0 is what permits
+          // shrinking below the label's intrinsic width.
+          flex: "0 1 auto",
           minWidth: 0,
           maxWidth: "100%",
+          px: 0,
           justifyContent: "flex-start",
           textAlign: "left",
           textTransform: "none",
           ...overviewTypography.secondaryBody,
           fontWeight: 650,
           color: stale ? "text.secondary" : "primary.main",
+          // It navigates rather than acting, so it reads as a link and leaves
+          // the bordered-control treatment to the resolution button.
+          ...(stale
+            ? {}
+            : {
+              textDecoration: "underline",
+              textDecorationColor: "color-mix(in srgb, var(--mui-palette-primary-main) 40%, transparent)",
+              textUnderlineOffset: 3,
+            }),
+          "&:hover": { bgcolor: "transparent", textDecorationColor: "currentColor" },
           "&:focus-visible": {
             outline: "2px solid",
             outlineColor: "primary.main",
@@ -113,7 +128,7 @@ export function CausalGroupFixButton({
           component="span"
           sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >
-          {actionLabel}: {testName}
+          {testName}
         </Box>
         {showBuild && (
           // whiteSpace: "pre" keeps the suffix's leading space, so the rendered

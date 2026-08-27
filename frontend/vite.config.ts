@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -15,8 +15,25 @@ const basePath = process.env.VITE_BASE_PATH || '/'
 // same directory the mock server reads.
 const mockAPI = process.env.VITE_MOCK_API
 
+// The entry HTML pins a strict CSP that the dev server enforces too, so any
+// local design or debugging tool that injects a script from its own origin is
+// blocked while iterating. Drop the meta tag during `vite dev` only; the
+// production build serves it untouched.
+function stripDevCSP(): Plugin {
+  return {
+    name: 'aster-strip-dev-csp',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      return html.replace(
+        /[ \t]*<meta\s+http-equiv="Content-Security-Policy"[^>]*>\n?/i,
+        '',
+      )
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), stripDevCSP()],
   base: basePath,
   build: {
     rollupOptions: {

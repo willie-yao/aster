@@ -120,7 +120,7 @@ test("a cause gathers everything it offers under one Next step section", () => {
   assert.equal(html.match(/Next step/g)?.length, 1);
   assert.match(html, /Suggested remediation from build 300/);
   assert.match(html, /Bump the node image to the current release\./);
-  assert.match(html, /Open representative failure: Conformance tests should pass/);
+  assert.match(html, /Conformance tests should pass in build 300, open representative failure/);
   assert.match(html, /Expand investigate cause/);
   assert.doesNotMatch(html, /Expand investigate and fix/);
 
@@ -134,7 +134,7 @@ test("a published-only deploy still gets the cause's reported remediation", () =
   assert.match(html, /Suggested remediation from build 300/);
   assert.match(html, /Bump the node image to the current release\./);
   // Neither capability is present, so neither control may be offered.
-  assert.doesNotMatch(html, /Open representative failure/);
+  assert.doesNotMatch(html, /open representative failure/);
   assert.doesNotMatch(html, /Expand investigate cause/);
 });
 

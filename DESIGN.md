@@ -367,7 +367,7 @@ accent edge, title on the left and metadata on the right. Every detail section
 and every action dialog opens with one.
 
 ### Run history strip
-A row of status squares, one per run, 8px dot in a 24x28px cell on desktop and a
+A row of status squares, one per run, 18px dot in a 24x28px cell on desktop and a
 44px touch cell on mobile. The strip is one composite tab stop: a single
 tabbable child, arrow keys to move within it, Home and End to jump. A ledger of
 28 jobs would otherwise put roughly 300 links in the tab order.
