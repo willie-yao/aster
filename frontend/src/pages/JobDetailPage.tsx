@@ -104,11 +104,12 @@ export function JobDetailPrimaryLayout({
       <Box
         sx={{
           display: "grid",
-          // Same as the analysis layout: the rail holds fixed-size evidence, so
-          // a pinned width beats splitting the row by ratio on a wide screen.
+          // The same split as the analysis layout, so the rail does not change
+          // width between the two. Here the strip and chart take the wider
+          // track and metadata holds the rail.
           gridTemplateColumns: {
             xs: "minmax(0, 1fr)",
-            lg: "minmax(0, 1fr) 380px",
+            lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
           },
           gap: 2,
           minWidth: 0,
@@ -128,11 +129,12 @@ export function JobDetailPrimaryLayout({
     <Box
       sx={{
         display: "grid",
-        // The rail holds fixed-size evidence, so pinning its width gives the
-        // analysis column the rest rather than splitting the row by ratio.
+        // The run strip and trend chart grow with the retained run count, so
+        // the row splits by ratio rather than pinning the rail, matching the
+        // test detail grid.
         gridTemplateColumns: {
           xs: "minmax(0, 1fr)",
-          lg: "minmax(0, 1fr) 380px",
+          lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)",
         },
         gap: 2,
         minWidth: 0,
