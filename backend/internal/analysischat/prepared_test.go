@@ -2,6 +2,7 @@ package analysischat
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -113,5 +114,84 @@ func TestServiceCreateSeedsPreparedCauseFindingWithoutUsingATurn(t *testing.T) {
 	}
 	if candidate.Analysis.Scope != ScopeCause || candidate.FixTarget.TestName != "TestCluster" || len(candidate.ArtifactCitations) != 1 {
 		t.Fatalf("candidate = %+v", candidate)
+	}
+}
+
+func TestServicePreparedAvailable(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{
+		{Builds: []string{"1"}, RootCause: "cause", Confidence: "high"},
+		{Builds: []string{"1"}, RootCause: "second cause", Confidence: "high"},
+	}, nil)
+	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleActive}
+	models.AssignPatternIdentity(&pattern)
+	detail := causalPatternDetail(pattern, "1")
+	writeJobDetail(t, dir, detail)
+
+	causeRef := func(group models.PatternCausalGroup) AnalysisRef {
+		return AnalysisRef{
+			Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+			CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+		}
+	}
+	ready := causeRef(pattern.CausalGroups[0])
+	uncited := causeRef(pattern.CausalGroups[1])
+	readyKey, err := PreparedCauseKey(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncitedKey, err := PreparedCauseKey(uncited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := PreparedCauseGeneration("runtime")
+	if err := SavePreparedCauseFindings(preparedFindingPath(dir), PreparedCauseFindings{
+		Generation: generation,
+		Findings: map[string]PreparedCauseFinding{
+			readyKey: {Ref: ready, PreparedAt: "2026-08-25T01:00:00Z", Reply: Reply{
+				Answer: "The artifact supports changing the controller.", Assessment: "supports",
+				Citations: []Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
+			}},
+			// A finding with no citation is not usable, so it must not be
+			// advertised as waiting.
+			uncitedKey: {Ref: uncited, PreparedAt: "2026-08-25T01:00:00Z", Reply: Reply{Answer: "no evidence"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patternScoped := AnalysisRef{Scope: ScopePattern, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash}
+	invalid := AnalysisRef{Scope: ScopeCause, JobID: pattern.JobID}
+	refs := []AnalysisRef{ready, uncited, patternScoped, invalid}
+
+	// Preparation is not configured yet, so nothing is waiting anywhere.
+	if got := service.PreparedAvailable(refs); !reflect.DeepEqual(got, []bool{false, false, false, false}) {
+		t.Fatalf("unconfigured = %v", got)
+	}
+	if err := service.ConfigurePreparedCauseFindings(generation); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.PreparedAvailable(refs); !reflect.DeepEqual(got, []bool{true, false, false, false}) {
+		t.Fatalf("configured = %v", got)
+	}
+	if got := service.PreparedAvailable(nil); len(got) != 0 {
+		t.Fatalf("empty batch = %v", got)
+	}
+
+	// A generation the findings were not written under is a miss, matching how
+	// the create path revalidates.
+	stale, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.ConfigurePreparedCauseFindings(PreparedCauseGeneration("other-runtime")); err != nil {
+		t.Fatal(err)
+	}
+	if got := stale.PreparedAvailable([]AnalysisRef{ready}); !reflect.DeepEqual(got, []bool{false}) {
+		t.Fatalf("stale generation = %v", got)
 	}
 }

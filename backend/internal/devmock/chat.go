@@ -58,6 +58,16 @@ func (c *Chat) CreatePrepared(ref analysischat.AnalysisRef, login, _ string) (an
 	return c.create(ref, login, true)
 }
 
+// PreparedAvailable mirrors the real service for the collapsed cause
+// indicator. CreatePrepared always succeeds here, so every cause qualifies.
+func (c *Chat) PreparedAvailable(refs []analysischat.AnalysisRef) []bool {
+	available := make([]bool, len(refs))
+	for i, ref := range refs {
+		available[i] = ref.Scope == analysischat.ScopeCause && strings.TrimSpace(ref.JobID) != ""
+	}
+	return available
+}
+
 func (c *Chat) create(ref analysischat.AnalysisRef, login string, prepared bool) (analysischat.SessionView, error) {
 	if strings.TrimSpace(ref.JobID) == "" {
 		return analysischat.SessionView{}, analysischat.ErrInvalidRequest

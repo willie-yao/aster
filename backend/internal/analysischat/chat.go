@@ -479,11 +479,38 @@ func (s *Service) preparedFinding(ref AnalysisRef) (PreparedCauseFinding, string
 	if ref.Scope != ScopeCause || s.preparedGeneration == "" {
 		return PreparedCauseFinding{}, "", false
 	}
-	key, err := PreparedCauseKey(ref)
+	prepared, err := LoadPreparedCauseFindings(preparedFindingPath(s.dataDir), s.preparedGeneration)
 	if err != nil {
 		return PreparedCauseFinding{}, "", false
 	}
+	return lookupPreparedFinding(prepared, ref)
+}
+
+// PreparedAvailable reports which references have a usable prepared finding.
+// The result is parallel to refs; the cache is read once for the whole batch.
+func (s *Service) PreparedAvailable(refs []AnalysisRef) []bool {
+	available := make([]bool, len(refs))
+	if len(refs) == 0 || s.preparedGeneration == "" {
+		return available
+	}
 	prepared, err := LoadPreparedCauseFindings(preparedFindingPath(s.dataDir), s.preparedGeneration)
+	if err != nil {
+		return available
+	}
+	for i, ref := range refs {
+		normalized, err := normalizeAnalysisRef(ref)
+		if err != nil || normalized.Scope != ScopeCause {
+			continue
+		}
+		_, _, available[i] = lookupPreparedFinding(prepared, normalized)
+	}
+	return available
+}
+
+// lookupPreparedFinding resolves one normalized cause reference against an
+// already-loaded cache. An unverified or uncited finding is not usable.
+func lookupPreparedFinding(prepared PreparedCauseFindings, ref AnalysisRef) (PreparedCauseFinding, string, bool) {
+	key, err := PreparedCauseKey(ref)
 	if err != nil {
 		return PreparedCauseFinding{}, "", false
 	}

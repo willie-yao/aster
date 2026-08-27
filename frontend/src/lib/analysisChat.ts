@@ -278,6 +278,64 @@ export function analysisChatAttemptStatus(attempt: AnalysisChatAttempt): { label
   }
 }
 
+export type AnalysisChatMarkerKind = "investigated" | "prepared";
+
+export interface PreparedFindingResult {
+  key: string;
+  causes: Record<string, boolean>;
+}
+
+// Records what the create path actually found for one cause. The batch answer
+// is taken at page load, and a cause card unmounts its chat when it folds, so
+// the correction has to be applied where it survives that. A result carrying a
+// different key describes causes that are no longer on the page.
+export function applyPreparedFindingResolution(
+  current: PreparedFindingResult,
+  key: string,
+  cause: string,
+  ready: boolean,
+): PreparedFindingResult {
+  if (current.key !== key || !cause || current.causes[cause] === ready) return current;
+  return { key: current.key, causes: { ...current.causes, [cause]: ready } };
+}
+
+export interface AnalysisChatMarker {
+  kind: AnalysisChatMarkerKind;
+  label: string;
+  detail: string;
+}
+
+// What the collapsed cause control says before an operator spends attention on
+// it. A shared conversation supersedes the prepared marker: opening a prepared
+// cause is what creates the session, and the finding becomes its first message.
+// An expanded panel is authoritative about its own contents, so the marker
+// stands down rather than narrating alongside it.
+export function analysisChatMarker(state: {
+  authenticated: boolean;
+  expanded: boolean;
+  session: AnalysisChatSession | null;
+  preparedFinding: boolean;
+  restoring: boolean;
+}): AnalysisChatMarker | null {
+  if (!state.authenticated || state.expanded) return null;
+  if (state.session) {
+    const login = state.session.created_by?.trim();
+    return {
+      kind: "investigated",
+      label: login ? `Investigated by ${login}` : "Investigated",
+      detail: login
+        ? `${login} started a shared investigation of this analysis.`
+        : "A shared investigation of this analysis is already open.",
+    };
+  }
+  if (!state.preparedFinding || state.restoring) return null;
+  return {
+    kind: "prepared",
+    label: "Finding ready",
+    detail: "The engine prepared a first answer for this cause. It may challenge the published root cause rather than confirm it.",
+  };
+}
+
 export type AnalysisChatRequestState = "answered" | "succeeded" | "terminal" | "pending" | "unresolved";
 
 export function analysisChatRequestState(session: AnalysisChatSession, requestID: string): AnalysisChatRequestState {
@@ -334,6 +392,28 @@ export async function createAnalysisChatSession(
   return parseResponse(response);
 }
 
+
+// Reports which of the given causes already have a prepared finding waiting.
+// Creating a prepared session would attribute a shared investigation to the
+// first operator who loaded the page, so the collapsed indicator asks here.
+export async function lookupPreparedAnalysisChatFindings(
+  refs: AnalysisChatReference[],
+  signal?: AbortSignal,
+): Promise<boolean[]> {
+  if (refs.length === 0) return [];
+  const response = await fetch(`${API_BASE}api/analysis-chat/prepared/lookup`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refs }),
+  });
+  if (!response.ok) throw await apiError(response);
+  const body = (await response.json()) as { prepared?: unknown };
+  const prepared = Array.isArray(body.prepared) ? body.prepared : [];
+  return refs.map((_, index) => prepared[index] === true);
+}
 
 export async function findAnalysisChatSession(
   analysis: AnalysisChatReference,

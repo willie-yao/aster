@@ -22,6 +22,7 @@ import {
   BuildOutlined,
   ExpandMore,
   FactCheckOutlined,
+  ForumOutlined,
   HelpOutlined,
   PsychologyAltOutlined,
   ReportProblemOutlined,
@@ -36,6 +37,7 @@ import {
   analysisChatFailureGuidance,
   analysisChatHistory,
   analysisChatIdempotencyConflictMessage,
+  analysisChatMarker,
   analysisChatRateLimitMessage,
   analysisChatRequestOutcomeUnknownMessage,
   analysisChatRequestPendingMessage,
@@ -595,12 +597,21 @@ export function AnalysisChat({
   fixPatterns = [],
   fixTarget,
   appearance = "default",
+  preparedFinding = false,
+  onPreparedResolved,
 }: {
   analysisRef: AnalysisChatReference;
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
   fixTarget?: CausalGroupFixTarget;
   appearance?: "default" | "detail";
+  // A prepared finding is waiting for this cause. Resolved read-only by the
+  // caller, because the only path that opens one creates a shared session.
+  preparedFinding?: boolean;
+  // The server reported whether a prepared finding really was waiting. The
+  // caller owns the answer because this panel unmounts when its cause card
+  // folds away, which would otherwise forget a definitive miss.
+  onPreparedResolved?: (ready: boolean) => void;
 }) {
   const { features } = useCapabilities();
   const { status: authStatus, mode: authMode, signIn } = useAuth();
@@ -924,6 +935,7 @@ export function AnalysisChat({
     controllerRef.current?.abort();
     cancelControllerRef.current?.abort();
     resetControllerRef.current?.abort();
+    if (preparedRetryTimerRef.current !== null) window.clearTimeout(preparedRetryTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -947,6 +959,13 @@ export function AnalysisChat({
   if (!features.analysis_chat) return null;
 
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
+  const marker = analysisChatMarker({
+    authenticated: authStatus === "authenticated",
+    expanded,
+    session,
+    preparedFinding,
+    restoring,
+  });
   // A turn is in flight or the session is loading, so the composer accepts no
   // input but keeps its focus. Nothing here is ever natively disabled: that
   // drops the operator's focus to the document body mid-interaction.
@@ -1265,6 +1284,7 @@ export function AnalysisChat({
     try {
       const created = await createPreparedAnalysisChatSession(analysisRef, createRequestIDRef.current, controller.signal);
       if (restoreControllerRef.current === controller) {
+        onPreparedResolved?.(Boolean(created));
         if (created) setSession(created);
         else schedulePreparedRetry();
       }
@@ -1392,6 +1412,28 @@ export function AnalysisChat({
               </Box>
             </ButtonBase>
           </Box>
+          {marker && (
+            <Tooltip title={marker.detail}>
+              <Chip
+                size="small"
+                icon={marker.kind === "investigated" ? <ForumOutlined /> : <AutoAwesome />}
+                label={marker.label}
+                // The chip renders a plain element, so it needs a role for the
+                // detail to reach assistive technology the tooltip cannot.
+                role="note"
+                aria-label={`${marker.label}. ${marker.detail}`}
+                sx={(theme) => ({
+                  flexShrink: 0,
+                  maxWidth: 210,
+                  height: 24,
+                  fontWeight: 650,
+                  ...overviewTypography.description,
+                  ...softChipSx(theme, marker.kind === "investigated" ? "info" : "success"),
+                  "& .MuiChip-icon": { color: "inherit", fontSize: 15 },
+                })}
+              />
+            </Tooltip>
+          )}
           {detailAppearance && turnUsage && (
             <Typography
               component="span"

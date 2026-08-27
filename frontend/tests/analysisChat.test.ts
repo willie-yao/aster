@@ -7,10 +7,12 @@ import {
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
   analysisChatHistory,
+  analysisChatMarker,
   analysisChatProviderFailureMessage,
   analysisChatRequestState,
   analysisChatResponseValidationMessage,
   analysisChatUnusableAnswerMessage,
+  applyPreparedFindingResolution,
   AnalysisChatAPIError,
   analysisChatProgressTurnUsage,
   analysisChatTurnLimitReached,
@@ -20,6 +22,7 @@ import {
   findAnalysisChatSession,
   isAnalysisChatOAuthExpired,
   loadAnalysisChatPendingIntent,
+  lookupPreparedAnalysisChatFindings,
   markAnalysisChatTurnLimitReached,
   reconcileAnalysisChatTurn,
   resumeAnalysisChatTurn,
@@ -44,6 +47,21 @@ const analysis: AnalysisChatReference = {
   class_name: "class",
   junit_file: "junit.xml",
   analysis_generated_at: "2026-07-26T12:00:00Z",
+};
+
+const firstCause: AnalysisChatReference = {
+  scope: "cause",
+  job_id: "periodic-demo",
+  pattern_id: "pattern-1",
+  pattern_hash: "pattern-hash",
+  causal_group_id: "cause-1",
+  causal_group_hash: "cause-hash-1",
+};
+
+const secondCause: AnalysisChatReference = {
+  ...firstCause,
+  causal_group_id: "cause-2",
+  causal_group_hash: "cause-hash-2",
 };
 
 const session: AnalysisChatSession = {
@@ -90,6 +108,138 @@ test("reload and remount restore the latest server session", async () => {
   }
 });
 
+
+test("the prepared-finding lookup answers a whole page of causes in one read-only request", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), init });
+    return new Response(JSON.stringify({ prepared: [false, true] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  const prepared = await lookupPreparedAnalysisChatFindings([firstCause, secondCause]);
+
+  assert.deepEqual(prepared, [false, true]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/api/analysis-chat/prepared/lookup");
+  assert.equal(requests[0].init?.method, "POST");
+  assert.equal(requests[0].init?.credentials, "same-origin");
+  assert.equal(requests[0].init?.cache, "no-store");
+  assert.deepEqual(JSON.parse(String(requests[0].init?.body)), { refs: [firstCause, secondCause] });
+});
+
+test("an empty batch asks the server nothing", async () => {
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return new Response(null, { status: 200 });
+  };
+
+  assert.deepEqual(await lookupPreparedAnalysisChatFindings([]), []);
+  assert.equal(called, false);
+});
+
+test("a short or malformed prepared answer marks the missing causes as not ready", async () => {
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ prepared: [true] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  assert.deepEqual(await lookupPreparedAnalysisChatFindings([firstCause, secondCause]), [true, false]);
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+
+  assert.deepEqual(await lookupPreparedAnalysisChatFindings([firstCause]), [false]);
+});
+
+test("a failed prepared lookup surfaces as an error rather than a false answer", async () => {
+  globalThis.fetch = async () => new Response("nope", { status: 500 });
+
+  await assert.rejects(() => lookupPreparedAnalysisChatFindings([firstCause]), AnalysisChatAPIError);
+});
+
+test("a shared conversation supersedes the prepared marker on the collapsed control", () => {
+  const base = {
+    authenticated: true,
+    expanded: false,
+    session: null,
+    preparedFinding: true,
+    restoring: false,
+  };
+
+  assert.deepEqual(analysisChatMarker(base), {
+    kind: "prepared",
+    label: "Finding ready",
+    detail:
+      "The engine prepared a first answer for this cause. It may challenge the published root cause rather than confirm it.",
+  });
+
+  // Opening a prepared cause is what creates the session, and the finding
+  // becomes its first message, so the weaker signal must not linger.
+  const investigated = analysisChatMarker({ ...base, session });
+  assert.equal(investigated?.kind, "investigated");
+  assert.equal(investigated?.label, "Investigated by alice");
+
+  const anonymousSession = analysisChatMarker({ ...base, session: { ...session, created_by: "  " } });
+  assert.equal(anonymousSession?.label, "Investigated");
+});
+
+test("a cause with nothing waiting and a visitor who cannot act get no marker", () => {
+  const base = {
+    authenticated: true,
+    expanded: false,
+    session: null,
+    preparedFinding: false,
+    restoring: false,
+  };
+
+  assert.equal(analysisChatMarker(base), null);
+  assert.equal(analysisChatMarker({ ...base, preparedFinding: true, authenticated: false }), null);
+  // A lookup still in flight has not established anything yet.
+  assert.equal(analysisChatMarker({ ...base, preparedFinding: true, restoring: true }), null);
+});
+
+test("what the server actually found outlives the cause card that asked", () => {
+  // The batch answer is taken at page load and a cause card unmounts its chat
+  // when it folds, so a create that found nothing has to be recorded where a
+  // fold cannot forget it.
+  const loaded = { key: "batch-1", causes: { "cause-1": true, "cause-2": true } };
+
+  const missed = applyPreparedFindingResolution(loaded, "batch-1", "cause-1", false);
+  assert.deepEqual(missed.causes, { "cause-1": false, "cause-2": true });
+
+  // A later hit has to clear that correction, or a cause whose finding arrived
+  // on the retry would stay silent for the rest of the page's life.
+  const recovered = applyPreparedFindingResolution(missed, "batch-1", "cause-1", true);
+  assert.deepEqual(recovered.causes, { "cause-1": true, "cause-2": true });
+
+  // Unchanged answers and causes with no chat reference change nothing, so a
+  // repeated report cannot churn the page.
+  assert.equal(applyPreparedFindingResolution(loaded, "batch-1", "cause-2", true), loaded);
+  assert.equal(applyPreparedFindingResolution(loaded, "batch-1", "", false), loaded);
+});
+
+test("a correction for causes no longer on the page is dropped", () => {
+  const loaded = { key: "batch-1", causes: { "cause-1": true } };
+
+  // The pattern's causes changed while a chat panel was open, so the answer
+  // this correction describes is about a cause the page no longer renders.
+  assert.equal(applyPreparedFindingResolution(loaded, "batch-2", "cause-1", false), loaded);
+});
+
+test("an open panel speaks for itself instead of carrying a marker", () => {
+  // The marker exists to say what is waiting before an operator expands the
+  // control. Once open, the transcript is authoritative, so a marker could only
+  // contradict it: an emptied conversation under a header claiming a finding.
+  const expanded = { authenticated: true, expanded: true, session: null, restoring: false };
+
+  assert.equal(analysisChatMarker({ ...expanded, preparedFinding: true }), null);
+  assert.equal(analysisChatMarker({ ...expanded, preparedFinding: false, session }), null);
+});
 
 test("shared observer refresh cannot overwrite a conversation reset", () => {
   const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
