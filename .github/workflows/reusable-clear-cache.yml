@@ -7,7 +7,7 @@ name: Reusable Clear Cache
 # Example consumer workflow:
 #   jobs:
 #     clear:
-#       uses: willie-yao/aster/.github/workflows/reusable-clear-cache.yml@v0.9.0-rc.9
+#       uses: willie-yao/aster/.github/workflows/reusable-clear-cache.yml@v0.9.0-rc.10
 #       with:
 #         project_dir: .
 

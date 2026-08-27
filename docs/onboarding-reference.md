@@ -34,7 +34,7 @@ API reads and is not printed, retained in the plan, or written to the scaffold.
 Inspect inferred inputs without rendering files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.9 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 \
   onboard discover \
   -source-repo owner/name
 ```
@@ -231,7 +231,7 @@ emit the prompt handoff bundle.
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
-  -engine-ref v0.9.0-rc.9 \
+  -engine-ref v0.9.0-rc.10 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
