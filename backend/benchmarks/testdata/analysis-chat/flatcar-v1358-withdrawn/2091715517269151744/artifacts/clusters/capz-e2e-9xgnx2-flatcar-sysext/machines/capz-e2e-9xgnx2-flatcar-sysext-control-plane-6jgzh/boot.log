@@ -1,0 +1,5 @@
+1064: [   18.791435] ignition[1485]: INFO     : files: createFilesystemsFiles: createFiles: op(c): GET https://extensions.flatcar.org/extensions/kubernetes-v1.35.8-x86-64.raw: attempt #1
+1065: [   19.089522] ignition[1485]: INFO     : files: createFilesystemsFiles: createFiles: op(c): GET result: Not Found
+1066: [   19.095106] ignition[1485]: CRITICAL : files: createFilesystemsFiles: createFiles: op(c): Error fetching file "/sysroot/opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw": resource not found
+1067: [   19.102878] ignition[1485]: CRITICAL : files: createFilesystemsFiles: createFiles: op(c): [failed]   writing file "/sysroot/opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw": resource not found
+1376: [   20.406522] ignition[1485]: CRITICAL : Ignition failed: failed to create files: failed to create files: error creating /sysroot/opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw: failed to create file "/sysroot/opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw": resource not found

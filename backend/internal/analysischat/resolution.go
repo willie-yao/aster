@@ -30,38 +30,49 @@ type resolvedAnalysis struct {
 	patterns       []models.PatternAnalysis
 	pattern        *models.PatternAnalysis
 	evidenceBuilds []ArtifactBuild
+	comparison     *CauseComparison
 	fixTarget      *resolvedFixTarget
 }
 
 func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
-	var err error
-	ref, err = normalizeAnalysisRef(ref)
+	ref, err := normalizeAnalysisRef(ref)
 	if err != nil {
 		return resolvedAnalysis{}, err
 	}
+	detail, err := s.loadJobDetail(ref.JobID)
+	if err != nil {
+		return resolvedAnalysis{}, err
+	}
+	return resolveFromDetail(ref, detail)
+}
 
-	file, err := os.Open(filepath.Join(s.dataDir, "jobs", models.JobDataFilename(ref.JobID)))
+func (s *Service) loadJobDetail(jobID string) (models.JobDetail, error) {
+	file, err := os.Open(filepath.Join(s.dataDir, "jobs", models.JobDataFilename(jobID)))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return resolvedAnalysis{}, ErrAnalysisNotFound
+			return models.JobDetail{}, ErrAnalysisNotFound
 		}
-		return resolvedAnalysis{}, fmt.Errorf("reading analysis job data: %w", err)
+		return models.JobDetail{}, fmt.Errorf("reading analysis job data: %w", err)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxJobDetailBytes+1))
 	if err != nil {
-		return resolvedAnalysis{}, fmt.Errorf("reading analysis job data: %w", err)
+		return models.JobDetail{}, fmt.Errorf("reading analysis job data: %w", err)
 	}
 	if len(data) > maxJobDetailBytes {
-		return resolvedAnalysis{}, fmt.Errorf("analysis job data exceeds %d bytes", maxJobDetailBytes)
+		return models.JobDetail{}, fmt.Errorf("analysis job data exceeds %d bytes", maxJobDetailBytes)
 	}
 	var detail models.JobDetail
 	if err := json.Unmarshal(data, &detail); err != nil {
-		return resolvedAnalysis{}, fmt.Errorf("decoding analysis job data: %w", err)
+		return models.JobDetail{}, fmt.Errorf("decoding analysis job data: %w", err)
 	}
-	if detail.JobID != "" && detail.JobID != ref.JobID {
-		return resolvedAnalysis{}, ErrAnalysisNotFound
+	if detail.JobID != "" && detail.JobID != jobID {
+		return models.JobDetail{}, ErrAnalysisNotFound
 	}
+	return detail, nil
+}
+
+func resolveFromDetail(ref AnalysisRef, detail models.JobDetail) (resolvedAnalysis, error) {
 	switch ref.Scope {
 	case ScopePattern:
 		return resolvePatternAnalysis(ref, detail)
@@ -228,6 +239,10 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 	if len(builds) == 0 {
 		return resolvedAnalysis{}, ErrAnalysisNotFound
 	}
+	comparison, err := causeComparisonFor(detail, *selectedGroup, selectedRuns)
+	if err != nil {
+		return resolvedAnalysis{}, err
+	}
 
 	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
 	var group models.PatternCausalGroup
@@ -257,7 +272,7 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 	causePattern.SuggestedFix = suggestedFix
 	causePattern.RelevantFiles = slices.Clone(relevantFiles)
 	causePattern.RemediationTargets = nil
-	causePattern.Lifecycle = nil
+	causePattern.Lifecycle = models.CausalGroupLifecycle(detail, group.Builds)
 	causePattern.Summary = group.RootCause
 	var fixTarget *resolvedFixTarget
 	if models.PatternIsActive(pattern) {
@@ -275,7 +290,7 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 		ref: ref, jobID: ref.JobID, buildPrefix: builds[0].BuildPrefix,
 		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
 		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &causePattern,
-		evidenceBuilds: cloneArtifactBuilds(builds), fixTarget: fixTarget,
+		evidenceBuilds: cloneArtifactBuilds(builds), comparison: cloneCauseComparison(comparison), fixTarget: fixTarget,
 	}, nil
 }
 
@@ -371,6 +386,61 @@ func selectCauseEvidenceRuns(group models.PatternCausalGroup, runs []models.Buil
 	}
 	sortPatternEvidenceRuns(matchingRuns)
 	return matchingRuns, len(matchingRuns), len(eligible)
+}
+
+func causeComparisonFor(detail models.JobDetail, group models.PatternCausalGroup, memberRuns []models.BuildResult) (*CauseComparison, error) {
+	run := selectCauseComparisonRun(group, detail.Runs)
+	if run == nil {
+		return nil, nil
+	}
+	build, err := artifactBuildFor(detail, *run)
+	if err != nil {
+		return nil, err
+	}
+	return &CauseComparison{ArtifactBuild: build, TestNames: representativeCauseTestNames(memberRuns)}, nil
+}
+
+func selectCauseComparisonRun(group models.PatternCausalGroup, runs []models.BuildResult) *models.BuildResult {
+	members := make(map[string]struct{}, len(group.Builds))
+	for _, buildID := range group.Builds {
+		if buildID = strings.TrimSpace(buildID); buildID != "" {
+			members[buildID] = struct{}{}
+		}
+	}
+	ordered := slices.Clone(runs)
+	sortPatternEvidenceRuns(ordered)
+	var candidate *models.BuildResult
+	for index := range ordered {
+		run := &ordered[index]
+		if _, member := members[run.BuildID]; member {
+			return candidate
+		}
+		if candidate == nil && run.Result != "PENDING" {
+			candidate = run
+		}
+	}
+	return nil
+}
+
+func representativeCauseTestNames(runs []models.BuildResult) []string {
+	names := make([]string, 0, len(runs))
+	seen := make(map[string]struct{}, len(runs))
+	for index := range runs {
+		failure := representativeCauseFailure(runs[index].TestCases)
+		if failure == nil {
+			continue
+		}
+		name := strings.TrimSpace(failure.Name)
+		if name == "" {
+			continue
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func severityFromConfidence(confidence string) string {
@@ -524,6 +594,23 @@ func cloneArtifactBuilds(builds []ArtifactBuild) []ArtifactBuild {
 		out[i].Build = cloneBuildInfo(out[i].Build)
 	}
 	return out
+}
+
+func cloneCauseComparison(comparison *CauseComparison) *CauseComparison {
+	if comparison == nil {
+		return nil
+	}
+	clone := *comparison
+	clone.ArtifactBuild.Build = cloneBuildInfo(comparison.ArtifactBuild.Build)
+	clone.TestNames = slices.Clone(comparison.TestNames)
+	return &clone
+}
+
+func causeComparisonBuildID(comparison *CauseComparison) string {
+	if comparison == nil {
+		return ""
+	}
+	return strings.TrimSpace(comparison.ArtifactBuild.Build.BuildID)
 }
 
 func clonePatternAnalyses(patterns []models.PatternAnalysis) []models.PatternAnalysis {

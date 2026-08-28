@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="capz-e2e-flatcar-resolution-fixture">
+  <testcase name="[It] Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes" classname="capz-e2e" status="failed" time="1866.053481992">
+    <failure message="Timed out after 1200.000s.&#10;KubeadmControlPlane object capz-e2e-9xgnx2/capz-e2e-9xgnx2-flatcar-sysext-control-plane was not initialized in time&#10;The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/cluster-api-provider-azure/test/e2e/common.go:265 with:&#10;KubeadmControlPlane is not yet initialized&#10;Expected&#10;    &lt;bool&gt;: false&#10;to be true" type="failed">[FAILED] Timed out after 1200.000s.
+KubeadmControlPlane object capz-e2e-9xgnx2/capz-e2e-9xgnx2-flatcar-sysext-control-plane was not initialized in time
+The function passed to Eventually failed at /home/prow/go/src/sigs.k8s.io/cluster-api-provider-azure/test/e2e/common.go:265 with:
+KubeadmControlPlane is not yet initialized
+Expected
+    &lt;bool&gt;: false
+to be true
+In [It] at: /home/prow/go/src/sigs.k8s.io/cluster-api-provider-azure/test/e2e/common.go:266 @ 08/24/26 03:04:41.554</failure>
+  </testcase>
+</testsuite>

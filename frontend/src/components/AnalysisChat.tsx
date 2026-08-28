@@ -124,6 +124,7 @@ const patternSuggestedQuestions = [
 ] as const;
 
 const causeSuggestedQuestions = [
+  "Has this cause been resolved in the latest completed run?",
   "What evidence supports this cause across its builds?",
   "How do the member builds differ?",
   "What concrete change follows from this cause?",
@@ -1532,14 +1533,14 @@ export function AnalysisChat({
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {causeScope
-                      ? "Interrogate this cause across its builds."
+                      ? "Interrogate this cause across failed and later runs."
                       : patternScope
                         ? "Interrogate the pattern across builds."
                         : "Interrogate the conclusion, not just the summary."}
                   </Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
                     {causeScope
-                      ? "Ask what the member builds prove, where they differ, or what concrete change follows."
+                      ? "Ask what the failed member builds prove, whether a later run recovered, or what concrete change follows."
                       : patternScope
                         ? "Ask which builds agree, where they differ, or whether the shared cause holds up."
                         : "Ask for evidence, test another cause, or challenge what the agent missed."}

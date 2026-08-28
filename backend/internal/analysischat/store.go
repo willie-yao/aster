@@ -59,6 +59,7 @@ type persistedResolvedAnalysis struct {
 	TestCase       models.TestCase                `json:"test_case"`
 	Pattern        *models.PatternAnalysis        `json:"pattern,omitempty"`
 	EvidenceBuilds []persistedArtifactBuild       `json:"evidence_builds,omitempty"`
+	Comparison     *persistedCauseComparison      `json:"comparison,omitempty"`
 	FixTarget      *persistedResolvedFixTarget    `json:"fix_target,omitempty"`
 }
 
@@ -74,6 +75,18 @@ type persistedArtifactBuild struct {
 	BuildPrefix string `json:"build_prefix"`
 	BuildID     string `json:"build_id"`
 	JobName     string `json:"job_name"`
+}
+
+type persistedCauseComparison struct {
+	BuildPrefix string    `json:"build_prefix"`
+	BuildID     string    `json:"build_id"`
+	JobName     string    `json:"job_name"`
+	Started     time.Time `json:"started,omitempty"`
+	Passed      bool      `json:"passed"`
+	Result      string    `json:"result,omitempty"`
+	Commit      string    `json:"commit,omitempty"`
+	Revision    string    `json:"revision,omitempty"`
+	TestNames   []string  `json:"test_names,omitempty"`
 }
 
 type persistedRequest struct {
@@ -572,6 +585,7 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 		JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: build, TestCase: testCase, Pattern: boundedPersistedPattern(resolved.pattern),
 		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
+		Comparison:     persistCauseComparison(resolved.comparison),
 		FixTarget:      persistResolvedFixTarget(resolved.fixTarget, sourceRepo),
 	}
 }
@@ -633,6 +647,8 @@ func boundedPersistedPatternLifecycle(lifecycle *models.PatternLifecycle) *model
 	}
 	return &models.PatternLifecycle{
 		State: lifecycle.State, Reason: clampPersistedText(lifecycle.Reason, 4<<10),
+		RecoveryStreak: lifecycle.RecoveryStreak,
+		RecoveryBuilds: boundedPersistedBuildIDs(lifecycle.RecoveryBuilds),
 	}
 }
 
@@ -745,6 +761,7 @@ func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
 		testCase:       cloneTestCase(resolved.TestCase),
 		pattern:        clonePattern(resolved.Pattern),
 		evidenceBuilds: restoreArtifactBuilds(resolved.EvidenceBuilds),
+		comparison:     restoreCauseComparison(resolved.Comparison),
 		fixTarget:      restoreResolvedFixTarget(resolved.FixTarget),
 	}
 }
@@ -775,6 +792,61 @@ func restoreArtifactBuilds(builds []persistedArtifactBuild) []ArtifactBuild {
 			BuildPrefix: build.BuildPrefix,
 			Build:       models.BuildInfo{BuildID: build.BuildID, JobName: build.JobName},
 		})
+	}
+	return out
+}
+
+func persistCauseComparison(comparison *CauseComparison) *persistedCauseComparison {
+	if comparison == nil {
+		return nil
+	}
+	build := comparison.ArtifactBuild.Build
+	return &persistedCauseComparison{
+		BuildPrefix: comparison.ArtifactBuild.BuildPrefix,
+		BuildID:     build.BuildID,
+		JobName:     build.JobName,
+		Started:     build.Started,
+		Passed:      build.Passed,
+		Result:      build.Result,
+		Commit:      build.Commit,
+		Revision:    build.Revision,
+		TestNames:   boundedPersistedCauseTestNames(comparison.TestNames),
+	}
+}
+
+func restoreCauseComparison(comparison *persistedCauseComparison) *CauseComparison {
+	if comparison == nil {
+		return nil
+	}
+	return &CauseComparison{
+		ArtifactBuild: ArtifactBuild{
+			BuildPrefix: comparison.BuildPrefix,
+			Build: models.BuildInfo{
+				BuildID: comparison.BuildID, JobName: comparison.JobName, Started: comparison.Started,
+				Passed: comparison.Passed, Result: comparison.Result, Commit: comparison.Commit, Revision: comparison.Revision,
+			},
+		},
+		TestNames: slices.Clone(comparison.TestNames),
+	}
+}
+
+func persistedCauseComparisonBuildID(comparison *persistedCauseComparison) string {
+	if comparison == nil {
+		return ""
+	}
+	return strings.TrimSpace(comparison.BuildID)
+}
+
+func boundedPersistedCauseTestNames(names []string) []string {
+	if len(names) > maxPatternChatBuildsPerGroup {
+		names = names[:maxPatternChatBuildsPerGroup]
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			out = append(out, clampPersistedText(name, maxTestNameBytes))
+		}
 	}
 	return out
 }

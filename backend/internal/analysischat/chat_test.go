@@ -2089,7 +2089,7 @@ func TestServicePatternChatPersistsCurrentCausalContext(t *testing.T) {
 	}
 }
 
-func TestServiceCauseChatUsesOnlySelectedGroupBuilds(t *testing.T) {
+func TestServiceCauseChatAddsNewestCompletedComparisonBuild(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat([]models.PatternCausalGroup{
 		{ID: "other", Builds: []string{"103"}, RootCause: "different cause", Confidence: "low"},
@@ -2101,7 +2101,23 @@ func TestServiceCauseChatUsesOnlySelectedGroupBuilds(t *testing.T) {
 	}, nil)
 	pattern.Systemic = false
 	models.AssignPatternIdentity(&pattern)
-	writeJobDetail(t, dir, causalPatternDetail(pattern, "101", "102", "103", "outside"))
+	detail := causalPatternDetail(pattern, "101", "102", "103", "outside")
+	for index := range detail.Runs {
+		run := &detail.Runs[index]
+		switch run.BuildID {
+		case "101", "102":
+			run.Result = "FAILURE"
+			run.TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-08-12T12:00:00Z")}
+		case "103":
+			run.Result = "PENDING"
+		case "outside":
+			run.Result = "SUCCESS"
+			run.Passed = true
+			run.Commit = "comparison-commit"
+		}
+	}
+	slices.Reverse(detail.Runs)
+	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: Reply{Answer: "The selected cause spans two builds.", Assessment: "explains"}}
 	service, err := NewService(t.Context(), dir, runner, Options{})
 	if err != nil {
@@ -2138,6 +2154,72 @@ func TestServiceCauseChatUsesOnlySelectedGroupBuilds(t *testing.T) {
 	}
 	if !slices.Equal(gotBuilds, []string{"102", "101"}) {
 		t.Fatalf("cause evidence builds = %v", gotBuilds)
+	}
+	if turn.Build.BuildID != "102" || turn.BuildPrefix != "logs/periodic-demo/102/" {
+		t.Fatalf("member anchor changed: build=%s prefix=%s", turn.Build.BuildID, turn.BuildPrefix)
+	}
+	if turn.Comparison == nil || turn.Comparison.ArtifactBuild.Build.BuildID != "outside" || !turn.Comparison.ArtifactBuild.Build.Passed ||
+		turn.Comparison.ArtifactBuild.Build.Commit != "comparison-commit" || !slices.Equal(turn.Comparison.TestNames, []string{"TestCluster"}) {
+		t.Fatalf("comparison = %+v", turn.Comparison)
+	}
+	if turn.Pattern.Lifecycle == nil || turn.Pattern.Lifecycle.RecoveryStreak != 1 || turn.Pattern.Lifecycle.State != models.PatternLifecycleActive {
+		t.Fatalf("cause lifecycle = %+v", turn.Pattern.Lifecycle)
+	}
+}
+
+func TestSelectCauseComparisonRunUsesNewestCompletedRun(t *testing.T) {
+	base := time.Date(2026, time.August, 28, 0, 0, 0, 0, time.UTC)
+	runs := []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "pending", Result: "PENDING", Started: base.Add(4 * time.Hour)}},
+		{BuildInfo: models.BuildInfo{BuildID: "comparison", Result: "SUCCESS", Passed: true, Started: base.Add(3 * time.Hour)}},
+		{BuildInfo: models.BuildInfo{BuildID: "member-new", Result: "FAILURE", Started: base.Add(2 * time.Hour)}},
+		{BuildInfo: models.BuildInfo{BuildID: "member-old", Result: "FAILURE", Started: base.Add(time.Hour)}},
+	}
+	comparison := selectCauseComparisonRun(models.PatternCausalGroup{Builds: []string{"member-old", "member-new"}}, runs)
+	if comparison == nil || comparison.BuildID != "comparison" {
+		t.Fatalf("comparison = %+v", comparison)
+	}
+}
+
+func TestServiceCauseChatDoesNotReuseSessionAfterComparisonChanges(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{Builds: []string{"1"}, RootCause: "cause", Confidence: "high"}}, nil)
+	pattern.Systemic = false
+	models.AssignPatternIdentity(&pattern)
+	detail := causalPatternDetail(pattern, "1", "2")
+	detail.Runs[0].Result = "FAILURE"
+	detail.Runs[0].TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-08-12T12:00:00Z")}
+	detail.Runs[1].Result = "SUCCESS"
+	detail.Runs[1].Passed = true
+	writeJobDetail(t, dir, detail)
+	group := pattern.CausalGroups[0]
+	ref := AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}
+	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Create(ref, "alice", "create-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := models.BuildResult{BuildInfo: models.BuildInfo{
+		BuildID: "3", JobName: detail.Name, Result: "SUCCESS", Passed: true,
+		Started: detail.Runs[1].Started.Add(time.Minute),
+	}}
+	detail.Runs = append(detail.Runs, newer)
+	writeJobDetail(t, dir, detail)
+	if _, err := service.Find(ref, "alice"); !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Find error = %v", err)
+	}
+	second, err := service.Create(ref, "alice", "create-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("reused stale session %s", first.ID)
 	}
 }
 

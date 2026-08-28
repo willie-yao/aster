@@ -1,0 +1,80 @@
+{
+  "builds": {
+    "2090605942025490432": {
+      "cluster": "capz-e2e-t7u12n-flatcar-sysext",
+      "machine": "capz-e2e-t7u12n-flatcar-sysext-control-plane-crndr",
+      "role": "failed-member",
+      "source": "https://storage.googleapis.com/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-25/2090605942025490432/"
+    },
+    "2091715517269151744": {
+      "cluster": "capz-e2e-9xgnx2-flatcar-sysext",
+      "machine": "capz-e2e-9xgnx2-flatcar-sysext-control-plane-6jgzh",
+      "role": "failed-member",
+      "source": "https://storage.googleapis.com/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-25/2091715517269151744/"
+    },
+    "2092830007742173184": {
+      "cluster": "capz-e2e-ik4bs2-flatcar-sysext",
+      "machine": "capz-e2e-ik4bs2-flatcar-sysext-control-plane-wt2jj",
+      "role": "comparison",
+      "source": "https://storage.googleapis.com/kubernetes-ci-logs/logs/periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-25/2092830007742173184/"
+    }
+  },
+  "expected": "The cause was not reproduced because stable-1.35 resolved to v1.35.6 instead of v1.35.8; the missing v1.35.8 Flatcar sysext was not fixed.",
+  "files": {
+    "2090605942025490432/artifacts/clusters/bootstrap/capz-e2e-t7u12n-flatcar-sysext-cluster-template.yaml": {
+      "bytes": 1339,
+      "sha256": "d05157a6c529c38c1d576042a9f93db1dfea888908e9bf56aa6bad00c2ef1f22"
+    },
+    "2090605942025490432/artifacts/clusters/capz-e2e-t7u12n-flatcar-sysext/machines/capz-e2e-t7u12n-flatcar-sysext-control-plane-crndr/boot.log": {
+      "bytes": 1027,
+      "sha256": "774484228830a1ed535b6fc1d8fd6b9f572bc45db422095805da889a754ef2a0"
+    },
+    "2090605942025490432/artifacts/junit.e2e_suite.1.xml": {
+      "bytes": 1234,
+      "sha256": "2d248e6ca5dd39b996455af041fa1c2ad369394c9e5517707b494a7661ebd71c"
+    },
+    "2090605942025490432/build-log.txt": {
+      "bytes": 667,
+      "sha256": "212ffd3ae8360d5b586931c3d2d78bb3bf8867ada2223ea30ad8cc8242bde371"
+    },
+    "2091715517269151744/artifacts/clusters/bootstrap/capz-e2e-9xgnx2-flatcar-sysext-cluster-template.yaml": {
+      "bytes": 1339,
+      "sha256": "b933ef611d3bda0f4b7cd6c059cc21dd1d2ec9e66abba86ef276b4327772859a"
+    },
+    "2091715517269151744/artifacts/clusters/capz-e2e-9xgnx2-flatcar-sysext/machines/capz-e2e-9xgnx2-flatcar-sysext-control-plane-6jgzh/boot.log": {
+      "bytes": 1027,
+      "sha256": "8d616e83f5eefe01a99020817031df4b05bd8c9de6b1f4c0109fc6cabcc79d88"
+    },
+    "2091715517269151744/artifacts/junit.e2e_suite.1.xml": {
+      "bytes": 1236,
+      "sha256": "f50bccd7f7199c18c2407e72f652efb6eb12b6be836d0e621c6bdb582fe1990c"
+    },
+    "2091715517269151744/build-log.txt": {
+      "bytes": 667,
+      "sha256": "bc2aa3cb9f077a339b92e1e81e47b9e8901e843d9c75b409dfbd783c8fccdde3"
+    },
+    "2092830007742173184/artifacts/clusters/bootstrap/capz-e2e-ik4bs2-flatcar-sysext-cluster-template.yaml": {
+      "bytes": 1339,
+      "sha256": "9b7087621023a6555d1e1c871b89bf804dd2b7bc0a1cfbdbf16ca401c10f8a25"
+    },
+    "2092830007742173184/artifacts/clusters/capz-e2e-ik4bs2-flatcar-sysext/machines/capz-e2e-ik4bs2-flatcar-sysext-control-plane-wt2jj/ignition.log": {
+      "bytes": 785,
+      "sha256": "420083d3c4b255948432772f6f3d7f51ca0efc6c4ae725315d9d4d519fc43404"
+    },
+    "2092830007742173184/artifacts/clusters/capz-e2e-ik4bs2-flatcar-sysext/machines/capz-e2e-ik4bs2-flatcar-sysext-control-plane-wt2jj/kubelet-version.txt": {
+      "bytes": 19,
+      "sha256": "ccc2fb32b7f4c3eedb2561643dcba0e0c95fc5c4f378f72ceaabf22fb921c135"
+    },
+    "2092830007742173184/artifacts/junit.e2e_suite.1.xml": {
+      "bytes": 307,
+      "sha256": "91abccf89d42755e033e992dda34c24aa3578d5b568fdc928271672e183ece78"
+    },
+    "2092830007742173184/build-log.txt": {
+      "bytes": 667,
+      "sha256": "a888efaee7b2f5c8a2cdaa30c2f3fa834431e7bebd9125d15e07c2626ae6970d"
+    }
+  },
+  "job": "periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-25",
+  "source_commit": "5eafa96647f647c297574725654fe79fda1bc312",
+  "version": 1
+}

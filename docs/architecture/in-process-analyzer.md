@@ -260,7 +260,7 @@ output through separate authority and lifecycle gates:
 | Surface | Owner and boundary | Guide |
 | --- | --- | --- |
 | Recurring causal groups | `backend/internal/patterns` correlates representative published failures. It cannot rewrite a per-build diagnosis, and per-job failures are isolated by last-known-good publication. | [Agentic analysis](../agentic.md#pattern-analysis) |
-| Analysis chat | `backend/internal/analysischat` resolves one published test, pattern, or causal group into a bounded private conversation. Cause scope exposes only that group's member builds. Chat does not mutate job JSON. | [Server mode](../server.md#analysis-chat) |
+| Analysis chat | `backend/internal/analysischat` resolves one published test, pattern, or causal group into a bounded private conversation. Cause scope exposes that group's failed member builds plus one newer completed comparison run when available. Chat does not mutate job JSON. | [Server mode](../server.md#analysis-chat) |
 | Resolution and actions | `backend/internal/actions` and `backend/internal/resolve` operate on current published subjects. Issue and Fix writes use preview and confirmation. Pattern and cause resolution update private lifecycle state. | [Server mode](../server.md#admin-gated-actions) |
 | Fix PR generation | `backend/internal/fixpr` and `backend/internal/fixruntime` bind an eligible subject, immutable source, a canonical patch, validation, review, and confirmation. | [Fix PR generation](../fix-prs.md) |
 | Pull request triage | `backend/internal/prtriage`, `prattribution`, `prescalation`, and `prcomment` own deterministic attribution, shared failures, optional escalation, and the separately gated GitHub App comment. | [Pull request triage](../pull-request-triage.md) |

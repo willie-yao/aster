@@ -1,0 +1,4 @@
+102: Aug 27 04:33:41.293934 localhost ignition[1932]: INFO     : files: createFilesystemsFiles: createFiles: op(4): [finished] writing link "/sysroot/etc/extensions/kubernetes.raw" -> "/opt/extensions/kubernetes/kubernetes-v1.35.6-x86-64.raw"
+122: Aug 27 04:33:42.187844 localhost ignition[1932]: INFO     : files: createFilesystemsFiles: createFiles: op(c): GET https://extensions.flatcar.org/extensions/kubernetes-v1.35.6-x86-64.raw: attempt #1
+123: Aug 27 04:33:42.448448 localhost ignition[1932]: INFO     : files: createFilesystemsFiles: createFiles: op(c): GET result: OK
+124: Aug 27 04:33:43.624175 localhost ignition[1932]: INFO     : files: createFilesystemsFiles: createFiles: op(c): [finished] writing file "/sysroot/opt/extensions/kubernetes/kubernetes-v1.35.6-x86-64.raw"

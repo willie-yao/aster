@@ -289,6 +289,7 @@ type Turn struct {
 	TestCase       models.TestCase
 	Pattern        *models.PatternAnalysis
 	EvidenceBuilds []ArtifactBuild
+	Comparison     *CauseComparison
 	History        []Message
 	Question       string
 	Progress       func(string)
@@ -298,6 +299,12 @@ type Turn struct {
 type ArtifactBuild struct {
 	BuildPrefix string           `json:"build_prefix"`
 	Build       models.BuildInfo `json:"build"`
+}
+
+// CauseComparison is the newest completed run after a cause's member failures.
+type CauseComparison struct {
+	ArtifactBuild ArtifactBuild
+	TestNames     []string
 }
 
 // ReportProgress records a non-sensitive phase when a turn observer is set.
@@ -475,15 +482,15 @@ func (s *Service) CreatePrepared(ref AnalysisRef, owner, requestID string) (Sess
 	return s.create(ref, owner, requestID, true)
 }
 
-func (s *Service) preparedFinding(ref AnalysisRef) (PreparedCauseFinding, string, bool) {
-	if ref.Scope != ScopeCause || s.preparedGeneration == "" {
+func (s *Service) preparedFinding(resolved resolvedAnalysis) (PreparedCauseFinding, string, bool) {
+	if resolved.ref.Scope != ScopeCause || s.preparedGeneration == "" {
 		return PreparedCauseFinding{}, "", false
 	}
 	prepared, err := LoadPreparedCauseFindings(preparedFindingPath(s.dataDir), s.preparedGeneration)
 	if err != nil {
 		return PreparedCauseFinding{}, "", false
 	}
-	return lookupPreparedFinding(prepared, ref)
+	return lookupPreparedFinding(prepared, resolved.ref, causeComparisonBuildID(resolved.comparison))
 }
 
 // PreparedAvailable reports which references have a usable prepared finding.
@@ -497,20 +504,36 @@ func (s *Service) PreparedAvailable(refs []AnalysisRef) []bool {
 	if err != nil {
 		return available
 	}
+	details := map[string]struct {
+		detail models.JobDetail
+		err    error
+	}{}
 	for i, ref := range refs {
 		normalized, err := normalizeAnalysisRef(ref)
 		if err != nil || normalized.Scope != ScopeCause {
 			continue
 		}
-		_, _, available[i] = lookupPreparedFinding(prepared, normalized)
+		loaded, ok := details[normalized.JobID]
+		if !ok {
+			loaded.detail, loaded.err = s.loadJobDetail(normalized.JobID)
+			details[normalized.JobID] = loaded
+		}
+		if loaded.err != nil {
+			continue
+		}
+		resolved, err := resolveFromDetail(normalized, loaded.detail)
+		if err != nil {
+			continue
+		}
+		_, _, available[i] = lookupPreparedFinding(prepared, resolved.ref, causeComparisonBuildID(resolved.comparison))
 	}
 	return available
 }
 
 // lookupPreparedFinding resolves one normalized cause reference against an
 // already-loaded cache. An unverified or uncited finding is not usable.
-func lookupPreparedFinding(prepared PreparedCauseFindings, ref AnalysisRef) (PreparedCauseFinding, string, bool) {
-	key, err := PreparedCauseKey(ref)
+func lookupPreparedFinding(prepared PreparedCauseFindings, ref AnalysisRef, comparisonBuildID string) (PreparedCauseFinding, string, bool) {
+	key, err := PreparedCauseKey(ref, comparisonBuildID)
 	if err != nil {
 		return PreparedCauseFinding{}, "", false
 	}
@@ -574,7 +597,7 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	}
 	seedMessages := []Message{}
 	seedRequests := map[string]persistedRequest{}
-	if finding, key, ok := s.preparedFinding(ref); ok {
+	if finding, key, ok := s.preparedFinding(resolved); ok {
 		message, request := preparedMessage(finding, key, now)
 		seedMessages = append(seedMessages, message)
 		seedRequests[message.RequestID] = request
@@ -615,7 +638,7 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 		}
 		changed = changed || migrated
 		if current == nil {
-			current = s.latestSessionForAnalysis(state, resolved.ref)
+			current = s.latestSessionForAnalysis(state, resolved)
 		}
 		if current != nil {
 			existing = s.sessionView(current)
@@ -696,7 +719,7 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	defer cancel()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current := s.latestSessionForAnalysis(state, resolved.ref)
+		current := s.latestSessionForAnalysis(state, resolved)
 		if current == nil {
 			return changed, ErrSessionNotFound
 		}
@@ -706,11 +729,14 @@ func (s *Service) Find(ref AnalysisRef, owner string) (SessionView, error) {
 	return view, err
 }
 
-func (s *Service) latestSessionForAnalysis(state *persistedState, ref AnalysisRef) *persistedSession {
+func (s *Service) latestSessionForAnalysis(state *persistedState, resolved resolvedAnalysis) *persistedSession {
 	var latest *persistedSession
 	latestID := ""
 	for id, current := range state.Sessions {
-		if current == nil || current.Retired || current.View.Analysis != ref {
+		if current == nil || current.Retired || current.View.Analysis != resolved.ref {
+			continue
+		}
+		if resolved.ref.Scope == ScopeCause && persistedCauseComparisonBuildID(current.Resolved.Comparison) != causeComparisonBuildID(resolved.comparison) {
 			continue
 		}
 		if latest == nil || sharedSessionNewer(id, current, latestID, latest) {
