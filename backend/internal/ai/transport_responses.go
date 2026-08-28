@@ -78,7 +78,8 @@ type responsesUsage struct {
 }
 
 type responsesInputTokenDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int  `json:"cached_tokens"`
+	CacheWriteTokens *int `json:"cache_write_tokens"`
 }
 
 type responsesOutputTokenDetails struct {
@@ -221,8 +222,14 @@ func responsesTokenUsage(usage *responsesUsage) aiusage.TokenUsage {
 	if usage == nil {
 		return aiusage.TokenUsage{}
 	}
+	cacheWrite := 0
+	cacheWriteReported := usage.InputTokensDetails.CacheWriteTokens != nil
+	if cacheWriteReported {
+		cacheWrite = *usage.InputTokensDetails.CacheWriteTokens
+	}
 	return aiusage.TokenUsage{
 		Reported: true, InputTokens: usage.InputTokens, CachedInputTokens: usage.InputTokensDetails.CachedTokens,
+		CacheWriteInputTokens: cacheWrite, CacheWriteInputTokensReported: cacheWriteReported,
 		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.OutputTokensDetails.ReasoningTokens,
 	}
 }

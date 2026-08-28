@@ -15,7 +15,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	shrinkCallDelay(t)
 	var requests []map[string]any
 	responses := []string{
-		`{"id":"resp-1","status":"completed","usage":{"input_tokens":21,"output_tokens":8,"input_tokens_details":{"cached_tokens":5},"output_tokens_details":{"reasoning_tokens":3}},"output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
+		`{"id":"resp-1","status":"completed","usage":{"input_tokens":21,"output_tokens":8,"input_tokens_details":{"cached_tokens":5,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":3}},"output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
 		`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +37,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 2 {
 		t.Fatalf("first response = %+v", first)
 	}
-	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 {
+	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || !first.Usage.CacheWriteInputTokensReported || first.Usage.CacheWriteInputTokens != 2 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 {
 		t.Fatalf("first metadata = %+v", first)
 	}
 	messages = append(messages, first.Message, modelMessage{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})
@@ -70,12 +70,20 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	}
 }
 
-func TestResponsesTokenUsageDistinguishesAbsentAndZero(t *testing.T) {
+func TestResponsesTokenUsageDistinguishesCacheWriteAbsentZeroAndPositive(t *testing.T) {
 	if got := responsesTokenUsage(nil); got.Reported {
 		t.Fatalf("absent usage = %+v", got)
 	}
 	if got := responsesTokenUsage(&responsesUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 || got.CacheWriteInputTokensReported {
-		t.Fatalf("present zero usage = %+v", got)
+		t.Fatalf("absent cache write = %+v", got)
+	}
+	zero := 0
+	if got := responsesTokenUsage(&responsesUsage{InputTokensDetails: responsesInputTokenDetails{CacheWriteTokens: &zero}}); !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 0 {
+		t.Fatalf("explicit zero cache write = %+v", got)
+	}
+	positive := 7
+	if got := responsesTokenUsage(&responsesUsage{InputTokensDetails: responsesInputTokenDetails{CacheWriteTokens: &positive}}); !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 7 {
+		t.Fatalf("positive cache write = %+v", got)
 	}
 }
 
