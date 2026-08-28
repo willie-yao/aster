@@ -117,6 +117,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		ToolChoice:        encodeChatToolChoice(req.ToolChoice),
 		ReasoningEffort:   req.ReasoningEffort,
 		MaxTokens:         req.MaxOutputTokens,
+		PromptCacheKey:    req.PromptCacheKey,
 		ParallelToolCalls: req.ParallelToolCalls,
 	})
 	if err != nil {

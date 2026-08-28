@@ -99,7 +99,10 @@ agentLoop:
 			}
 		}
 		requestStart := time.Now()
-		resp, err := c.callModel(ctx, messages, schemas, parallelToolCalls)
+		resp, err := c.callModelRequest(ctx, modelRequest{
+			Model: c.model, Messages: messages, Tools: schemas,
+			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
+		})
 		state.recentModelRequest = time.Since(requestStart)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.

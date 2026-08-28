@@ -148,9 +148,6 @@ func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDef
 }
 
 func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*modelResponse, error) {
-	if request.PromptCacheKey == "" {
-		request.PromptCacheKey = promptCacheKeyFromContext(ctx)
-	}
 	if c.reasoningEffortErr != nil {
 		return nil, c.reasoningEffortErr
 	}
