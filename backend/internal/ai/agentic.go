@@ -572,7 +572,8 @@ type agentState struct {
 	// run. Stamped onto the accepted analysis and the cache entry so a later
 	// prompt edit invalidates them on read. Held on state so the stamp and
 	// cache-write paths reuse it without re-threading sysPrompt.
-	promptHash string
+	promptHash     string
+	promptCacheKey string
 
 	// priorPreliminaryAttempts carries the retry budget already spent on this
 	// cache key so a new preliminary result increments rather than resets it.
@@ -828,6 +829,7 @@ func (c *Client) doAnalyzeAgentic(
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
+	state.promptCacheKey = analysisPromptCacheKey(sysPrompt+agToolDocs, schemas)
 
 	state.deadline = state.startTime.Add(in.Opts.Timeout)
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(state.deadline) {
@@ -1253,7 +1255,10 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 			return state.bestDraft.parsed
 		}
 		requestStart := time.Now()
-		resp, err := c.callModel(ctx, repairMessages, schemas, parallelToolCalls)
+		resp, err := c.callModelRequest(ctx, modelRequest{
+			Model: c.model, Messages: repairMessages, Tools: schemas,
+			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
+		})
 		state.recentModelRequest = time.Since(requestStart)
 		if err != nil || !resp.HasMessage {
 			recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "tool_turn_error", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), RetryDurationMs: int(time.Since(started) / time.Millisecond)})

@@ -213,6 +213,7 @@ type modelRequest struct {
 	MaxOutputTokens   int
 	OmitReasoning     bool
 	ReasoningEffort   ReasoningEffort
+	PromptCacheKey    string
 }
 
 const defaultModelHTTPResponseBytes int64 = 8 << 20

@@ -32,6 +32,7 @@ type responsesRequest struct {
 	Store             bool                 `json:"store"`
 	Include           []string             `json:"include,omitempty"`
 	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
+	PromptCacheKey    string               `json:"prompt_cache_key,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -109,6 +110,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
 		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), Reasoning: encodeResponsesReasoning(req.ReasoningEffort),
 		ParallelToolCalls: req.ParallelToolCalls, Store: false, Include: include, MaxOutputTokens: req.MaxOutputTokens,
+		PromptCacheKey: req.PromptCacheKey,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)

@@ -175,6 +175,12 @@ otherwise reusable entry. Set `ai.cache_generation`, `AI_CACHE_GENERATION`, the
 Pages `ai-cache-generation` input, or Helm `analysisCache.generation` for an
 intentional reversible rebaseline.
 
+Both provider APIs receive a content-free `prompt_cache_key` on the main
+analysis loop and Tool-backed critique repairs. Its workspace component routes
+the stable engine and consumer prompt prefix together; its shard identifies the
+exact enabled Tool schemas. Build IDs, source revisions, artifact paths, prompts,
+and Tool contents are not included in the key.
+
 ## Usage metadata
 
 The transports record provider-reported input, output, cached-input, cache-write,
