@@ -64,7 +64,25 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 {
+	wantBytes := requestSizeEstimate([]modelMessage{{Role: "user", Content: strPtr("user")}}, 0)
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 || event.Bytes != wantBytes {
+		t.Fatalf("event = %+v", event)
+	}
+}
+
+func TestClientCallModelRecordsRequestBytesOnProviderError(t *testing.T) {
+	transport := &recordingTransport{err: errors.New("provider failed")}
+	client := &Client{model: "model-a", transport: transport}
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test"})
+	messages := []modelMessage{{Role: "user", Content: strPtr("user")}}
+	ctx := withAnalysisTrace(context.Background(), trace)
+	if _, err := client.callModel(ctx, messages, nil, nil); err == nil {
+		t.Fatal("expected provider error")
+	}
+	trace.Finish("error", errors.New("provider failed"))
+	event := store.Snapshot().Traces[0].Events[0]
+	if event.Outcome != "error" || event.UsageReported || event.Bytes != requestSizeEstimate(messages, 0) {
 		t.Fatalf("event = %+v", event)
 	}
 }

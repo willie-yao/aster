@@ -160,7 +160,11 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 	}
 	start := time.Now()
 	resp, err := c.transport.Complete(ctx, request)
-	event := TraceEvent{Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond), MessageCount: len(request.Messages), ReasoningEffort: string(request.ReasoningEffort)}
+	event := TraceEvent{
+		Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond),
+		MessageCount: len(request.Messages), ReasoningEffort: string(request.ReasoningEffort),
+		Bytes: requestSizeEstimate(request.Messages, schemaPayloadBytes(request.Tools)),
+	}
 	usage := aiusage.TokenUsage{}
 	if resp != nil {
 		usage = resp.Usage

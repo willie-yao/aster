@@ -48,9 +48,6 @@ func TestDeriveContextBudgets_ReservesHeadroom(t *testing.T) {
 	if budgets.RequestTokenBudget+contextReservedTokens != budgets.ContextWindowTokens {
 		t.Fatalf("request=%d reserved=%d window=%d", budgets.RequestTokenBudget, contextReservedTokens, budgets.ContextWindowTokens)
 	}
-	if budgets.ContextByteBudget != budgets.RequestTokenBudget*promptBytesPerToken {
-		t.Fatalf("context bytes=%d, want %d", budgets.ContextByteBudget, budgets.RequestTokenBudget*promptBytesPerToken)
-	}
 	if budgets.UsedFallback {
 		t.Fatal("detected window unexpectedly marked fallback")
 	}
@@ -63,7 +60,7 @@ func TestDeriveContextBudgets_FallbackIsBounded(t *testing.T) {
 	}
 }
 
-func TestEstimatedPromptTokensUsesCalibratedRatio(t *testing.T) {
+func TestConservativePromptTokenEstimate_CoversDenseData(t *testing.T) {
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr(strings.Repeat("/very/long/artifact/path/日本語/", 600))},
@@ -71,14 +68,13 @@ func TestEstimatedPromptTokensUsesCalibratedRatio(t *testing.T) {
 		{Role: "tool", ToolCallID: "call", Content: strPtr(strings.Repeat(`{"key":"値","line":"aaaaaaaa"}`+"\n", 1200))},
 	}
 	bytes := requestSizeEstimate(messages, 2048)
-	tokens := estimatedPromptTokens(messages, 2048)
-	want := (bytes+promptBytesPerToken-1)/promptBytesPerToken + requestSerializationReserveTokens
-	if tokens != want {
-		t.Fatalf("tokens=%d, want calibrated estimate %d for serialized bytes=%d", tokens, want, bytes)
+	tokens := conservativePromptTokenEstimate(messages, 2048)
+	if tokens <= bytes {
+		t.Fatalf("tokens=%d must reserve provider framing above serialized bytes=%d", tokens, bytes)
 	}
 }
 
-func TestPrepareContextRequest_PreservesHistoryWithin128KProviderCall(t *testing.T) {
+func TestPrepareContextRequest_CompactsBefore128KProviderCall(t *testing.T) {
 	budgets := DeriveContextBudgets(128_000)
 	messages := conversation(24, 9_000)
 	schemas := 4_000
@@ -87,43 +83,19 @@ func TestPrepareContextRequest_PreservesHistoryWithin128KProviderCall(t *testing
 		RequestTokenBudget:  budgets.RequestTokenBudget,
 	}), "test")
 	if !fits {
-		t.Fatal("expected calibrated request to fit")
+		t.Fatal("expected compaction to make a tool-heavy request fit")
 	}
-	if got := estimatedPromptTokens(out, schemas); got > budgets.RequestTokenBudget {
+	if got := conservativePromptTokenEstimate(out, schemas); got > budgets.RequestTokenBudget {
 		t.Fatalf("estimate=%d exceeds request budget=%d", got, budgets.RequestTokenBudget)
 	}
 	for _, message := range out {
 		if message.Role == "tool" && message.ToolCallID == "" {
-			t.Fatal("request broke a tool result pairing")
-		}
-		if message.Role == "tool" && isStubbed(message.Content) {
-			t.Fatal("request compacted history below the calibrated limit")
+			t.Fatal("compaction broke a tool result pairing")
 		}
 	}
 }
 
-func TestPrepareContextRequest_CompactsAboveCalibrated128KLimit(t *testing.T) {
-	budgets := DeriveContextBudgets(128_000)
-	messages := conversation(60, 9_000)
-	out, fits := prepareContextRequest(context.Background(), messages, 4_000, contextHeadroomFor(AgenticOptions{
-		ContextWindowTokens: budgets.ContextWindowTokens,
-		RequestTokenBudget:  budgets.RequestTokenBudget,
-	}), "test")
-	if !fits {
-		t.Fatal("expected compaction to make an oversized request fit")
-	}
-	compacted := false
-	for _, message := range out {
-		if message.Role == "tool" && isStubbed(message.Content) {
-			compacted = true
-		}
-	}
-	if !compacted {
-		t.Fatal("expected compaction above the calibrated limit")
-	}
-}
-
-func TestAgentic_ContextHeadroomPreservesLongToolHistoryWithoutPrematureCompaction(t *testing.T) {
+func TestAgentic_ContextHeadroomCompactsLongToolHistory(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	for i := 0; i < 16; i++ {
@@ -158,28 +130,28 @@ func TestAgentic_ContextHeadroomPreservesLongToolHistoryWithoutPrematureCompacti
 		t.Fatalf("provider requests=%d, want 17", len(requests))
 	}
 	for i, raw := range requests {
-		if len(raw) > budgets.ContextByteBudget {
-			t.Fatalf("request %d wire bytes=%d exceed context byte budget=%d", i, len(raw), budgets.ContextByteBudget)
+		if len(raw) > budgets.RequestTokenBudget {
+			t.Fatalf("request %d wire bytes=%d exceed conservative budget=%d", i, len(raw), budgets.RequestTokenBudget)
 		}
 	}
-	maxBytes := 0
-	for _, raw := range requests {
-		maxBytes = max(maxBytes, len(raw))
-	}
-	if maxBytes <= budgets.RequestTokenBudget {
-		t.Fatalf("largest request=%d did not exercise the old one-byte-per-token limit=%d", maxBytes, budgets.RequestTokenBudget)
-	}
+	var compacted bool
 	for _, event := range store.Snapshot().Traces[0].Events {
 		if event.Kind == "context_compaction" {
-			t.Fatalf("request compacted below calibrated limit: %+v", event)
+			compacted = true
+			if event.EstimatedPromptTokens > budgets.RequestTokenBudget || event.ContextLimitTokens != 128_000 || event.ReservedTokens == 0 {
+				t.Fatalf("bad compaction telemetry: %+v", event)
+			}
 		}
+	}
+	if !compacted {
+		t.Fatal("expected context compaction trace")
 	}
 }
 
 func TestAgentic_ContextHeadroomDeniesCritiqueExpansionAndKeepsDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	large := strings.Repeat("evidence=very-long ", 30_000)
+	large := strings.Repeat("evidence=very-long ", 10_000)
 	candidate := `{"summary":"draft","is_transient":false,"root_cause":"` + large + `","severity":"High","suggested_fix":"investigate further","relevant_files":[]}`
 	srv.push(200, chatRespFinal(candidate))
 
