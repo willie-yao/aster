@@ -78,9 +78,11 @@ none, low, medium, high, xhigh, max
 ```
 
 Unknown values fail before provider I/O. Chat Completions sends
-`reasoning_effort`; Responses sends `reasoning.effort`. Provider and model
-support varies. Aster does not infer effort from the model name or silently
-change an unsupported value.
+`reasoning_effort`; Responses sends `reasoning.effort`. GPT-5.4 and later
+OpenAI models support Chat Completions tool calling only with `none`, so Aster
+rejects another explicit effort for that combination before provider I/O. Use
+Responses to request higher effort. Other provider and model support varies.
+Aster does not silently change an unsupported value.
 
 Reasoning effort is private content-free provenance. A non-empty value changes
 provider and cache fingerprints, but existing reusable analyses remain cached

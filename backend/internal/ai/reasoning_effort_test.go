@@ -60,6 +60,50 @@ func TestReasoningEffortNormalizesBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestChatReasoningEffortRejectsGPT54AndLaterBeforeTransport(t *testing.T) {
+	for _, model := range []string{"gpt-5.4", "gpt-5.4-mini", "GPT-5.6-SOL", "gpt-6.0"} {
+		t.Run(model, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				requests++
+			}))
+			defer server.Close()
+
+			client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: server.URL, Model: model, ReasoningEffort: ReasoningEffortHigh})
+			err := client.ValidateConfiguration()
+			if err == nil || !strings.Contains(err.Error(), "set reasoning effort to none or use responses") {
+				t.Fatalf("error = %v", err)
+			}
+			if _, err := client.Complete(context.Background(), "system", "user"); err == nil {
+				t.Fatal("Complete succeeded with unsupported configuration")
+			}
+			if requests != 0 {
+				t.Fatalf("provider requests = %d, want 0", requests)
+			}
+		})
+	}
+}
+
+func TestChatReasoningEffortAllowsSupportedCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name, api, model string
+		effort           ReasoningEffort
+	}{
+		{name: "older chat model", api: APIChatCompletions, model: "gpt-5.3", effort: ReasoningEffortHigh},
+		{name: "chat none", api: APIChatCompletions, model: "gpt-5.6", effort: ReasoningEffortNone},
+		{name: "chat default", api: APIChatCompletions, model: "gpt-5.6", effort: ""},
+		{name: "responses", api: APIResponses, model: "gpt-5.6", effort: ReasoningEffortHigh},
+		{name: "other model family", api: APIChatCompletions, model: "claude-sonnet-4.6", effort: ReasoningEffortHigh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClientWithOptions(Options{API: tc.api, Endpoint: "https://model.invalid", Model: tc.model, ReasoningEffort: tc.effort})
+			if err := client.ValidateConfiguration(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestReasoningEffortRejectsInvalidBeforeTransport(t *testing.T) {
 	for _, apiMode := range []string{APIChatCompletions, APIResponses} {
 		t.Run(apiMode, func(t *testing.T) {

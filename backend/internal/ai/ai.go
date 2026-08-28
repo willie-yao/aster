@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func NewClientWithOptions(opts Options) *Client {
 	if apiMode == "" {
 		apiMode = APIChatCompletions
 	}
+	reasoningEffortErr = errors.Join(reasoningEffortErr, validateChatReasoningEffort(apiMode, opts.Model, reasoningEffort))
 	var transport modelTransport
 	switch apiMode {
 	case APIChatCompletions:
@@ -106,6 +108,24 @@ func NewClientWithOptions(opts Options) *Client {
 		maxOutputTokens: opts.MaxOutputTokens, maxOutputTokensErr: maxOutputTokensErr,
 		cache: NewCache(opts.CacheDir),
 	}
+}
+
+var openAIGPTVersionPattern = regexp.MustCompile(`(?i)^gpt-(\d+)\.(\d+)(?:-|$)`)
+
+func validateChatReasoningEffort(apiMode, model string, effort ReasoningEffort) error {
+	if apiMode != APIChatCompletions || effort == "" || effort == ReasoningEffortNone {
+		return nil
+	}
+	match := openAIGPTVersionPattern.FindStringSubmatch(strings.TrimSpace(model))
+	if len(match) != 3 {
+		return nil
+	}
+	major, majorErr := strconv.Atoi(match[1])
+	minor, minorErr := strconv.Atoi(match[2])
+	if majorErr != nil || minorErr != nil || major < 5 || major == 5 && minor < 4 {
+		return nil
+	}
+	return fmt.Errorf("chat_completions cannot use tool calling with model %q and reasoning effort %q; set reasoning effort to none or use responses", model, effort)
 }
 
 // Endpoint returns the configured chat-completions URL.

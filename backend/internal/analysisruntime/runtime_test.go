@@ -234,6 +234,26 @@ ai:
 	}
 }
 
+func TestNewRejectsGPT54ChatToolReasoningBeforeProviderIO(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	analysisProject := &Project{
+		Config: &project.Config{AI: &project.AI{}},
+		Provider: project.AIProvider{
+			API: project.AIAPIChatCompletions, Endpoint: server.URL + "/v1/chat/completions", Model: "gpt-5.4", ReasoningEffort: ai.ReasoningEffortHigh,
+		},
+	}
+	if _, err := New(t.Context(), Options{Project: analysisProject, Token: "token"}); err == nil || !strings.Contains(err.Error(), "set reasoning effort to none or use responses") {
+		t.Fatalf("error = %v", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("provider requests = %d, want 0", requests.Load())
+	}
+}
+
 func TestNewRejectsInvalidReasoningEffortBeforeProviderIO(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
