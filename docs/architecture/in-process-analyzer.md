@@ -128,7 +128,7 @@ The main boundaries are layered rather than represented by one counter:
 | Time | The per-failure timeout is capped by the parent fetch context. Repair also requires explicit time headroom. |
 | Artifact bytes | A fixed engine GCS ceiling limits bytes fetched by artifact and Kubernetes tools. |
 | Model-visible bytes | A context-derived model-byte budget and per-tool result caps bound inserted evidence. |
-| Context | The runtime prefers an operator context-window override, then provider metadata, then a bounded fallback. A conservative one-byte-per-token estimate reserves completion and finalization headroom. |
+| Context | The runtime prefers an operator context-window override, then provider metadata, then a bounded fallback. A three-byte-per-token request estimate preserves completion and finalization headroom. |
 
 Before each provider request, old tool results may be compacted into bounded
 stubs while recent evidence remains verbatim. If the request still cannot fit,
