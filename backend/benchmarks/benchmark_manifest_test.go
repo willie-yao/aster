@@ -775,6 +775,9 @@ type benchmarkJSONLTrace struct {
 	CachedInputTokens     int                         `json:"cached_input_tokens"`
 	OutputTokens          int                         `json:"output_tokens"`
 	ReasoningTokens       int                         `json:"reasoning_tokens"`
+	RequestBytes          int                         `json:"request_bytes"`
+	ReportedRequestBytes  int                         `json:"reported_request_bytes"`
+	MaxRequestBytes       int                         `json:"max_request_bytes"`
 	Finalize              map[string]int              `json:"finalize"`
 	FinalizeRecovery      map[string]int              `json:"finalize_recovery"`
 	Critique              map[string]int              `json:"critique"`
@@ -923,8 +926,11 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 				if event.Outcome == "error" {
 					result.Trace.ModelFailures++
 				}
+				result.Trace.RequestBytes += event.Bytes
+				result.Trace.MaxRequestBytes = max(result.Trace.MaxRequestBytes, event.Bytes)
 				if event.UsageReported {
 					result.Trace.ReportedRequests++
+					result.Trace.ReportedRequestBytes += event.Bytes
 				}
 				result.Trace.InputTokens += event.InputTokens
 				result.Trace.CachedInputTokens += event.CachedInputTokens
@@ -1141,7 +1147,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		},
 	}
 	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
-		{Kind: "model_request", Outcome: "success", Attempts: 2, InputTokens: 10, CachedInputTokens: 4, OutputTokens: 2},
+		{Kind: "model_request", Outcome: "success", Attempts: 2, UsageReported: true, InputTokens: 10, CachedInputTokens: 4, OutputTokens: 2, Bytes: 120},
 		{Kind: "tool_call", Tool: "grep_repo", Outcome: "success", Grep: &tools.GrepCallObservation{
 			SelectorID: "primary", PathFilter: "*.go", PathFilterSupplied: true, PathFilterLength: 4,
 			ContextLines: 2, MaxMatches: 30, MatchCount: 0, FilesScanned: 4, Outcome: tools.GrepOutcomeZeroMatches,
@@ -1193,7 +1199,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||
 		result.SourceEvidenceToolCalls != 1 || result.SourceReadCoverageHits != 1 || result.SourceReadCoverageTotal != 1 || len(result.SourceReadRanges) != 1 || result.SourceReadRanges[0].Path != "file.go" || len(result.SourceCitations) != 0 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
-		result.ProviderRequestCap != 18 || result.Trace.ProviderAttempts != 2 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
+		result.ProviderRequestCap != 18 || result.Trace.ProviderAttempts != 2 || result.Trace.RequestBytes != 120 || result.Trace.ReportedRequestBytes != 120 || result.Trace.MaxRequestBytes != 120 || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != benchmarkHumanScoreRubricVersion || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
 		!result.SemanticRevisionAttempted || !result.SemanticRevisionSelected || result.SemanticRevisionRejected ||
