@@ -18,7 +18,7 @@ const (
 	// PreparedCauseFindingsFilename is the private fetcher-owned cause finding cache.
 	PreparedCauseFindingsFilename = "prepared_cause_findings.json"
 	preparedCauseFindingsVersion  = 1
-	PreparedCauseQuestion         = "Investigate this causal group across its member builds. Determine what the artifacts prove about the root cause and the concrete repository change that should fix it. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision."
+	PreparedCauseQuestion         = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision."
 )
 
 // PreparedCauseFinding is one engine-generated first answer for a cause chat.
@@ -48,12 +48,19 @@ func PreparedCauseGeneration(runtimeFingerprint string) string {
 }
 
 // PreparedCauseKey returns the stable identity for one cause reference.
-func PreparedCauseKey(ref AnalysisRef) (string, error) {
+func PreparedCauseKey(ref AnalysisRef, comparisonBuildID string) (string, error) {
 	ref, err := normalizeAnalysisRef(ref)
 	if err != nil || ref.Scope != ScopeCause {
 		return "", fmt.Errorf("%w: prepared finding requires cause scope", ErrInvalidRequest)
 	}
-	return hashAnalysisRef(ref)
+	payload, err := json.Marshal(struct {
+		Ref               AnalysisRef `json:"ref"`
+		ComparisonBuildID string      `json:"comparison_build_id,omitempty"`
+	}{Ref: ref, ComparisonBuildID: strings.TrimSpace(comparisonBuildID)})
+	if err != nil {
+		return "", fmt.Errorf("encoding prepared cause identity: %w", err)
+	}
+	return hashBytes(payload), nil
 }
 
 // LoadPreparedCauseFindings loads the bounded private cache.
@@ -111,7 +118,7 @@ func PreparedCauseTurn(ref AnalysisRef, detail models.JobDetail) (Turn, error) {
 		Scope: resolved.ref.Scope, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: cloneBuildInfo(resolved.build), TestCase: cloneTestCase(resolved.testCase),
 		Pattern: clonePattern(resolved.pattern), EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),
-		Question: PreparedCauseQuestion,
+		Comparison: cloneCauseComparison(resolved.comparison), Question: PreparedCauseQuestion,
 	}, nil
 }
 

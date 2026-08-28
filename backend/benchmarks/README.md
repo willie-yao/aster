@@ -411,3 +411,20 @@ loaded-instruction metadata to a provider request. The immutable image contract
 records the upstream commit and source digest, frozen models.dev digest, Bun
 builder identity, runtime and build-only patch identities, embedded Web UI
 identity, and final binary digest.
+
+## Cause-resolution comparison benchmark
+
+The Flatcar cause-resolution benchmark checks that analysis chat does not call a
+cause fixed merely because a later run passed with different inputs. Its frozen
+fixture contains failed builds `2090605942025490432` and
+`2091715517269151744`, where `stable-1.35` selected Kubernetes v1.35.8, and
+comparison build `2092830007742173184`, where it selected v1.35.6.
+
+```bash
+RUN_CAUSE_RESOLUTION_BENCHMARK=1 \
+AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
+go test ./benchmarks -run TestAnalysisChatCauseResolutionBenchmark -v -timeout 20m
+```
+
+The fixture-integrity test runs in normal CI. The model benchmark remains opt-in
+because it makes provider calls.

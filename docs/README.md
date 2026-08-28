@@ -49,7 +49,7 @@ basic dashboard is healthy.
 | --- | --- | --- |
 | Pull request triage | [Pull request triage](pull-request-triage.md) | Deterministic cross-deployment view of open pull request failures, with optional bot comments and authenticated AI escalation. |
 | Analysis chat | [Server mode](server.md#analysis-chat) | Authenticated, read-only model conversation over published analysis. |
-| Cause-scoped analysis chat | [Server mode](server.md#analysis-chat) | Authenticated chat over exactly one causal group and its member builds. |
+| Cause-scoped analysis chat | [Server mode](server.md#analysis-chat) | Authenticated chat over one causal group's failed builds and newest later completed comparison. |
 | File Issue and Mark Resolved | [Server mode](server.md#admin-gated-actions) and [GitHub issues](github-issues.md) | Authenticated preview or lifecycle action. GitHub writes use a server-held `BOT_TOKEN`. |
 | Email notifications | [Notifications](notifications.md) | SMTP credentials and routing stay deployment-owned. |
 | Fix PR generation | [Fix PR generation](fix-prs.md) | Experimental, confirmation-gated code writing through Agent Sandbox. |

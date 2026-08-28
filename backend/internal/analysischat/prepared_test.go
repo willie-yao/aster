@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
@@ -27,6 +28,21 @@ func TestPreparedCauseFindingsRejectDifferentGeneration(t *testing.T) {
 func TestPreparedCauseGenerationChangesWithRuntime(t *testing.T) {
 	if PreparedCauseGeneration("runtime-one") == PreparedCauseGeneration("runtime-two") {
 		t.Fatal("generation did not change")
+	}
+}
+
+func TestPreparedCauseKeyChangesWithComparisonBuild(t *testing.T) {
+	ref := AnalysisRef{Scope: ScopeCause, JobID: "job", PatternID: "pattern", PatternHash: "pattern-hash", CausalGroupID: "cause", CausalGroupHash: "cause-hash"}
+	first, err := PreparedCauseKey(ref, "build-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PreparedCauseKey(ref, "build-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("comparison build did not change the prepared finding key")
 	}
 }
 
@@ -74,7 +90,7 @@ func TestServiceCreateSeedsPreparedCauseFindingWithoutUsingATurn(t *testing.T) {
 		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
 		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
 	}
-	key, err := PreparedCauseKey(ref)
+	key, err := PreparedCauseKey(ref, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,11 +152,11 @@ func TestServicePreparedAvailable(t *testing.T) {
 	}
 	ready := causeRef(pattern.CausalGroups[0])
 	uncited := causeRef(pattern.CausalGroups[1])
-	readyKey, err := PreparedCauseKey(ready)
+	readyKey, err := PreparedCauseKey(ready, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncitedKey, err := PreparedCauseKey(uncited)
+	uncitedKey, err := PreparedCauseKey(uncited, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +193,14 @@ func TestServicePreparedAvailable(t *testing.T) {
 	}
 	if got := service.PreparedAvailable(refs); !reflect.DeepEqual(got, []bool{true, false, false, false}) {
 		t.Fatalf("configured = %v", got)
+	}
+	detail.Runs = append(detail.Runs, models.BuildResult{BuildInfo: models.BuildInfo{
+		BuildID: "2", JobName: detail.Name, Result: "SUCCESS", Passed: true,
+		Started: detail.Runs[0].Started.Add(time.Minute),
+	}})
+	writeJobDetail(t, dir, detail)
+	if got := service.PreparedAvailable([]AnalysisRef{ready}); !reflect.DeepEqual(got, []bool{false}) {
+		t.Fatalf("changed comparison = %v", got)
 	}
 	if got := service.PreparedAvailable(nil); len(got) != 0 {
 		t.Fatalf("empty batch = %v", got)

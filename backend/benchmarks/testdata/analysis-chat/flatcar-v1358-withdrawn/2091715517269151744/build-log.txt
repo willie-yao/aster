@@ -1,0 +1,4 @@
+1463:   Aug 24 02:39:52.711: INFO: Resolved KUBERNETES_VERSION (set to stable-1.35) to v1.35.8
+3132:   INFO: Creating the workload cluster with name "capz-e2e-9xgnx2-flatcar-sysext" using the "flatcar-sysext" template (Kubernetes v1.35.8, 1 control-plane machines, 1 worker machines)
+3134:   INFO: clusterctl config cluster capz-e2e-9xgnx2-flatcar-sysext --infrastructure (default) --kubernetes-version v1.35.8 --control-plane-machine-count 1 --worker-machine-count 1 --flavor flatcar-sysext
+3143:   Aug 24 03:04:41.555: INFO: Cleaning up after "Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes" spec

@@ -126,6 +126,29 @@ func TestApplyPatternLifecycleObservationRecovery(t *testing.T) {
 	}
 }
 
+func TestCausalGroupLifecycleUsesGroupBuilds(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		passes     int
+		wantState  PatternLifecycleState
+		wantStreak int
+	}{
+		{name: "one pass remains active", passes: 1, wantState: PatternLifecycleActive, wantStreak: 1},
+		{name: "three passes recover", passes: 3, wantState: PatternLifecycleRecovered, wantStreak: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			detail := observedRecoveryDetail(test.passes, false, false)
+			lifecycle := CausalGroupLifecycle(detail, []string{"failure-5", "failure-4"})
+			if lifecycle.State != test.wantState || lifecycle.RecoveryStreak != test.wantStreak || len(lifecycle.RecoveryBuilds) != test.wantStreak {
+				t.Fatalf("lifecycle = %+v", lifecycle)
+			}
+			if lifecycle.SourceRevision != "" || len(lifecycle.PassingBuilds) != 0 {
+				t.Fatalf("cause lifecycle gained source-verification state: %+v", lifecycle)
+			}
+		})
+	}
+}
+
 func TestApplyPatternLifecycleSourceObservationTakesPrecedenceOverObservationRecovery(t *testing.T) {
 	pattern := lifecyclePattern()
 	pattern.RemediationVerification.PassingBuilds = []string{"pass-1"}

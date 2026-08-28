@@ -1,0 +1,30 @@
+160:               - path: /etc/extensions/kubernetes.raw
+161:                 hard: false
+162:                 target: /opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw
+163:               files:
+164:               - path: /etc/sysupdate.kubernetes.d/kubernetes-v1.35.conf
+175:                 contents:
+176:                   remote:
+177:                     url: https://extensions.flatcar.org/extensions/kubernetes-v1.35.8-x86-64.raw
+178:             systemd:
+179:               units:
+259:         kind: AzureMachineTemplate
+260:         name: capz-e2e-9xgnx2-flatcar-sysext-md-0
+261:       version: v1.35.8
+262: ---
+263: apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+344:             - path: /etc/extensions/kubernetes.raw
+345:               hard: false
+346:               target: /opt/extensions/kubernetes/kubernetes-v1.35.8-x86-64.raw
+347:             files:
+348:             - path: /etc/sysupdate.kubernetes.d/kubernetes-v1.35.conf
+359:               contents:
+360:                 remote:
+361:                   url: https://extensions.flatcar.org/extensions/kubernetes-v1.35.8-x86-64.raw
+362:     initConfiguration:
+363:       nodeRegistration:
+384:       name: capz-e2e-9xgnx2-flatcar-sysext-control-plane
+385:   replicas: 1
+386:   version: v1.35.8
+387: ---
+388: apiVersion: infrastructure.cluster.x-k8s.io/v1beta1

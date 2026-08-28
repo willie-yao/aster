@@ -1506,6 +1506,7 @@ func TestAnalysisChatPatternContextCurrentCausalFields(t *testing.T) {
 		Lifecycle: &models.PatternLifecycle{
 			State: models.PatternLifecycleRecovered, Reason: "three later builds passed",
 			SourceRevision: "private-source-revision", PassingBuilds: []string{"private-passing-build"},
+			RecoveryStreak: 3, RecoveryBuilds: []string{"107", "106", "105"},
 		},
 	}
 	encoded, err := encodeAnalysisChatPatternContext(analysischat.Turn{
@@ -1533,7 +1534,8 @@ func TestAnalysisChatPatternContextCurrentCausalFields(t *testing.T) {
 	if !slices.Equal(context.CausalGroups[2].ArtifactBuilds, []string{"101"}) {
 		t.Fatalf("group b = %+v", context.CausalGroups[2])
 	}
-	if context.Lifecycle == nil || context.Lifecycle.State != models.PatternLifecycleRecovered || context.Lifecycle.Reason != "three later builds passed" {
+	if context.Lifecycle == nil || context.Lifecycle.State != models.PatternLifecycleRecovered || context.Lifecycle.Reason != "three later builds passed" ||
+		context.Lifecycle.RecoveryStreak != 3 || !slices.Equal(context.Lifecycle.RecoveryBuilds, []string{"107", "106", "105"}) {
 		t.Fatalf("lifecycle = %+v", context.Lifecycle)
 	}
 	text := string(encoded)
@@ -1555,10 +1557,20 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 			RootCause: "same cause", Confidence: "high",
 		}},
 		SharedRootCause: "same cause", SharedBuilds: []string{"2", "1"}, Summary: "same cause",
+		Lifecycle: &models.PatternLifecycle{
+			State: models.PatternLifecycleActive, Reason: "one later run passed", RecoveryStreak: 1, RecoveryBuilds: []string{"3"},
+		},
 	}
 	context, err := analysisChatContext(analysischat.Turn{
 		Scope: analysischat.ScopeCause, JobID: "periodic-demo", Pattern: pattern,
 		EvidenceBuilds: []analysischat.ArtifactBuild{{Build: models.BuildInfo{BuildID: "2"}}, {Build: models.BuildInfo{BuildID: "1"}}},
+		Comparison: &analysischat.CauseComparison{
+			ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{
+				BuildID: "3", Result: "SUCCESS", Passed: true,
+				Started: time.Date(2026, time.August, 27, 4, 22, 14, 0, time.UTC), Commit: "5eafa966",
+			}},
+			TestNames: []string{"Flatcar sysext cluster"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1566,8 +1578,37 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 	if !strings.Contains(context, "Selected published causal-group analysis") || strings.Contains(context, "Selected published recurring-pattern analysis") {
 		t.Fatalf("context = %s", context)
 	}
-	if !strings.Contains(context, "Answer only about this cause and its listed builds") {
+	for _, want := range []string{`"comparison_build"`, `"build_id": "3"`, `"representative_tests"`, "newest completed run available when this conversation was created", "A passing comparison proves only that the cause was not reproduced"} {
+		if !strings.Contains(context, want) {
+			t.Fatalf("context missing %q: %s", want, context)
+		}
+	}
+	if strings.Contains(context, "Answer only about this cause and its listed builds") {
 		t.Fatalf("context = %s", context)
+	}
+}
+
+func TestAnalysisChatCauseComparisonBuildIsSeparateFromMemberBuilds(t *testing.T) {
+	turn := analysischat.Turn{
+		Scope: analysischat.ScopeCause,
+		EvidenceBuilds: []analysischat.ArtifactBuild{
+			{Build: models.BuildInfo{BuildID: "2"}},
+			{Build: models.BuildInfo{BuildID: "1"}},
+		},
+		Comparison: &analysischat.CauseComparison{
+			ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{BuildID: "3"}},
+		},
+	}
+	builds := analysisChatArtifactBuilds(turn)
+	got := make([]string, 0, len(builds))
+	for _, build := range builds {
+		got = append(got, build.Build.BuildID)
+	}
+	if !slices.Equal(got, []string{"2", "1", "3"}) {
+		t.Fatalf("artifact builds = %v", got)
+	}
+	if !slices.Equal([]string{turn.EvidenceBuilds[0].Build.BuildID, turn.EvidenceBuilds[1].Build.BuildID}, []string{"2", "1"}) {
+		t.Fatalf("member builds mutated: %+v", turn.EvidenceBuilds)
 	}
 }
 

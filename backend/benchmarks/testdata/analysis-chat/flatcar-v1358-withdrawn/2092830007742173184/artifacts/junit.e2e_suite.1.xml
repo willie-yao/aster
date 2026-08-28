@@ -1,0 +1,4 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="capz-e2e-flatcar-resolution-fixture">
+  <testcase name="[It] Workload cluster creation Creating a Flatcar sysext cluster [OPTIONAL] With Flatcar control-plane and worker nodes" classname="capz-e2e" status="passed" time="992.032068732" />
+</testsuite>

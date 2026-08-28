@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -387,22 +388,47 @@ func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
 				RepoRefs: map[string]string{"example/repo": "main:deadbeef"},
 			},
 		}},
+		comparison: &CauseComparison{
+			ArtifactBuild: ArtifactBuild{
+				BuildPrefix: "logs/job/2/",
+				Build: models.BuildInfo{
+					BuildID: "2", JobName: "job", Result: "SUCCESS", Passed: true,
+					Started: time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC), Commit: "commit-two",
+					JUnitURLs: []string{"private-comparison-junit"}, RepoRefs: map[string]string{"example/repo": "main:private"},
+				},
+			},
+			TestNames: []string{"TestCluster"},
+		},
 	}
+	pattern.Lifecycle = &models.PatternLifecycle{
+		State: models.PatternLifecycleActive, Reason: "watching", RecoveryStreak: 1, RecoveryBuilds: []string{"2"},
+	}
+	resolved.pattern = &pattern
 	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
 	if persisted.Pattern == nil || len(persisted.Pattern.Subject) > 4<<10 || len(persisted.Pattern.SharedRootCause) > 32<<10 ||
 		len(persisted.Pattern.SuggestedFix) > 16<<10 || len(persisted.Pattern.Summary) > 16<<10 ||
 		len(persisted.Pattern.SharedBuilds) != 50 || len(persisted.Pattern.RelevantFiles) != 50 {
 		t.Fatalf("bounded pattern = %+v", persisted.Pattern)
 	}
-	encoded, err := json.Marshal(persisted.EvidenceBuilds)
+	encoded, err := json.Marshal(persisted)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "private-junit-url") || strings.Contains(string(encoded), "deadbeef") {
+	if strings.Contains(string(encoded), "private-junit-url") || strings.Contains(string(encoded), "deadbeef") ||
+		strings.Contains(string(encoded), "private-comparison-junit") || strings.Contains(string(encoded), "main:private") {
 		t.Fatalf("oversized build metadata persisted: %s", encoded)
 	}
 	restored := restoreResolved(persisted)
 	if len(restored.evidenceBuilds) != 1 || restored.evidenceBuilds[0].Build.BuildID != "1" || restored.evidenceBuilds[0].Build.JobName != "job" {
 		t.Fatalf("restored evidence builds = %+v", restored.evidenceBuilds)
+	}
+	if restored.comparison == nil || restored.comparison.ArtifactBuild.Build.BuildID != "2" ||
+		!restored.comparison.ArtifactBuild.Build.Passed || restored.comparison.ArtifactBuild.Build.Commit != "commit-two" ||
+		!slices.Equal(restored.comparison.TestNames, []string{"TestCluster"}) {
+		t.Fatalf("restored comparison = %+v", restored.comparison)
+	}
+	if restored.pattern.Lifecycle == nil || restored.pattern.Lifecycle.RecoveryStreak != 1 ||
+		!slices.Equal(restored.pattern.Lifecycle.RecoveryBuilds, []string{"2"}) {
+		t.Fatalf("restored lifecycle = %+v", restored.pattern.Lifecycle)
 	}
 }

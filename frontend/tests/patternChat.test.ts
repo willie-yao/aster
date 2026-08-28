@@ -69,7 +69,8 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   assert.match(source, /exactJUnitAnalysis = !multiBuildScope/);
   assert.match(source, /legacyFixEligible = patternScope/);
   assert.match(source, /chatTitle = causeScope \? "Investigate cause"/);
+  assert.match(source, /Has this cause been resolved in the latest completed run/);
   assert.match(source, /What evidence supports this cause across its builds/);
   assert.match(source, /What concrete change follows from this cause/);
-  assert.match(source, /Interrogate this cause across its builds/);
+  assert.match(source, /Interrogate this cause across failed and later runs/);
 });

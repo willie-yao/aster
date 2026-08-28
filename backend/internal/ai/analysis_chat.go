@@ -257,7 +257,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		if !ok || len(turn.EvidenceBuilds) == 0 {
 			return analysischat.Reply{}, fmt.Errorf("analysis chat multi-build evidence browser is unavailable")
 		}
-		browser = factory.ForBuilds(turn.EvidenceBuilds)
+		browser = factory.ForBuilds(analysisChatArtifactBuilds(turn))
 	} else {
 		browser = a.browserFactory.ForBuild(turn.BuildPrefix, turn.Build.JobName+"/"+turn.Build.BuildID)
 	}
@@ -459,6 +459,14 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	recordAnalysisChatStructuredResponse(loopCtx, "success", "finalize", modelCalls, providerAttempts, structured, stats, "")
 	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
+}
+
+func analysisChatArtifactBuilds(turn analysischat.Turn) []analysischat.ArtifactBuild {
+	builds := slices.Clone(turn.EvidenceBuilds)
+	if turn.Scope == analysischat.ScopeCause && turn.Comparison != nil {
+		builds = append(builds, turn.Comparison.ArtifactBuild)
+	}
+	return builds
 }
 
 // classifyAnalysisChatLoopError maps a tool-loop failure onto the chat error
@@ -879,8 +887,20 @@ type analysisChatPatternCausalGroup struct {
 }
 
 type analysisChatPatternLifecycle struct {
-	State  models.PatternLifecycleState `json:"state"`
-	Reason string                       `json:"reason,omitempty"`
+	State          models.PatternLifecycleState `json:"state"`
+	Reason         string                       `json:"reason,omitempty"`
+	RecoveryStreak int                          `json:"recovery_streak,omitempty"`
+	RecoveryBuilds []string                     `json:"recovery_builds,omitempty"`
+}
+
+type analysisChatCauseComparison struct {
+	BuildID   string   `json:"build_id"`
+	Result    string   `json:"result,omitempty"`
+	Passed    bool     `json:"passed"`
+	StartedAt string   `json:"started_at,omitempty"`
+	Commit    string   `json:"commit,omitempty"`
+	Revision  string   `json:"revision,omitempty"`
+	TestNames []string `json:"representative_tests,omitempty"`
 }
 
 type analysisChatPatternContext struct {
@@ -899,6 +919,7 @@ type analysisChatPatternContext struct {
 	RelevantFiles   []string                         `json:"published_relevant_files,omitempty"`
 	SharedBuilds    []string                         `json:"shared_builds,omitempty"`
 	ArtifactBuilds  []string                         `json:"artifact_builds"`
+	ComparisonBuild *analysisChatCauseComparison     `json:"comparison_build,omitempty"`
 }
 
 func clampAnalysisChatPatternText(value string, maxBytes int) string {
@@ -965,8 +986,22 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 	var lifecycle *analysisChatPatternLifecycle
 	if pattern.Lifecycle != nil {
 		lifecycle = &analysisChatPatternLifecycle{
-			State:  pattern.Lifecycle.State,
-			Reason: clampAnalysisChatPatternText(pattern.Lifecycle.Reason, analysisChatMaxPatternLifecycleReasonBytes),
+			State: pattern.Lifecycle.State, Reason: clampAnalysisChatPatternText(pattern.Lifecycle.Reason, analysisChatMaxPatternLifecycleReasonBytes),
+			RecoveryStreak: pattern.Lifecycle.RecoveryStreak,
+			RecoveryBuilds: boundedAnalysisChatBuildIDs(pattern.Lifecycle.RecoveryBuilds),
+		}
+	}
+	var comparison *analysisChatCauseComparison
+	if turn.Scope == analysischat.ScopeCause && turn.Comparison != nil {
+		build := turn.Comparison.ArtifactBuild.Build
+		comparison = &analysisChatCauseComparison{
+			BuildID: clampAnalysisChatPatternText(build.BuildID, analysisChatMaxBuildIDBytes),
+			Result:  clampAnalysisChatPatternText(build.Result, 64), Passed: build.Passed,
+			Commit: clampAnalysisChatPatternText(build.Commit, 256), Revision: clampAnalysisChatPatternText(build.Revision, 256),
+			TestNames: boundedAnalysisChatTestNames(turn.Comparison.TestNames),
+		}
+		if !build.Started.IsZero() {
+			comparison.StartedAt = build.Started.UTC().Format(time.RFC3339)
 		}
 	}
 	payload := analysisChatPatternContext{
@@ -978,6 +1013,7 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 		SuggestedFix:    clampAnalysisChatPatternText(pattern.SuggestedFix, 16<<10),
 		RelevantFiles:   boundedAnalysisChatFiles(pattern.RelevantFiles),
 		SharedBuilds:    boundedAnalysisChatBuildIDs(pattern.SharedBuilds), ArtifactBuilds: artifactBuilds,
+		ComparisonBuild: comparison,
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -997,7 +1033,7 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		}
 		if turn.Scope == analysischat.ScopeCause {
 			return "Selected published causal-group analysis:\n\n" + string(encoded) +
-				"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. The single causal group's artifact_builds field lists its available builds. Answer only about this cause and its listed builds.", nil
+				"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. The causal group's artifact_builds field lists its failed member builds. comparison_build, when present, is the newest completed run available when this conversation was created and its artifacts are available under the same prefix. Answer only about this cause, using its member builds and the comparison build. A passing comparison proves only that the cause was not reproduced in that run. Compare the representative test, configuration, versions, source revision, and triggering conditions before describing the cause as resolved. Name the comparison build in the answer. Treat a skipped, missing, or materially different test as inconclusive.", nil
 		}
 		return "Selected published recurring-pattern analysis:\n\n" + string(encoded) +
 			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Each causal group's artifact_builds field lists which selected builds have artifact access. Answer only about this recurring pattern and its listed builds.", nil
@@ -1410,6 +1446,20 @@ func boundedAnalysisChatBuildIDs(builds []string) []string {
 			build = build[:analysisChatMaxBuildIDBytes]
 		}
 		out = append(out, build)
+	}
+	return out
+}
+
+func boundedAnalysisChatTestNames(names []string) []string {
+	if len(names) > analysisChatMaxPatternBuildsPerGroup {
+		names = names[:analysisChatMaxPatternBuildsPerGroup]
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			out = append(out, clampAnalysisChatPatternText(name, analysisChatMaxQuestionBytes))
+		}
 	}
 	return out
 }

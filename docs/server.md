@@ -121,9 +121,18 @@ operators see the same transcript and active-turn progress. Only one turn may ru
 at a time, and only the operator who started it may cancel it. Test,
 recurring-pattern, and causal-group scopes are supported. A
 causal-group session is bound to the parent pattern ID and hash plus the cause ID
-and hash. It exposes exactly the cause's member builds, including single-build
-causes, and does not require the parent pattern to be systemic. The server refuses
-the session when any member build has left the published window.
+and hash. It exposes the cause's failed member builds, including single-build
+causes, plus the newest later completed run when one is available. The later run
+is comparison evidence, not a member of the cause. A passing comparison proves
+only that the cause did not reproduce in that run; the chat must compare the
+test and triggering inputs before describing it as resolved. Cause chat does not
+require the parent pattern to be systemic. The server refuses the session when
+any member build has left the published window.
+
+The resolved evidence is frozen when a session is created. The comparison build
+is identified in the model context, and a refreshed lookup does not reuse the
+old shared session when a newer comparison run appears. An already-open session
+continues to describe the evidence available when it was created.
 
 Each start or message uses a unique `Idempotency-Key`. Repeating the
 same key and body returns the original state; reusing the key for different
@@ -151,7 +160,8 @@ After each initial or reconciliation AI publication, the fetcher prepares up to
 three active causal groups that do not already have a current finding,
 preferring causes on published recurring patterns so the budget reaches the
 causes a maintainer can open. These best-effort findings use the same
-cause-scoped artifact tools and citation validation as interactive chat. They
+cause-scoped member and comparison artifacts and citation validation as
+interactive chat. They
 are cached by cause, model, prompt, and AI cache generation. A prepared finding
 seeds a new cause conversation without using one of the maintainer's admitted
 turns. Preparation failures never fail or roll back dashboard publication, and

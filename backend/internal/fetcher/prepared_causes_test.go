@@ -128,6 +128,47 @@ func TestPrepareCauseFindingsCachesSuccessfulAnswer(t *testing.T) {
 	}
 }
 
+func TestPrepareCauseFindingsRefreshesWhenComparisonChanges(t *testing.T) {
+	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
+		Answer: "The comparison does not prove a fix.", Assessment: "supports",
+		Citations: []analysischat.Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
+	}}
+	installPreparedCauseRunner(t, runner)
+	dir := t.TempDir()
+	p := preparedCausePipeline(dir)
+	detail := preparedCauseDetail()
+	details := []models.JobDetail{detail}
+	p.prepareCauseFindings(t.Context(), details)
+	detail.Runs = append(detail.Runs, models.BuildResult{BuildInfo: models.BuildInfo{
+		BuildID: "2", JobName: detail.Name, Result: "SUCCESS", Passed: true,
+		Started: time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC),
+	}})
+	details[0] = detail
+	p.prepareCauseFindings(t.Context(), details)
+	if runner.calls != 2 || len(runner.turns) != 2 || runner.turns[1].Comparison == nil || runner.turns[1].Comparison.ArtifactBuild.Build.BuildID != "2" {
+		t.Fatalf("calls=%d turns=%+v", runner.calls, runner.turns)
+	}
+	state, err := analysischat.LoadPreparedCauseFindings(filepath.Join(dir, analysischat.PreparedCauseFindingsFilename), analysischat.PreparedCauseGeneration("runtime"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Findings) != 1 {
+		t.Fatalf("findings = %+v", state.Findings)
+	}
+	ref := detail.PatternAnalyses[0].CausalGroups[0]
+	wantKey, err := analysischat.PreparedCauseKey(analysischat.AnalysisRef{
+		Scope: analysischat.ScopeCause, JobID: detail.JobID,
+		PatternID: detail.PatternAnalyses[0].ID, PatternHash: detail.PatternAnalyses[0].ContentHash,
+		CausalGroupID: ref.ID, CausalGroupHash: ref.ContentHash,
+	}, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.Findings[wantKey]; !ok {
+		t.Fatalf("comparison finding key missing: %+v", state.Findings)
+	}
+}
+
 func TestPrepareCauseFindingsPrefersPublishedCauses(t *testing.T) {
 	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
 		Answer: "Change the controller.", Assessment: "supports",

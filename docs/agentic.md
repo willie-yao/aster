@@ -211,9 +211,13 @@ Retained patterns stay readable but cannot start notifications, issues, Fix
 previews, or resolution changes.
 
 Causal groups are analysis-only. When every member build remains available, an
-authenticated cause-scoped chat can inspect exactly those builds and return prose
-with verified artifact citations. Chat does not grant File Issue or Fix PR
-eligibility. A fix still starts from a representative exact JUnit failure.
+authenticated cause-scoped chat can inspect those failed builds and the newest
+later completed run. The later run is comparison evidence, not cause membership.
+Cause chat derives the existing observation-only recovery streak from that
+group's builds, but a passing comparison does not prove a fix: the model must
+compare the representative test and triggering inputs. Chat returns prose with
+verified artifact citations and does not grant File Issue or Fix PR eligibility.
+A fix still starts from a representative exact JUnit failure.
 
 ## Private operational data
 

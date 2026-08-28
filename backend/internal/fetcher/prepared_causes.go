@@ -83,7 +83,8 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 				if turnErr != nil {
 					continue
 				}
-				key, keyErr := analysischat.PreparedCauseKey(ref)
+				comparisonBuildID := preparedCauseComparisonBuildID(turn)
+				key, keyErr := analysischat.PreparedCauseKey(ref, comparisonBuildID)
 				if keyErr != nil {
 					continue
 				}
@@ -169,4 +170,11 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 	if prepared > 0 {
 		log.Printf("💬 prepared %d cause finding(s) for immediate review", prepared)
 	}
+}
+
+func preparedCauseComparisonBuildID(turn analysischat.Turn) string {
+	if turn.Comparison == nil {
+		return ""
+	}
+	return turn.Comparison.ArtifactBuild.Build.BuildID
 }

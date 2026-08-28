@@ -71,13 +71,7 @@ func ApplyPatternLifecycle(detail JobDetail, pattern *PatternAnalysis) {
 	if pattern == nil || !pattern.Systemic {
 		return
 	}
-	recoveryBuilds := observedRecoveryBuilds(detail, *pattern)
-	lifecycle := &PatternLifecycle{
-		State:          PatternLifecycleActive,
-		Reason:         "The recurring remediation remains unresolved.",
-		RecoveryStreak: len(recoveryBuilds),
-		RecoveryBuilds: recoveryBuilds,
-	}
+	lifecycle := observedPatternLifecycle(detail, pattern.SharedBuilds)
 	pattern.Lifecycle = lifecycle
 	verification := pattern.RemediationVerification
 	if verification == nil || verification.State != PatternRemediationAlreadyPresent {
@@ -113,6 +107,23 @@ func ApplyPatternLifecycle(detail JobDetail, pattern *PatternAnalysis) {
 	} else {
 		lifecycle.Reason = "The remediation is present; comparable post-fix runs are still pending."
 	}
+}
+
+// CausalGroupLifecycle derives observation-only recovery for one causal group.
+func CausalGroupLifecycle(detail JobDetail, builds []string) *PatternLifecycle {
+	return observedPatternLifecycle(detail, builds)
+}
+
+func observedPatternLifecycle(detail JobDetail, builds []string) *PatternLifecycle {
+	recoveryBuilds := observedRecoveryBuilds(detail, PatternAnalysis{SharedBuilds: builds})
+	lifecycle := &PatternLifecycle{
+		State:          PatternLifecycleActive,
+		Reason:         "The recurring remediation remains unresolved.",
+		RecoveryStreak: len(recoveryBuilds),
+		RecoveryBuilds: recoveryBuilds,
+	}
+	applyObservedRecovery(lifecycle)
+	return lifecycle
 }
 
 func applyObservedRecovery(lifecycle *PatternLifecycle) {
