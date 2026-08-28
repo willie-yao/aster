@@ -39,6 +39,142 @@ func TestPuntRE_SanityTable(t *testing.T) {
 			wantPunt: false,
 		},
 		{
+			name: "Verify remediation by after preserve",
+			text: "Update google.golang.org/grpc and golang.org/x/text, regenerate the module sums, and change the builder image to a fixed Go release. " +
+				"Preserve the existing Trivy gate in Makefile. Verify the remediation by rebuilding the images and running make container image-scan.",
+			wantPunt: false,
+		},
+		{
+			name:     "Verify with rerun",
+			text:     "Change the PodGroup API version consumed by the scheduler. Verify with a rerun that scheduler readiness succeeds.",
+			wantPunt: false,
+		},
+		{
+			name:     "Verify with rebuilt image",
+			text:     "Correct the PodGroup API registration. Verify with a rebuilt Kind image that the scheduler can list PodGroups.",
+			wantPunt: false,
+		},
+		{
+			name:     "Standalone verify remediation by",
+			text:     "Verify the remediation by reviewing deployment logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Standalone verify with rerun",
+			text:     "Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Verdict then verify with rerun",
+			text:     "The failure is persistent. Verify with a rerun whether it persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Rerun then verify with rerun",
+			text:     "Retry the failed job. Verify with a rerun whether it passes.",
+			wantPunt: true,
+		},
+		{
+			name:     "Negated change then verify",
+			text:     "Change is not required. Verify with a rerun whether it passes.",
+			wantPunt: true,
+		},
+		{
+			name:     "Completed update then verify",
+			text:     "Update was already applied. Verify the remediation by reviewing the logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Contracted negation then verify",
+			text:     "Change isn't required. Verify with a rerun whether it passes.",
+			wantPunt: true,
+		},
+		{
+			name:     "Auxiliary negation then verify",
+			text:     "Update did not need to be applied. Verify with a rerun whether it passes.",
+			wantPunt: true,
+		},
+		{
+			name:     "Terse completion then verify",
+			text:     "Update complete. Verify the remediation by reviewing the logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Applied status with complement",
+			text:     "Patch already applied to the cluster. Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Completed status with adverb",
+			text:     "Update completed successfully. Verify the remediation by reviewing the logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Remains status then verify",
+			text:     "Change remains unnecessary. Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Required object then verify",
+			text:     "Install required CRDs. Verify with a rerun that the API is available.",
+			wantPunt: false,
+		},
+		{
+			name:     "Unnecessary object then verify",
+			text:     "Remove unnecessary flags. Verify with a rerun that startup succeeds.",
+			wantPunt: false,
+		},
+		{
+			name:     "Completed object then verify",
+			text:     "Delete completed Jobs. Verify the remediation by listing the namespace.",
+			wantPunt: false,
+		},
+		{
+			name:     "Cannot apply then verify",
+			text:     "Change cannot be applied. Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Could not apply then verify",
+			text:     "Update could not be applied. Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Must not apply then verify",
+			text:     "Patch must not be applied. Verify with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Bullet remediation then verify",
+			text:     "- Update the dependency.\n- Verify the remediation by rebuilding the image.",
+			wantPunt: false,
+		},
+		{
+			name:     "Verify remediation status",
+			text:     "Verify the remediation status in the deployment logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Verify with operator",
+			text:     "Verify with the operator that the controller is healthy.",
+			wantPunt: true,
+		},
+		{
+			name:     "Check remediation by",
+			text:     "Check the remediation by reviewing the deployment logs.",
+			wantPunt: true,
+		},
+		{
+			name:     "Investigate with rerun",
+			text:     "Investigate with a rerun whether the failure persists.",
+			wantPunt: true,
+		},
+		{
+			name:     "Review change via logs",
+			text:     "Review the change via logs before deciding what to modify.",
+			wantPunt: true,
+		},
+		{
 			name:     "Should-check punt",
 			text:     "You should check whether the controller manager log shows leader election failures.",
 			wantPunt: true,
@@ -69,9 +205,9 @@ func TestPuntRE_SanityTable(t *testing.T) {
 			wantPunt: false,
 		},
 		{
-			name:     "You should verify by",
+			name:     "Standalone should verify by",
 			text:     "You should verify by checking the metrics dashboard.",
-			wantPunt: false,
+			wantPunt: true,
 		},
 		{
 			name:     "Mixed investigate-and-fix still punts",
