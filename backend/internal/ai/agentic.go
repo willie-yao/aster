@@ -828,6 +828,7 @@ func (c *Client) doAnalyzeAgentic(
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
+	ctx = withPromptCacheKey(ctx, analysisPromptCacheKey(sysPrompt+agToolDocs, schemas))
 
 	state.deadline = state.startTime.Add(in.Opts.Timeout)
 	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(state.deadline) {

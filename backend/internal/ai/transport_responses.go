@@ -32,6 +32,7 @@ type responsesRequest struct {
 	Store             bool                 `json:"store"`
 	Include           []string             `json:"include,omitempty"`
 	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
+	PromptCacheKey    string               `json:"prompt_cache_key,omitempty"`
 }
 
 type responsesReasoning struct {

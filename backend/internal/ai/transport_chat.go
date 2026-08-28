@@ -51,6 +51,7 @@ type chatCompletionsRequest struct {
 	ToolChoice      *chatToolChoice          `json:"tool_choice,omitempty"`
 	ReasoningEffort ReasoningEffort          `json:"reasoning_effort,omitempty"`
 	MaxTokens       int                      `json:"max_tokens,omitempty"`
+	PromptCacheKey  string                   `json:"prompt_cache_key,omitempty"`
 
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
