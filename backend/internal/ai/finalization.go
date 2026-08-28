@@ -107,14 +107,16 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "empty", ErrorCode: "missing_message"})
 		return "", resp.Message.ProviderItems, true
 	}
-	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
 	if len(resp.Message.ToolCalls) == 1 && resp.Message.ToolCalls[0].Function.Name == format.Name {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "forced_function"})
 		// The forced call encodes the final answer; it is not an application Tool
 		// invocation. Replay its arguments as assistant content on later repairs so
 		// Responses does not require a synthetic function_call_output.
-		return resp.Message.ToolCalls[0].Function.Arguments, nil, true
+		content := resp.Message.ToolCalls[0].Function.Arguments
+		captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, modelMessage{Role: "assistant", Content: strPtr(content)}))
+		return content, nil, true
 	}
+	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
 	if resp.Message.Content != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "plain_content"})
 		return *resp.Message.Content, resp.Message.ProviderItems, true

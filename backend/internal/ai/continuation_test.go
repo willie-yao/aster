@@ -263,3 +263,43 @@ func TestContinueStructuredRejectsOverBudgetWithoutProviderRequest(t *testing.T)
 		t.Fatalf("requests=%d", len(transport.requests))
 	}
 }
+
+func TestResponsesContinuationSanitizesForcedFinalizationCall(t *testing.T) {
+	ordinaryReasoning := json.RawMessage(`{"type":"reasoning","encrypted_content":"ordinary-reasoning"}`)
+	ordinaryCall := json.RawMessage(`{"type":"function_call","call_id":"read-1","name":"read","arguments":"{\"path\":\"config/jobs.yaml\"}"}`)
+	ordinaryGrepCall := json.RawMessage(`{"type":"function_call","call_id":"grep-1","name":"grep","arguments":"{\"path\":\"config/jobs.yaml\"}"}`)
+	finalReasoning := json.RawMessage(`{"type":"reasoning","encrypted_content":"final-reasoning"}`)
+	finalCall := json.RawMessage(`{"type":"function_call","call_id":"submit-1","name":"submit_analysis","arguments":` + string(mustJSON(cleanFinalJSON)) + `}`)
+	client, transport := newRecordedToolLoopClient(APIResponses,
+		continuationToolResponse(ordinaryReasoning, ordinaryCall, ordinaryGrepCall),
+		&modelResponse{HasMessage: true, Attempts: 1, Message: modelMessage{
+			Role: "assistant", ProviderItems: []json.RawMessage{finalReasoning, finalCall},
+			ToolCalls: []modelToolCall{{ID: "submit-1", Type: "function", Function: modelFunction{Name: "submit_analysis", Arguments: cleanFinalJSON}}},
+		}},
+		structuredContent(`{"body":"safe"}`),
+	)
+	registry, enabled := continuationRegistry(t, "source")
+	memo, continuation, err := client.ToolLoopWithContinuation(t.Context(), "system", "user", registry, enabled, &tools.Env{}, ToolLoopOptions{MaxIters: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memo != cleanFinalJSON {
+		t.Fatalf("memo=%q", memo)
+	}
+	if err := client.ContinueStructured(t.Context(), continuation, "continue", structuredBodyFormat(), bodyValidator("safe")); err != nil {
+		t.Fatal(err)
+	}
+	request := transport.requests[2]
+	input, _ := json.Marshal(encodeResponsesInput(request.Messages))
+	text := string(input)
+	for _, want := range []string{"ordinary-reasoning", `"call_id":"read-1"`, `"call_id":"grep-1"`, "source", "third CP machine cloud-init empty", "continue"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("continued request missing %q: %s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"final-reasoning", `"call_id":"submit-1"`} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("continued request retained %q: %s", unwanted, text)
+		}
+	}
+}
