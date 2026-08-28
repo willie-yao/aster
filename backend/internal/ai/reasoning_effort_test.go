@@ -60,22 +60,16 @@ func TestReasoningEffortNormalizesBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestChatReasoningEffortRejectsGPT54AndLaterBeforeTransport(t *testing.T) {
-	for _, model := range []string{"gpt-5.4", "gpt-5.4-mini", "GPT-5.6-SOL", "gpt-6.0"} {
+func TestChatReasoningEffortRejectsGPT54ToolCallsBeforeTransport(t *testing.T) {
+	for _, model := range []string{"gpt-5.4", "gpt-5.4-mini", "openai/gpt-5.6-sol", "gpt-6.0"} {
 		t.Run(model, func(t *testing.T) {
 			requests := 0
-			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-				requests++
-			}))
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
 			defer server.Close()
-
 			client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: server.URL, Model: model, ReasoningEffort: ReasoningEffortHigh})
-			err := client.ValidateConfiguration()
+			_, err := client.callModel(context.Background(), []modelMessage{{Role: "user", Content: strPtr("test")}}, []tools.Schema{{Type: "function", Function: tools.FunctionDecl{Name: "read"}}}, nil)
 			if err == nil || !strings.Contains(err.Error(), "set reasoning effort to none or use responses") {
 				t.Fatalf("error = %v", err)
-			}
-			if _, err := client.Complete(context.Background(), "system", "user"); err == nil {
-				t.Fatal("Complete succeeded with unsupported configuration")
 			}
 			if requests != 0 {
 				t.Fatalf("provider requests = %d, want 0", requests)
@@ -84,23 +78,28 @@ func TestChatReasoningEffortRejectsGPT54AndLaterBeforeTransport(t *testing.T) {
 	}
 }
 
-func TestChatReasoningEffortAllowsSupportedCombinations(t *testing.T) {
+func TestChatReasoningEffortAllowsToolFreeGPT54(t *testing.T) {
+	shrinkCallDelay(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { writeReasoningTestFinal(w, APIChatCompletions, "ok") }))
+	defer server.Close()
+	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: server.URL, Model: "gpt-5.4", ReasoningEffort: ReasoningEffortHigh})
+	if _, err := client.Complete(context.Background(), "system", "user"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolCallingConfigurationAllowsSupportedCombinations(t *testing.T) {
 	for _, tc := range []struct {
-		name, api, model string
-		effort           ReasoningEffort
+		api, model string
+		effort     ReasoningEffort
 	}{
-		{name: "older chat model", api: APIChatCompletions, model: "gpt-5.3", effort: ReasoningEffortHigh},
-		{name: "chat none", api: APIChatCompletions, model: "gpt-5.6", effort: ReasoningEffortNone},
-		{name: "chat default", api: APIChatCompletions, model: "gpt-5.6", effort: ""},
-		{name: "responses", api: APIResponses, model: "gpt-5.6", effort: ReasoningEffortHigh},
-		{name: "other model family", api: APIChatCompletions, model: "claude-sonnet-4.6", effort: ReasoningEffortHigh},
+		{APIChatCompletions, "gpt-5.3", ReasoningEffortHigh}, {APIChatCompletions, "gpt-5.6", ReasoningEffortNone},
+		{APIChatCompletions, "gpt-5.6", ""}, {APIResponses, "gpt-5.6", ReasoningEffortHigh},
+		{APIChatCompletions, "claude-sonnet-4.6", ReasoningEffortHigh},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			client := NewClientWithOptions(Options{API: tc.api, Endpoint: "https://model.invalid", Model: tc.model, ReasoningEffort: tc.effort})
-			if err := client.ValidateConfiguration(); err != nil {
-				t.Fatal(err)
-			}
-		})
+		if err := ValidateToolCallingConfiguration(tc.api, tc.model, tc.effort); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

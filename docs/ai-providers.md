@@ -80,8 +80,10 @@ none, low, medium, high, xhigh, max
 Unknown values fail before provider I/O. Chat Completions sends
 `reasoning_effort`; Responses sends `reasoning.effort`. GPT-5.4 and later
 OpenAI models support Chat Completions tool calling only with `none`, so Aster
-rejects another explicit effort for that combination before provider I/O. Use
-Responses to request higher effort. Other provider and model support varies.
+rejects another explicit effort for canonical `gpt-5.4`-and-later model IDs and
+provider-qualified IDs ending in that canonical form. Use Responses to request
+higher effort. Arbitrary provider aliases cannot be inferred; other provider and
+model support varies.
 Aster does not silently change an unsupported value.
 
 Reasoning effort is private content-free provenance. A non-empty value changes
