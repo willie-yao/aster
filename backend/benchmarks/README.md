@@ -85,6 +85,10 @@ Options:
 - `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set
   `BENCH_REPETITION_START=<index>` when an isolated operation must retain its
   planned repetition number instead of restarting at 1.
+- `BENCH_RESPONSES_WEBSOCKET=true` enables the production Responses WebSocket
+  path for the authoritative analysis. It is valid only with
+  `AI_API=responses`. The setting is recorded in the provider and effective
+  input identities so HTTP and WebSocket runs cannot share a cold-cache path.
 - `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
   namespace used by production.
 - `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a
@@ -108,7 +112,8 @@ Options:
   semantic review. Transport retries count through each trace event's `attempts`
   value, and a truncated trace fails closed because request usage would be
   incomplete. Private JSONL records `provider_request_cap`, logical
-  `model_requests`, actual `provider_attempts`, and `trace_truncated`.
+  `model_requests`, actual `provider_attempts`, logical request bytes, separate
+  Responses wire-request bytes, and `trace_truncated`.
 
 For the Claude hard-policy production-readiness matrix, the fixed configuration
 uses `max_iters: 11`, a non-zero byte floor, one critique retry, and semantic

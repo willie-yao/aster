@@ -22,17 +22,19 @@ func newResponsesTransport(api *httpAPIClient) *responsesTransport {
 }
 
 type responsesRequest struct {
-	Model             string               `json:"model"`
-	Input             []any                `json:"input"`
-	Tools             []responsesTool      `json:"tools,omitempty"`
-	Text              *responsesTextConfig `json:"text,omitempty"`
-	ToolChoice        *responsesToolChoice `json:"tool_choice,omitempty"`
-	Reasoning         *responsesReasoning  `json:"reasoning,omitempty"`
-	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
-	Store             bool                 `json:"store"`
-	Include           []string             `json:"include,omitempty"`
-	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
-	PromptCacheKey    string               `json:"prompt_cache_key,omitempty"`
+	Type               string               `json:"type,omitempty"`
+	PreviousResponseID string               `json:"previous_response_id,omitempty"`
+	Model              string               `json:"model"`
+	Input              []any                `json:"input"`
+	Tools              []responsesTool      `json:"tools,omitempty"`
+	Text               *responsesTextConfig `json:"text,omitempty"`
+	ToolChoice         *responsesToolChoice `json:"tool_choice,omitempty"`
+	Reasoning          *responsesReasoning  `json:"reasoning,omitempty"`
+	ParallelToolCalls  *bool                `json:"parallel_tool_calls,omitempty"`
+	Store              bool                 `json:"store"`
+	Include            []string             `json:"include,omitempty"`
+	MaxOutputTokens    int                  `json:"max_output_tokens,omitempty"`
+	PromptCacheKey     string               `json:"prompt_cache_key,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -87,6 +89,20 @@ type responsesOutputTokenDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
+func responsesRequestFor(req modelRequest) responsesRequest {
+	include := []string{"reasoning.encrypted_content"}
+	if req.OmitReasoning {
+		include = nil
+	}
+	return responsesRequest{
+		Model: req.Model, Input: encodeResponsesInput(req.Messages),
+		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
+		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), Reasoning: encodeResponsesReasoning(req.ReasoningEffort),
+		ParallelToolCalls: req.ParallelToolCalls, Store: false, Include: include, MaxOutputTokens: req.MaxOutputTokens,
+		PromptCacheKey: req.PromptCacheKey,
+	}
+}
+
 type responsesOutputItem struct {
 	Type      string `json:"type"`
 	CallID    string `json:"call_id"`
@@ -101,33 +117,25 @@ type responsesOutputItem struct {
 
 func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
 	time.Sleep(callDelay)
-	include := []string{"reasoning.encrypted_content"}
-	if req.OmitReasoning {
-		include = nil
-	}
-	body, err := json.Marshal(responsesRequest{
-		Model: req.Model, Input: encodeResponsesInput(req.Messages),
-		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
-		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), Reasoning: encodeResponsesReasoning(req.ReasoningEffort),
-		ParallelToolCalls: req.ParallelToolCalls, Store: false, Include: include, MaxOutputTokens: req.MaxOutputTokens,
-		PromptCacheKey: req.PromptCacheKey,
-	})
+	body, err := json.Marshal(responsesRequestFor(req))
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	var resp *http.Response
 	attempts := 0
+	wireRequestBytes := 0
 	for attempt := 0; attempt < 3; attempt++ {
 		attempts = attempt + 1
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return &modelResponse{Attempts: attempts}, fmt.Errorf("build request: %w", err)
+			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("build request: %w", err)
 		}
 		t.api.setRequestHeaders(httpReq)
+		wireRequestBytes += len(body)
 		resp, err = t.api.httpClient.Do(httpReq)
 		if err != nil {
-			return &modelResponse{Attempts: attempts}, fmt.Errorf("post: %w", err)
+			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if attempt == 2 {
@@ -137,7 +145,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
-				return &modelResponse{Attempts: attempts}, ctx.Err()
+				return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, ctx.Err()
 			case <-time.After(wait):
 			}
 			continue
@@ -147,21 +155,22 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 	defer resp.Body.Close()
 	raw, err := readModelResponseBody(resp.Body, req.MaxResponseBytes)
 	if err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("responses", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, newModelHTTPError("responses", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
 	if wire.Status != "completed" {
-		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage)}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
 	}
 	out := decodeResponsesResponse(wire)
 	out.Attempts = attempts
 	out.HTTPStatus = resp.StatusCode
+	out.WireRequestBytes = wireRequestBytes
 	return out, nil
 }
 

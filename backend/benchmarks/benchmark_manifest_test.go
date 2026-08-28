@@ -595,6 +595,7 @@ type benchmarkJSONLResult struct {
 	ComparisonInputSHA256     string                         `json:"comparison_input_sha256"`
 	APIMode                   string                         `json:"api_mode"`
 	ReasoningEffort           string                         `json:"reasoning_effort,omitempty"`
+	ResponsesWebSocket        bool                           `json:"responses_websocket,omitempty"`
 	ProviderPath              string                         `json:"provider_path,omitempty"`
 	ProviderConfigSHA256      string                         `json:"provider_config_sha256"`
 	TransportID               string                         `json:"transport_id,omitempty"`
@@ -765,6 +766,7 @@ func benchmarkSourceEvidenceToolCalls(usage benchmarkToolUsage) int {
 
 type benchmarkRequestUsageSample struct {
 	RequestBytes      int `json:"request_bytes"`
+	WireRequestBytes  int `json:"wire_request_bytes,omitempty"`
 	InputTokens       int `json:"input_tokens"`
 	CachedInputTokens int `json:"cached_input_tokens"`
 }
@@ -784,6 +786,8 @@ type benchmarkJSONLTrace struct {
 	RequestBytes          int                           `json:"request_bytes"`
 	ReportedRequestBytes  int                           `json:"reported_request_bytes"`
 	MaxRequestBytes       int                           `json:"max_request_bytes"`
+	WireRequestBytes      int                           `json:"wire_request_bytes,omitempty"`
+	MaxWireRequestBytes   int                           `json:"max_wire_request_bytes,omitempty"`
 	RequestUsageSamples   []benchmarkRequestUsageSample `json:"request_usage_samples"`
 	Finalize              map[string]int                `json:"finalize"`
 	FinalizeRecovery      map[string]int                `json:"finalize_recovery"`
@@ -825,7 +829,8 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		BaselineConsumerCommit: identity.BaselineConsumerCommit, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		ProjectSHA256: identity.ProjectSHA256, EffectivePromptSHA256: identity.EffectivePromptSHA256,
 		SkillSetHash: identity.SkillSetHash, EffectiveInputSHA256: identity.EffectiveInputSHA256, ComparisonInputSHA256: identity.ComparisonInputSHA256,
-		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		APIMode: identity.APIMode, ReasoningEffort: string(identity.ReasoningEffort), ResponsesWebSocket: identity.ResponsesWebSocket,
+		ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
 		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens, Pricing: identity.Pricing,
 		EvidenceTelemetryVersion: 2, EvidenceCondition: stageReport.Condition, EvidenceMode: bc.evidenceMode,
 		SourceExpectationSHA256: benchmarkSourceExpectationSHA256(bc), ExpectedSourceRanges: append([]benchmarkSourceRange{}, bc.sourceRanges...), SourceReadCoverageTotal: len(bc.sourceRanges), SourceSignalTotal: len(bc.sourceSignals),
@@ -936,12 +941,15 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 				}
 				result.Trace.RequestBytes += event.Bytes
 				result.Trace.MaxRequestBytes = max(result.Trace.MaxRequestBytes, event.Bytes)
+				result.Trace.WireRequestBytes += event.WireRequestBytes
+				result.Trace.MaxWireRequestBytes = max(result.Trace.MaxWireRequestBytes, event.WireRequestBytes)
 				if event.UsageReported {
 					result.Trace.ReportedRequests++
 					result.Trace.ReportedRequestBytes += event.Bytes
 					if event.InputTokens > 0 {
 						result.Trace.RequestUsageSamples = append(result.Trace.RequestUsageSamples, benchmarkRequestUsageSample{
-							RequestBytes: event.Bytes, InputTokens: event.InputTokens, CachedInputTokens: event.CachedInputTokens,
+							RequestBytes: event.Bytes, WireRequestBytes: event.WireRequestBytes,
+							InputTokens: event.InputTokens, CachedInputTokens: event.CachedInputTokens,
 						})
 					}
 				}
@@ -1160,7 +1168,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		},
 	}
 	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
-		{Kind: "model_request", Outcome: "success", Attempts: 2, UsageReported: true, InputTokens: 10, CachedInputTokens: 4, OutputTokens: 2, Bytes: 120},
+		{Kind: "model_request", Outcome: "success", Attempts: 2, UsageReported: true, InputTokens: 10, CachedInputTokens: 4, OutputTokens: 2, Bytes: 120, WireRequestBytes: 84},
 		{Kind: "model_request", Outcome: "error", Attempts: 1, Bytes: 80},
 		{Kind: "tool_call", Tool: "grep_repo", Outcome: "success", Grep: &tools.GrepCallObservation{
 			SelectorID: "primary", PathFilter: "*.go", PathFilterSupplied: true, PathFilterLength: 4,
@@ -1213,7 +1221,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||
 		result.SourceEvidenceToolCalls != 1 || result.SourceReadCoverageHits != 1 || result.SourceReadCoverageTotal != 1 || len(result.SourceReadRanges) != 1 || result.SourceReadRanges[0].Path != "file.go" || len(result.SourceCitations) != 0 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
-		result.ProviderRequestCap != 18 || result.Trace.ModelRequests != 2 || result.Trace.ModelFailures != 1 || result.Trace.ProviderAttempts != 3 || result.Trace.RequestBytes != 200 || result.Trace.ReportedRequestBytes != 120 || result.Trace.MaxRequestBytes != 120 || len(result.Trace.RequestUsageSamples) != 1 || result.Trace.RequestUsageSamples[0] != (benchmarkRequestUsageSample{RequestBytes: 120, InputTokens: 10, CachedInputTokens: 4}) || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
+		result.ProviderRequestCap != 18 || result.Trace.ModelRequests != 2 || result.Trace.ModelFailures != 1 || result.Trace.ProviderAttempts != 3 || result.Trace.RequestBytes != 200 || result.Trace.ReportedRequestBytes != 120 || result.Trace.MaxRequestBytes != 120 || result.Trace.WireRequestBytes != 84 || result.Trace.MaxWireRequestBytes != 84 || len(result.Trace.RequestUsageSamples) != 1 || result.Trace.RequestUsageSamples[0] != (benchmarkRequestUsageSample{RequestBytes: 120, WireRequestBytes: 84, InputTokens: 10, CachedInputTokens: 4}) || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != benchmarkHumanScoreRubricVersion || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
 		!result.SemanticRevisionAttempted || !result.SemanticRevisionSelected || result.SemanticRevisionRejected ||

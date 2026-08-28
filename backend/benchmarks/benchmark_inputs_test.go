@@ -35,6 +35,7 @@ type benchmarkRunIdentity struct {
 	EvidenceStageSHA256     string
 	APIMode                 string
 	ReasoningEffort         ai.ReasoningEffort
+	ResponsesWebSocket      bool
 	ProviderPath            string
 	ProviderConfigSHA256    string
 	TransportID             string
@@ -75,6 +76,10 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, mod
 	providerPath := strings.TrimSpace(os.Getenv("BENCH_PROVIDER_PATH"))
 	transportID := strings.TrimSpace(os.Getenv("BENCH_TRANSPORT_ID"))
 	reasoningEffort := benchmarkReasoningEffort(t)
+	responsesWebSocket, err := benchmarkResponsesWebSocket(apiMode, os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resultsEnabled && (providerPath == "" || transportID == "") {
 		t.Fatal("BENCH_PROVIDER_PATH and BENCH_TRANSPORT_ID are required when BENCH_RESULTS_JSONL is set")
 	}
@@ -85,14 +90,15 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, mod
 		systemPrompt: ComposeBenchPrompt(),
 		agentic:      defaultBenchAgentic(),
 		identity: benchmarkRunIdentity{
-			Arm:               arm,
-			EngineCommit:      benchmarkEngineCommit(t, resultsEnabled),
-			EvidenceCondition: condition,
-			APIMode:           apiMode,
-			ReasoningEffort:   reasoningEffort,
-			ProviderPath:      providerPath,
+			Arm:                arm,
+			EngineCommit:       benchmarkEngineCommit(t, resultsEnabled),
+			EvidenceCondition:  condition,
+			APIMode:            apiMode,
+			ReasoningEffort:    reasoningEffort,
+			ResponsesWebSocket: responsesWebSocket,
+			ProviderPath:       providerPath,
 			ProviderConfigSHA256: benchmarkProviderConfigSHA256(
-				apiMode, endpoint, model, reasoningEffort,
+				apiMode, endpoint, model, reasoningEffort, responsesWebSocket,
 			),
 			TransportID: transportID,
 		},
@@ -246,6 +252,9 @@ func validateBenchmarkRunIdentity(identity benchmarkRunIdentity) error {
 	if identity.APIMode != ai.APIChatCompletions && identity.APIMode != ai.APIResponses {
 		return fmt.Errorf("benchmark API mode is invalid")
 	}
+	if identity.ResponsesWebSocket && identity.APIMode != ai.APIResponses {
+		return fmt.Errorf("benchmark responses websocket requires responses API mode")
+	}
 	if effort, err := ai.NormalizeReasoningEffort(string(identity.ReasoningEffort)); err != nil || effort != identity.ReasoningEffort {
 		return fmt.Errorf("benchmark reasoning effort is invalid or not normalized")
 	}
@@ -327,19 +336,40 @@ func validateBenchmarkVariantDir(baseDir, variantDir string) error {
 	return nil
 }
 
-func benchmarkProviderConfigSHA256(apiMode, endpoint, model string, reasoningEffort ai.ReasoningEffort) string {
+func benchmarkProviderConfigSHA256(apiMode, endpoint, model string, reasoningEffort ai.ReasoningEffort, responsesWebSocket bool) string {
 	data, err := json.Marshal(struct {
-		API             string             `json:"api"`
-		Endpoint        string             `json:"endpoint"`
-		Model           string             `json:"model"`
-		ReasoningEffort ai.ReasoningEffort `json:"reasoning_effort,omitempty"`
+		API                string             `json:"api"`
+		Endpoint           string             `json:"endpoint"`
+		Model              string             `json:"model"`
+		ReasoningEffort    ai.ReasoningEffort `json:"reasoning_effort,omitempty"`
+		ResponsesWebSocket bool               `json:"responses_websocket,omitempty"`
 	}{
 		API: strings.TrimSpace(apiMode), Endpoint: strings.TrimSpace(endpoint), Model: strings.TrimSpace(model), ReasoningEffort: reasoningEffort,
+		ResponsesWebSocket: responsesWebSocket,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("marshal benchmark provider identity: %v", err))
 	}
 	return sha256Hex(data)
+}
+
+func TestBenchmarkResponsesWebSocketSeparatesIdentity(t *testing.T) {
+	httpProvider := benchmarkProviderConfigSHA256(ai.APIResponses, "https://example.invalid/responses", "model", ai.ReasoningEffortHigh, false)
+	websocketProvider := benchmarkProviderConfigSHA256(ai.APIResponses, "https://example.invalid/responses", "model", ai.ReasoningEffortHigh, true)
+	if httpProvider == websocketProvider {
+		t.Fatal("responses websocket did not change provider identity")
+	}
+	base := benchmarkRunIdentity{
+		EffectivePromptSHA256: strings.Repeat("a", 64), SkillSetHash: strings.Repeat("b", 64),
+		APIMode: ai.APIResponses, ProviderConfigSHA256: httpProvider, EvidenceCondition: benchmarkEvidenceConditionFixture,
+	}
+	httpInput := benchmarkEffectiveInputSHA256(base, project.Agentic{}, "")
+	base.ResponsesWebSocket = true
+	base.ProviderConfigSHA256 = websocketProvider
+	websocketInput := benchmarkEffectiveInputSHA256(base, project.Agentic{}, "")
+	if httpInput == websocketInput {
+		t.Fatal("responses websocket did not change effective input identity")
+	}
 }
 
 func benchmarkPricingIdentityFromEnv(pricing project.AIUsagePricing, getenv func(string) string) (benchmarkPricingIdentity, error) {
@@ -412,6 +442,7 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 		SkillSetHash            string                    `json:"skill_set_hash"`
 		APIMode                 string                    `json:"api_mode"`
 		ReasoningEffort         ai.ReasoningEffort        `json:"reasoning_effort,omitempty"`
+		ResponsesWebSocket      bool                      `json:"responses_websocket,omitempty"`
 		ProviderPath            string                    `json:"provider_path,omitempty"`
 		ProviderConfigSHA256    string                    `json:"provider_config_sha256,omitempty"`
 		TransportID             string                    `json:"transport_id,omitempty"`
@@ -426,7 +457,8 @@ func benchmarkEffectiveInputSHA256(identity benchmarkRunIdentity, agentic projec
 	}{
 		ProjectSHA256: identity.ProjectSHA256, FixtureSHA256: identity.FixtureSHA256, BenchmarkManifestSHA256: identity.BenchmarkManifestSHA256, BaselinePromptSHA256: identity.BaselinePromptSHA256,
 		EffectivePromptSHA256: identity.EffectivePromptSHA256, SkillSetHash: identity.SkillSetHash,
-		APIMode: identity.APIMode, ReasoningEffort: identity.ReasoningEffort, ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
+		APIMode: identity.APIMode, ReasoningEffort: identity.ReasoningEffort, ResponsesWebSocket: identity.ResponsesWebSocket,
+		ProviderPath: identity.ProviderPath, ProviderConfigSHA256: identity.ProviderConfigSHA256, TransportID: identity.TransportID,
 		ModelContextTokens: identity.ModelContextTokens, ModelOutputTokens: identity.ModelOutputTokens,
 		EvidenceCondition: identity.EvidenceCondition, FrozenEvidenceSHA256: identity.FrozenEvidenceSHA256, EvidenceStageSHA256: identity.EvidenceStageSHA256,
 		CacheGeneration: cacheGeneration, Agentic: agentic, Pricing: pricing,

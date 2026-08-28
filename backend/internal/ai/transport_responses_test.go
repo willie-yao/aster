@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +38,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 2 {
 		t.Fatalf("first response = %+v", first)
 	}
-	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || !first.Usage.CacheWriteInputTokensReported || first.Usage.CacheWriteInputTokens != 2 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 {
+	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || !first.Usage.CacheWriteInputTokensReported || first.Usage.CacheWriteInputTokens != 2 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 || first.WireRequestBytes == 0 {
 		t.Fatalf("first metadata = %+v", first)
 	}
 	messages = append(messages, first.Message, modelMessage{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})
@@ -51,6 +52,12 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	}
 	if store, ok := requests[0]["store"].(bool); !ok || store {
 		t.Fatalf("store = %#v, want false", requests[0]["store"])
+	}
+	if _, ok := requests[0]["type"]; ok {
+		t.Fatalf("HTTP request included websocket type: %#v", requests[0])
+	}
+	if _, ok := requests[0]["previous_response_id"]; ok {
+		t.Fatalf("HTTP request included previous_response_id: %#v", requests[0])
 	}
 	input := requests[1]["input"].([]any)
 	var reasoning, call, output bool
@@ -110,8 +117,11 @@ func TestResponsesTransportRejectsIncomplete(t *testing.T) {
 func TestResponsesTraceRecordsRetryCount(t *testing.T) {
 	shrinkCallDelay(t)
 	calls := 0
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	wireBytes := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		body, _ := io.ReadAll(r.Body)
+		wireBytes += len(body)
 		if calls == 1 {
 			w.Header().Set("Retry-After", "0")
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
@@ -129,7 +139,7 @@ func TestResponsesTraceRecordsRetryCount(t *testing.T) {
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	if event.Attempts != 2 || event.ResponseID != "resp-retry" {
+	if event.Attempts != 2 || event.ResponseID != "resp-retry" || event.WireRequestBytes != wireBytes {
 		t.Fatalf("event = %+v", event)
 	}
 }

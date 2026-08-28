@@ -703,6 +703,21 @@ func TestBenchmarkRepetitionStart(t *testing.T) {
 	})
 }
 
+func benchmarkResponsesWebSocket(apiMode string, getenv func(string) string) (bool, error) {
+	raw := strings.TrimSpace(getenv("BENCH_RESPONSES_WEBSOCKET"))
+	if raw == "" {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("BENCH_RESPONSES_WEBSOCKET must be a boolean")
+	}
+	if enabled && apiMode != ai.APIResponses {
+		return false, fmt.Errorf("BENCH_RESPONSES_WEBSOCKET requires AI_API=responses")
+	}
+	return enabled, nil
+}
+
 func benchmarkAPIMode() (string, error) {
 	apiMode := strings.ToLower(strings.TrimSpace(os.Getenv("AI_API")))
 	if apiMode == "" {
@@ -713,6 +728,27 @@ func benchmarkAPIMode() (string, error) {
 		return apiMode, nil
 	default:
 		return "", fmt.Errorf("AI_API must be %q or %q", ai.APIChatCompletions, ai.APIResponses)
+	}
+}
+
+func TestBenchmarkResponsesWebSocket(t *testing.T) {
+	for _, tc := range []struct {
+		name, api, value string
+		want             bool
+		wantErr          bool
+	}{
+		{name: "default", api: ai.APIResponses},
+		{name: "responses enabled", api: ai.APIResponses, value: "true", want: true},
+		{name: "chat disabled", api: ai.APIChatCompletions, value: "false"},
+		{name: "chat enabled", api: ai.APIChatCompletions, value: "true", wantErr: true},
+		{name: "invalid", api: ai.APIResponses, value: "sometimes", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := benchmarkResponsesWebSocket(tc.api, func(string) string { return tc.value })
+			if (err != nil) != tc.wantErr || got != tc.want {
+				t.Fatalf("got=%v err=%v", got, err)
+			}
+		})
 	}
 }
 
@@ -768,7 +804,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	cacheDir := benchmarkCacheDir(t, bc, repetition, identity)
 	clientOptions := ai.Options{
 		Token: token, API: apiMode, Endpoint: endpoint, Model: model, ReasoningEffort: identity.ReasoningEffort, CacheDir: cacheDir,
-		MaxOutputTokens: identity.ModelOutputTokens,
+		MaxOutputTokens: identity.ModelOutputTokens, ResponsesWebSocket: identity.ResponsesWebSocket,
 	}
 	client := ai.NewClientWithOptions(clientOptions)
 

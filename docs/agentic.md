@@ -224,8 +224,9 @@ A fix still starts from a representative exact JUnit failure.
 The analyzer writes private traces and usage ledgers beside the public output.
 They are excluded from `/data/*` and removed from Pages publication.
 
-Private traces retain bounded control-flow facts such as provider attempts, tool
-counts, compaction, floor nudges, evidence-plan coverage and the group IDs it
+Private traces retain bounded control-flow facts such as provider attempts,
+logical request size, Responses wire-request size, tool counts, compaction,
+floor nudges, evidence-plan coverage and the group IDs it
 reopened for, critique stages, semantic-review stages, timeouts, and completion
 status. They do not retain prompts, assistant text, reasoning, tool arguments,
 tool output, credentials, endpoint URLs, or raw provider bodies. Authenticated

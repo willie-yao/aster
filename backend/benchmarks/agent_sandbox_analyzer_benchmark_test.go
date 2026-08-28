@@ -704,7 +704,7 @@ func prepareAgentSandboxAnalyzerBenchmarkCase(t *testing.T, cfg agentSandboxAnal
 		FixtureSHA256:           bc.fixtureSHA256, ProjectSHA256: sha256Hex(projectData), EffectivePromptSHA256: manifest.EffectivePromptSHA256,
 		SkillSetHash: manifest.SkillSetHash, EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups),
 		APIMode: cfg.Provider.API, ReasoningEffort: ai.ReasoningEffort(cfg.Provider.ReasoningEffort), ProviderPath: cfg.ProviderPath,
-		ProviderConfigSHA256: benchmarkProviderConfigSHA256(cfg.Provider.API, cfg.Provider.Endpoint, cfg.Provider.Model, ai.ReasoningEffort(cfg.Provider.ReasoningEffort)), TransportID: cfg.TransportID,
+		ProviderConfigSHA256: benchmarkProviderConfigSHA256(cfg.Provider.API, cfg.Provider.Endpoint, cfg.Provider.Model, ai.ReasoningEffort(cfg.Provider.ReasoningEffort), false), TransportID: cfg.TransportID,
 		ModelContextTokens: cfg.ModelContextTokens, ModelOutputTokens: cfg.ModelOutputTokens,
 	}
 	identity.Pricing, err = benchmarkPricingIdentityFromEnv(projectConfig.AI.EffectiveUsage().Pricing, os.Getenv)

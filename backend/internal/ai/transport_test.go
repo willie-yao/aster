@@ -16,9 +16,11 @@ type recordingTransport struct {
 	request modelRequest
 	result  *modelResponse
 	err     error
+	calls   int
 }
 
 func (t *recordingTransport) Complete(_ context.Context, req modelRequest) (*modelResponse, error) {
+	t.calls++
 	t.request = req
 	return t.result, t.err
 }
@@ -49,7 +51,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	transport := &recordingTransport{result: &modelResponse{
 		HasMessage: true, Message: modelMessage{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call"}}},
 		ResponseID: "resp-1", Status: "completed", FinishReason: "tool_calls",
-		Attempts: 2, HTTPStatus: 200, Usage: aiusage.TokenUsage{
+		Attempts: 2, HTTPStatus: 200, WireRequestBytes: 321, Usage: aiusage.TokenUsage{
 			Reported: true, InputTokens: 11, CachedInputTokens: 3,
 			CacheWriteInputTokens: 2, CacheWriteInputTokensReported: true,
 			OutputTokens: 7, ReasoningTokens: 2,
@@ -65,7 +67,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
 	wantBytes := requestSizeEstimate([]modelMessage{{Role: "user", Content: strPtr("user")}}, 0)
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 || event.Bytes != wantBytes {
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 || event.Bytes != wantBytes || event.WireRequestBytes != 321 {
 		t.Fatalf("event = %+v", event)
 	}
 }
@@ -84,6 +86,56 @@ func TestClientCallModelRecordsRequestBytesOnProviderError(t *testing.T) {
 	event := store.Snapshot().Traces[0].Events[0]
 	if event.Outcome != "error" || event.UsageReported || event.Bytes != requestSizeEstimate(messages, 0) {
 		t.Fatalf("event = %+v", event)
+	}
+}
+
+type recordingConversation struct {
+	recordingTransport
+	closed bool
+}
+
+func (c *recordingConversation) Close() error {
+	c.closed = true
+	return nil
+}
+
+type fixedConversationTransport struct {
+	conversation modelConversation
+}
+
+func (t fixedConversationTransport) NewConversation(context.Context) (modelConversation, error) {
+	return t.conversation, nil
+}
+
+func TestAgenticConversationLeavesSemanticJudgeOnHTTP(t *testing.T) {
+	base := &recordingTransport{result: &modelResponse{
+		HasMessage: true, Message: modelMessage{Role: "assistant", Content: strPtr(`{"findings":[]}`)},
+	}}
+	conversation := &recordingConversation{recordingTransport: recordingTransport{result: &modelResponse{
+		HasMessage: true, Message: modelMessage{Role: "assistant", Content: strPtr("agentic")},
+	}}}
+	client := &Client{model: "model", transport: base, conversation: fixedConversationTransport{conversation: conversation}}
+	agenticClient, closeConversation, err := client.newAgenticConversation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeConversation()
+
+	_, err = agenticClient.semanticCritique(t.Context(),
+		&agentState{readArtifactsFull: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{}},
+		semanticJudgeStageDraft, analysisResponse{RootCause: "cause"}, nil, nil,
+		contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.calls != 1 || conversation.calls != 0 {
+		t.Fatalf("semantic calls base=%d conversation=%d", base.calls, conversation.calls)
+	}
+	if _, err := agenticClient.callAgenticModelRequest(t.Context(), modelRequest{Model: "model"}); err != nil {
+		t.Fatal(err)
+	}
+	if base.calls != 1 || conversation.calls != 1 {
+		t.Fatalf("agentic calls base=%d conversation=%d", base.calls, conversation.calls)
 	}
 }
 

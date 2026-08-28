@@ -485,6 +485,10 @@ type AI struct {
 	// could carry a provider credential (e.g. an api-key header).
 	Headers map[string]string `yaml:"headers,omitempty" json:"-"`
 
+	// ResponsesWebSocket uses one connection-local Responses conversation for
+	// each authoritative analysis. It is valid only when API resolves to responses.
+	ResponsesWebSocket bool `yaml:"responses_websocket,omitempty" json:"-"`
+
 	// Concurrency caps how many failures are analyzed in parallel. Each analysis
 	// is independent, so batching endpoints can process several investigations at
 	// once. Defaults to 1 because the engine has no request-level backoff and
@@ -1437,6 +1441,9 @@ func (c *Config) Validate() error {
 		api := strings.ToLower(strings.TrimSpace(c.AI.API))
 		if api != "" && api != AIAPIChatCompletions && api != AIAPIResponses {
 			return fmt.Errorf("ai.api %q is invalid (want %q or %q)", c.AI.API, AIAPIChatCompletions, AIAPIResponses)
+		}
+		if c.AI.ResponsesWebSocket && api != "" && api != AIAPIResponses {
+			return fmt.Errorf("ai.responses_websocket requires ai.api %q", AIAPIResponses)
 		}
 		if err := ValidateAICacheGeneration(c.AI.CacheGeneration); err != nil {
 			return fmt.Errorf("ai.cache_generation: %w", err)

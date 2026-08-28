@@ -29,6 +29,15 @@ type modelTransport interface {
 	Complete(context.Context, modelRequest) (*modelResponse, error)
 }
 
+type modelConversation interface {
+	modelTransport
+	Close() error
+}
+
+type conversationTransport interface {
+	NewConversation(context.Context) (modelConversation, error)
+}
+
 // modelHTTPError preserves provider response details for existing transport
 // callers while allowing domain-specific callers to classify the status code.
 type modelHTTPError struct {
@@ -138,6 +147,23 @@ func safeProviderRequestID(value string) string {
 	return value
 }
 
+func (c *Client) newAgenticConversation(ctx context.Context) (*Client, func(), error) {
+	if c.conversation == nil {
+		return c, func() {}, nil
+	}
+	conversation, err := c.conversation.NewConversation(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		recordTrace(ctx, TraceEvent{Kind: "responses_websocket", Outcome: "connect_fallback"})
+		return c, func() {}, nil
+	}
+	copy := *c
+	copy.agenticConversation = conversation
+	return &copy, func() { _ = conversation.Close() }, nil
+}
+
 func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDefs []tools.Schema, parallelToolCalls *bool) (*modelResponse, error) {
 	return c.callModelRequest(ctx, modelRequest{
 		Model:             c.model,
@@ -148,6 +174,18 @@ func (c *Client) callModel(ctx context.Context, messages []modelMessage, toolDef
 }
 
 func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*modelResponse, error) {
+	return c.callModelRequestWithTransport(ctx, request, c.transport)
+}
+
+func (c *Client) callAgenticModelRequest(ctx context.Context, request modelRequest) (*modelResponse, error) {
+	transport := c.transport
+	if c.agenticConversation != nil {
+		transport = c.agenticConversation
+	}
+	return c.callModelRequestWithTransport(ctx, request, transport)
+}
+
+func (c *Client) callModelRequestWithTransport(ctx context.Context, request modelRequest, transport modelTransport) (*modelResponse, error) {
 	if c.reasoningEffortErr != nil {
 		return nil, c.reasoningEffortErr
 	}
@@ -164,7 +202,7 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 		request.MaxOutputTokens = c.maxOutputTokens
 	}
 	start := time.Now()
-	resp, err := c.transport.Complete(ctx, request)
+	resp, err := transport.Complete(ctx, request)
 	event := TraceEvent{
 		Kind: "model_request", DurationMs: int(time.Since(start) / time.Millisecond),
 		MessageCount: len(request.Messages), ReasoningEffort: string(request.ReasoningEffort),
@@ -186,6 +224,7 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 		event.OutputTokens = resp.Usage.OutputTokens
 		event.ReasoningTokens = resp.Usage.ReasoningTokens
 		event.ToolCallCount = len(resp.Message.ToolCalls)
+		event.WireRequestBytes = resp.WireRequestBytes
 	}
 	aiusage.ObserveModelRequestWithModelAndReasoningEffort(ctx, usage, c.model, c.modelFingerprint(), string(request.ReasoningEffort))
 	if err != nil {
@@ -237,14 +276,15 @@ func readModelResponseBody(body io.Reader, limit int64) ([]byte, error) {
 }
 
 type modelResponse struct {
-	Message      modelMessage
-	FinishReason string
-	HasMessage   bool
-	ResponseID   string
-	Status       string
-	Attempts     int
-	HTTPStatus   int
-	Usage        aiusage.TokenUsage
+	Message          modelMessage
+	FinishReason     string
+	HasMessage       bool
+	ResponseID       string
+	Status           string
+	Attempts         int
+	HTTPStatus       int
+	Usage            aiusage.TokenUsage
+	WireRequestBytes int
 }
 
 // The JSON tags preserve the existing compaction size estimate. API adapters

@@ -151,6 +151,7 @@ type TraceEvent struct {
 	NormalizedCount               int                 `json:"normalized_count,omitempty"`
 	ScanTruncated                 bool                `json:"scan_truncated,omitempty"`
 	Bytes                         int                 `json:"bytes,omitempty"`
+	WireRequestBytes              int                 `json:"wire_request_bytes,omitempty"`
 	Elided                        int                 `json:"elided,omitempty"`
 	Retry                         int                 `json:"retry,omitempty"`
 	IssueCount                    int                 `json:"issue_count,omitempty"`

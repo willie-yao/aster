@@ -68,6 +68,34 @@ Provider compatibility is per endpoint and model. Confirm that the selected
 model supports the configured API, tool calling, the required context size, and
 streaming behavior when the endpoint uses streaming.
 
+## Responses WebSocket mode
+
+For measured tool-heavy analyses, Responses can opt in to one persistent
+connection per authoritative failure analysis:
+
+```yaml
+ai:
+  api: responses
+  endpoint: https://provider.example/v1/responses
+  model: provider-model-id
+  responses_websocket: true
+```
+
+The setting is valid only with `api: responses`. HTTP remains the default.
+Analysis chat, semantic-judge requests, one-shot structured generation, and
+other model request families continue using HTTP.
+
+Aster keeps the complete local message history. It sends only new input with
+`previous_response_id` when that history exactly extends the prior response.
+Compaction or replaced history starts a new chain with complete input. Requests
+keep `store: false`. A missing prior response is retried once as a new chain;
+connection, rate-limit, or transport failures fall back to the existing HTTP
+Responses path while the analysis context remains active.
+
+The configured operation endpoint must support a WebSocket upgrade at the same
+path. The handshake uses the same bearer, provider-derived, and extra headers as
+HTTP.
+
 ## Reasoning effort
 
 Set provider reasoning effort through `AI_REASONING_EFFORT` or Helm
