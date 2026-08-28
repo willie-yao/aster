@@ -140,6 +140,8 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			for _, text := range []string{
 				`The helper could not resolve a volumeID for mountPath "/mnt/volume1".`,
 				`The helper failed to map the volume ID to C:\mnt\volume1.`,
+				`The definitive failure is that PowerShell inside the tester pod could not find C:\mnt\volume1.`,
+				`The first failing assertion came from the PowerShell probe: Get-Item could not find C:\mnt\volume1, stdout was empty, and the test produced an empty volume ID.`,
 			} {
 				if !mountSignal.matches(text) {
 					t.Errorf("missing-mount signal rejects equivalent wording %q", text)
@@ -156,6 +158,17 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			for _, text := range []string{
 				`The helper resolved volumeID "disk-1" for /mnt/volume1.`,
 				`The helper could not resolve the kubelet hostname. It then mapped volumeID "disk-1" to /mnt/volume1 successfully.`,
+				`The helper could not find evidence about C:\mnt\volume1; the mounted path was present.`,
+				`The report could not find C:\mnt\volume1 in the failure output; the helper resolved it successfully.`,
+				`The report did not say PowerShell could not find C:\mnt\volume1.`,
+				`The definitive failure was not that PowerShell inside the tester pod could not find C:\mnt\volume1; the path was present.`,
+				`The artifacts do not establish that the definitive failure is that PowerShell inside the tester pod could not find C:\mnt\volume1.`,
+				`The first failing assertion did not come from Get-Item failing to find C:\mnt\volume1; stdout was empty for an unrelated command.`,
+				`It is false that the first failing assertion came from the PowerShell probe: Get-Item could not find C:\mnt\volume1, stdout was empty, and the test produced an empty volume ID.`,
+				`The definitive failure is that PowerShell inside the tester pod could not find C:\mnt\volume1, but later checks proved the path was present and the helper resolved it successfully.`,
+				`The definitive failure is that PowerShell inside the tester pod could not find C:\mnt\volume1 when first checked, but a retry found the path and resolved it successfully.`,
+				`The first failing assertion came from the PowerShell probe: Get-Item could not find C:\mnt\volume1, stdout was empty, and the test produced an empty volume ID, but a retry resolved the path.`,
+				`PowerShell initially could not find C:\mnt\volume1, but the helper resolved it successfully.`,
 			} {
 				if mountSignal.matches(text) {
 					t.Errorf("missing-mount signal accepted unrelated or successful resolution %q", text)
@@ -190,6 +203,8 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				"The API server returned NotFound when the scheduler listed v1beta1 PodGroups.",
 				"The API server returned 404 for that version.",
 				"Skipping API scheduling.k8s.io/v1beta1 because it has no resources.",
+				"The API server was configured to serve scheduling.k8s.io/v1alpha3, explicitly skipped v1beta1, while kube-scheduler attempted to list v1beta1 PodGroups and could not synchronize its handlers.",
+				"The API server skipped serving scheduling.k8s.io/v1beta1, and the scheduler could not list v1beta1 PodGroups.",
 			} {
 				if !responseSignal.matches(text) {
 					t.Errorf("case %q rejects equivalent unavailable-API wording %q", bc.name, text)
@@ -206,6 +221,12 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
 				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
 				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
+				"The API server skipped an unrelated webhook. The scheduler request for v1beta1 PodGroup succeeded.",
+				"The API server served v1beta1 PodGroups successfully. The harness skipped v1beta1 validation before scheduler checks.",
+				"The API server was configured to serve v1alpha3. The harness explicitly skipped v1beta1 validation while kube-scheduler attempted to list v1beta1 PodGroups successfully.",
+				"The API server was configured to serve v1alpha3, explicitly skipped v1beta1, while kube-scheduler attempted to list v1beta1 PodGroups successfully but an unrelated metrics exporter could not synchronize.",
+				"The API server skipped v1beta1 audit logging while the scheduler listed v1beta1 PodGroups successfully.",
+				"It is false that the API server skipped serving v1beta1; the scheduler could not list v1beta1 PodGroups because its service account was forbidden.",
 			} {
 				if responseSignal.matches(text) {
 					t.Errorf("case %q accepts unrelated or successful API wording %q", bc.name, text)
@@ -219,6 +240,7 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 				"The scheduler listed a v1beta1 PodGroup whose workload endpoint returned 404.",
 				"The API server returned 404 for an unrelated admission webhook. The scheduler requested v1beta1 PodGroup, whose API request succeeded.",
 				"The API server returned 404 for v1alpha3, not for v1beta1 PodGroup.",
+				"It is false that the API server skipped serving v1beta1; the scheduler could not list v1beta1 PodGroups because its service account was forbidden.",
 			} {
 				wrong := &models.TestCase{AISummary: &models.AISummary{Summary: base + text}, AIAnalysis: &models.AIAnalysis{RootCause: base + text}}
 				if assessment := assessBenchmarkCase(bc, wrong); !slices.Contains(assessment.missingMust, "identifies unavailable PodGroup API response") {
