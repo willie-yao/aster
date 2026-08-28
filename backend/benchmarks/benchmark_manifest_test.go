@@ -744,6 +744,10 @@ type benchmarkJSONLDraft struct {
 	Attempt             int                           `json:"attempt"`
 	Phase               string                        `json:"phase"`
 	Selected            bool                          `json:"selected"`
+	SignalHits          int                           `json:"signal_hits"`
+	SignalTotal         int                           `json:"signal_total"`
+	RequiredSignalHits  int                           `json:"required_signal_hits"`
+	RequiredSignalTotal int                           `json:"required_signal_total"`
 	RuleIDs             []string                      `json:"rule_ids,omitempty"`
 	MatchedSkillIDs     []string                      `json:"matched_skill_ids,omitempty"`
 	MissingGroups       []ai.CritiqueEvidenceGroupRef `json:"missing_groups,omitempty"`
@@ -888,8 +892,10 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		HumanScoreDimensions: append([]string(nil), benchmarkHumanScoreDimensions...),
 	}
 	for _, observation := range observations {
+		score := scoreBenchmarkDraft(bc, observation)
 		result.Drafts = append(result.Drafts, benchmarkJSONLDraft{
 			Attempt: observation.Attempt, Phase: observation.Phase, Selected: observation.Attempt == selectedAttempt,
+			SignalHits: score.hit, SignalTotal: score.total, RequiredSignalHits: score.requiredHit, RequiredSignalTotal: score.required,
 			RuleIDs: append([]string(nil), observation.RuleIDs...), MatchedSkillIDs: append([]string(nil), observation.MatchedSkillIDs...),
 			MissingGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.MissingGroups...), UnavailableGroups: append([]ai.CritiqueEvidenceGroupRef(nil), observation.UnavailableGroups...),
 			PublishedRuleIDs: append([]string(nil), observation.PublishedRuleIDs...), PublishedHardRules: append([]string(nil), observation.PublishedHardRules...), PublishedSoftRules: append([]string(nil), observation.PublishedSoftRules...),
@@ -1184,8 +1190,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		name: "case-one", stableID: "0123456789abcdef0123", evidenceMode: benchmarkEvidenceModeArtifactAndSource, jobName: "job", buildID: "123", testName: "test", testSource: models.TestCaseSourceBuild,
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
 		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
-		sourceRepo:    [2]string{"example", "project"},
-		signals:       []benchSignal{{name: "cause", re: regexp.MustCompile(`root cause`), must: true}},
+		sourceRepo: [2]string{"example", "project"},
+		signals: []benchSignal{
+			{name: "cause", re: regexp.MustCompile(`root cause`), must: true},
+			{name: "optional detail", re: regexp.MustCompile(`optional detail`)},
+		},
 		sourceRanges:  []benchmarkSourceRange{{Repository: "example/project", Revision: strings.Repeat("a", 40), Path: "file.go", LineStart: 1, LineEnd: 2}},
 		sourceSignals: []benchSignal{{name: "source cause", re: regexp.MustCompile(`root cause`), must: true}},
 	}
@@ -1225,7 +1234,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		EvidencePlanCovered: true, GCSFloorRetryExhausted: true, CacheGeneration: "generation",
 	}
 	observations := []benchmarkDraftObservation{{DraftObservation: ai.DraftObservation{
-		Attempt: 1, Phase: "initial", RuleIDs: []string{"remediation.punt"},
+		Attempt: 1, Phase: "initial", RootCause: "PRIVATE_DRAFT_TEXT root cause", RuleIDs: []string{"remediation.punt"},
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
 	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
@@ -1236,14 +1245,14 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "PRIVATE_MODEL") {
-		t.Fatalf("JSONL leaked model identity: %s", data)
+	if strings.Contains(string(data), "PRIVATE_MODEL") || strings.Contains(string(data), "PRIVATE_DRAFT_TEXT") {
+		t.Fatalf("JSONL leaked private model or draft content: %s", data)
 	}
 	var result benchmarkJSONLResult
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 2 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 2 || result.SignalTotal != 2 || result.DiagnosisSignalHits != 2 || result.DiagnosisSignalTotal != 2 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
+	if !slices.Equal(result.EvidenceGroupsSelected, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsHit, []string{"initiating-error"}) || !slices.Equal(result.EvidenceGroupsMissed, []string{"secondary-evidence"}) || !slices.Equal(result.EvidenceGroupSources["initiating-error"], []string{"model_tool"}) || result.EvidenceTelemetryVersion != 2 || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.EvidenceStageSHA256 != benchmarkEvidenceStageSHA256(bc.evidenceGroups) || !result.ModelRequestMade || result.TrialStatus != "contract_violation" || result.EvidenceStages == nil || result.EvidenceRevisions == nil || result.ModelLabel != "model-a" || result.Arm != "variant" || result.EngineCommit != strings.Repeat("b", 40) || result.FixtureSHA256 != strings.Repeat("c", 64) || result.BaselineConsumerCommit != strings.Repeat("d", 40) || result.BaselinePromptSHA256 != strings.Repeat("3", 64) || result.ProjectSHA256 != strings.Repeat("e", 64) || result.EffectivePromptSHA256 != strings.Repeat("f", 64) || result.SkillSetHash != strings.Repeat("1", 64) || result.EffectiveInputSHA256 != strings.Repeat("2", 64) || result.APIMode != ai.APIChatCompletions || result.ProviderPath != "github-copilot/claude-sonnet-4.6" || result.TransportID != "copilot-structural-proxy-v1" || result.Repetition != 2 || result.Outcome != string(benchmarkOutcomeUsable) || result.IsTransient == nil || *result.IsTransient || result.SignalHits != 2 || result.SignalTotal != 3 || result.DiagnosisSignalHits != 2 || result.DiagnosisSignalTotal != 2 || result.TransientCorrect != nil || result.ForbiddenChecksPassed != 0 || result.ForbiddenChecksTotal != 0 || result.SourceRevision != strings.Repeat("a", 40) || result.SourceUnavailable || result.TestSource != models.TestCaseSourceBuild ||
 		result.Trace.Finalize["empty:unexpected_tool_call"] != 1 || result.Trace.Critique["punts"] != 1 || result.GCSBytes != 42 ||
 		len(result.Trace.GrepCalls) != 1 || result.Trace.GrepCalls[0].Outcome != tools.GrepOutcomeZeroMatches || result.Trace.GrepCalls[0].ContextLines != 2 || result.Trace.GrepCalls[0].FilesScanned != 4 ||
 		!result.EvidencePlanCovered || !result.GCSFloorRetryExhausted || result.CritiquePassed == nil || !*result.CritiquePassed || !result.BudgetExhausted ||
@@ -1258,7 +1267,8 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!slices.Equal(result.SemanticJudgeOutcomes, []string{"draft:objected", "revision:passed", "revision:revised"}) ||
 		!slices.Equal(result.SemanticFindingClasses, []string{"specific_error_ignored"}) || result.SupportedFactsRetained != 1 || result.SupportedFactsAdded != 1 || result.SupportedFactsDropped != 0 ||
 		result.EvidenceMode != benchmarkEvidenceModeArtifactAndSource || !slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
-		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected {
+		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected ||
+		result.Drafts[0].SignalHits != 1 || result.Drafts[0].SignalTotal != 2 || result.Drafts[0].RequiredSignalHits != 1 || result.Drafts[0].RequiredSignalTotal != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	info, err := os.Stat(path)
