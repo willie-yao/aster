@@ -68,6 +68,9 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
+	if err := ai.ValidateToolCallingConfiguration(provider.API, provider.Model, provider.ReasoningEffort); err != nil {
+		return nil, err
+	}
 	if provider.Endpoint == "" || provider.Model == "" {
 		return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
 	}
@@ -160,7 +163,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ExtraHeaders:    opts.Project.Provider.Headers,
 		MaxOutputTokens: opts.MaxOutputTokens,
 	})
-	if err := client.ValidateConfiguration(); err != nil {
+	if err := client.ValidateToolConfiguration(); err != nil {
 		return nil, err
 	}
 	budgets, contextSource, err := resolveContextBudgets(ctx, client)

@@ -155,6 +155,11 @@ func (c *Client) callModelRequest(ctx context.Context, request modelRequest) (*m
 		return nil, c.maxOutputTokensErr
 	}
 	request.ReasoningEffort = c.reasoningEffort
+	if len(request.Tools) > 0 {
+		if err := ValidateToolCallingConfiguration(c.apiMode, c.model, request.ReasoningEffort); err != nil {
+			return nil, err
+		}
+	}
 	if request.MaxOutputTokens == 0 {
 		request.MaxOutputTokens = c.maxOutputTokens
 	}

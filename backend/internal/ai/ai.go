@@ -108,6 +108,35 @@ func NewClientWithOptions(opts Options) *Client {
 	}
 }
 
+var openAIGPTVersionPattern = regexp.MustCompile(`(?i)^gpt-(\d+)\.(\d+)(?:-|$)`)
+
+// ValidateToolCallingConfiguration rejects provider settings that cannot run
+// Aster's tool-using analysis loop.
+func ValidateToolCallingConfiguration(apiMode, model string, effort ReasoningEffort) error {
+	if apiMode != APIChatCompletions || effort == "" || effort == ReasoningEffortNone {
+		return nil
+	}
+	if slash := strings.LastIndexByte(model, '/'); slash >= 0 {
+		model = model[slash+1:]
+	}
+	match := openAIGPTVersionPattern.FindStringSubmatch(strings.TrimSpace(model))
+	if len(match) != 3 {
+		return nil
+	}
+	major := 0
+	minor := 0
+	_, _ = fmt.Sscanf(match[1]+"."+match[2], "%d.%d", &major, &minor)
+	if major < 5 || major == 5 && minor < 4 {
+		return nil
+	}
+	return fmt.Errorf("chat_completions cannot use tool calling with model %q and reasoning effort %q; set reasoning effort to none or use responses", model, effort)
+}
+
+// ValidateToolConfiguration validates this client for Aster's tool-using loop.
+func (c *Client) ValidateToolConfiguration() error {
+	return errors.Join(c.ValidateConfiguration(), ValidateToolCallingConfiguration(c.apiMode, c.model, c.reasoningEffort))
+}
+
 // Endpoint returns the configured chat-completions URL.
 func (c *Client) Endpoint() string { return c.apiURL }
 
