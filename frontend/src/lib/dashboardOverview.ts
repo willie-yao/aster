@@ -141,6 +141,93 @@ export function buildsAnalyzedLabel(
   return patternCountOutdated(pattern, refreshStatus) ? `${label} (earlier window)` : label;
 }
 
+function recurringBuildGroups(
+  pattern: Pick<PatternAnalysis, "causal_groups" | "shared_builds">,
+): string[][] {
+  const groups = (pattern.causal_groups ?? [])
+    .map((group) => group.builds)
+    .filter((builds) => builds.length > 1);
+  if (groups.length > 0) return groups;
+  return pattern.shared_builds?.length ? [pattern.shared_builds] : [];
+}
+
+export function patternRecurringBuildCount(
+  pattern: Pick<PatternAnalysis, "causal_groups" | "shared_builds">,
+): number {
+  return recurringBuildGroups(pattern).reduce(
+    (largest, builds) => Math.max(largest, new Set(builds).size),
+    0,
+  );
+}
+
+// currentPatternFailureStreak counts newest completed failures attributed to
+// one recurring cause. Pending runs neither extend nor break the streak.
+export function currentPatternFailureStreak(
+  pattern: Pick<PatternAnalysis, "causal_groups" | "shared_builds">,
+  job?: Pick<JobSummary, "recent_runs">,
+): number {
+  if (!job) return 0;
+  let longest = 0;
+  for (const group of recurringBuildGroups(pattern)) {
+    const builds = new Set(group);
+    let streak = 0;
+    for (const run of job.recent_runs) {
+      if (run.result === "PENDING") continue;
+      if (run.passed || !builds.has(run.build_id)) break;
+      streak++;
+    }
+    longest = Math.max(longest, streak);
+  }
+  return longest;
+}
+
+function patternConfidenceRank(confidence: PatternAnalysis["confidence"]): number {
+  switch (confidence) {
+    case "high": return 3;
+    case "medium": return 2;
+    case "low": return 1;
+  }
+}
+
+// rankRecurringPatterns leads with patterns that are failing now from the same
+// cause, then with active patterns that have the least recovery evidence.
+export function rankRecurringPatterns(
+  patterns: PatternAnalysis[],
+  jobsByID: Record<string, JobSummary>,
+): PatternAnalysis[] {
+  return [...patterns].sort((a, b) => {
+    const aStreak = currentPatternFailureStreak(a, a.job_id ? jobsByID[a.job_id] : undefined);
+    const bStreak = currentPatternFailureStreak(b, b.job_id ? jobsByID[b.job_id] : undefined);
+    if (aStreak !== bStreak) return bStreak - aStreak;
+
+    if (aStreak === 0) {
+      const aRecovery = a.lifecycle?.recovery_streak ?? 0;
+      const bRecovery = b.lifecycle?.recovery_streak ?? 0;
+      if (aRecovery !== bRecovery) return aRecovery - bRecovery;
+    }
+
+    const confidence = patternConfidenceRank(b.confidence) - patternConfidenceRank(a.confidence);
+    if (confidence !== 0) return confidence;
+
+    const recurringBuilds = patternRecurringBuildCount(b) - patternRecurringBuildCount(a);
+    if (recurringBuilds !== 0) return recurringBuilds;
+    if (a.builds_analyzed !== b.builds_analyzed) return b.builds_analyzed - a.builds_analyzed;
+    return (a.job_id ?? a.subject).localeCompare(b.job_id ?? b.subject);
+  });
+}
+
+export function patternEvidenceLabel(
+  pattern: Pick<PatternAnalysis, "builds_analyzed" | "causal_groups" | "shared_builds">,
+  refreshStatus?: PatternRefreshStatus,
+): string {
+  const suffix = patternCountOutdated(pattern, refreshStatus) ? " (earlier window)" : "";
+  const recurringBuilds = patternRecurringBuildCount(pattern);
+  if (recurringBuilds === 0) return buildsAnalyzedLabel(pattern, refreshStatus);
+  const recurring = countLabel(recurringBuilds, "same-cause failure");
+  if (recurringBuilds === pattern.builds_analyzed) return `${recurring}${suffix}`;
+  return `${recurring} across ${countLabel(pattern.builds_analyzed, "analyzed build")}${suffix}`;
+}
+
 export function needsAttentionSummary(
   recurringPatterns: number | null,
   testAlerts: number | null,

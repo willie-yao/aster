@@ -10,10 +10,13 @@ import { createServer } from "vite";
 import {
   attentionSignal,
   countLabel,
+  currentPatternFailureStreak,
   disclosureLabel,
   mergeOverviewHistoryState,
   needsAttentionSummary,
   orderedDashboardBranches,
+  patternEvidenceLabel,
+  rankRecurringPatterns,
   overviewBranchFromParam,
   overviewStatusFromParam,
   readOverviewHistoryState,
@@ -107,6 +110,28 @@ function job(overrides: Partial<JobSummary> = {}): JobSummary {
     ],
     pass_rate_recent: 0.5,
     ...overrides,
+  };
+}
+
+function recurringPattern(
+  jobID: string,
+  buildsAnalyzed: number,
+  sharedBuilds: string[],
+  recoveryStreak: number,
+): PatternAnalysis {
+  return {
+    id: `pattern-${jobID}`,
+    subject: jobID,
+    job_id: jobID,
+    generated_at: "2026-08-28T18:47:11Z",
+    builds_analyzed: buildsAnalyzed,
+    causal_groups: [{ builds: sharedBuilds, root_cause: "same cause", confidence: "high" }],
+    systemic: true,
+    confidence: "high",
+    shared_root_cause: "same cause",
+    shared_builds: sharedBuilds,
+    lifecycle: { state: "active", reason: "The recurring remediation remains unresolved.", recovery_streak: recoveryStreak },
+    summary: "Repeated failure.",
   };
 }
 
@@ -330,6 +355,63 @@ test("overview count labels place dynamic counts in Needs attention", () => {
   assert.equal(attentionSignal("medium", true), "medium confidence · Last successful refresh");
 });
 
+test("recurring pattern ranking leads with an active same-cause streak", () => {
+  const patterns = [
+    recurringPattern("first", 5, ["first-2", "first-1"], 1),
+    recurringPattern("second", 4, ["second-2", "second-1"], 2),
+    recurringPattern("third", 3, ["third-3", "third-2", "third-1"], 2),
+    recurringPattern("fourth", 3, ["fourth-3", "fourth-2", "fourth-1"], 0),
+  ];
+  const jobs = Object.fromEntries(patterns.map((pattern) => {
+    const jobID = pattern.job_id ?? pattern.subject;
+    const active = jobID === "fourth";
+    return [jobID, job({
+      job_id: jobID,
+      name: jobID,
+      current_status: active ? "FAILING" : "PASSING",
+      overall_status: "FLAKY",
+      recent_runs: active
+        ? [
+          { build_id: "pending", passed: false, result: "PENDING", timestamp: "2026-08-28T18:00:00Z" },
+          { build_id: "fourth-3", passed: false, result: "FAILURE", timestamp: "2026-08-28T17:00:00Z" },
+          { build_id: "fourth-2", passed: false, result: "FAILURE", timestamp: "2026-08-28T16:00:00Z" },
+          { build_id: "fourth-1", passed: false, result: "FAILURE", timestamp: "2026-08-28T15:00:00Z" },
+        ]
+        : [{ build_id: `${jobID}-pass`, passed: true, result: "SUCCESS", timestamp: "2026-08-28T18:00:00Z" }],
+    })];
+  }));
+
+  assert.equal(currentPatternFailureStreak(patterns[3], jobs.fourth), 3);
+  assert.deepEqual(
+    rankRecurringPatterns(patterns, jobs).map((pattern) => pattern.job_id),
+    ["fourth", "first", "third", "second"],
+  );
+  assert.deepEqual(patterns.map((pattern) => pattern.job_id), ["first", "second", "third", "fourth"]);
+});
+
+test("missing recovery metadata does not imply a recovered pattern", () => {
+  const unknown = recurringPattern("unknown", 2, ["unknown-2", "unknown-1"], 0);
+  delete unknown.lifecycle;
+  const recovering = recurringPattern("recovering", 5, ["recovering-2", "recovering-1"], 1);
+  const jobs = {
+    unknown: job({ job_id: "unknown", recent_runs: [{ build_id: "pass", passed: true, result: "SUCCESS", timestamp: "2026-08-28T18:00:00Z" }] }),
+    recovering: job({ job_id: "recovering", recent_runs: [{ build_id: "pass", passed: true, result: "SUCCESS", timestamp: "2026-08-28T18:00:00Z" }] }),
+  };
+
+  assert.deepEqual(
+    rankRecurringPatterns([recovering, unknown], jobs).map((pattern) => pattern.job_id),
+    ["unknown", "recovering"],
+  );
+});
+
+test("recurring pattern evidence distinguishes matching failures from analyzed builds", () => {
+  const partial = recurringPattern("partial", 5, ["2", "1"], 0);
+  const active = recurringPattern("active", 3, ["3", "2", "1"], 0);
+
+  assert.equal(patternEvidenceLabel(partial), "2 same-cause failures across 5 analyzed builds");
+  assert.equal(patternEvidenceLabel(active), "3 same-cause failures");
+});
+
 test("disclosure labels pluralize and expose expansion state", () => {
   assert.equal(
     disclosureLabel(false, 2, "additional recurring pattern", "additional recurring patterns"),
@@ -381,6 +463,49 @@ test("attention rows use one full-row destination link", () => {
   assert.match(html, /timed out waiting for cluster/);
   assert.match(html, /3 consecutive failures/);
   assert.match(html, />Failing</);
+});
+
+test("featured recurring pattern exposes a current same-cause streak", () => {
+  const pattern = recurringPattern("active", 3, ["3", "2", "1"], 0);
+  const activeJob = job({
+    job_id: "active",
+    name: "active",
+    current_status: "FAILING",
+    overall_status: "FLAKY",
+    recent_runs: [
+      { build_id: "3", passed: false, result: "FAILURE", timestamp: "2026-08-28T17:00:00Z" },
+      { build_id: "2", passed: false, result: "FAILURE", timestamp: "2026-08-28T16:00:00Z" },
+      { build_id: "1", passed: false, result: "FAILURE", timestamp: "2026-08-28T15:00:00Z" },
+    ],
+  });
+  const html = render(createElement(FeaturedPatternRow, {
+    pattern,
+    rank: 1,
+    prefix: "",
+    stale: false,
+    job: activeJob,
+  }));
+
+  assert.match(html, /Failing now · 3 in a row/);
+  assert.match(html, /3 same-cause failures/);
+  assert.doesNotMatch(html, />Flaky</);
+
+  const running = render(createElement(FeaturedPatternRow, {
+    pattern,
+    rank: 1,
+    prefix: "",
+    stale: false,
+    job: {
+      ...activeJob,
+      current_status: "RUNNING",
+      recent_runs: [
+        { build_id: "pending", passed: false, result: "PENDING", timestamp: "2026-08-28T18:00:00Z" },
+        ...activeJob.recent_runs,
+      ],
+    },
+  }));
+  assert.match(running, /Running now · after 3 same-cause failures/);
+  assert.doesNotMatch(running, /Failing now/);
 });
 
 test("featured analysis link precedes separate recent-run links", () => {
@@ -494,6 +619,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /jobPath\(pattern\.job_id/);
   assert.match(attention, /testRunPath\(item\.job_id, item\.test_name, item\.last_failure\.build_id\)/);
   assert.match(attention, /"additional recurring pattern"/);
+  assert.match(attention, /additional\.map\(\(pattern, index\)[\s\S]*<FeaturedPatternRow/);
   assert.match(attention, /"resolved failures"/);
   assert.match(attention, /No active test alerts/);
   assert.match(attention, /No published test-level or recurring-pattern alerts need attention/);

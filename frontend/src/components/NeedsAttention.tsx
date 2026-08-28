@@ -15,12 +15,15 @@ import {
   attentionGroupNoun,
   attentionGroups,
   attentionSignal,
-  buildsAnalyzedLabel,
+  countLabel,
+  currentPatternFailureStreak,
   disclosureLabel,
   MAX_OVERVIEW_PATTERNS,
   needsAttentionSummary,
   passRateSummary,
+  patternEvidenceLabel,
   persistOverviewHistoryState,
+  rankRecurringPatterns,
   readOverviewHistoryState,
   patternFullyResolved,
   unlistedCauseResolutions,
@@ -149,8 +152,18 @@ export function FeaturedPatternRow({
 }) {
   const lead = rank === 1;
   const compactOnMobile = rank > 1;
-  const color = job ? statusToMuiColor(job.overall_status) : "default";
-  const status = job ? statusLabel(job.overall_status) : "Recurring";
+  const failureStreak = currentPatternFailureStreak(pattern, job);
+  const currentFailure = failureStreak > 0;
+  const running = job?.current_status === "RUNNING";
+  const statusValue = running ? "RUNNING" : currentFailure ? "FAILING" : job?.overall_status;
+  const color = statusValue ? statusToMuiColor(statusValue) : "default";
+  const status = running
+    ? `Running now${currentFailure ? ` · after ${countLabel(failureStreak, "same-cause failure")}` : ""}`
+    : currentFailure
+      ? `Failing now${failureStreak > 1 ? ` · ${failureStreak} in a row` : ""}`
+      : job?.current_status === "PASSING" && job.overall_status !== "PASSING"
+        ? `${statusLabel(job.overall_status)} · Passing now`
+        : job ? statusLabel(job.overall_status) : "Recurring";
   const signal = attentionSignal(pattern.confidence, stale);
   const jobName = shortJobName(pattern.subject, prefix);
 
@@ -329,7 +342,7 @@ export function FeaturedPatternRow({
           color="textSecondary"
           sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}
         >
-          {buildsAnalyzedLabel(pattern, refreshStatus)}
+          {patternEvidenceLabel(pattern, refreshStatus)}
         </Typography>
         <Typography
           variant="caption"
@@ -710,15 +723,16 @@ export function NeedsAttention({
 
   const recurring = useMemo<PatternAnalysis[]>(
     () =>
-      (report?.recurring_patterns ?? [])
-        .filter(
+      rankRecurringPatterns(
+        (report?.recurring_patterns ?? []).filter(
           (pattern) =>
             pattern.job_id &&
             patternLifecycleActive(pattern.lifecycle) &&
             !patternFullyResolved(pattern, resolved),
-        )
-        .slice(0, MAX_OVERVIEW_PATTERNS),
-    [report, resolved],
+        ),
+        jobsByID,
+      ).slice(0, MAX_OVERVIEW_PATTERNS),
+    [jobsByID, report, resolved],
   );
 
   const resolvedPatterns = useMemo<PatternAnalysis[]>(
@@ -881,19 +895,17 @@ export function NeedsAttention({
                 timeout="auto"
                 unmountOnExit
               >
-                {additional.map((pattern) => {
+                {additional.map((pattern, index) => {
                   const refreshStatus = report.pattern_refresh?.jobs?.[pattern.job_id ?? ""];
-                  const stale = Boolean(refreshStatus && refreshStatus.state !== "current");
-                  const subject = shortJobName(pattern.subject, filePrefix);
                   return (
-                    <AttentionRow
+                    <FeaturedPatternRow
                       key={pattern.id ?? pattern.job_id ?? pattern.subject}
-                      to={jobPath(pattern.job_id ?? "")}
-                      destinationLabel={`View analysis for ${subject}`}
-                      subject={subject}
-                      summary={pattern.shared_root_cause || pattern.summary}
-                      count={buildsAnalyzedLabel(pattern, refreshStatus)}
-                      signal={attentionSignal(pattern.confidence, stale)}
+                      pattern={pattern}
+                      rank={FEATURED_PATTERNS + index + 1}
+                      prefix={filePrefix}
+                      stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
+                      refreshStatus={refreshStatus}
+                      job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
                     />
                   );
                 })}
