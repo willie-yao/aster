@@ -25,16 +25,19 @@ var callDelay = 500 * time.Millisecond
 
 // Client calls an OpenAI chat-completions compatible API for AI analysis.
 type Client struct {
-	api                *httpAPIClient
-	transport          modelTransport
-	apiMode            string
-	apiURL             string
-	model              string
-	reasoningEffort    ReasoningEffort
-	reasoningEffortErr error
-	maxOutputTokens    int
-	maxOutputTokensErr error
-	cache              *Cache
+	api                 *httpAPIClient
+	transport           modelTransport
+	conversation        conversationTransport
+	agenticConversation modelConversation
+	apiMode             string
+	apiURL              string
+	model               string
+	reasoningEffort     ReasoningEffort
+	reasoningEffortErr  error
+	maxOutputTokens     int
+	maxOutputTokensErr  error
+	responsesWebSocket  bool
+	cache               *Cache
 }
 
 // ReasoningEffort is the normalized provider reasoning-effort contract.
@@ -75,6 +78,9 @@ type Options struct {
 	// MaxOutputTokens is an optional request output cap. Zero preserves the
 	// provider default and historical production behavior.
 	MaxOutputTokens int
+	// ResponsesWebSocket enables one connection-local Responses conversation
+	// for each authoritative agentic analysis. Other calls remain on HTTP.
+	ResponsesWebSocket bool
 }
 
 // NewClientWithOptions creates a Client from explicit options. Endpoint and
@@ -91,20 +97,26 @@ func NewClientWithOptions(opts Options) *Client {
 		apiMode = APIChatCompletions
 	}
 	var transport modelTransport
+	var conversation conversationTransport
 	switch apiMode {
 	case APIChatCompletions:
 		transport = newChatCompletionsTransport(api)
 	case APIResponses:
-		transport = newResponsesTransport(api)
+		responses := newResponsesTransport(api)
+		transport = responses
+		if opts.ResponsesWebSocket {
+			conversation = newResponsesWebSocketTransport(api, responses)
+		}
 	default:
 		transport = unsupportedTransport{api: apiMode}
 	}
 	return &Client{
-		api: api, transport: transport, apiMode: apiMode,
+		api: api, transport: transport, conversation: conversation, apiMode: apiMode,
 		apiURL: opts.Endpoint, model: opts.Model,
 		reasoningEffort: reasoningEffort, reasoningEffortErr: reasoningEffortErr,
 		maxOutputTokens: opts.MaxOutputTokens, maxOutputTokensErr: maxOutputTokensErr,
-		cache: NewCache(opts.CacheDir),
+		responsesWebSocket: opts.ResponsesWebSocket,
+		cache:              NewCache(opts.CacheDir),
 	}
 }
 
@@ -151,7 +163,11 @@ func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
 
 // ValidateConfiguration rejects unsupported client options before provider I/O.
 func (c *Client) ValidateConfiguration() error {
-	return errors.Join(c.reasoningEffortErr, c.maxOutputTokensErr)
+	var responsesWebSocketErr error
+	if c.responsesWebSocket && c.apiMode != APIResponses {
+		responsesWebSocketErr = fmt.Errorf("responses websocket requires api %q", APIResponses)
+	}
+	return errors.Join(c.reasoningEffortErr, c.maxOutputTokensErr, responsesWebSocketErr)
 }
 
 // ModelFingerprint hashes the model, endpoint, and non-default API contract.

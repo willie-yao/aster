@@ -234,6 +234,23 @@ ai:
 	}
 }
 
+func TestLoadProjectRejectsResponsesWebSocketWithChat(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("Investigate artifacts.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := project.Config{AI: &project.AI{ResponsesWebSocket: true}}
+	_, err := LoadProject(dir, &cfg, ProviderFallbacks{
+		API: project.AIAPIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+	})
+	if err == nil || !strings.Contains(err.Error(), "ai.responses_websocket") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestNewRejectsGPT54ChatToolReasoningBeforeProviderIO(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

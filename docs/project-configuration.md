@@ -293,6 +293,13 @@ optional `AI_REASONING_EFFORT`, and `AI_TOKEN` from the deployment. For cache ge
 `AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
 historical cache-key shape. Generation values are limited to 64 characters and
 may contain alphanumerics, dot, underscore, and hyphen.
+`ai.responses_websocket` is an optional private transport setting for measured,
+tool-heavy Responses analyses. It defaults to `false` and requires the resolved
+API to be `responses`. When enabled, each authoritative failure analysis uses
+one connection-local conversation with exact-prefix incremental continuation
+and HTTP recovery. Semantic review, analysis chat, and one-shot model calls
+remain on HTTP. The setting does not change cache identity.
+
 Most projects do not need analysis tuning. The defaults are designed to work
 without an `ai:` block. Add only the setting that a measured model or artifact
 constraint requires:
