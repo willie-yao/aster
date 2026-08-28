@@ -10,10 +10,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
-// Context limits are expressed in tokens. The request estimator deliberately
-// treats each serialized byte as one token, which is conservative for logs,
-// YAML, JSON, paths, and non-ASCII text without binding the engine to one
-// provider tokenizer.
+// Context limits are expressed in tokens. Request sizing uses a fixed
+// provider-neutral calibration for the text, logs, YAML, and JSON that make up
+// Aster analysis conversations.
 const (
 	fallbackContextWindowTokens = 64 * 1024
 	maxContextWindowTokens      = 1_000_000_000
@@ -24,6 +23,7 @@ const (
 	providerFramingHeadroomTokens = 1 * 1024
 
 	requestSerializationReserveTokens = 4 * 1024
+	promptBytesPerToken               = 3
 )
 
 const contextReservedTokens = completionHeadroomTokens + finalizationHeadroomTokens + evidenceLedgerHeadroomTokens + providerFramingHeadroomTokens
@@ -78,10 +78,9 @@ func DeriveContextBudgets(providerTokens int) ContextBudgets {
 	return ContextBudgets{
 		ContextWindowTokens: providerTokens,
 		RequestTokenBudget:  requestTokens,
-		// Compaction uses the conservative one-byte-per-token ceiling.
-		ContextByteBudget: requestTokens,
-		ModelByteBudget:   modelBytes,
-		UsedFallback:      usedFallback,
+		ContextByteBudget:   requestTokens * promptBytesPerToken,
+		ModelByteBudget:     modelBytes,
+		UsedFallback:        usedFallback,
 	}
 }
 
@@ -114,26 +113,27 @@ func contextHeadroomFor(opts AgenticOptions) contextHeadroom {
 	}
 }
 
-// conservativePromptTokenEstimate uses one token per serialized byte plus
-// a fixed transport allowance. This intentionally overestimates ordinary prose
-// and avoids a tokenizer dependency while remaining safe for dense CI data.
-func conservativePromptTokenEstimate(messages []modelMessage, schemaBytes int) int {
+// estimatedPromptTokens converts serialized request bytes with the shared
+// provider-neutral calibration and adds a fixed transport allowance.
+func estimatedPromptTokens(messages []modelMessage, schemaBytes int) int {
 	// requestSizeEstimate covers the model-visible content and schemas. Reserve
 	// additional token-equivalent framing for provider JSON, role encoding, and
 	// request metadata that transports add after the neutral messages are built.
-	return requestSizeEstimate(messages, schemaBytes) + requestSerializationReserveTokens
+	requestBytes := requestSizeEstimate(messages, schemaBytes)
+	return (requestBytes+promptBytesPerToken-1)/promptBytesPerToken + requestSerializationReserveTokens
 }
 
 // prepareContextRequest compacts a request and rejects it before transport when
-// the conservative estimate still exceeds the reserved request budget.
+// the calibrated estimate still exceeds the reserved request budget.
 func prepareContextRequest(ctx context.Context, messages []modelMessage, schemaBytes int, headroom contextHeadroom, stage string) ([]modelMessage, bool) {
-	compactionBudget := headroom.requestTokens - requestSerializationReserveTokens
-	if compactionBudget < 1 {
-		compactionBudget = 1
+	compactionTokens := headroom.requestTokens - requestSerializationReserveTokens
+	if compactionTokens < 1 {
+		compactionTokens = 1
 	}
+	compactionBudget := compactionTokens * promptBytesPerToken
 	messages, elided := compactMessages(messages, schemaBytes, compactionBudget)
 	afterBytes := requestSizeEstimate(messages, schemaBytes)
-	afterTokens := conservativePromptTokenEstimate(messages, schemaBytes)
+	afterTokens := estimatedPromptTokens(messages, schemaBytes)
 	if elided > 0 {
 		recordTrace(ctx, TraceEvent{
 			Kind: "context_compaction", Outcome: stage, Elided: elided,
