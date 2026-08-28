@@ -144,8 +144,10 @@ also records the derived provider-request cap, GCS bytes, floor markers, sorted 
 reasons, the hashed cache generation, zero-request cache reload results, and
 content-free draft metadata. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
-selected attempt. It records both raw findings and the findings that survive
-deterministic publication sanitization. It also records every best/fallback
+selected attempt. It also records each draft's manifest signal hits and totals,
+including the required-signal subset, without retaining the scored text. It
+records both raw findings and the findings that survive deterministic publication
+sanitization. It also records every best/fallback
 replacement decision with evidence revisions, strict-dominance state, and a
 stable acceptance or rejection reason. Decision events displace older ordinary
 trace events if the per-analysis cap is full. It does not contain draft text.
