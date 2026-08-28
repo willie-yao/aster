@@ -45,6 +45,28 @@ type puntPattern struct {
 // controller log". Applied to text immediately after a candidate match.
 var validationFollowRE = regexp.MustCompile(`^\s+(?:by|via|through|using|that)\b`)
 
+const concreteRemediationVerbs = `add|apply|bump|change|configure|correct|delete|disable|enable|increase|install|lower|` +
+	`patch|pin|preserve|raise|rebuild|redeploy|reduce|remove|replace|restore|retry|revert|roll\s+back|` +
+	`scale|set|switch|update|upgrade`
+
+var (
+	verifyVerbRE             = regexp.MustCompile(`(?i)\bverify\s*$`)
+	verifyValidationFollowRE = regexp.MustCompile(
+		`^\s+(?:(?:the\s+)?(?:fix|change|remediation)\s+(?:by|via|through|using)\b|` +
+			`with\s+(?:(?:a|the)\s+)?(?:re-?run|rebuilt)\b)`,
+	)
+	concreteRemediationStartRE = regexp.MustCompile(`(?i)^(?:` + concreteRemediationVerbs + `)\b`)
+	nonActionableRemediationRE = regexp.MustCompile(
+		`(?i)^(?:` + concreteRemediationVerbs + `)\s+(?:(?:` +
+			`are|aren.t|can.t|cannot|could|did|do|does|had|has|is|isn.t|may|might|must|not|` +
+			`remains?|should|was|wasn.t|were|weren.t|will|would)\b|no\s+longer\b|` +
+			`(?:already\s+)?(?:applied|complete(?:d)?|done|finished)(?:\s+(?:` +
+			`after|already|at|before|by|during|earlier|for|in|now|on|previously|recently|since|` +
+			`successfully|to|today|with|without|yesterday)\b.*)?\s*$)`,
+	)
+	remediationListPrefixRE = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s*`)
+)
+
 // puntPatterns:
 //  1. Bare diagnostic imperative at sentence or bullet start, such as "Check X".
 //  2. "<subject> should/need-to <diag verb>", such as "operator needs to verify".
@@ -89,10 +111,8 @@ func findPunts(text string) []string {
 		idxs := p.re.FindAllStringIndex(text, -1)
 		for _, idx := range idxs {
 			start, end := idx[0], idx[1]
-			if p.exemptValidationFollow {
-				if validationFollowRE.MatchString(text[end:]) {
-					continue
-				}
+			if p.exemptValidationFollow && validationFollowAllowed(text, start, end) {
+				continue
 			}
 			match := strings.TrimLeft(text[start:end], " \t\n.!?;-*0123456789)")
 			match = strings.TrimSpace(match)
@@ -102,6 +122,23 @@ func findPunts(text string) []string {
 		}
 	}
 	return out
+}
+
+func validationFollowAllowed(text string, start, end int) bool {
+	remainder := text[end:]
+	validationShape := validationFollowRE.MatchString(remainder) ||
+		verifyVerbRE.MatchString(text[start:end]) && verifyValidationFollowRE.MatchString(remainder)
+	if !validationShape {
+		return false
+	}
+	clauses := remediationClauses(text[:start])
+	if len(clauses) == 0 {
+		return false
+	}
+	prior := remediationListPrefixRE.ReplaceAllString(clauses[len(clauses)-1], "")
+	return !rerunOnlyClauseRE.MatchString(prior) &&
+		concreteRemediationStartRE.MatchString(prior) &&
+		!nonActionableRemediationRE.MatchString(prior)
 }
 
 // noRemediationPrefix is the sanctioned escape hatch for a draft whose evidence
@@ -197,7 +234,7 @@ func remediationClauses(text string) []string {
 // That covers both a materially stronger gate and a publication rule whose old
 // output no longer reflects what the model said. Cosmetic prompt-shape changes
 // do not bump.
-const currentCritiqueVersion = 11
+const currentCritiqueVersion = 12
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned
