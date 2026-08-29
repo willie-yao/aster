@@ -1585,6 +1585,7 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		"aws-ebs-sumdb-http2-failure": {
 			"Kubetest2 installation failed on sum.golang.org HTTP/2 INTERNAL_ERROR responses. Cluster setup later succeeded, but the functional E2E tests did not run and no JUnit result exists.",
 			"The bin/kubetest2 build failed while verifying modules through sum.golang.org after HTTP/2 INTERNAL_ERROR responses. The wrapper skipped the test command, so this was before any storage E2E ran.",
+			"The functional tests did not run after sum.golang.org HTTP/2 INTERNAL_ERROR broke the bin/kubetest2 build, so they could not fail when executed; no JUnit exists.",
 		},
 		"azuredisk-pvc-resourceversion-conflict": {
 			"The offline test retains a PVC across the detach wait and submits the stale object without refreshing or retrying the 409 conflict. The test code, not Azure Disk resize, is the cause.",

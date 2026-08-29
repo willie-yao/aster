@@ -232,7 +232,7 @@
           "name": "recognizes functional tests never ran",
           "pattern": "(?is)(?:functional )?(?:tests?|e2e).{0,100}(?:never (?:ran|started|executed|reached)|did not (?:run|start)|were not (?:run|started)|were skipped)|(?:skip(?:s|ped)|prevented|before).{0,140}(?:functional )?(?:tests?|e2e|test command)|(?:no|without).{0,60}junit",
           "must": true,
-          "negated": "(?is)(?:tests?|e2e).{0,100}(?:did not|didn.t).{0,50}fail.{0,100}(?:after|when).{0,50}(?:they )?(?:ran|started|executed)|(?:tests?|e2e).{0,100}(?:ran|executed).{0,100}(?:successfully|but did not fail)"
+          "negated": "(?is)(?:functional )?(?:tests?|e2e)(?: themselves)? (?:did not|didn.t) fail (?:after|when) (?:they )?(?:ran|started|executed)|(?:functional )?(?:tests?|e2e) (?:ran|executed)(?: successfully)?(?: but)? (?:did not|didn.t) fail"
         }
       ],
       "forbidden": [
