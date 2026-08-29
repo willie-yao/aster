@@ -935,13 +935,11 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 func sanitizePublishedCitations(parsed analysisResponse, context analysisCitationContext) analysisResponse {
 	const maxPublishedCitations = 20
 	valid := make([]models.EvidenceCitation, 0, min(len(parsed.EvidenceCitations), maxPublishedCitations))
-	if !context.Full {
-		for _, citation := range parsed.EvidenceCitations {
-			if evidenceCitationIssue(citation, context.Evidence) == "" {
-				valid = append(valid, citation)
-				if len(valid) == maxPublishedCitations {
-					break
-				}
+	for _, citation := range parsed.EvidenceCitations {
+		if evidenceCitationIssue(citation, context.Evidence) == "" {
+			valid = append(valid, citation)
+			if len(valid) == maxPublishedCitations {
+				break
 			}
 		}
 	}
