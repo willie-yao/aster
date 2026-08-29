@@ -54,7 +54,7 @@
         {
           "name": "product regression treated as root cause",
           "pattern": "(?is)(?:root cause|caused by|failure was due to|failed because of).{0,100}(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster)|(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster).{0,100}(?:root cause|caused (?:the )?(?:job|tests|failure))",
-          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:functional regression|product bug|workload cluster failure)"
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:functional regression|product bug|workload cluster failure)|(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster failure).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
@@ -102,8 +102,8 @@
       "id": "capa-kubeadm-webhook-ca-mismatch",
       "stable_id": "703c559b636651693448",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v1.tar.gz",
-      "fixture_sha256": "879d6f87bd46c7a2a8a60ef6c403467a0355f2a8bdf2e5a43e54319e53c82f96",
+      "fixture_asset": "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v2.tar.gz",
+      "fixture_sha256": "60f3e8b746d9135c3afc262ffb9f5eb6f4f23c98203b39e1fbb06bdda3cf800e",
       "job_type": "periodic",
       "job_name": "periodic-cluster-api-provider-aws-e2e-conformance-release-2-12",
       "build_id": "2092992761815896064",
@@ -151,7 +151,7 @@
         {
           "name": "AWS provisioning treated as root cause",
           "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota)|(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
-          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:AWS|EC2|VPC).{0,100}(?:failure|provisioning|networking)"
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:AWS|EC2|VPC).{0,100}(?:failure|provisioning|networking)|(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
@@ -238,7 +238,7 @@
         {
           "name": "storage driver treated as root cause",
           "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:EBS|CSI|volume|attach|mount|resize)|(?:EBS|CSI|volume|attach|mount|resize).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
-          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:EBS|CSI|storage|volume).{0,100}(?:failure|defect|cause)"
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:EBS|CSI|storage|volume).{0,100}(?:failure|defect|cause)|(?:EBS|CSI|storage|volume|attach|mount|resize).{0,100}(?:failure|defect|problem).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
@@ -293,8 +293,8 @@
       "id": "azuredisk-pvc-resourceversion-conflict",
       "stable_id": "21c21fe4d728e8564f03",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v1.tar.gz",
-      "fixture_sha256": "f9f73c07c6168ac9479b2ef09d6c94dbf36667b0b8392378e1566f0f61e82b59",
+      "fixture_asset": "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v2.tar.gz",
+      "fixture_sha256": "79f5e3e1c7e5cb9b156d4ec6d21e5dc5183b254931408feefdfdf5a1560c4ec5",
       "job_type": "periodic",
       "job_name": "ci-azuredisk-csi-driver-e2e-capz-windows",
       "build_id": "2093054417317138432",
@@ -338,7 +338,7 @@
         {
           "name": "Azure Disk resize treated as root cause",
           "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand)|(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
-          "negated": "(?is)(?:not|no|isn.t|wasn.t|rather than|instead of).{0,120}(?:Azure Disk|CSI|disk|filesystem).{0,120}(?:failure|failed|resize|expand)"
+          "negated": "(?is)(?:not|no|isn.t|wasn.t|rather than|instead of).{0,120}(?:Azure Disk|CSI|disk|filesystem).{0,120}(?:failure|failed|resize|expand)|(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand|failure|problem).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
@@ -386,8 +386,8 @@
       "id": "kubernetes-two-step-upgrade-missing-kubelet",
       "stable_id": "e1e10d24d14f039abe2f",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v1.tar.gz",
-      "fixture_sha256": "2949729900e6cafeb224414a111654df97cb3698a0fac17156f5edfedbb4af2d",
+      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v2.tar.gz",
+      "fixture_sha256": "efab5a1ccb6071f82e1e5e5d489a79a59de0a1b4caa67c05bb51d32fa1fc28a9",
       "job_type": "periodic",
       "job_name": "ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1",
       "build_id": "2093510175414554624",
@@ -429,12 +429,12 @@
         },
         {
           "name": "identifies masked missing-kubelet failure",
-          "pattern": "(?is)(?:missing|cannot find|Failed to find binary).{0,100}kubelet.{0,260}(?:tee|pipefail|masked|continues)|(?:tee|pipefail|masked).{0,260}(?:missing|cannot find|Failed to find binary).{0,100}kubelet",
+          "pattern": "(?is)(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet.{0,260}(?:tee|pipefail|masked|continues)|(?:tee|pipefail|masked).{0,260}(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet",
           "must": true
         },
         {
           "name": "identifies fatal kubectl version parse",
-          "pattern": "(?is)kubectl version.{0,220}(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata|parse).{0,180}(?:exit|fatal|terminat|fail)|(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata).{0,220}kubectl version",
+          "pattern": "(?is)kubectl version.{0,260}(?:(?:failed|error|exit|fatal|terminat).{0,180})?(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata)|(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata).{0,260}kubectl version",
           "must": true
         },
         {
@@ -446,7 +446,7 @@
         {
           "name": "control-plane runtime treated as root cause",
           "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
-          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)"
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failure|failed|unhealthy).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
@@ -509,7 +509,7 @@
         },
         {
           "name": "source requires local kubelet",
-          "pattern": "(?is)(?:find-binary|requires|looks for|find|cannot find).{0,120}(?:local )?kubelet|kubelet.{0,120}(?:find-binary|required local binary|must exist)",
+          "pattern": "(?is)(?:find-binary|requires|looks for|find|cannot find|could not find).{0,120}(?:local )?kubelet|kubelet.{0,120}(?:find-binary|required local binary|must exist)",
           "must": true
         }
       ],
@@ -531,6 +531,12 @@
           "path": "experiment/compatibility-versions/emulated-version-upgrade.sh",
           "line_start": 84,
           "line_end": 93
+        },
+        {
+          "source_id": "test-infra",
+          "path": "experiment/compatibility-versions/e2e-two-steps-upgrade.sh",
+          "line_start": 18,
+          "line_end": 20
         }
       ]
     }

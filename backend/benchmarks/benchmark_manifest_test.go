@@ -1509,8 +1509,8 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			},
 		},
 		"capa-kubeadm-webhook-ca-mismatch": {
-			asset:         "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v1.tar.gz",
-			fixtureSHA256: "879d6f87bd46c7a2a8a60ef6c403467a0355f2a8bdf2e5a43e54319e53c82f96",
+			asset:         "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v2.tar.gz",
+			fixtureSHA256: "60f3e8b746d9135c3afc262ffb9f5eb6f4f23c98203b39e1fbb06bdda3cf800e",
 			evidenceMode:  benchmarkEvidenceModeArtifactOnly,
 			primaryRepo:   "kubernetes-sigs/cluster-api-provider-aws",
 			testName:      "[It] [unmanaged] [conformance] tests conformance",
@@ -1538,8 +1538,8 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			},
 		},
 		"azuredisk-pvc-resourceversion-conflict": {
-			asset:         "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v1.tar.gz",
-			fixtureSHA256: "f9f73c07c6168ac9479b2ef09d6c94dbf36667b0b8392378e1566f0f61e82b59",
+			asset:         "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v2.tar.gz",
+			fixtureSHA256: "79f5e3e1c7e5cb9b156d4ec6d21e5dc5183b254931408feefdfdf5a1560c4ec5",
 			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
 			primaryRepo:   "kubernetes-sigs/azuredisk-csi-driver",
 			testName:      "[It] Dynamic Provisioning [single-az] should create a volume on demand and resize it [disk.csi.azure.com] [Windows]",
@@ -1553,14 +1553,15 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			},
 		},
 		"kubernetes-two-step-upgrade-missing-kubelet": {
-			asset:         "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v1.tar.gz",
-			fixtureSHA256: "2949729900e6cafeb224414a111654df97cb3698a0fac17156f5edfedbb4af2d",
+			asset:         "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v2.tar.gz",
+			fixtureSHA256: "efab5a1ccb6071f82e1e5e5d489a79a59de0a1b4caa67c05bb51d32fa1fc28a9",
 			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
 			primaryRepo:   "kubernetes/test-infra",
 			testName:      "[build] two-step compatibility-version upgrade",
 			testSource:    models.TestCaseSourceBuild,
 			sourceRanges: []benchmarkSourceRange{
 				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/common.sh", LineStart: 331, LineEnd: 349},
+				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/e2e-two-steps-upgrade.sh", LineStart: 18, LineEnd: 20},
 				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/e2e-two-steps-upgrade.sh", LineStart: 96, LineEnd: 140},
 				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/emulated-version-upgrade.sh", LineStart: 84, LineEnd: 93},
 			},
@@ -1577,8 +1578,15 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		"cluster-api-kind-minimum-version":            "The Prow image has kind v0.32 while ensure-kind.sh requires v0.33. The CI preflight mismatch stops before cluster creation; this is not a Cluster API functional regression.",
 		"capa-kubeadm-webhook-ca-mismatch":            "AWS instance provisioning was blocked by the webhook failure. KubeadmConfigTemplate creation hit an unknown-authority serving-certificate trust mismatch, not an AWS failure.",
 		"aws-ebs-sumdb-http2-failure":                 "The EBS CSI volume tests completed; the build failure was external. sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2, and the cluster became ready with E2E_PASSED: 1.",
-		"azuredisk-pvc-resourceversion-conflict":      "The Azure Disk resize test failed before driver expansion. A stale PVC resourceVersion caused an object-has-been-modified conflict, and the harness does not retry it. This was not an Azure Disk failure.",
+		"azuredisk-pvc-resourceversion-conflict":      "The Azure Disk resize test failed before driver expansion. The test harness gets the PVC, later issues one Update, and does not retry the conflict; the source calls ExpectNoError. A stale PVC resourceVersion caused the object-has-been-modified response. This was not an Azure Disk failure.",
 		"kubernetes-two-step-upgrade-missing-kubelet": "The control-plane components upgraded successfully; the later harness failed. emulated-version-upgrade ran before download_current_version_bins, could not find kubelet, tee without pipefail masked it, and kubectl version then failed on v0.0.0-master. This was not a control-plane failure.",
+	}
+	postposedNegation := map[string]string{
+		"cluster-api-kind-minimum-version":            "A Cluster API functional regression was not the root cause.",
+		"capa-kubeadm-webhook-ca-mismatch":            "AWS networking was not the root cause.",
+		"aws-ebs-sumdb-http2-failure":                 "An EBS CSI volume failure was not the root cause.",
+		"azuredisk-pvc-resourceversion-conflict":      "Azure Disk resize failure was not the root cause.",
+		"kubernetes-two-step-upgrade-missing-kubelet": "The control plane failure was not the root cause.",
 	}
 	if len(cases) != len(want) {
 		t.Fatalf("cases = %d, want %d", len(cases), len(want))
@@ -1620,8 +1628,12 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			t.Fatalf("case %q opposite diagnosis passed: %+v", bc.name, assessment)
 		}
 		alternate := &models.TestCase{AISummary: &models.AISummary{Summary: alternateCorrect[bc.name], IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: alternateCorrect[bc.name]}}
-		if assessment := assessBenchmarkCase(bc, alternate); assessment.forbiddenPassed != assessment.forbiddenTotal {
-			t.Fatalf("case %q alternate correct diagnosis hit forbidden rule: %+v", bc.name, assessment)
+		if assessment := assessBenchmarkCase(bc, alternate); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
+			t.Fatalf("case %q alternate correct diagnosis rejected: %+v", bc.name, assessment)
+		}
+		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}
+		if assessment := assessBenchmarkCase(bc, postposed); assessment.forbiddenPassed != assessment.forbiddenTotal {
+			t.Fatalf("case %q postposed negation hit forbidden rule: %+v", bc.name, assessment)
 		}
 	}
 }
