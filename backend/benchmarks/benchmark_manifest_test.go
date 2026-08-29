@@ -1469,70 +1469,160 @@ func TestKubectlSkewEvaluationManifest(t *testing.T) {
 }
 
 func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
+	type expectedEvidence struct {
+		id     string
+		path   string
+		sample string
+	}
+	type expectedCase struct {
+		asset          string
+		fixtureSHA256  string
+		evidenceMode   string
+		primaryRepo    string
+		testName       string
+		testSource     string
+		transient      bool
+		sourceRanges   []benchmarkSourceRange
+		evidenceGroups []expectedEvidence
+	}
+	buildLogPath := `(?i)(?:^|/)build-log[.]txt$`
+	junitAndBuildPath := `(?i)(?:^|/)(?:build-log[.]txt|junit_01[.]xml)$`
 	cases, err := loadBenchmarkManifest("testdata/benchmarks/corpus-batch-1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantModes := map[string]string{
-		"cluster-api-kind-minimum-version":            benchmarkEvidenceModeArtifactAndSource,
-		"capa-kubeadm-webhook-ca-mismatch":            benchmarkEvidenceModeArtifactOnly,
-		"aws-ebs-sumdb-http2-failure":                 benchmarkEvidenceModeArtifactOnly,
-		"azuredisk-pvc-resourceversion-conflict":      benchmarkEvidenceModeArtifactAndSource,
-		"kubernetes-two-step-upgrade-missing-kubelet": benchmarkEvidenceModeArtifactAndSource,
+	want := map[string]expectedCase{
+		"cluster-api-kind-minimum-version": {
+			asset:         "cluster-api-kind-minimum-2093512440632315904.tar.gz",
+			fixtureSHA256: "9f016290458ff05020057c218e952fdf09e71324d537865c9efdd5e05badf27d",
+			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
+			primaryRepo:   "kubernetes-sigs/cluster-api",
+			testName:      "[build] Cluster API kind minimum-version preflight",
+			testSource:    models.TestCaseSourceBuild,
+			sourceRanges: []benchmarkSourceRange{{
+				Repository: "kubernetes-sigs/cluster-api", Revision: "7ddd6ab95b631c25402662cae2835a2934eee6d6",
+				Path: "hack/scripts/ensure/ensure-kind.sh", LineStart: 34, LineEnd: 65,
+			}},
+			evidenceGroups: []expectedEvidence{
+				{id: "detected-kind-version", path: buildLogPath, sample: "Detected kind version: v0.32.0"},
+				{id: "required-kind-version", path: buildLogPath, sample: "Requires v0.33.0 or greater"},
+			},
+		},
+		"capa-kubeadm-webhook-ca-mismatch": {
+			asset:         "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v1.tar.gz",
+			fixtureSHA256: "879d6f87bd46c7a2a8a60ef6c403467a0355f2a8bdf2e5a43e54319e53c82f96",
+			evidenceMode:  benchmarkEvidenceModeArtifactOnly,
+			primaryRepo:   "kubernetes-sigs/cluster-api-provider-aws",
+			testName:      "[It] [unmanaged] [conformance] tests conformance",
+			transient:     true,
+			evidenceGroups: []expectedEvidence{
+				{id: "kubeadm-webhook-service", path: `(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$`, sample: "capi-kubeadm-bootstrap-webhook-service"},
+				{id: "unknown-certificate-authority", path: `(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$`, sample: "certificate signed by unknown authority"},
+				{id: "template-blocked", path: `(?i)(?:^|/)(?:build-log[.]txt|clusterctl-describe-cluster-[^/]+[.]txt)$`, sample: "KubeadmConfigTemplate does not exist"},
+			},
+		},
+		"aws-ebs-sumdb-http2-failure": {
+			asset:         "aws-ebs-sumdb-http2-2092995529448361984.tar.gz",
+			fixtureSHA256: "8fce462a7577703341a6ea5d452e71ea9f1919880392fefbadb7700f4b06b17b",
+			evidenceMode:  benchmarkEvidenceModeArtifactOnly,
+			primaryRepo:   "kubernetes-sigs/aws-ebs-csi-driver",
+			testName:      "[build] kubetest2 dependency verification",
+			testSource:    models.TestCaseSourceBuild,
+			transient:     true,
+			evidenceGroups: []expectedEvidence{
+				{id: "sumdb-tile-request", path: buildLogPath, sample: "sum.golang.org/tile/8/0/x068/469"},
+				{id: "http2-internal-error", path: buildLogPath, sample: "INTERNAL_ERROR; received from peer"},
+				{id: "kubetest2-target", path: buildLogPath, sample: "Makefile:331: bin/kubetest2"},
+				{id: "cluster-became-ready", path: buildLogPath, sample: "Your cluster example is ready"},
+				{id: "e2e-passed", path: buildLogPath, sample: "E2E_PASSED: 1"},
+			},
+		},
+		"azuredisk-pvc-resourceversion-conflict": {
+			asset:         "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v1.tar.gz",
+			fixtureSHA256: "f9f73c07c6168ac9479b2ef09d6c94dbf36667b0b8392378e1566f0f61e82b59",
+			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
+			primaryRepo:   "kubernetes-sigs/azuredisk-csi-driver",
+			testName:      "[It] Dynamic Provisioning [single-az] should create a volume on demand and resize it [disk.csi.azure.com] [Windows]",
+			sourceRanges: []benchmarkSourceRange{{
+				Repository: "kubernetes-sigs/azuredisk-csi-driver", Revision: "6bc2e5c4608b9874f093620eaf1865ac80b93e1c",
+				Path: "test/e2e/testsuites/dynamically_provisioned_resize_volume_tester.go", LineStart: 71, LineEnd: 105,
+			}},
+			evidenceGroups: []expectedEvidence{
+				{id: "pvc-resize-operation", path: junitAndBuildPath, sample: "fail to resize pvc"},
+				{id: "object-modified-conflict", path: junitAndBuildPath, sample: "object has been modified"},
+			},
+		},
+		"kubernetes-two-step-upgrade-missing-kubelet": {
+			asset:         "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v1.tar.gz",
+			fixtureSHA256: "2949729900e6cafeb224414a111654df97cb3698a0fac17156f5edfedbb4af2d",
+			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
+			primaryRepo:   "kubernetes/test-infra",
+			testName:      "[build] two-step compatibility-version upgrade",
+			testSource:    models.TestCaseSourceBuild,
+			sourceRanges: []benchmarkSourceRange{
+				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/common.sh", LineStart: 331, LineEnd: 349},
+				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/e2e-two-steps-upgrade.sh", LineStart: 96, LineEnd: 140},
+				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/emulated-version-upgrade.sh", LineStart: 84, LineEnd: 93},
+			},
+			evidenceGroups: []expectedEvidence{
+				{id: "upgrade-without-kubelet", path: buildLogPath, sample: "--no-kubelet"},
+				{id: "emulated-upgrade-stage", path: buildLogPath, sample: "emulated-version-upgrade.sh"},
+				{id: "conformance-tests-passed", path: buildLogPath, sample: "SUCCESS! -- 411 Passed"},
+				{id: "missing-kubelet-binary", path: buildLogPath, sample: "Failed to find binary kubelet"},
+				{id: "fatal-kubectl-version", path: buildLogPath, sample: "could not parse pre-release/metadata (-master+$Format:%H$) in version v0.0.0-master"},
+			},
+		},
 	}
-	wantSourceRanges := map[string]int{
-		"cluster-api-kind-minimum-version":            1,
-		"azuredisk-pvc-resourceversion-conflict":      1,
-		"kubernetes-two-step-upgrade-missing-kubelet": 3,
+	alternateCorrect := map[string]string{
+		"cluster-api-kind-minimum-version":            "The Prow image has kind v0.32 while ensure-kind.sh requires v0.33. The CI preflight mismatch stops before cluster creation; this is not a Cluster API functional regression.",
+		"capa-kubeadm-webhook-ca-mismatch":            "AWS instance provisioning was blocked by the webhook failure. KubeadmConfigTemplate creation hit an unknown-authority serving-certificate trust mismatch, not an AWS failure.",
+		"aws-ebs-sumdb-http2-failure":                 "The EBS CSI volume tests completed; the build failure was external. sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2, and the cluster became ready with E2E_PASSED: 1.",
+		"azuredisk-pvc-resourceversion-conflict":      "The Azure Disk resize test failed before driver expansion. A stale PVC resourceVersion caused an object-has-been-modified conflict, and the harness does not retry it. This was not an Azure Disk failure.",
+		"kubernetes-two-step-upgrade-missing-kubelet": "The control-plane components upgraded successfully; the later harness failed. emulated-version-upgrade ran before download_current_version_bins, could not find kubelet, tee without pipefail masked it, and kubectl version then failed on v0.0.0-master. This was not a control-plane failure.",
 	}
-	if len(cases) != len(wantModes) {
-		t.Fatalf("cases = %d, want %d", len(cases), len(wantModes))
+	if len(cases) != len(want) {
+		t.Fatalf("cases = %d, want %d", len(cases), len(want))
 	}
-	primaryRepos := map[string]bool{}
-	transient := 0
-	buildFailures := 0
 	for _, bc := range cases {
-		if bc.evidenceMode != wantModes[bc.name] {
-			t.Fatalf("case %q evidence mode = %q", bc.name, bc.evidenceMode)
-		}
-		if bc.fixtureAsset == "" || !benchmarkSHA256RE.MatchString(bc.fixtureSHA256) {
-			t.Fatalf("case %q fixture identity is incomplete", bc.name)
+		expected, ok := want[bc.name]
+		if !ok {
+			t.Fatalf("unexpected case %q", bc.name)
 		}
 		primary, ok := benchmarkPrimarySourceRef(bc)
 		if !ok {
 			t.Fatalf("case %q primary source is missing", bc.name)
 		}
-		primaryRepos[primary.Repository] = true
-		if bc.expectedTransient == nil || *bc.expectedTransient != bc.referenceTransient {
+		if bc.fixtureAsset != expected.asset || bc.fixtureSHA256 != expected.fixtureSHA256 || bc.evidenceMode != expected.evidenceMode || primary.Repository != expected.primaryRepo || bc.testName != expected.testName || bc.testSource != expected.testSource {
+			t.Fatalf("case %q identity mismatch: %+v primary=%+v", bc.name, bc, primary)
+		}
+		if bc.expectedTransient == nil || *bc.expectedTransient != expected.transient || bc.referenceTransient != expected.transient {
 			t.Fatalf("case %q transient identity is incomplete", bc.name)
 		}
-		if bc.referenceTransient {
-			transient++
+		if !slices.Equal(bc.sourceRanges, expected.sourceRanges) {
+			t.Fatalf("case %q source ranges = %+v, want %+v", bc.name, bc.sourceRanges, expected.sourceRanges)
 		}
-		if bc.testSource == models.TestCaseSourceBuild {
-			buildFailures++
+		if len(bc.evidenceGroups) != len(expected.evidenceGroups) {
+			t.Fatalf("case %q evidence groups = %d, want %d", bc.name, len(bc.evidenceGroups), len(expected.evidenceGroups))
 		}
-		if got := len(bc.sourceRanges); got != wantSourceRanges[bc.name] {
-			t.Fatalf("case %q source ranges = %d, want %d", bc.name, got, wantSourceRanges[bc.name])
+		for index, group := range bc.evidenceGroups {
+			wantGroup := expected.evidenceGroups[index]
+			if group.id != wantGroup.id || len(group.pathREs) != 1 || group.pathREs[0].String() != wantGroup.path || len(group.contentREs) != 1 || !group.contentREs[0].MatchString(wantGroup.sample) {
+				t.Fatalf("case %q evidence group %d = %+v, want %+v", bc.name, index, group, wantGroup)
+			}
 		}
-		reference := &models.TestCase{
-			AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: bc.referenceTransient},
-			AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis},
-		}
+		reference := &models.TestCase{AISummary: &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis}}
 		if assessment := assessBenchmarkCase(bc, reference); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
 			t.Fatalf("case %q reference rejected: %+v", bc.name, assessment)
 		}
-		opposite := &models.TestCase{
-			AISummary:  &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: bc.oppositeTransient},
-			AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis},
-		}
+		opposite := &models.TestCase{AISummary: &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: bc.oppositeTransient}, AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis}}
 		assessment := assessBenchmarkCase(bc, opposite)
 		if len(assessment.missingMust) == 0 && assessment.forbiddenPassed == assessment.forbiddenTotal {
 			t.Fatalf("case %q opposite diagnosis passed: %+v", bc.name, assessment)
 		}
-	}
-	if len(primaryRepos) != 5 || transient != 2 || buildFailures != 3 {
-		t.Fatalf("batch balance repos=%d transient=%d build_failures=%d", len(primaryRepos), transient, buildFailures)
+		alternate := &models.TestCase{AISummary: &models.AISummary{Summary: alternateCorrect[bc.name], IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: alternateCorrect[bc.name]}}
+		if assessment := assessBenchmarkCase(bc, alternate); assessment.forbiddenPassed != assessment.forbiddenTotal {
+			t.Fatalf("case %q alternate correct diagnosis hit forbidden rule: %+v", bc.name, assessment)
+		}
 	}
 }
 

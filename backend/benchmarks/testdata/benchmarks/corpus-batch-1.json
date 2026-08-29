@@ -53,18 +53,26 @@
       "forbidden": [
         {
           "name": "product regression treated as root cause",
-          "pattern": "(?is)(?:Cluster API|Kubernetes).{0,120}(?:functional regression|product bug|workload cluster failure).{0,100}(?:caused|root cause|failed)",
-          "negated": "(?is)(?:not|isn.t|rather than).{0,100}(?:e2e|product|Cluster API|Kubernetes).{0,100}(?:failure|regression|bug)"
+          "pattern": "(?is)(?:root cause|caused by|failure was due to|failed because of).{0,100}(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster)|(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster).{0,100}(?:root cause|caused (?:the )?(?:job|tests|failure))",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:functional regression|product bug|workload cluster failure)"
         }
       ],
       "evidence_groups": [
         {
-          "id": "kind-version-gate",
+          "id": "detected-kind-version",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "Detected kind version: v0[.]32[.]0",
+            "Detected kind version: v0[.]32[.]0"
+          ]
+        },
+        {
+          "id": "required-kind-version",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
             "Requires v0[.]33[.]0 or greater"
           ]
         }
@@ -94,8 +102,8 @@
       "id": "capa-kubeadm-webhook-ca-mismatch",
       "stable_id": "703c559b636651693448",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "capa-kubeadm-webhook-ca-2092992761815896064.tar.gz",
-      "fixture_sha256": "3835363703596ce3de47c9d7e8f18407d5b9fe4961c0246113b5b6c712865636",
+      "fixture_asset": "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v1.tar.gz",
+      "fixture_sha256": "879d6f87bd46c7a2a8a60ef6c403467a0355f2a8bdf2e5a43e54319e53c82f96",
       "job_type": "periodic",
       "job_name": "periodic-cluster-api-provider-aws-e2e-conformance-release-2-12",
       "build_id": "2092992761815896064",
@@ -142,18 +150,26 @@
       "forbidden": [
         {
           "name": "AWS provisioning treated as root cause",
-          "pattern": "(?is)(?:AWS|EC2|VPC).{0,120}(?:provisioning|networking|instance|quota).{0,120}(?:failed|failure|broken|root cause)",
-          "negated": "(?is)(?:not|rather than|instead of).{0,100}(?:AWS|EC2|VPC)"
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota)|(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:AWS|EC2|VPC).{0,100}(?:failure|provisioning|networking)"
         }
       ],
       "evidence_groups": [
         {
-          "id": "webhook-ca-rejection",
+          "id": "kubeadm-webhook-service",
           "paths": [
             "(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$"
           ],
           "content": [
-            "capi-kubeadm-bootstrap-webhook-service",
+            "capi-kubeadm-bootstrap-webhook-service"
+          ]
+        },
+        {
+          "id": "unknown-certificate-authority",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$"
+          ],
+          "content": [
             "certificate signed by unknown authority"
           ]
         },
@@ -199,7 +215,7 @@
       "reference_diagnosis": "Building bin/kubetest2 fails while Go verifies multiple modules against sum.golang.org; independent tile requests terminate with HTTP/2 INTERNAL_ERROR. The cluster validation timeouts are startup noise that later resolves: the same run reports the cluster ready and E2E_PASSED: 1. The terminal job failure is the checksum-service error while building the test binary, not an EBS CSI storage defect.",
       "reference_is_transient": true,
       "expected_transient": true,
-      "opposite_diagnosis": "The AWS EBS CSI driver failed a volume provisioning, attach, mount, or resize operation in the storage test suite.",
+      "opposite_diagnosis": "The job failed because the AWS EBS CSI driver could not provision, attach, mount, or resize a volume in the storage test suite.",
       "opposite_is_transient": false,
       "signals": [
         {
@@ -221,18 +237,26 @@
       "forbidden": [
         {
           "name": "storage driver treated as root cause",
-          "pattern": "(?is)(?:EBS|CSI|volume|attach|mount|resize).{0,120}(?:failed|failure|bug|defect|root cause)",
-          "negated": "(?is)(?:not|rather than|instead of).{0,100}(?:EBS|CSI|storage|volume)"
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:EBS|CSI|volume|attach|mount|resize)|(?:EBS|CSI|volume|attach|mount|resize).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:EBS|CSI|storage|volume).{0,100}(?:failure|defect|cause)"
         }
       ],
       "evidence_groups": [
         {
-          "id": "checksum-service",
+          "id": "sumdb-tile-request",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "sum[.]golang[.]org/tile",
+            "sum[.]golang[.]org/tile"
+          ]
+        },
+        {
+          "id": "http2-internal-error",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
             "INTERNAL_ERROR; received from peer"
           ]
         },
@@ -246,12 +270,20 @@
           ]
         },
         {
-          "id": "same-run-success",
+          "id": "cluster-became-ready",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "Your cluster .* is ready",
+            "Your cluster .* is ready"
+          ]
+        },
+        {
+          "id": "e2e-passed",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
             "E2E_PASSED: 1"
           ]
         }
@@ -261,8 +293,8 @@
       "id": "azuredisk-pvc-resourceversion-conflict",
       "stable_id": "21c21fe4d728e8564f03",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "azuredisk-pvc-resourceversion-2093054417317138432.tar.gz",
-      "fixture_sha256": "e77663f2cc23f6102e974aa9d9039adde1c1154fd70b6e6d4c0bd82290569627",
+      "fixture_asset": "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v1.tar.gz",
+      "fixture_sha256": "f9f73c07c6168ac9479b2ef09d6c94dbf36667b0b8392378e1566f0f61e82b59",
       "job_type": "periodic",
       "job_name": "ci-azuredisk-csi-driver-e2e-capz-windows",
       "build_id": "2093054417317138432",
@@ -280,7 +312,7 @@
         }
       ],
       "primary_source_id": "primary",
-      "test_name": "AzureDisk CSI Driver End-to-End Tests [It] Dynamic Provisioning [single-az] should create a volume on demand and resize it [disk.csi.azure.com] [Windows]",
+      "test_name": "[It] Dynamic Provisioning [single-az] should create a volume on demand and resize it [disk.csi.azure.com] [Windows]",
       "junit_file": "junit_01.xml",
       "failure_message": "fail to resize pvc: the object has been modified; please apply your changes to the latest version and try again",
       "evidence_mode": "artifact_and_source",
@@ -288,7 +320,7 @@
       "reference_diagnosis": "The resize test reads a PVC and later submits a single Update using that stale object. Another controller update advances the PVC resourceVersion, so the API returns an optimistic-concurrency conflict. The test treats that retryable conflict as terminal instead of refreshing and retrying. No disk resize operation demonstrates an Azure Disk CSI failure.",
       "reference_is_transient": false,
       "expected_transient": false,
-      "opposite_diagnosis": "The Azure Disk CSI driver accepted the resize and then failed to expand the Azure disk or Windows filesystem.",
+      "opposite_diagnosis": "The job failed because the Azure Disk CSI driver accepted the request but could not expand the Azure disk or Windows filesystem.",
       "opposite_is_transient": false,
       "signals": [
         {
@@ -305,18 +337,26 @@
       "forbidden": [
         {
           "name": "Azure Disk resize treated as root cause",
-          "pattern": "(?is)(?:Azure Disk|CSI driver|disk|filesystem).{0,120}(?:resize|expand).{0,120}(?:failed|failure|bug|root cause)",
-          "negated": "(?is)(?:not|no|rather than|instead of).{0,120}(?:Azure Disk|CSI|disk|filesystem).{0,120}(?:failure|failed|resize|expand)"
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand)|(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|no|isn.t|wasn.t|rather than|instead of).{0,120}(?:Azure Disk|CSI|disk|filesystem).{0,120}(?:failure|failed|resize|expand)"
         }
       ],
       "evidence_groups": [
         {
-          "id": "pvc-update-conflict",
+          "id": "pvc-resize-operation",
           "paths": [
             "(?i)(?:^|/)(?:build-log[.]txt|junit_01[.]xml)$"
           ],
           "content": [
-            "fail to resize pvc",
+            "fail to resize pvc"
+          ]
+        },
+        {
+          "id": "object-modified-conflict",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit_01[.]xml)$"
+          ],
+          "content": [
             "object has been modified"
           ]
         }
@@ -346,8 +386,8 @@
       "id": "kubernetes-two-step-upgrade-missing-kubelet",
       "stable_id": "e1e10d24d14f039abe2f",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624.tar.gz",
-      "fixture_sha256": "89cd33c9135d89e67b446bd1a2edd67f6fcfc83e94f2799679e90ade126b23b1",
+      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v1.tar.gz",
+      "fixture_sha256": "2949729900e6cafeb224414a111654df97cb3698a0fac17156f5edfedbb4af2d",
       "job_type": "periodic",
       "job_name": "ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1",
       "build_id": "2093510175414554624",
@@ -373,23 +413,28 @@
       "primary_source_id": "test-infra",
       "test_name": "[build] two-step compatibility-version upgrade",
       "test_source": "build",
-      "failure_message": "Failed to find binary kubelet for platform linux/amd64",
+      "failure_message": "error: client version error: could not parse pre-release/metadata (-master+$Format:%H$) in version \"v0.0.0-master+$Format:%H$\"",
       "evidence_mode": "artifact_and_source",
       "consecutive_failures": 20,
-      "reference_diagnosis": "The first upgrade stage explicitly runs twice with --no-kubelet. The next stage immediately invokes emulated-version-upgrade.sh, which calls kube::util::find-binary kubelet before the wrapper downloads the current-version binaries. The job therefore fails on a missing local kubelet binary after 411 conformance tests pass. This is deterministic sequencing in the upgrade harness, not a workload-cluster control-plane failure.",
+      "reference_diagnosis": "The wrapper invokes emulated-version-upgrade.sh before downloading the current-version binaries. That script cannot find a local kubelet, but its failure is piped to tee without pipefail and is masked. The next standalone kubectl version command uses an incompletely versioned source binary, reports v0.0.0-master+$Format:%H$, and terminates the job. This is deterministic upgrade-harness ordering and error-propagation behavior after 411 tests passed, not a workload-cluster control-plane failure.",
       "reference_is_transient": false,
       "expected_transient": false,
-      "opposite_diagnosis": "The upgraded kube-apiserver, controller-manager, or scheduler became unhealthy and caused the workload cluster to fail its conformance tests.",
+      "opposite_diagnosis": "The job failed because the upgraded kube-apiserver, controller-manager, or scheduler became unhealthy and broke the workload cluster conformance tests.",
       "opposite_is_transient": false,
       "signals": [
         {
-          "name": "identifies missing kubelet binary",
-          "pattern": "(?is)(?:Failed to find binary|missing).{0,80}kubelet",
+          "name": "identifies current binaries downloaded too late",
+          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,160}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
           "must": true
         },
         {
-          "name": "identifies no-kubelet sequencing defect",
-          "pattern": "(?is)--no-kubelet.{0,360}(?:emulated-version-upgrade|find-binary|requires.{0,80}kubelet)|(?:emulated-version-upgrade|find-binary).{0,360}--no-kubelet",
+          "name": "identifies masked missing-kubelet failure",
+          "pattern": "(?is)(?:missing|cannot find|Failed to find binary).{0,100}kubelet.{0,260}(?:tee|pipefail|masked|continues)|(?:tee|pipefail|masked).{0,260}(?:missing|cannot find|Failed to find binary).{0,100}kubelet",
+          "must": true
+        },
+        {
+          "name": "identifies fatal kubectl version parse",
+          "pattern": "(?is)kubectl version.{0,220}(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata|parse).{0,180}(?:exit|fatal|terminat|fail)|(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata).{0,220}kubectl version",
           "must": true
         },
         {
@@ -400,8 +445,8 @@
       "forbidden": [
         {
           "name": "control-plane runtime treated as root cause",
-          "pattern": "(?is)(?:kube-apiserver|controller-manager|scheduler|control plane).{0,140}(?:failed|failure|unhealthy|root cause)",
-          "negated": "(?is)(?:not|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)"
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)"
         }
       ],
       "evidence_groups": [
@@ -411,30 +456,60 @@
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "--no-kubelet",
-            "emulated-version-upgrade[.]sh"
+            "--no-kubelet"
           ]
         },
         {
-          "id": "missing-kubelet-after-tests",
+          "id": "emulated-upgrade-stage",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "SUCCESS! -- 411 Passed",
+            "emulated-version-upgrade[.]sh"
+          ]
+        },
+        {
+          "id": "conformance-tests-passed",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "SUCCESS! -- 411 Passed"
+          ]
+        },
+        {
+          "id": "missing-kubelet-binary",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
             "Failed to find binary kubelet"
+          ]
+        },
+        {
+          "id": "fatal-kubectl-version",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "could not parse pre-release/metadata .*v0[.]0[.]0-master"
           ]
         }
       ],
       "source_signals": [
         {
-          "name": "source runs binary upgrade without kubelet",
-          "pattern": "(?is)(?:upgrade_cluster_components|first upgrade).{0,260}--no-kubelet|--no-kubelet.{0,260}(?:upgrade_cluster_components|twice)",
+          "name": "source orders emulated upgrade before current download",
+          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,180}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
           "must": true
         },
         {
-          "name": "source requires kubelet before current binary download",
-          "pattern": "(?is)(?:emulated-version-upgrade|find-binary).{0,260}kubelet.{0,360}(?:before|prior|later).{0,160}(?:download_current_version_bins|current-version binaries)",
+          "name": "source masks pipeline failure without pipefail",
+          "pattern": "(?is)(?:emulated-version-upgrade|missing kubelet).{0,260}(?:pipe|tee).{0,180}(?:no pipefail|without pipefail|masked|continues)|(?:no pipefail|without pipefail|masked).{0,260}(?:emulated-version-upgrade|missing kubelet)",
+          "must": true
+        },
+        {
+          "name": "source requires local kubelet",
+          "pattern": "(?is)(?:find-binary|requires|looks for|find|cannot find).{0,120}(?:local )?kubelet|kubelet.{0,120}(?:find-binary|required local binary|must exist)",
           "must": true
         }
       ],
