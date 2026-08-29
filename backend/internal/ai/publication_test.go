@@ -263,6 +263,39 @@ func TestInvalidEvidenceCitationIsDropped(t *testing.T) {
 	}
 }
 
+func TestEvidenceOverflowPreservesRetainedCitations(t *testing.T) {
+	valid := models.EvidenceCitation{
+		Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller failed to reconcile",
+	}
+	parsed := analysisResponse{
+		RootCause:    "The failure is shown at build-log.txt:42, not missing.log:99.",
+		Summary:      "The retained evidence at line 42 identifies the failure.",
+		SuggestedFix: "Do not rely on the unrelated line 99 claim.",
+		EvidenceCitations: []models.EvidenceCitation{
+			valid,
+			{Path: "missing.log", LineStart: 99, LineEnd: 99, Quote: "unretained evidence"},
+			{Path: "build-log.txt", LineStart: 43, LineEnd: 43, Quote: "wrong line"},
+		},
+	}
+	context := analysisCitationContext{
+		Full: true,
+		Evidence: map[string]*analysisChatEvidence{
+			"build-log.txt": {Lines: map[int]string{42: "controller failed to reconcile"}},
+		},
+	}
+
+	sanitized := sanitizePublishedCitations(parsed, context)
+	if !slices.Equal(sanitized.EvidenceCitations, []models.EvidenceCitation{valid}) {
+		t.Fatalf("published citations = %+v, want retained citation only", sanitized.EvidenceCitations)
+	}
+	if !strings.Contains(sanitized.RootCause, "build-log.txt:42") || !strings.Contains(sanitized.Summary, "line 42") {
+		t.Fatalf("supported line claims were removed: %+v", sanitized)
+	}
+	if strings.Contains(sanitized.RootCause, "missing.log:99") || strings.Contains(sanitized.SuggestedFix, "line 99") {
+		t.Fatalf("unsupported line claims survived: %+v", sanitized)
+	}
+}
+
 func TestSuggestedFixLineClaimIsSanitized(t *testing.T) {
 	parsed := analysisResponse{SuggestedFix: "Update scripts/ci-e2e.sh at line 999 and rerun the job."}
 	sanitized := sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: map[string]*analysisChatEvidence{}})
