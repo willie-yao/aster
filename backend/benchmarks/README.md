@@ -55,7 +55,7 @@ run_case gcp-pd-csi-windows-mount-visibility /path/to/gcp-pd-csi-prow-dashboard-
 The first five-case corpus-growth batch is pinned in
 `testdata/benchmarks/corpus-batch-1.json`. It covers a Cluster API kind-version
 gate, a CAPA webhook CA mismatch, an AWS EBS CSI checksum-service failure, an
-Azure Disk PVC update conflict, and a Kubernetes two-step upgrade sequencing
+Azure Disk PVC update conflict, and a Kubernetes Windows test-selection
 failure. Its fixtures and source revisions are public and digest-pinned. The
 cases do not pin one project consumer, so a run may supply the frozen project
 configuration and prompt appropriate to the comparison.
