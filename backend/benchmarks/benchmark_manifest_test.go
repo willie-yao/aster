@@ -1589,14 +1589,35 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		"azuredisk-pvc-resourceversion-conflict": {
 			"The offline test retains a PVC across the detach wait and submits the stale object without refreshing or retrying the 409 conflict. The test code, not Azure Disk resize, is the cause.",
 			"The helper gets the claim, later updates that old PVC, and never uses RetryOnConflict. The object-has-been-modified error is a test harness defect rather than a driver failure.",
+			"The helper gets and later updates the stale PVC, but the 409 conflict was not retried. The test should refresh and retry instead of treating it as terminal; this was not an Azure Disk failure.",
+		},
+		"kubernetes-windows-nonroot-command": {
+			"The shared pod helper always sets Command to id -u. The explicit RunAsUser cases use LinuxOnly, but the image-specified case should not run on Windows without a skip. HCS cannot find the Linux utility; this is not a containerd or runAsNonRoot failure.",
 		},
 	}
-	contradictoryControls := map[string]string{
-		"cluster-api-kind-minimum-version":       "The environment has kind v0.32 and the source requires v0.33, but the preflight did not stop the cluster or tests; the failure came later.",
-		"aws-ebs-sumdb-http2-failure":            "sum.golang.org returned HTTP/2 INTERNAL_ERROR while bin/kubetest2 built, but the functional tests did not fail after they ran.",
-		"azuredisk-pvc-resourceversion-conflict": "The PVC had an object-has-been-modified conflict, and the test correctly retried it with RetryOnConflict before the Azure Disk failure.",
-		"kubernetes-windows-nonroot-command":     "The helper runs id -u on Windows, but the test intentionally runs there without a skip and does not need a Windows skip.",
+	type contradictoryControl struct {
+		text          string
+		missingSignal []string
 	}
+	contradictoryControls := map[string]contradictoryControl{
+		"cluster-api-kind-minimum-version": {
+			text:          "The environment has kind v0.32 and the pinned source requires v0.33, but the preflight did not stop the cluster or tests; the failure came later. This was not a Cluster API functional regression.",
+			missingSignal: []string{"identifies CI preflight tool mismatch"},
+		},
+		"aws-ebs-sumdb-http2-failure": {
+			text:          "sum.golang.org returned HTTP/2 INTERNAL_ERROR while bin/kubetest2 built, but the functional tests did not fail after they ran. This was not an EBS CSI volume failure.",
+			missingSignal: []string{"recognizes functional tests never ran"},
+		},
+		"azuredisk-pvc-resourceversion-conflict": {
+			text:          "The test helper gets a PVC, later updates the same stale object, and hits a 409 object-has-been-modified conflict. The conflict was correctly retried with RetryOnConflict before the Azure Disk failure, so missing retry is not the cause.",
+			missingSignal: []string{"identifies test harness missing retry", "source has no conflict retry"},
+		},
+		"kubernetes-windows-nonroot-command": {
+			text:          "The shared pod helper always sets Command to id -u, and the explicit RunAsUser tests use LinuxOnly. The image-specified test intentionally runs on Windows without a skip because it does not need one; the Windows node and containerd were not the root cause.",
+			missingSignal: []string{"identifies missing Windows test skip", "source skips only explicit user cases on Windows"},
+		},
+	}
+
 	postposedNegation := map[string]string{
 		"cluster-api-kind-minimum-version":       "A Cluster API functional regression was not the root cause.",
 		"capa-kubeadm-webhook-ca-mismatch":       "AWS networking was not the root cause.",
@@ -1653,10 +1674,11 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 				t.Fatalf("case %q audited paraphrase rejected: %+v", bc.name, assessment)
 			}
 		}
-		if contradiction := contradictoryControls[bc.name]; contradiction != "" {
-			wrong := &models.TestCase{AISummary: &models.AISummary{Summary: contradiction, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: contradiction}}
-			if assessment := assessBenchmarkCase(bc, wrong); len(assessment.missingMust) == 0 {
-				t.Fatalf("case %q accepted contradictory control: %+v", bc.name, assessment)
+		if contradiction, ok := contradictoryControls[bc.name]; ok {
+			wrong := &models.TestCase{AISummary: &models.AISummary{Summary: contradiction.text, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: contradiction.text}}
+			assessment := assessBenchmarkCase(bc, wrong)
+			if !slices.Equal(assessment.missingMust, contradiction.missingSignal) {
+				t.Fatalf("case %q contradictory control missing = %v, want %v: %+v", bc.name, assessment.missingMust, contradiction.missingSignal, assessment)
 			}
 		}
 		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}
