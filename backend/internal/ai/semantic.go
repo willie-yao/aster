@@ -1189,7 +1189,7 @@ func (c *Client) reviewSemanticRevision(ctx context.Context, state *agentState, 
 			return state.considerDraftDecisionForPolicy(candidate, true, policy)
 		}
 	}
-	result, err := c.semanticCritiqueTracked(ctx, state, semanticJudgeStageRevision, candidate.parsed, &prior, initialFindings, headroom)
+	result, err := c.semanticCritiqueTracked(ctx, state, candidate.attempt, semanticJudgeStageRevision, candidate.parsed, &prior, initialFindings, headroom)
 	if err != nil {
 		recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageRevision, "error", result, "semantic_judge_error"))
 		log.Printf("  ⓘ semantic judge (revision): skipped (%v)", err)
@@ -1221,15 +1221,16 @@ func semanticInitialFindingsAllowCauseReplacement(classes []string) bool {
 // applySemanticJudgePostLoop runs the judge on an accepted force-finalize draft
 // and, on findings, drives one tools-free refinalize round. The revision is
 // compared with the prior draft before deterministic selection.
-func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, headroom contextHeadroom, policy CritiqueCachePolicy) analysisResponse {
+func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, reviewedAttempt int, headroom contextHeadroom, policy CritiqueCachePolicy) analysisResponse {
 	if state.bestDraft == nil {
 		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		candidate := state.newDraftCandidate("finalize", finalContent, finalProviderItems, parsed, out)
+		reviewedAttempt = candidate.attempt
 		state.considerFallbackDraft(candidate, false)
 		state.considerDraft(candidate, false)
 	}
 	state.judgeRan = true
-	result, err := c.semanticCritiqueTracked(ctx, state, semanticJudgeStageDraft, parsed, nil, nil, headroom)
+	result, err := c.semanticCritiqueTracked(ctx, state, reviewedAttempt, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 	if err != nil {
 		recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "error", result, "semantic_judge_error"))
 		log.Printf("  ⓘ semantic judge (post-loop): skipped (%v)", err)

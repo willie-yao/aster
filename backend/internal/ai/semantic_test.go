@@ -197,13 +197,40 @@ func TestApplySemanticJudgePostLoop_RefinalizesOnObjection(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "shallow", RootCause: "the PR broke it", SuggestedFix: "revert it"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "shallow-final", nil, orig, selectedDraftAttempt(state), contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if !strings.Contains(got.RootCause, "route table") {
 		t.Errorf("expected the refinalized draft, got root_cause=%q", got.RootCause)
 	}
 	if !state.judgeRan || !state.judgeObjected || !state.judgeRevised {
 		t.Errorf("telemetry = ran:%v objected:%v revised:%v, want all true", state.judgeRan, state.judgeObjected, state.judgeRevised)
+	}
+}
+
+func TestApplyPostLoopCritiqueAssociatesSemanticReviewWithFinalDraft(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	srv.push(200, chatRespFinal(`{"findings":[]}`))
+	client := newAgenticTestClient(t, srv.URL)
+
+	var observations []SemanticReviewObservation
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
+		draftAttempt: 2, semanticReviewObserver: func(observation SemanticReviewObservation) {
+			observations = append(observations, observation)
+		},
+		bestDraft: &critiqueDraftCandidate{
+			attempt: 1, parsed: analysisResponse{Summary: "earlier", RootCause: "earlier cause", SuggestedFix: "Apply the earlier fix."},
+			quality: critiqueQuality{Passed: true},
+		},
+	}
+	final := analysisResponse{Summary: "final", RootCause: "final cause", SuggestedFix: "Apply the final fix."}
+	client.applyPostLoopCritique(context.Background(), state, nil, "final", nil, final, AgenticOptions{
+		SemanticJudge: true, ContextByteBudget: 100_000,
+	}, &critiqueRetryBudget{}, true, 2, "finalize")
+
+	if len(observations) != 1 || observations[0].Attempt != 2 || observations[0].Stage != semanticJudgeStageDraft || observations[0].Outcome != "passed" {
+		t.Fatalf("semantic observations = %+v", observations)
 	}
 }
 
@@ -223,7 +250,7 @@ func TestApplySemanticJudgePostLoopRejectsNonSanitizableRevision(t *testing.T) {
 		parsed: orig, content: "sound-final", attempt: 1,
 		rawQuality: critiqueQuality{Passed: true}, quality: critiqueQuality{Passed: true},
 	}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, []modelMessage{{Role: "user", Content: strPtr("u")}}, "sound-final", nil, orig, selectedDraftAttempt(state), contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if got.RootCause != orig.RootCause || state.judgeRevised || !state.judgeRevisionRejected {
 		t.Fatalf("non-sanitizable semantic revision replaced the valid draft: got=%+v state=%+v", got, state)
@@ -246,7 +273,7 @@ func TestApplySemanticJudgePostLoopMarksStrictPolicyRevisionRejected(t *testing.
 		parsed: orig, content: "sound-final", attempt: 1,
 		rawQuality: critiqueQuality{Passed: true}, quality: critiqueQuality{Passed: true},
 	}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "sound-final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "sound-final", nil, orig, selectedDraftAttempt(state), contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 	if got.RootCause != orig.RootCause || state.judgeRevised || !state.judgeRevisionRejected {
 		t.Fatalf("strict-policy semantic revision was not retained as rejected: got=%+v state=%+v", got, state)
 	}
@@ -274,7 +301,7 @@ func TestApplySemanticJudgePostLoopAllowsPreservedRawHardFinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	state.considerDraft(state.newDraftCandidate("initial", string(origJSON), nil, orig, origOut), false)
-	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, string(origJSON), nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, string(origJSON), nil, orig, selectedDraftAttempt(state), contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 	if got.RootCause != "revised cause" || !state.judgeRevised || state.judgeRevisionRejected {
 		t.Fatalf("semantic revision was not selected: got=%+v state=%+v", got, state)
 	}
@@ -290,7 +317,7 @@ func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {
 
 	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}}
 	orig := analysisResponse{Summary: "sound", RootCause: "real cause", SuggestedFix: "real fix"}
-	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
+	got := client.applySemanticJudgePostLoop(context.Background(), state, nil, "final", nil, orig, selectedDraftAttempt(state), contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}), CritiqueCachePolicyStrict)
 
 	if got.RootCause != "real cause" {
 		t.Errorf("sound draft should be unchanged, got %q", got.RootCause)
@@ -769,16 +796,32 @@ func TestAgentic_SemanticRevisionFindingKeepsEarlierDraft(t *testing.T) {
 	srv.push(200, chatRespFinal(revised))
 	srv.push(200, chatRespFinal(`{"findings":[{"class":"revision_dropped_supported_cause","detail":"The revision replaces the prior causal claim without stronger evidence."}]}`))
 	client := newAgenticTestClient(t, srv.URL)
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
-			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
-		}), "agentic:test:semantic-revision-finding", "sys", "user")
+	var observations []SemanticReviewObservation
+	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+	})
+	in.SemanticReviewObserver = func(observation SemanticReviewObservation) {
+		snapshot := observation
+		snapshot.Findings = append([]SemanticFindingObservation(nil), observation.Findings...)
+		observations = append(observations, snapshot)
+		if len(observation.Findings) > 0 {
+			observation.Findings[0].Detail = "observer mutation"
+		}
+	}
+	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in,
+		"agentic:test:semantic-revision-finding", "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if analysis.RootCause != "the PR broke it" || !analysis.JudgeRevisionRejected || analysis.JudgeRevised {
 		t.Fatalf("revision finding replaced prior draft: %+v", analysis)
+	}
+	if len(observations) != 2 || observations[0].Attempt != 1 || observations[0].Stage != semanticJudgeStageDraft || observations[0].Outcome != "objected" ||
+		len(observations[0].Findings) != 1 || observations[0].Findings[0].Class != semanticFindingOwnershipNotEstablished || observations[0].Findings[0].Detail != "The draft does not establish ownership." ||
+		observations[1].Attempt != 2 || observations[1].Stage != semanticJudgeStageRevision || observations[1].Outcome != "objected" || len(observations[1].Findings) != 1 ||
+		observations[1].Findings[0].Class != semanticFindingRevisionDroppedSupportedCause || observations[1].Findings[0].Detail != "The revision replaces the prior causal claim without stronger evidence." {
+		t.Fatalf("semantic observations = %+v", observations)
 	}
 }
 

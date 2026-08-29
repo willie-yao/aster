@@ -741,30 +741,59 @@ var benchmarkHumanScoreDimensions = []string{
 }
 
 type benchmarkJSONLDraft struct {
-	Attempt             int                           `json:"attempt"`
-	Phase               string                        `json:"phase"`
-	Selected            bool                          `json:"selected"`
-	SignalHits          int                           `json:"signal_hits"`
-	SignalTotal         int                           `json:"signal_total"`
-	RequiredSignalHits  int                           `json:"required_signal_hits"`
-	RequiredSignalTotal int                           `json:"required_signal_total"`
-	RuleIDs             []string                      `json:"rule_ids,omitempty"`
-	MatchedSkillIDs     []string                      `json:"matched_skill_ids,omitempty"`
-	MissingGroups       []ai.CritiqueEvidenceGroupRef `json:"missing_groups,omitempty"`
-	UnavailableGroups   []ai.CritiqueEvidenceGroupRef `json:"unavailable_groups,omitempty"`
-	PublishedRuleIDs    []string                      `json:"published_rule_ids,omitempty"`
-	PublishedHardRules  []string                      `json:"published_hard_rules,omitempty"`
-	PublishedSoftRules  []string                      `json:"published_soft_rules,omitempty"`
-	PublishedHardIssues int                           `json:"published_hard_issues,omitempty"`
-	PublishedPuntCount  int                           `json:"published_punt_count,omitempty"`
-	PublishedMissing    int                           `json:"published_missing_group_count,omitempty"`
-	PuntCount           int                           `json:"punt_count,omitempty"`
-	UnreadCitationCount int                           `json:"unread_citation_count,omitempty"`
-	CitationIssueCount  int                           `json:"citation_issue_count,omitempty"`
-	MissingGroupCount   int                           `json:"missing_group_count,omitempty"`
-	TransientConflict   bool                          `json:"transient_conflict,omitempty"`
-	ToolCalls           int                           `json:"tool_calls,omitempty"`
-	EvidenceReads       int                           `json:"evidence_reads,omitempty"`
+	Attempt             int                            `json:"attempt"`
+	Phase               string                         `json:"phase"`
+	Selected            bool                           `json:"selected"`
+	SignalHits          int                            `json:"signal_hits"`
+	SignalTotal         int                            `json:"signal_total"`
+	RequiredSignalHits  int                            `json:"required_signal_hits"`
+	RequiredSignalTotal int                            `json:"required_signal_total"`
+	RuleIDs             []string                       `json:"rule_ids,omitempty"`
+	MatchedSkillIDs     []string                       `json:"matched_skill_ids,omitempty"`
+	MissingGroups       []ai.CritiqueEvidenceGroupRef  `json:"missing_groups,omitempty"`
+	UnavailableGroups   []ai.CritiqueEvidenceGroupRef  `json:"unavailable_groups,omitempty"`
+	PublishedRuleIDs    []string                       `json:"published_rule_ids,omitempty"`
+	PublishedHardRules  []string                       `json:"published_hard_rules,omitempty"`
+	PublishedSoftRules  []string                       `json:"published_soft_rules,omitempty"`
+	PublishedHardIssues int                            `json:"published_hard_issues,omitempty"`
+	PublishedPuntCount  int                            `json:"published_punt_count,omitempty"`
+	PublishedMissing    int                            `json:"published_missing_group_count,omitempty"`
+	PuntCount           int                            `json:"punt_count,omitempty"`
+	UnreadCitationCount int                            `json:"unread_citation_count,omitempty"`
+	CitationIssueCount  int                            `json:"citation_issue_count,omitempty"`
+	MissingGroupCount   int                            `json:"missing_group_count,omitempty"`
+	TransientConflict   bool                           `json:"transient_conflict,omitempty"`
+	ToolCalls           int                            `json:"tool_calls,omitempty"`
+	EvidenceReads       int                            `json:"evidence_reads,omitempty"`
+	SemanticReviews     []benchmarkJSONLSemanticReview `json:"semantic_reviews,omitempty"`
+}
+
+type benchmarkJSONLSemanticReview struct {
+	Stage    string                          `json:"stage"`
+	Outcome  string                          `json:"outcome"`
+	Findings []benchmarkJSONLSemanticFinding `json:"findings,omitempty"`
+}
+
+type benchmarkJSONLSemanticFinding struct {
+	Class  string `json:"class"`
+	Detail string `json:"detail"`
+}
+
+func benchmarkSemanticReviewsForAttempt(observations []ai.SemanticReviewObservation, attempt int) []benchmarkJSONLSemanticReview {
+	var reviews []benchmarkJSONLSemanticReview
+	for _, observation := range observations {
+		if observation.Attempt != attempt {
+			continue
+		}
+		findings := make([]benchmarkJSONLSemanticFinding, len(observation.Findings))
+		for i, finding := range observation.Findings {
+			findings[i] = benchmarkJSONLSemanticFinding{Class: finding.Class, Detail: finding.Detail}
+		}
+		reviews = append(reviews, benchmarkJSONLSemanticReview{
+			Stage: observation.Stage, Outcome: observation.Outcome, Findings: findings,
+		})
+	}
+	return reviews
 }
 
 type benchmarkCacheVerification struct {
@@ -829,7 +858,7 @@ type benchmarkJSONLTrace struct {
 	GrepCalls             []tools.GrepCallObservation   `json:"grep_calls"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, semanticReviews []ai.SemanticReviewObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
 	t.Helper()
 	if path == "" {
 		return
@@ -903,6 +932,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			PuntCount: observation.PuntCount, UnreadCitationCount: observation.UnreadCitationCount,
 			CitationIssueCount: observation.CitationIssueCount, MissingGroupCount: observation.MissingGroupCount,
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
+			SemanticReviews: benchmarkSemanticReviewsForAttempt(semanticReviews, observation.Attempt),
 		})
 	}
 	if source, ok := benchmarkPrimarySourceRef(bc); ok {
@@ -1237,7 +1267,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		Attempt: 1, Phase: "initial", RootCause: "PRIVATE_DRAFT_TEXT root cause", RuleIDs: []string{"remediation.punt"},
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
-	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
+	semanticReviews := []ai.SemanticReviewObservation{{
+		Attempt: 1, Stage: "draft", Outcome: "objected",
+		Findings: []ai.SemanticFindingObservation{{Class: "specific_error_ignored", Detail: "The draft ignores the specific request error."}},
+	}}
+	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, semanticReviews, 1,
 		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}, sourceObservations: []ai.SourceEvidenceObservation{{SourceID: "primary", Tool: "read_repo_file", Path: "file.go", LineStart: 1, LineEnd: 2}}},
 		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}, semanticJudgeOutcomes: []string{"draft:objected", "revision:passed", "revision:revised"}, semanticFindingClasses: []string{"specific_error_ignored"}}, 18, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
 		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
@@ -1275,6 +1309,11 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	reviews := result.Drafts[0].SemanticReviews
+	if len(reviews) != 1 || reviews[0].Stage != "draft" || reviews[0].Outcome != "objected" || len(reviews[0].Findings) != 1 ||
+		reviews[0].Findings[0].Class != "specific_error_ignored" || reviews[0].Findings[0].Detail != "The draft ignores the specific request error." {
+		t.Fatalf("semantic reviews = %+v", reviews)
+	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("result mode=%o", info.Mode().Perm())
 	}
@@ -1290,7 +1329,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
-	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
+	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions,
 	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
 	data, err := os.ReadFile(path)
@@ -1348,7 +1387,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 				Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: tc.modelRequest,
 				Stages: []benchmarkEvidenceStage{stage}, TrialStatus: tc.status,
 			}
-			writeBenchmarkJSONL(t, path, bc, 1, tc.result, tc.outcome, time.Second, ai.AnalysisTraceFile{}, nil, 0,
+			writeBenchmarkJSONL(t, path, bc, 1, tc.result, tc.outcome, time.Second, ai.AnalysisTraceFile{}, nil, nil, 0,
 				benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard,
 				benchmarkCacheVerification{}, identity, benchmarkEvidenceCoverage{}, report)
 			data, err := os.ReadFile(path)
