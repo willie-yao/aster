@@ -1591,6 +1591,12 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			"The helper gets the claim, later updates that old PVC, and never uses RetryOnConflict. The object-has-been-modified error is a test harness defect rather than a driver failure.",
 		},
 	}
+	contradictoryControls := map[string]string{
+		"cluster-api-kind-minimum-version":       "The environment has kind v0.32 and the source requires v0.33, but the preflight did not stop the cluster or tests; the failure came later.",
+		"aws-ebs-sumdb-http2-failure":            "sum.golang.org returned HTTP/2 INTERNAL_ERROR while bin/kubetest2 built, but the functional tests did not fail after they ran.",
+		"azuredisk-pvc-resourceversion-conflict": "The PVC had an object-has-been-modified conflict, and the test correctly retried it with RetryOnConflict before the Azure Disk failure.",
+		"kubernetes-windows-nonroot-command":     "The helper runs id -u on Windows, but the test intentionally runs there without a skip and does not need a Windows skip.",
+	}
 	postposedNegation := map[string]string{
 		"cluster-api-kind-minimum-version":       "A Cluster API functional regression was not the root cause.",
 		"capa-kubeadm-webhook-ca-mismatch":       "AWS networking was not the root cause.",
@@ -1645,6 +1651,12 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			observed := &models.TestCase{AISummary: &models.AISummary{Summary: paraphrase, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: paraphrase}}
 			if assessment := assessBenchmarkCase(bc, observed); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
 				t.Fatalf("case %q audited paraphrase rejected: %+v", bc.name, assessment)
+			}
+		}
+		if contradiction := contradictoryControls[bc.name]; contradiction != "" {
+			wrong := &models.TestCase{AISummary: &models.AISummary{Summary: contradiction, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: contradiction}}
+			if assessment := assessBenchmarkCase(bc, wrong); len(assessment.missingMust) == 0 {
+				t.Fatalf("case %q accepted contradictory control: %+v", bc.name, assessment)
 			}
 		}
 		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}

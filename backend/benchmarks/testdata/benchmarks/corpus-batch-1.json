@@ -42,7 +42,7 @@
         },
         {
           "name": "identifies CI preflight tool mismatch",
-          "pattern": "(?is)(?:preflight|version gate|prerequisite|minimum-version|ensure-kind).{0,1000}(?:before|prevents|stops|aborts|rejects|exits|no|never|without).{0,160}(?:cluster|test|e2e)|(?:before|never|without|no).{0,160}(?:cluster|test|e2e).{0,1000}(?:preflight|version gate|prerequisite|ensure-kind)",
+          "pattern": "(?is)(?:job|e2e|run).{0,160}(?:fails?|stops?|exits?|aborts?).{0,220}(?:preflight|version gate|prerequisite|ensure-kind)|(?:preflight|version gate|prerequisite|ensure-kind).{0,600}(?:caus(?:e|es|ing)|therefore|so).{0,160}(?:job|run|build).{0,120}(?:fail|exit)|(?:preflight|version gate|prerequisite|ensure-kind).{0,220}(?:first gating step|before any tests|before tests)|(?:preflight|version gate|prerequisite|ensure-kind).{0,180}(?:stops?|aborts?|prevents?|rejects?|exits?).{0,100}before.{0,100}(?:cluster|tests?|e2e)",
           "must": true
         },
         {
@@ -230,8 +230,9 @@
         },
         {
           "name": "recognizes functional tests never ran",
-          "pattern": "(?is)(?:tests?|E2E).{0,140}(?:never|not).{0,100}(?:ran|started|reached)|(?:before|prevented|skip(?:s|ped)).{0,140}(?:functional )?(?:tests?|test command|E2E)|(?:no|without).{0,80}JUnit",
-          "must": true
+          "pattern": "(?is)(?:functional )?(?:tests?|e2e).{0,100}(?:never (?:ran|started|executed|reached)|did not (?:run|start)|were not (?:run|started)|were skipped)|(?:skip(?:s|ped)|prevented|before).{0,140}(?:functional )?(?:tests?|e2e|test command)|(?:no|without).{0,60}junit",
+          "must": true,
+          "negated": "(?is)(?:tests?|e2e).{0,100}(?:did not|didn.t).{0,50}fail.{0,100}(?:after|when).{0,50}(?:they )?(?:ran|started|executed)|(?:tests?|e2e).{0,100}(?:ran|executed).{0,100}(?:successfully|but did not fail)"
         }
       ],
       "forbidden": [
@@ -330,8 +331,9 @@
         },
         {
           "name": "identifies test harness missing retry",
-          "pattern": "(?is)(?:test|harness|helper|code).{0,260}(?:single Update|does not retry|does not use.{0,40}RetryOnConflict|never uses?.{0,40}RetryOnConflict|no (?:conflict )?retry|without.{0,80}(?:fresh GET|refresh|retry)|never re-fetches|stale object|retryable conflict)",
-          "must": true
+          "pattern": "(?is)(?:test|harness|helper|code|source|implementation|path).{0,280}(?:single Update|does not retry|does not use.{0,40}RetryOnConflict|never uses?.{0,40}RetryOnConflict|no (?:conflict )?retry|without.{0,80}(?:fresh GET|refresh|retry)|never re-fetches|stale object)",
+          "must": true,
+          "negated": "(?is)(?:correctly|successfully|explicitly).{0,80}(?:retried|re-fetched|refreshed).{0,100}(?:conflict|PVC|claim)|(?:conflict|PVC|claim).{0,100}(?:was|is).{0,40}(?:retried|refreshed)"
         }
       ],
       "forbidden": [
@@ -369,8 +371,9 @@
         },
         {
           "name": "source has no conflict retry",
-          "pattern": "(?is)(?:ExpectNoError|terminal|does not retry|does not use.{0,40}RetryOnConflict|never uses?.{0,40}RetryOnConflict|no (?:conflict )?retry|without.{0,80}(?:fresh GET|refresh|retry)|never re-fetches).{0,240}(?:conflict|Update|stale|409)|(?:conflict|Update|stale|409).{0,240}(?:ExpectNoError|does not retry|RetryOnConflict|no retry|without.{0,40}retry|never re-fetches)",
-          "must": true
+          "pattern": "(?is)(?:does not|doesn.t|never|no|without|instead of).{0,100}(?:retry|RetryOnConflict|re-fetch|refresh)|ExpectNoError.{0,180}(?:conflict|Update)|(?:conflict|409).{0,140}(?:terminal|fatal assertion)",
+          "must": true,
+          "negated": "(?is)(?:correctly|successfully|explicitly).{0,80}(?:retried|re-fetched|refreshed).{0,100}(?:conflict|PVC|claim)|(?:conflict|PVC|claim).{0,100}(?:was|is).{0,40}(?:retried|refreshed)"
         }
       ],
       "expected_source_ranges": [
@@ -423,8 +426,9 @@
         },
         {
           "name": "identifies missing Windows test skip",
-          "pattern": "(?is)(?:image-specified-user|image specified user ID|implicit-nonroot).{0,260}(?:no|missing|lacks|without|not).{0,100}(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly)|(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly).{0,260}(?:missing|absent|not applied|only.{0,80}explicit)",
-          "must": true
+          "pattern": "(?is)(?:image.?specified-user|image specified user ID|implicit-nonroot|case|test).{0,260}(?:has no|lacks|is missing|without).{0,80}(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly)|(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly).{0,260}(?:missing|absent|not applied|only.{0,80}explicit)",
+          "must": true,
+          "negated": "(?is)(?:intentionally|correctly|should).{0,100}(?:run|runs).{0,100}Windows.{0,100}(?:without|no).{0,50}(?:skip|LinuxOnly)|(?:does not|doesn.t).{0,50}need.{0,50}(?:Windows )?skip"
         },
         {
           "name": "rejects node runtime as initiating cause",
@@ -475,8 +479,9 @@
         },
         {
           "name": "source skips only explicit user cases on Windows",
-          "pattern": "(?is)(?:explicit|RunAsUser).{0,260}(?:LinuxOnly|SkipIfNodeOSDistroIs|skip Windows).{0,260}(?:image.?specified|implicit).{0,180}(?:no|missing|without|lacks).{0,100}(?:Windows skip|skip|LinuxOnly)|(?:image.?specified|implicit).{0,220}(?:no|missing|without|lacks).{0,100}(?:Windows skip|LinuxOnly)",
-          "must": true
+          "pattern": "(?is)(?:explicit|RunAsUser).{0,280}(?:LinuxOnly|SkipIfNodeOSDistroIs|skip Windows).{0,280}(?:image.?specified|implicit).{0,180}(?:has no|lacks|is missing|without).{0,100}(?:Windows skip|skip|LinuxOnly)|(?:image.?specified|implicit).{0,240}(?:has no|lacks|is missing|without).{0,100}(?:Windows skip|LinuxOnly)",
+          "must": true,
+          "negated": "(?is)(?:intentionally|correctly|should).{0,100}(?:run|runs).{0,100}Windows.{0,100}(?:without|no).{0,50}(?:skip|LinuxOnly)|(?:does not|doesn.t).{0,50}need.{0,50}(?:Windows )?skip"
         }
       ],
       "expected_source_ranges": [
