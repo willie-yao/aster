@@ -42,7 +42,7 @@
         },
         {
           "name": "identifies CI preflight tool mismatch",
-          "pattern": "(?is)(?:preflight|ensure-kind|tool(?:ing)?|CI image|Prow image).{0,240}(?:mismatch|outdated|before.{0,80}(?:cluster|test))",
+          "pattern": "(?is)(?:preflight|version gate|prerequisite|minimum-version|ensure-kind).{0,1000}(?:before|prevents|stops|aborts|rejects|exits|no|never|without).{0,160}(?:cluster|test|e2e)|(?:before|never|without|no).{0,160}(?:cluster|test|e2e).{0,1000}(?:preflight|version gate|prerequisite|ensure-kind)",
           "must": true
         },
         {
@@ -80,12 +80,12 @@
       "source_signals": [
         {
           "name": "source pins kind 0.33 minimum",
-          "pattern": "(?is)(?:ensure-kind[.]sh|MINIMUM_KIND_VERSION|checked-in.{0,80}preflight).{0,180}v?0[.]33",
+          "pattern": "(?is)(?:source|script|revision|preflight|ensure-kind|MINIMUM_KIND_VERSION|requirement).{0,240}(?:minimum|requires|enforces|requirement).{0,100}v?0[.]33|v?0[.]33.{0,180}(?:minimum|requirement).{0,180}(?:source|script|revision|preflight|ensure-kind)",
           "must": true
         },
         {
           "name": "runtime image provides kind 0.32",
-          "pattern": "(?is)(?:Prow|CI).{0,100}(?:image|environment).{0,100}v?0[.]32",
+          "pattern": "(?is)(?:Prow|CI|runner|container|environment|image).{0,200}(?:has|ships|supplies|exposes|contains|detected).{0,100}(?:kind )?v?0[.]32|(?:kind )?v?0[.]32.{0,200}(?:Prow|CI|runner|container|environment|image)",
           "must": true
         }
       ],
@@ -212,7 +212,7 @@
       "failure_message": "verifying module via sum.golang.org: stream error: INTERNAL_ERROR; received from peer",
       "evidence_mode": "artifact_only",
       "consecutive_failures": 1,
-      "reference_diagnosis": "Building bin/kubetest2 fails while Go verifies multiple modules against sum.golang.org; independent tile requests terminate with HTTP/2 INTERNAL_ERROR. The cluster validation timeouts are startup noise that later resolves: the same run reports the cluster ready and E2E_PASSED: 1. The terminal job failure is the checksum-service error while building the test binary, not an EBS CSI storage defect.",
+      "reference_diagnosis": "Building bin/kubetest2 fails while Go verifies multiple modules against sum.golang.org; independent tile requests terminate with HTTP/2 INTERNAL_ERROR. The cluster later becomes ready, so the startup timeouts are not terminal. The wrapper retains the nonzero setup result as E2E_PASSED: 1 and skips the functional test command, so no storage test or JUnit result demonstrates an EBS CSI defect.",
       "reference_is_transient": true,
       "expected_transient": true,
       "opposite_diagnosis": "The job failed because the AWS EBS CSI driver could not provision, attach, mount, or resize a volume in the storage test suite.",
@@ -229,8 +229,8 @@
           "must": true
         },
         {
-          "name": "recognizes same-run cluster and e2e success",
-          "pattern": "(?is)(?:cluster.{0,120}(?:ready|became ready)|E2E_PASSED.{0,20}1)",
+          "name": "recognizes functional tests never ran",
+          "pattern": "(?is)(?:tests?|E2E).{0,140}(?:never|not).{0,100}(?:ran|started|reached)|(?:before|prevented|skip(?:s|ped)).{0,140}(?:functional )?(?:tests?|test command|E2E)|(?:no|without).{0,80}JUnit",
           "must": true
         }
       ],
@@ -279,7 +279,7 @@
           ]
         },
         {
-          "id": "e2e-passed",
+          "id": "retained-failure-state",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
@@ -330,7 +330,7 @@
         },
         {
           "name": "identifies test harness missing retry",
-          "pattern": "(?is)(?:test|harness).{0,180}(?:single Update|does not retry|stale object|refreshing and retrying|retryable conflict)",
+          "pattern": "(?is)(?:test|harness|helper|code).{0,260}(?:single Update|does not retry|does not use.{0,40}RetryOnConflict|never uses?.{0,40}RetryOnConflict|no (?:conflict )?retry|without.{0,80}(?:fresh GET|refresh|retry)|never re-fetches|stale object|retryable conflict)",
           "must": true
         }
       ],
@@ -364,12 +364,12 @@
       "source_signals": [
         {
           "name": "source gets then updates one PVC object",
-          "pattern": "(?is)(?:Get|reads?).{0,180}(?:PVC|PersistentVolumeClaim).{0,260}(?:single|one|later).{0,100}Update|(?:PVC|PersistentVolumeClaim).{0,180}(?:Get|reads?).{0,260}Update",
+          "pattern": "(?is)(?:Get|read|fetch|retain).{0,180}(?:PVC|PersistentVolumeClaim|claim|object).{0,360}(?:Update|submit|write|old|stale)|(?:PVC|PersistentVolumeClaim|claim).{0,180}(?:Get|read|fetch|retain).{0,360}(?:Update|submit|write|old|stale)",
           "must": true
         },
         {
           "name": "source has no conflict retry",
-          "pattern": "(?is)(?:ExpectNoError|terminal|does not retry|without retry).{0,180}(?:conflict|Update)",
+          "pattern": "(?is)(?:ExpectNoError|terminal|does not retry|does not use.{0,40}RetryOnConflict|never uses?.{0,40}RetryOnConflict|no (?:conflict )?retry|without.{0,80}(?:fresh GET|refresh|retry)|never re-fetches).{0,240}(?:conflict|Update|stale|409)|(?:conflict|Update|stale|409).{0,240}(?:ExpectNoError|does not retry|RetryOnConflict|no retry|without.{0,40}retry|never re-fetches)",
           "must": true
         }
       ],
@@ -383,160 +383,108 @@
       ]
     },
     {
-      "id": "kubernetes-two-step-upgrade-missing-kubelet",
-      "stable_id": "e1e10d24d14f039abe2f",
+      "id": "kubernetes-windows-nonroot-command",
+      "stable_id": "97aa98f041ba0371d916",
       "bucket": "kubernetes-ci-logs",
-      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v2.tar.gz",
-      "fixture_sha256": "efab5a1ccb6071f82e1e5e5d489a79a59de0a1b4caa67c05bb51d32fa1fc28a9",
+      "fixture_asset": "kubernetes-windows-nonroot-command-2093383338533326848-redacted-v1.tar.gz",
+      "fixture_sha256": "1c4a63e3f3c91fe4ac1fb7abcf1261b336b25cb4ae1752cf7ef4c666b138d423",
       "job_type": "periodic",
-      "job_name": "ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1",
-      "build_id": "2093510175414554624",
-      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1/2093510175414554624/",
-      "commit": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
-      "repo_version": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
+      "job_name": "cloud-provider-azure-conformance-windows-capz",
+      "build_id": "2093383338533326848",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/cloud-provider-azure-conformance-windows-capz/2093383338533326848/",
+      "commit": "69ec3a40a818ccbc32b8ce88c84609404d8cb7a2",
+      "repo_version": "69ec3a40a818ccbc32b8ce88c84609404d8cb7a2",
       "repo_refs": {
-        "kubernetes/kubernetes": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
-        "kubernetes/test-infra": "3eb4c55b33029c73a56d30123d7c2f8b5412173b"
+        "kubernetes/kubernetes": "a98d44a5ead37569e259909ab74377cd4c17a46a"
       },
       "source_refs": [
         {
-          "id": "kubernetes",
+          "id": "primary",
           "repository": "kubernetes/kubernetes",
-          "revision": "e72c2715ade37738aa5c029e8de5285cbe1c9441"
-        },
-        {
-          "id": "test-infra",
-          "repository": "kubernetes/test-infra",
-          "revision": "3eb4c55b33029c73a56d30123d7c2f8b5412173b"
+          "revision": "a98d44a5ead37569e259909ab74377cd4c17a46a"
         }
       ],
-      "primary_source_id": "test-infra",
-      "test_name": "[build] two-step compatibility-version upgrade",
-      "test_source": "build",
-      "failure_message": "error: client version error: could not parse pre-release/metadata (-master+$Format:%H$) in version \"v0.0.0-master+$Format:%H$\"",
+      "primary_source_id": "primary",
+      "test_name": "[It] [sig-node] Security Context When creating a container with runAsNonRoot should run with an image specified user ID [NodeConformance]",
+      "junit_file": "junit_01.xml",
+      "failure_message": "wait for pod \"implicit-nonroot-uid\" to succeed: pod failed before success",
       "evidence_mode": "artifact_and_source",
       "consecutive_failures": 20,
-      "reference_diagnosis": "The wrapper invokes emulated-version-upgrade.sh before downloading the current-version binaries. That script cannot find a local kubelet, but its failure is piped to tee without pipefail and is masked. The next standalone kubectl version command uses an incompletely versioned source binary, reports v0.0.0-master+$Format:%H$, and terminates the job. This is deterministic upgrade-harness ordering and error-propagation behavior after 411 tests passed, not a workload-cluster control-plane failure.",
+      "reference_diagnosis": "The NodeConformance runAsNonRoot case uses a shared pod helper that unconditionally sets the container command to id -u. The explicit RunAsUser cases are marked LinuxOnly and skip Windows, but the image-specified-user case has no Windows skip. On the Windows worker, containerd/HCS tries to execute id and fails because that Linux utility is not present. This is a Kubernetes e2e OS-selection defect, not a node, image-pull, runAsNonRoot enforcement, or cloud-provider failure.",
       "reference_is_transient": false,
       "expected_transient": false,
-      "opposite_diagnosis": "The job failed because the upgraded kube-apiserver, controller-manager, or scheduler became unhealthy and broke the workload cluster conformance tests.",
+      "opposite_diagnosis": "The job failed because the Windows node, containerd runtime, or runAsNonRoot security-context enforcement was broken.",
       "opposite_is_transient": false,
       "signals": [
         {
-          "name": "identifies current binaries downloaded too late",
-          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,160}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
+          "name": "identifies Linux id command on Windows",
+          "pattern": "(?is)(?:id -u|Linux utility|Linux command).{0,220}(?:Windows|not present|cannot find|file specified)|(?:Windows).{0,220}(?:id -u|Linux utility|Linux command).{0,160}(?:missing|not present|cannot find)",
           "must": true
         },
         {
-          "name": "identifies masked missing-kubelet failure",
-          "pattern": "(?is)(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet.{0,260}(?:tee|pipefail|masked|continues)|(?:tee|pipefail|masked).{0,260}(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet",
+          "name": "identifies missing Windows test skip",
+          "pattern": "(?is)(?:image-specified-user|image specified user ID|implicit-nonroot).{0,260}(?:no|missing|lacks|without|not).{0,100}(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly)|(?:Windows skip|SkipIfNodeOSDistroIs|LinuxOnly).{0,260}(?:missing|absent|not applied|only.{0,80}explicit)",
           "must": true
         },
         {
-          "name": "identifies fatal kubectl version parse",
-          "pattern": "(?is)kubectl version.{0,260}(?:(?:failed|error|exit|fatal|terminat).{0,180})?(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata)|(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata).{0,260}kubectl version",
-          "must": true
-        },
-        {
-          "name": "recognizes conformance tests passed first",
-          "pattern": "(?is)(?:411|conformance).{0,120}(?:passed|success)|(?:passed|success).{0,120}(?:411|conformance)"
+          "name": "rejects node runtime as initiating cause",
+          "pattern": "(?is)(?:not|rather than|instead of).{0,120}(?:node|containerd|runAsNonRoot|cloud-provider|image pull).{0,120}(?:failure|broken|cause)"
         }
       ],
       "forbidden": [
         {
-          "name": "control-plane runtime treated as root cause",
-          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
-          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failure|failed|unhealthy).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+          "name": "Windows runtime treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,120}(?:Windows node|containerd|runAsNonRoot|cloud-provider|image pull)|(?:Windows node|containerd|runAsNonRoot|cloud-provider|image pull).{0,120}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,140}(?:Windows node|containerd|runAsNonRoot|cloud-provider|image pull)|(?:Windows node|containerd|runAsNonRoot|cloud-provider|image pull).{0,100}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
         }
       ],
       "evidence_groups": [
         {
-          "id": "upgrade-without-kubelet",
+          "id": "windows-command-failure",
           "paths": [
             "(?i)(?:^|/)build-log[.]txt$"
           ],
           "content": [
-            "--no-kubelet"
+            "hcs::System::CreateProcess: id -u implicit-nonroot-uid: The system cannot find the file specified"
           ]
         },
         {
-          "id": "emulated-upgrade-stage",
+          "id": "image-user-test",
           "paths": [
-            "(?i)(?:^|/)build-log[.]txt$"
+            "(?i)(?:^|/)junit_01[.]xml$"
           ],
           "content": [
-            "emulated-version-upgrade[.]sh"
+            "should run with an image specified user ID"
           ]
         },
         {
-          "id": "conformance-tests-passed",
+          "id": "windows-worker",
           "paths": [
-            "(?i)(?:^|/)build-log[.]txt$"
+            "(?i)(?:^|/)(?:build-log[.]txt|node-describe[.]txt)$"
           ],
           "content": [
-            "SUCCESS! -- 411 Passed"
-          ]
-        },
-        {
-          "id": "missing-kubelet-binary",
-          "paths": [
-            "(?i)(?:^|/)build-log[.]txt$"
-          ],
-          "content": [
-            "Failed to find binary kubelet"
-          ]
-        },
-        {
-          "id": "fatal-kubectl-version",
-          "paths": [
-            "(?i)(?:^|/)build-log[.]txt$"
-          ],
-          "content": [
-            "could not parse pre-release/metadata .*v0[.]0[.]0-master"
+            "Windows Server 2022|kubernetes[.]io/os:windows"
           ]
         }
       ],
       "source_signals": [
         {
-          "name": "source orders emulated upgrade before current download",
-          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,180}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
+          "name": "source helper unconditionally runs id -u",
+          "pattern": "(?is)(?:shared )?(?:pod )?helper.{0,220}(?:unconditionally|always).{0,120}id -u|Command.{0,100}id.{0,40}-u",
           "must": true
         },
         {
-          "name": "source masks pipeline failure without pipefail",
-          "pattern": "(?is)(?:emulated-version-upgrade|missing kubelet).{0,260}(?:pipe|tee).{0,180}(?:no pipefail|without pipefail|masked|continues)|(?:no pipefail|without pipefail|masked).{0,260}(?:emulated-version-upgrade|missing kubelet)",
-          "must": true
-        },
-        {
-          "name": "source requires local kubelet",
-          "pattern": "(?is)(?:find-binary|requires|looks for|find|cannot find|could not find).{0,120}(?:local )?kubelet|kubelet.{0,120}(?:find-binary|required local binary|must exist)",
+          "name": "source skips only explicit user cases on Windows",
+          "pattern": "(?is)(?:explicit|RunAsUser).{0,260}(?:LinuxOnly|SkipIfNodeOSDistroIs|skip Windows).{0,260}(?:image.?specified|implicit).{0,180}(?:no|missing|without|lacks).{0,100}(?:Windows skip|skip|LinuxOnly)|(?:image.?specified|implicit).{0,220}(?:no|missing|without|lacks).{0,100}(?:Windows skip|LinuxOnly)",
           "must": true
         }
       ],
       "expected_source_ranges": [
         {
-          "source_id": "test-infra",
-          "path": "experiment/compatibility-versions/common.sh",
-          "line_start": 331,
-          "line_end": 349
-        },
-        {
-          "source_id": "test-infra",
-          "path": "experiment/compatibility-versions/e2e-two-steps-upgrade.sh",
-          "line_start": 96,
-          "line_end": 140
-        },
-        {
-          "source_id": "test-infra",
-          "path": "experiment/compatibility-versions/emulated-version-upgrade.sh",
-          "line_start": 84,
-          "line_end": 93
-        },
-        {
-          "source_id": "test-infra",
-          "path": "experiment/compatibility-versions/e2e-two-steps-upgrade.sh",
-          "line_start": 18,
-          "line_end": 20
+          "source_id": "primary",
+          "path": "test/e2e/common/node/security_context.go",
+          "line_start": 476,
+          "line_end": 530
         }
       ]
     }

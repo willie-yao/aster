@@ -1534,7 +1534,7 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 				{id: "http2-internal-error", path: buildLogPath, sample: "INTERNAL_ERROR; received from peer"},
 				{id: "kubetest2-target", path: buildLogPath, sample: "Makefile:331: bin/kubetest2"},
 				{id: "cluster-became-ready", path: buildLogPath, sample: "Your cluster example is ready"},
-				{id: "e2e-passed", path: buildLogPath, sample: "E2E_PASSED: 1"},
+				{id: "retained-failure-state", path: buildLogPath, sample: "E2E_PASSED: 1"},
 			},
 		},
 		"azuredisk-pvc-resourceversion-conflict": {
@@ -1552,41 +1552,51 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 				{id: "object-modified-conflict", path: junitAndBuildPath, sample: "object has been modified"},
 			},
 		},
-		"kubernetes-two-step-upgrade-missing-kubelet": {
-			asset:         "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v2.tar.gz",
-			fixtureSHA256: "efab5a1ccb6071f82e1e5e5d489a79a59de0a1b4caa67c05bb51d32fa1fc28a9",
+		"kubernetes-windows-nonroot-command": {
+			asset:         "kubernetes-windows-nonroot-command-2093383338533326848-redacted-v1.tar.gz",
+			fixtureSHA256: "1c4a63e3f3c91fe4ac1fb7abcf1261b336b25cb4ae1752cf7ef4c666b138d423",
 			evidenceMode:  benchmarkEvidenceModeArtifactAndSource,
-			primaryRepo:   "kubernetes/test-infra",
-			testName:      "[build] two-step compatibility-version upgrade",
-			testSource:    models.TestCaseSourceBuild,
-			sourceRanges: []benchmarkSourceRange{
-				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/common.sh", LineStart: 331, LineEnd: 349},
-				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/e2e-two-steps-upgrade.sh", LineStart: 18, LineEnd: 20},
-				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/e2e-two-steps-upgrade.sh", LineStart: 96, LineEnd: 140},
-				{Repository: "kubernetes/test-infra", Revision: "3eb4c55b33029c73a56d30123d7c2f8b5412173b", Path: "experiment/compatibility-versions/emulated-version-upgrade.sh", LineStart: 84, LineEnd: 93},
-			},
+			primaryRepo:   "kubernetes/kubernetes",
+			testName:      "[It] [sig-node] Security Context When creating a container with runAsNonRoot should run with an image specified user ID [NodeConformance]",
+			sourceRanges: []benchmarkSourceRange{{
+				Repository: "kubernetes/kubernetes", Revision: "a98d44a5ead37569e259909ab74377cd4c17a46a",
+				Path: "test/e2e/common/node/security_context.go", LineStart: 476, LineEnd: 530,
+			}},
 			evidenceGroups: []expectedEvidence{
-				{id: "upgrade-without-kubelet", path: buildLogPath, sample: "--no-kubelet"},
-				{id: "emulated-upgrade-stage", path: buildLogPath, sample: "emulated-version-upgrade.sh"},
-				{id: "conformance-tests-passed", path: buildLogPath, sample: "SUCCESS! -- 411 Passed"},
-				{id: "missing-kubelet-binary", path: buildLogPath, sample: "Failed to find binary kubelet"},
-				{id: "fatal-kubectl-version", path: buildLogPath, sample: "could not parse pre-release/metadata (-master+$Format:%H$) in version v0.0.0-master"},
+				{id: "windows-command-failure", path: buildLogPath, sample: "hcs::System::CreateProcess: id -u implicit-nonroot-uid: The system cannot find the file specified"},
+				{id: "image-user-test", path: `(?i)(?:^|/)junit_01[.]xml$`, sample: "should run with an image specified user ID"},
+				{id: "windows-worker", path: `(?i)(?:^|/)(?:build-log[.]txt|node-describe[.]txt)$`, sample: "Windows Server 2022"},
 			},
 		},
 	}
 	alternateCorrect := map[string]string{
-		"cluster-api-kind-minimum-version":            "The Prow image has kind v0.32 while ensure-kind.sh requires v0.33. The CI preflight mismatch stops before cluster creation; this is not a Cluster API functional regression.",
-		"capa-kubeadm-webhook-ca-mismatch":            "AWS instance provisioning was blocked by the webhook failure. KubeadmConfigTemplate creation hit an unknown-authority serving-certificate trust mismatch, not an AWS failure.",
-		"aws-ebs-sumdb-http2-failure":                 "The EBS CSI volume tests completed; the build failure was external. sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2, and the cluster became ready with E2E_PASSED: 1.",
-		"azuredisk-pvc-resourceversion-conflict":      "The Azure Disk resize test failed before driver expansion. The test harness gets the PVC, later issues one Update, and does not retry the conflict; the source calls ExpectNoError. A stale PVC resourceVersion caused the object-has-been-modified response. This was not an Azure Disk failure.",
-		"kubernetes-two-step-upgrade-missing-kubelet": "The control-plane components upgraded successfully; the later harness failed. emulated-version-upgrade ran before download_current_version_bins, could not find kubelet, tee without pipefail masked it, and kubectl version then failed on v0.0.0-master. This was not a control-plane failure.",
+		"cluster-api-kind-minimum-version":       "The Prow image has kind v0.32 while ensure-kind.sh requires v0.33. The CI preflight mismatch stops before cluster creation; this is not a Cluster API functional regression.",
+		"capa-kubeadm-webhook-ca-mismatch":       "AWS instance provisioning was blocked by the webhook failure. KubeadmConfigTemplate creation hit an unknown-authority serving-certificate trust mismatch, not an AWS failure.",
+		"aws-ebs-sumdb-http2-failure":            "The functional storage tests never ran. sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2; the cluster later became ready, but the wrapper retained E2E_PASSED: 1 as the nonzero setup result.",
+		"azuredisk-pvc-resourceversion-conflict": "The Azure Disk resize test failed before driver expansion. The test harness gets the PVC, later issues one Update, and does not retry the conflict; the source calls ExpectNoError. A stale PVC resourceVersion caused the object-has-been-modified response. This was not an Azure Disk failure.",
+		"kubernetes-windows-nonroot-command":     "The shared pod helper always sets Command to id -u. The explicit RunAsUser cases use LinuxOnly and SkipIfNodeOSDistroIs, but the image-specified implicit-nonroot case has no Windows skip. HCS cannot find that Linux utility on the Windows worker; this is not a containerd or runAsNonRoot failure.",
+	}
+	auditParaphrases := map[string][]string{
+		"cluster-api-kind-minimum-version": {
+			"The environment exposes kind v0.32 while the pinned source revision requires v0.33. The prerequisite version gate stops the job before the cluster or E2E tests start.",
+			"The Prow runner container ships kind v0.32, but ensure-kind enforces a v0.33 minimum and rejects the old binary during preflight before tests.",
+			"The job fails its kind version preflight check because the Prow runner image ships kind v0.32 while the pinned source requires v0.33. No E2E test ran.",
+		},
+		"aws-ebs-sumdb-http2-failure": {
+			"Kubetest2 installation failed on sum.golang.org HTTP/2 INTERNAL_ERROR responses. Cluster setup later succeeded, but the functional E2E tests did not run and no JUnit result exists.",
+			"The bin/kubetest2 build failed while verifying modules through sum.golang.org after HTTP/2 INTERNAL_ERROR responses. The wrapper skipped the test command, so this was before any storage E2E ran.",
+		},
+		"azuredisk-pvc-resourceversion-conflict": {
+			"The offline test retains a PVC across the detach wait and submits the stale object without refreshing or retrying the 409 conflict. The test code, not Azure Disk resize, is the cause.",
+			"The helper gets the claim, later updates that old PVC, and never uses RetryOnConflict. The object-has-been-modified error is a test harness defect rather than a driver failure.",
+		},
 	}
 	postposedNegation := map[string]string{
-		"cluster-api-kind-minimum-version":            "A Cluster API functional regression was not the root cause.",
-		"capa-kubeadm-webhook-ca-mismatch":            "AWS networking was not the root cause.",
-		"aws-ebs-sumdb-http2-failure":                 "An EBS CSI volume failure was not the root cause.",
-		"azuredisk-pvc-resourceversion-conflict":      "Azure Disk resize failure was not the root cause.",
-		"kubernetes-two-step-upgrade-missing-kubelet": "The control plane failure was not the root cause.",
+		"cluster-api-kind-minimum-version":       "A Cluster API functional regression was not the root cause.",
+		"capa-kubeadm-webhook-ca-mismatch":       "AWS networking was not the root cause.",
+		"aws-ebs-sumdb-http2-failure":            "An EBS CSI volume failure was not the root cause.",
+		"azuredisk-pvc-resourceversion-conflict": "Azure Disk resize failure was not the root cause.",
+		"kubernetes-windows-nonroot-command":     "The Windows node and containerd runtime were not the root cause.",
 	}
 	if len(cases) != len(want) {
 		t.Fatalf("cases = %d, want %d", len(cases), len(want))
@@ -1630,6 +1640,12 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		alternate := &models.TestCase{AISummary: &models.AISummary{Summary: alternateCorrect[bc.name], IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: alternateCorrect[bc.name]}}
 		if assessment := assessBenchmarkCase(bc, alternate); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
 			t.Fatalf("case %q alternate correct diagnosis rejected: %+v", bc.name, assessment)
+		}
+		for _, paraphrase := range auditParaphrases[bc.name] {
+			observed := &models.TestCase{AISummary: &models.AISummary{Summary: paraphrase, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: paraphrase}}
+			if assessment := assessBenchmarkCase(bc, observed); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
+				t.Fatalf("case %q audited paraphrase rejected: %+v", bc.name, assessment)
+			}
 		}
 		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}
 		if assessment := assessBenchmarkCase(bc, postposed); assessment.forbiddenPassed != assessment.forbiddenTotal {
