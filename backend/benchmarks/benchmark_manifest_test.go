@@ -1425,6 +1425,9 @@ func TestKubectlSkewEvaluationManifest(t *testing.T) {
 	if bc.name != "kubectl-skew-stable2-latest-kubeproxy-version" || len(bc.sourceRefs) != 2 || len(bc.sourceRanges) != 3 || bc.primarySourceID != "latest-client" || bc.evidenceMode != benchmarkEvidenceModeArtifactAndSource {
 		t.Fatalf("case=%+v", bc)
 	}
+	if bc.fixtureAsset != "kubectl-skew-stable2-latest-2090131815695126528.tar.gz" || bc.fixtureSHA256 != "409d87e22344fef1ee7106a654ddf460908ab8797fee64a855087b567023321d" {
+		t.Fatalf("fixture identity=%s sha256=%s", bc.fixtureAsset, bc.fixtureSHA256)
+	}
 	if bc.sourceRefs[0].Repository != "kubernetes/kubernetes" || bc.sourceRefs[1].Repository != "kubernetes/kubernetes" || bc.sourceRefs[0].Revision == bc.sourceRefs[1].Revision {
 		t.Fatalf("source refs=%+v", bc.sourceRefs)
 	}
