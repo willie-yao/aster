@@ -1581,19 +1581,28 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			"The environment exposes kind v0.32 while the pinned source revision requires v0.33. The prerequisite version gate stops the job before the cluster or E2E tests start.",
 			"The Prow runner container ships kind v0.32, but ensure-kind enforces a v0.33 minimum and rejects the old binary during preflight before tests.",
 			"The job fails its kind version preflight check because the Prow runner image ships kind v0.32 while the pinned source requires v0.33. No E2E test ran.",
+			"The kubekins image supplies kind v0.32 while the source requires v0.33. The preflight deliberately returns exit code 2, producing a hard preflight failure before tests.",
+		},
+		"capa-kubeadm-webhook-ca-mismatch": {
+			"The freshly installed kubeadm-bootstrap webhook certificate was not trusted by the API server, causing repeated admission failures. This transient CA trust mismatch, not AWS provisioning, caused the deadline.",
 		},
 		"aws-ebs-sumdb-http2-failure": {
 			"Kubetest2 installation failed on sum.golang.org HTTP/2 INTERNAL_ERROR responses. Cluster setup later succeeded, but the functional E2E tests did not run and no JUnit result exists.",
 			"The bin/kubetest2 build failed while verifying modules through sum.golang.org after HTTP/2 INTERNAL_ERROR responses. The wrapper skipped the test command, so this was before any storage E2E ran.",
 			"The functional tests did not run after sum.golang.org HTTP/2 INTERNAL_ERROR broke the bin/kubetest2 build, so they could not fail when executed; no JUnit exists.",
+			"sum.golang.org HTTP/2 INTERNAL_ERROR broke the bin/kubetest2 build. No E2E test was ever executed, and this was not an EBS CSI volume failure.",
 		},
 		"azuredisk-pvc-resourceversion-conflict": {
 			"The offline test retains a PVC across the detach wait and submits the stale object without refreshing or retrying the 409 conflict. The test code, not Azure Disk resize, is the cause.",
 			"The helper gets the claim, later updates that old PVC, and never uses RetryOnConflict. The object-has-been-modified error is a test harness defect rather than a driver failure.",
 			"The helper gets and later updates the stale PVC, but the 409 conflict was not retried. The test should refresh and retry instead of treating it as terminal; this was not an Azure Disk failure.",
+			"The test gets the PVC and performs one direct Update without conflict handling. It neither refreshes the object nor retries the 409, so the test harness, not Azure Disk, is at fault.",
+			"The source gets the PVC and later submits the same stale object; it neither refreshes the resourceVersion nor retries conflicts. The test harness, not Azure Disk, causes the 409 failure.",
 		},
 		"kubernetes-windows-nonroot-command": {
 			"The shared pod helper always sets Command to id -u. The explicit RunAsUser cases use LinuxOnly, but the image-specified case should not run on Windows without a skip. HCS cannot find the Linux utility; this is not a containerd or runAsNonRoot failure.",
+			"The source helper sets Command id -u. The Windows job skips tests labeled LinuxOnly, but this UID-specific test is not so labeled, so the absent test selection guard causes the HCS failure.",
+			"The source helper sets Command id -u. A sibling explicit-user test carries LinuxOnly, but the present image-specified test lacks that tag and runs on Windows; the runtime is not the root cause.",
 		},
 	}
 	type contradictoryControl struct {
