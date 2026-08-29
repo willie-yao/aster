@@ -1581,7 +1581,7 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			"The environment exposes kind v0.32 while the pinned source revision requires v0.33. The prerequisite version gate stops the job before the cluster or E2E tests start.",
 			"The Prow runner container ships kind v0.32, but ensure-kind enforces a v0.33 minimum and rejects the old binary during preflight before tests.",
 			"The job fails its kind version preflight check because the Prow runner image ships kind v0.32 while the pinned source requires v0.33. No E2E test ran.",
-			"The kubekins image supplies kind v0.32 while the source requires v0.33. The preflight deliberately returns exit code 2, producing a hard preflight failure before tests.",
+			"The kubekins image supplies kind v0.32 while the source requires v0.33. The preflight deliberately returns exit code 2, causing a hard preflight failure on every run.",
 		},
 		"capa-kubeadm-webhook-ca-mismatch": {
 			"The freshly installed kubeadm-bootstrap webhook certificate was not trusted by the API server, causing repeated admission failures. This transient CA trust mismatch, not AWS provisioning, caused the deadline.",
@@ -1635,7 +1635,7 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			{text: "The image has kind v0.32 and the source requires v0.33; the preflight deliberately returns exit code 0 and permits the tests to run.", missingSignal: []string{"identifies CI preflight tool mismatch"}},
 		},
 		"capa-kubeadm-webhook-ca-mismatch": {
-			{text: "The kubeadm-bootstrap webhook certificate was not rejected and had no trust mismatch. This was transient and was not an AWS provisioning failure.", missingSignal: []string{"identifies kubeadm webhook trust rejection"}},
+			{text: "The KubeadmConfigTemplate kubeadm-bootstrap webhook certificate was not rejected and had no trust mismatch. This was transient and was not an AWS provisioning failure.", missingSignal: []string{"identifies kubeadm webhook trust rejection"}},
 		},
 		"aws-ebs-sumdb-http2-failure": {
 			{text: "sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2. No successful E2E tests ever ran to completion, but failing storage tests did execute. This was not an EBS CSI volume failure.", missingSignal: []string{"recognizes functional tests never ran"}},
@@ -1646,6 +1646,20 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		},
 		"kubernetes-windows-nonroot-command": {
 			{text: "The helper sets Command to id -u on Windows. This UID-specific test is not so labeled, but it has a separate Windows skip. The runtime was not the root cause.", missingSignal: []string{"identifies missing Windows test skip", "source skips only explicit user cases on Windows"}},
+		},
+	}
+	nearbyContradictoryControls := map[string][]contradictoryControl{
+		"cluster-api-kind-minimum-version": {
+			{text: "The image has kind v0.32 and the source requires v0.33. A hard preflight failure occurred before tests, but it was ignored and the tests then ran.", missingSignal: []string{"identifies CI preflight tool mismatch"}},
+		},
+		"aws-ebs-sumdb-http2-failure": {
+			{text: "sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2. No E2E tests ever ran successfully, but all storage tests did execute and fail. This was not an EBS CSI volume failure.", missingSignal: []string{"recognizes functional tests never ran"}},
+		},
+		"azuredisk-pvc-resourceversion-conflict": {
+			{text: "The source gets a stale PVC and updates it, causing an object has been modified 409. The test is not without conflict handling and refreshes and retries. This was not an Azure Disk resize failure.", missingSignal: []string{"identifies test harness missing retry", "source has no conflict retry"}},
+		},
+		"kubernetes-windows-nonroot-command": {
+			{text: "The helper sets Command to id -u on Windows. The image-specified UID case lacks the Windows skip used by adjacent explicit UID tests, but that difference did not cause this failure. The runtime was not the root cause.", missingSignal: []string{"identifies missing Windows test skip", "source skips only explicit user cases on Windows"}},
 		},
 	}
 	postposedNegation := map[string]string{
@@ -1716,6 +1730,13 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			assessment := assessBenchmarkCase(bc, wrong)
 			if !slices.Equal(assessment.missingMust, contradiction.missingSignal) {
 				t.Fatalf("case %q extra contradictory control missing = %v, want %v: %+v", bc.name, assessment.missingMust, contradiction.missingSignal, assessment)
+			}
+		}
+		for _, contradiction := range nearbyContradictoryControls[bc.name] {
+			wrong := &models.TestCase{AISummary: &models.AISummary{Summary: contradiction.text, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: contradiction.text}}
+			assessment := assessBenchmarkCase(bc, wrong)
+			if !slices.Equal(assessment.missingMust, contradiction.missingSignal) {
+				t.Fatalf("case %q nearby contradictory control missing = %v, want %v: %+v", bc.name, assessment.missingMust, contradiction.missingSignal, assessment)
 			}
 		}
 		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}
