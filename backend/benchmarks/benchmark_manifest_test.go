@@ -1603,6 +1603,7 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			"The shared pod helper always sets Command to id -u. The explicit RunAsUser cases use LinuxOnly, but the image-specified case should not run on Windows without a skip. HCS cannot find the Linux utility; this is not a containerd or runAsNonRoot failure.",
 			"The source helper sets Command id -u. The Windows job skips tests labeled LinuxOnly, but this UID-specific test is not so labeled, so the absent test selection guard causes the HCS failure.",
 			"The source helper sets Command id -u. A sibling explicit-user test carries LinuxOnly, but the present image-specified test lacks that tag and runs on Windows; the runtime is not the root cause.",
+			"The source helper runs id -u, and the image-specified UID case lacks the Windows skip used by adjacent explicit UID tests. HCS cannot find the command, so test selection is the defect.",
 		},
 	}
 	type contradictoryControl struct {
@@ -1628,6 +1629,25 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 		},
 	}
 
+	extraContradictoryControls := map[string][]contradictoryControl{
+		"cluster-api-kind-minimum-version": {
+			{text: "The image has kind v0.32 and the source requires v0.33, but a hard preflight failure was ignored and the tests continued.", missingSignal: []string{"identifies CI preflight tool mismatch"}},
+			{text: "The image has kind v0.32 and the source requires v0.33; the preflight deliberately returns exit code 0 and permits the tests to run.", missingSignal: []string{"identifies CI preflight tool mismatch"}},
+		},
+		"capa-kubeadm-webhook-ca-mismatch": {
+			{text: "The kubeadm-bootstrap webhook certificate was not rejected and had no trust mismatch. This was transient and was not an AWS provisioning failure.", missingSignal: []string{"identifies kubeadm webhook trust rejection"}},
+		},
+		"aws-ebs-sumdb-http2-failure": {
+			{text: "sum.golang.org returned HTTP/2 INTERNAL_ERROR while building bin/kubetest2. No successful E2E tests ever ran to completion, but failing storage tests did execute. This was not an EBS CSI volume failure.", missingSignal: []string{"recognizes functional tests never ran"}},
+		},
+		"azuredisk-pvc-resourceversion-conflict": {
+			{text: "The source gets a stale PVC and updates it, causing an object-has-been-modified 409. This is not an unhandled conflict; retry logic handles it. This was not an Azure Disk resize failure.", missingSignal: []string{"identifies test harness missing retry", "source has no conflict retry"}},
+			{text: "The source gets a stale PVC and updates it, causing an object has been modified 409. Neither refresh nor retry is missing; both are implemented. This was not an Azure Disk resize failure.", missingSignal: []string{"identifies test harness missing retry", "source has no conflict retry"}},
+		},
+		"kubernetes-windows-nonroot-command": {
+			{text: "The helper sets Command to id -u on Windows. This UID-specific test is not so labeled, but it has a separate Windows skip. The runtime was not the root cause.", missingSignal: []string{"identifies missing Windows test skip", "source skips only explicit user cases on Windows"}},
+		},
+	}
 	postposedNegation := map[string]string{
 		"cluster-api-kind-minimum-version":       "A Cluster API functional regression was not the root cause.",
 		"capa-kubeadm-webhook-ca-mismatch":       "AWS networking was not the root cause.",
@@ -1689,6 +1709,13 @@ func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
 			assessment := assessBenchmarkCase(bc, wrong)
 			if !slices.Equal(assessment.missingMust, contradiction.missingSignal) {
 				t.Fatalf("case %q contradictory control missing = %v, want %v: %+v", bc.name, assessment.missingMust, contradiction.missingSignal, assessment)
+			}
+		}
+		for _, contradiction := range extraContradictoryControls[bc.name] {
+			wrong := &models.TestCase{AISummary: &models.AISummary{Summary: contradiction.text, IsTransient: bc.referenceTransient}, AIAnalysis: &models.AIAnalysis{RootCause: contradiction.text}}
+			assessment := assessBenchmarkCase(bc, wrong)
+			if !slices.Equal(assessment.missingMust, contradiction.missingSignal) {
+				t.Fatalf("case %q extra contradictory control missing = %v, want %v: %+v", bc.name, assessment.missingMust, contradiction.missingSignal, assessment)
 			}
 		}
 		postposed := &models.TestCase{AISummary: &models.AISummary{Summary: postposedNegation[bc.name]}, AIAnalysis: &models.AIAnalysis{RootCause: postposedNegation[bc.name]}}
