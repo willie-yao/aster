@@ -150,11 +150,14 @@ semantic-judge flags, context truncations, model and Tool failures, model
 requests, and provider-reported input and output tokens. Private JSONL output
 also records the derived provider-request cap, GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
 reasons, the hashed cache generation, zero-request cache reload results, and
-content-free draft metadata. Draft metadata contains stable critique rule IDs,
+draft metadata that omits raw draft text. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
 selected attempt. It also records each draft's manifest signal hits and totals,
-including the required-signal subset, without retaining the scored text. It
-records both raw findings and the findings that survive deterministic publication
+including the required-signal subset, without retaining the scored text. Semantic
+reviews are attached to the draft they evaluated with the review stage, outcome,
+and the judge's validated bounded findings. These details are written only to the
+private benchmark JSONL; production traces remain content-free. The JSONL records
+both raw critique findings and the findings that survive deterministic publication
 sanitization. It also records every best/fallback
 replacement decision with evidence revisions, strict-dominance state, and a
 stable acceptance or rejection reason. Decision events displace older ordinary

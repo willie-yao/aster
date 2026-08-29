@@ -47,6 +47,7 @@ type ServiceConfig struct {
 	UsageRecorder          *aiusage.Recorder
 	UsageOrigin            aiusage.Origin
 	DraftObserver          DraftObserver
+	SemanticReviewObserver SemanticReviewObserver
 	DraftSelectionObserver DraftSelectionObserver
 	SourceEvidenceObserver SourceEvidenceObserver
 }
@@ -98,6 +99,7 @@ type Service struct {
 	patternFailureCooldown time.Duration
 
 	draftObserver          DraftObserver
+	semanticReviewObserver SemanticReviewObserver
 	draftSelectionObserver DraftSelectionObserver
 	sourceEvidenceObserver SourceEvidenceObserver
 }
@@ -129,6 +131,7 @@ func NewService(config ServiceConfig) *Service {
 		usageRecorder:          config.UsageRecorder,
 		usageOrigin:            config.UsageOrigin,
 		draftObserver:          config.DraftObserver,
+		semanticReviewObserver: config.SemanticReviewObserver,
 		draftSelectionObserver: config.DraftSelectionObserver,
 		sourceEvidenceObserver: config.SourceEvidenceObserver,
 		patternNow:             time.Now,
@@ -314,6 +317,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		ConsecutiveFailures:    consecutiveFailures,
 		FailureSignal:          failureSignal,
 		DraftObserver:          s.draftObserver,
+		SemanticReviewObserver: s.semanticReviewObserver,
 		DraftSelectionObserver: s.draftSelectionObserver,
 		SourceEvidenceObserver: s.sourceEvidenceObserver,
 		PromptHash:             promptHash,

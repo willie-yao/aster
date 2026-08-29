@@ -854,12 +854,16 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	traceStore := ai.NewTraceStore()
 	serviceConfig.TraceStore = traceStore
 	var draftObservations []benchmarkDraftObservation
+	var semanticReviewObservations []ai.SemanticReviewObservation
 	selectedAttempt := 0
 	serviceConfig.DraftObserver = func(observation ai.DraftObservation) {
 		draftObservations = append(draftObservations, benchmarkDraftObservation{
 			DraftObservation: observation,
 			observedAt:       time.Now(),
 		})
+	}
+	serviceConfig.SemanticReviewObserver = func(observation ai.SemanticReviewObservation) {
+		semanticReviewObservations = append(semanticReviewObservations, observation)
 	}
 	serviceConfig.DraftSelectionObserver = func(attempt int) { selectedAttempt = attempt }
 	var sourceObservations []ai.SourceEvidenceObservation
@@ -939,7 +943,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("validate benchmark evidence stages: %v", err)
 	}
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage, stageReport)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, semanticReviewObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage, stageReport)
 	if trialStatus == "contract_violation" || trialStatus == "no_result" {
 		t.Fatalf("benchmark trial status is %s", trialStatus)
 	}

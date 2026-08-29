@@ -18,6 +18,7 @@ type agentLoopResult struct {
 	finalContent        string
 	finalProviderItems  []json.RawMessage
 	finalDraftObserved  bool
+	finalDraftAttempt   int
 	draftPhase          string
 	gcsFloorOnlyRetries int
 }
@@ -51,6 +52,7 @@ func (c *Client) runAgenticLoop(ctx context.Context, state *agentState, messages
 	headroom := contextHeadroomFor(state.opts)
 
 	finalDraftObserved := false
+	finalDraftAttempt := 0
 	draftPhase := "initial"
 
 	// When single_tool_call is on, request parallel_tool_calls=false so
@@ -71,6 +73,7 @@ agentLoop:
 				finalContent = fallback.content
 				finalProviderItems = fallback.providerItems
 				finalDraftObserved = true
+				finalDraftAttempt = fallback.attempt
 				recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
 				break agentLoop
@@ -115,6 +118,7 @@ agentLoop:
 				finalContent = fallback.content
 				finalProviderItems = fallback.providerItems
 				finalDraftObserved = true
+				finalDraftAttempt = fallback.attempt
 				recordTrace(ctx, TraceEvent{Kind: "draft_recovery", Outcome: "model_request_error", SelectedAttempt: fallback.attempt})
 				log.Printf("  ⚠ agentic request failed (%v); publishing the best prior draft", err)
 				break agentLoop
@@ -200,9 +204,13 @@ agentLoop:
 						if fallback := state.promoteFallbackDraft(); fallback != nil {
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
+							finalDraftAttempt = fallback.attempt
 						} else {
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
+							if candidateDraft != nil {
+								finalDraftAttempt = candidateDraft.attempt
+							}
 						}
 						finalDraftObserved = parsedOK
 						recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -266,9 +274,13 @@ agentLoop:
 						if fallback := state.promoteFallbackDraft(); fallback != nil {
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
+							finalDraftAttempt = fallback.attempt
 						} else {
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
+							if candidateDraft != nil {
+								finalDraftAttempt = candidateDraft.attempt
+							}
 						}
 						finalDraftObserved = parsedOK
 						recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -303,7 +315,7 @@ agentLoop:
 					// one revision-review call. Failures preserve the selected draft.
 					if state.opts.SemanticJudge && !state.judgeRan && state.bestDraft == candidateDraft {
 						state.judgeRan = true
-						result, err := c.semanticCritiqueTracked(ctx, state, semanticJudgeStageDraft, parsed, nil, nil, headroom)
+						result, err := c.semanticCritiqueTracked(ctx, state, candidateDraft.attempt, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 						switch {
 						case err != nil:
 							recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "error", result, "semantic_judge_error"))
@@ -354,6 +366,7 @@ agentLoop:
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
 							finalDraftObserved = true
+							finalDraftAttempt = fallback.attempt
 							state.critiquePassed = fallback.quality.Passed
 							break agentLoop
 						default:
@@ -377,9 +390,13 @@ agentLoop:
 			if parsedOK && state.bestDraft != nil {
 				finalContent = state.bestDraft.content
 				finalProviderItems = state.bestDraft.providerItems
+				finalDraftAttempt = state.bestDraft.attempt
 			} else {
 				finalContent = candidate
 				finalProviderItems = msg.ProviderItems
+				if candidateDraft != nil {
+					finalDraftAttempt = candidateDraft.attempt
+				}
 			}
 			finalDraftObserved = parsedOK
 			break
@@ -444,6 +461,7 @@ agentLoop:
 		finalContent = fallback.content
 		finalProviderItems = fallback.providerItems
 		finalDraftObserved = true
+		finalDraftAttempt = fallback.attempt
 		parsed, ok = tryParseAnalysis(finalContent)
 		recordTrace(ctx, TraceEvent{Kind: "finalize_recovery", Outcome: "retained_draft", SelectedAttempt: fallback.attempt})
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
@@ -456,7 +474,7 @@ agentLoop:
 	return agentLoopResult{
 		messages: messages, parsed: parsed,
 		finalContent: finalContent, finalProviderItems: finalProviderItems,
-		finalDraftObserved: finalDraftObserved, draftPhase: draftPhase,
+		finalDraftObserved: finalDraftObserved, finalDraftAttempt: finalDraftAttempt, draftPhase: draftPhase,
 		gcsFloorOnlyRetries: gcsFloorOnlyRetries,
 	}, nil
 }
