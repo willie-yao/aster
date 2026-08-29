@@ -1468,6 +1468,74 @@ func TestKubectlSkewEvaluationManifest(t *testing.T) {
 	}
 }
 
+func TestCorpusBatchOneEvaluationManifest(t *testing.T) {
+	cases, err := loadBenchmarkManifest("testdata/benchmarks/corpus-batch-1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantModes := map[string]string{
+		"cluster-api-kind-minimum-version":            benchmarkEvidenceModeArtifactAndSource,
+		"capa-kubeadm-webhook-ca-mismatch":            benchmarkEvidenceModeArtifactOnly,
+		"aws-ebs-sumdb-http2-failure":                 benchmarkEvidenceModeArtifactOnly,
+		"azuredisk-pvc-resourceversion-conflict":      benchmarkEvidenceModeArtifactAndSource,
+		"kubernetes-two-step-upgrade-missing-kubelet": benchmarkEvidenceModeArtifactAndSource,
+	}
+	wantSourceRanges := map[string]int{
+		"cluster-api-kind-minimum-version":            1,
+		"azuredisk-pvc-resourceversion-conflict":      1,
+		"kubernetes-two-step-upgrade-missing-kubelet": 3,
+	}
+	if len(cases) != len(wantModes) {
+		t.Fatalf("cases = %d, want %d", len(cases), len(wantModes))
+	}
+	primaryRepos := map[string]bool{}
+	transient := 0
+	buildFailures := 0
+	for _, bc := range cases {
+		if bc.evidenceMode != wantModes[bc.name] {
+			t.Fatalf("case %q evidence mode = %q", bc.name, bc.evidenceMode)
+		}
+		if bc.fixtureAsset == "" || !benchmarkSHA256RE.MatchString(bc.fixtureSHA256) {
+			t.Fatalf("case %q fixture identity is incomplete", bc.name)
+		}
+		primary, ok := benchmarkPrimarySourceRef(bc)
+		if !ok {
+			t.Fatalf("case %q primary source is missing", bc.name)
+		}
+		primaryRepos[primary.Repository] = true
+		if bc.expectedTransient == nil || *bc.expectedTransient != bc.referenceTransient {
+			t.Fatalf("case %q transient identity is incomplete", bc.name)
+		}
+		if bc.referenceTransient {
+			transient++
+		}
+		if bc.testSource == models.TestCaseSourceBuild {
+			buildFailures++
+		}
+		if got := len(bc.sourceRanges); got != wantSourceRanges[bc.name] {
+			t.Fatalf("case %q source ranges = %d, want %d", bc.name, got, wantSourceRanges[bc.name])
+		}
+		reference := &models.TestCase{
+			AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: bc.referenceTransient},
+			AIAnalysis: &models.AIAnalysis{RootCause: bc.referenceDiagnosis},
+		}
+		if assessment := assessBenchmarkCase(bc, reference); len(assessment.missingMust) > 0 || assessment.forbiddenPassed != assessment.forbiddenTotal {
+			t.Fatalf("case %q reference rejected: %+v", bc.name, assessment)
+		}
+		opposite := &models.TestCase{
+			AISummary:  &models.AISummary{Summary: bc.oppositeDiagnosis, IsTransient: bc.oppositeTransient},
+			AIAnalysis: &models.AIAnalysis{RootCause: bc.oppositeDiagnosis},
+		}
+		assessment := assessBenchmarkCase(bc, opposite)
+		if len(assessment.missingMust) == 0 && assessment.forbiddenPassed == assessment.forbiddenTotal {
+			t.Fatalf("case %q opposite diagnosis passed: %+v", bc.name, assessment)
+		}
+	}
+	if len(primaryRepos) != 5 || transient != 2 || buildFailures != 3 {
+		t.Fatalf("batch balance repos=%d transient=%d build_failures=%d", len(primaryRepos), transient, buildFailures)
+	}
+}
+
 func TestCAPZAgentSandboxEvaluationManifest(t *testing.T) {
 	cases, err := loadBenchmarkManifest("testdata/benchmarks/capz-agent-sandbox-eval.json")
 	if err != nil {
