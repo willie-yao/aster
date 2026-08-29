@@ -1,0 +1,544 @@
+{
+  "version": 5,
+  "cases": [
+    {
+      "id": "cluster-api-kind-minimum-version",
+      "stable_id": "ab4f87d3e1c5e9b40e40",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "cluster-api-kind-minimum-2093512440632315904.tar.gz",
+      "fixture_sha256": "9f016290458ff05020057c218e952fdf09e71324d537865c9efdd5e05badf27d",
+      "job_type": "periodic",
+      "job_name": "periodic-cluster-api-e2e-main-v2",
+      "build_id": "2093512440632315904",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-e2e-main-v2/2093512440632315904/",
+      "commit": "7ddd6ab95b631c25402662cae2835a2934eee6d6",
+      "repo_version": "7ddd6ab95b631c25402662cae2835a2934eee6d6",
+      "repo_refs": {
+        "kubernetes-sigs/cluster-api": "7ddd6ab95b631c25402662cae2835a2934eee6d6"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/cluster-api",
+          "revision": "7ddd6ab95b631c25402662cae2835a2934eee6d6"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[build] Cluster API kind minimum-version preflight",
+      "test_source": "build",
+      "failure_message": "Detected kind version: v0.32.0. Requires v0.33.0 or greater.",
+      "evidence_mode": "artifact_and_source",
+      "consecutive_failures": 13,
+      "reference_diagnosis": "The job exits before creating a test cluster because the checked-in Cluster API preflight requires kind v0.33.0 or newer while the Prow image supplies v0.32.0. This is a CI tool-image version mismatch, not an e2e product failure.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "opposite_diagnosis": "A Kubernetes or Cluster API functional regression caused tests to fail after the workload cluster started.",
+      "opposite_is_transient": false,
+      "signals": [
+        {
+          "name": "identifies kind 0.32 versus 0.33 gate",
+          "pattern": "(?is)(?:kind|image).{0,120}v?0[.]32.{0,240}v?0[.]33|v?0[.]33.{0,240}(?:kind|image).{0,120}v?0[.]32",
+          "must": true
+        },
+        {
+          "name": "identifies CI preflight tool mismatch",
+          "pattern": "(?is)(?:preflight|ensure-kind|tool(?:ing)?|CI image|Prow image).{0,240}(?:mismatch|outdated|before.{0,80}(?:cluster|test))",
+          "must": true
+        },
+        {
+          "name": "recognizes tests never started",
+          "pattern": "(?is)(?:before|without|never).{0,100}(?:cluster creation|creating a test cluster|e2e tests|tests started)"
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "product regression treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failure was due to|failed because of).{0,100}(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster)|(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster).{0,100}(?:root cause|caused (?:the )?(?:job|tests|failure))",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:functional regression|product bug|workload cluster failure)|(?:Cluster API|Kubernetes).{0,100}(?:functional regression|product bug|workload cluster failure).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "detected-kind-version",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "Detected kind version: v0[.]32[.]0"
+          ]
+        },
+        {
+          "id": "required-kind-version",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "Requires v0[.]33[.]0 or greater"
+          ]
+        }
+      ],
+      "source_signals": [
+        {
+          "name": "source pins kind 0.33 minimum",
+          "pattern": "(?is)(?:ensure-kind[.]sh|MINIMUM_KIND_VERSION|checked-in.{0,80}preflight).{0,180}v?0[.]33",
+          "must": true
+        },
+        {
+          "name": "runtime image provides kind 0.32",
+          "pattern": "(?is)(?:Prow|CI).{0,100}(?:image|environment).{0,100}v?0[.]32",
+          "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "source_id": "primary",
+          "path": "hack/scripts/ensure/ensure-kind.sh",
+          "line_start": 34,
+          "line_end": 65
+        }
+      ]
+    },
+    {
+      "id": "capa-kubeadm-webhook-ca-mismatch",
+      "stable_id": "703c559b636651693448",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "capa-kubeadm-webhook-ca-2092992761815896064-redacted-v2.tar.gz",
+      "fixture_sha256": "60f3e8b746d9135c3afc262ffb9f5eb6f4f23c98203b39e1fbb06bdda3cf800e",
+      "job_type": "periodic",
+      "job_name": "periodic-cluster-api-provider-aws-e2e-conformance-release-2-12",
+      "build_id": "2092992761815896064",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/periodic-cluster-api-provider-aws-e2e-conformance-release-2-12/2092992761815896064/",
+      "commit": "c10097852c90cbd57a938855d9e340a1246bf939",
+      "repo_version": "c10097852c90cbd57a938855d9e340a1246bf939",
+      "repo_refs": {
+        "kubernetes-sigs/cluster-api-provider-aws": "c10097852c90cbd57a938855d9e340a1246bf939"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/cluster-api-provider-aws",
+          "revision": "c10097852c90cbd57a938855d9e340a1246bf939"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[It] [unmanaged] [conformance] tests conformance",
+      "junit_file": "junit.e2e_suite.xml",
+      "failure_message": "Failed to apply the cluster template: context deadline exceeded",
+      "evidence_mode": "artifact_only",
+      "consecutive_failures": 1,
+      "reference_diagnosis": "The management API server reaches the CAPI kubeadm bootstrap webhook service but rejects its serving certificate as signed by an unknown authority. KubeadmConfigTemplate creation retries until the template-apply deadline expires, so worker provisioning never begins. This is a transient webhook CA-bundle or serving-certificate trust mismatch, not an AWS infrastructure failure.",
+      "reference_is_transient": true,
+      "expected_transient": true,
+      "opposite_diagnosis": "CAPA failed because AWS infrastructure networking or instance provisioning was broken.",
+      "opposite_is_transient": false,
+      "signals": [
+        {
+          "name": "identifies kubeadm webhook trust rejection",
+          "pattern": "(?is)KubeadmConfigTemplate.{0,260}(?:webhook|unknown authority)|(?:webhook|unknown authority).{0,260}KubeadmConfigTemplate",
+          "must": true
+        },
+        {
+          "name": "identifies certificate or CA mismatch",
+          "pattern": "(?is)(?:CA.?bundle|serving.?certificate|certificate).{0,180}(?:mismatch|trust|unknown authority|reject)",
+          "must": true
+        },
+        {
+          "name": "recognizes transient failure",
+          "pattern": "(?i)transient|intermittent|one.?off|adjacent runs? passed"
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "AWS provisioning treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota)|(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:AWS|EC2|VPC).{0,100}(?:failure|provisioning|networking)|(?:AWS|EC2|VPC).{0,100}(?:provisioning|networking|instance|quota).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "kubeadm-webhook-service",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$"
+          ],
+          "content": [
+            "capi-kubeadm-bootstrap-webhook-service"
+          ]
+        },
+        {
+          "id": "unknown-certificate-authority",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit[.]e2e_suite[.]xml)$"
+          ],
+          "content": [
+            "certificate signed by unknown authority"
+          ]
+        },
+        {
+          "id": "template-blocked",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|clusterctl-describe-cluster-[^/]+[.]txt)$"
+          ],
+          "content": [
+            "KubeadmConfigTemplate does not exist"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aws-ebs-sumdb-http2-failure",
+      "stable_id": "06bf64bc8dc83eda8557",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "aws-ebs-sumdb-http2-2092995529448361984.tar.gz",
+      "fixture_sha256": "8fce462a7577703341a6ea5d452e71ea9f1919880392fefbadb7700f4b06b17b",
+      "job_type": "periodic",
+      "job_name": "ci-aws-ebs-csi-driver-e2e-functional",
+      "build_id": "2092995529448361984",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-aws-ebs-csi-driver-e2e-functional/2092995529448361984/",
+      "commit": "36d7fd880c3c4ff3b29212e2c5df8aca6628eda6",
+      "repo_version": "36d7fd880c3c4ff3b29212e2c5df8aca6628eda6",
+      "repo_refs": {
+        "kubernetes-sigs/aws-ebs-csi-driver": "36d7fd880c3c4ff3b29212e2c5df8aca6628eda6"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/aws-ebs-csi-driver",
+          "revision": "36d7fd880c3c4ff3b29212e2c5df8aca6628eda6"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[build] kubetest2 dependency verification",
+      "test_source": "build",
+      "failure_message": "verifying module via sum.golang.org: stream error: INTERNAL_ERROR; received from peer",
+      "evidence_mode": "artifact_only",
+      "consecutive_failures": 1,
+      "reference_diagnosis": "Building bin/kubetest2 fails while Go verifies multiple modules against sum.golang.org; independent tile requests terminate with HTTP/2 INTERNAL_ERROR. The cluster validation timeouts are startup noise that later resolves: the same run reports the cluster ready and E2E_PASSED: 1. The terminal job failure is the checksum-service error while building the test binary, not an EBS CSI storage defect.",
+      "reference_is_transient": true,
+      "expected_transient": true,
+      "opposite_diagnosis": "The job failed because the AWS EBS CSI driver could not provision, attach, mount, or resize a volume in the storage test suite.",
+      "opposite_is_transient": false,
+      "signals": [
+        {
+          "name": "identifies Go checksum service failure",
+          "pattern": "(?is)sum[.]golang[.]org.{0,240}(?:INTERNAL_ERROR|HTTP.?2|stream error)",
+          "must": true
+        },
+        {
+          "name": "identifies kubetest2 build failure",
+          "pattern": "(?is)(?:bin/kubetest2|kubetest2).{0,180}(?:build|Makefile|fail)|(?:build|Makefile|fail).{0,180}(?:bin/kubetest2|kubetest2)",
+          "must": true
+        },
+        {
+          "name": "recognizes same-run cluster and e2e success",
+          "pattern": "(?is)(?:cluster.{0,120}(?:ready|became ready)|E2E_PASSED.{0,20}1)",
+          "must": true
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "storage driver treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:EBS|CSI|volume|attach|mount|resize)|(?:EBS|CSI|volume|attach|mount|resize).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:EBS|CSI|storage|volume).{0,100}(?:failure|defect|cause)|(?:EBS|CSI|storage|volume|attach|mount|resize).{0,100}(?:failure|defect|problem).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "sumdb-tile-request",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "sum[.]golang[.]org/tile"
+          ]
+        },
+        {
+          "id": "http2-internal-error",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "INTERNAL_ERROR; received from peer"
+          ]
+        },
+        {
+          "id": "kubetest2-target",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "Makefile:331: bin/kubetest2"
+          ]
+        },
+        {
+          "id": "cluster-became-ready",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "Your cluster .* is ready"
+          ]
+        },
+        {
+          "id": "e2e-passed",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "E2E_PASSED: 1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "azuredisk-pvc-resourceversion-conflict",
+      "stable_id": "21c21fe4d728e8564f03",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "azuredisk-pvc-resourceversion-2093054417317138432-redacted-v2.tar.gz",
+      "fixture_sha256": "79f5e3e1c7e5cb9b156d4ec6d21e5dc5183b254931408feefdfdf5a1560c4ec5",
+      "job_type": "periodic",
+      "job_name": "ci-azuredisk-csi-driver-e2e-capz-windows",
+      "build_id": "2093054417317138432",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-azuredisk-csi-driver-e2e-capz-windows/2093054417317138432/",
+      "commit": "6bc2e5c4608b9874f093620eaf1865ac80b93e1c",
+      "repo_version": "6bc2e5c4608b9874f093620eaf1865ac80b93e1c",
+      "repo_refs": {
+        "kubernetes-sigs/azuredisk-csi-driver": "6bc2e5c4608b9874f093620eaf1865ac80b93e1c"
+      },
+      "source_refs": [
+        {
+          "id": "primary",
+          "repository": "kubernetes-sigs/azuredisk-csi-driver",
+          "revision": "6bc2e5c4608b9874f093620eaf1865ac80b93e1c"
+        }
+      ],
+      "primary_source_id": "primary",
+      "test_name": "[It] Dynamic Provisioning [single-az] should create a volume on demand and resize it [disk.csi.azure.com] [Windows]",
+      "junit_file": "junit_01.xml",
+      "failure_message": "fail to resize pvc: the object has been modified; please apply your changes to the latest version and try again",
+      "evidence_mode": "artifact_and_source",
+      "consecutive_failures": 14,
+      "reference_diagnosis": "The resize test reads a PVC and later submits a single Update using that stale object. Another controller update advances the PVC resourceVersion, so the API returns an optimistic-concurrency conflict. The test treats that retryable conflict as terminal instead of refreshing and retrying. No disk resize operation demonstrates an Azure Disk CSI failure.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "opposite_diagnosis": "The job failed because the Azure Disk CSI driver accepted the request but could not expand the Azure disk or Windows filesystem.",
+      "opposite_is_transient": false,
+      "signals": [
+        {
+          "name": "identifies stale PVC update conflict",
+          "pattern": "(?is)(?:PVC|PersistentVolumeClaim).{0,180}(?:resourceVersion|object has been modified|optimistic.?concurrency|conflict)|(?:object has been modified|resourceVersion|optimistic.?concurrency).{0,180}(?:PVC|PersistentVolumeClaim)",
+          "must": true
+        },
+        {
+          "name": "identifies test harness missing retry",
+          "pattern": "(?is)(?:test|harness).{0,180}(?:single Update|does not retry|stale object|refreshing and retrying|retryable conflict)",
+          "must": true
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "Azure Disk resize treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand)|(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|no|isn.t|wasn.t|rather than|instead of).{0,120}(?:Azure Disk|CSI|disk|filesystem).{0,120}(?:failure|failed|resize|expand)|(?:Azure Disk|CSI driver|disk|filesystem).{0,100}(?:resize|expand|failure|problem).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "pvc-resize-operation",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit_01[.]xml)$"
+          ],
+          "content": [
+            "fail to resize pvc"
+          ]
+        },
+        {
+          "id": "object-modified-conflict",
+          "paths": [
+            "(?i)(?:^|/)(?:build-log[.]txt|junit_01[.]xml)$"
+          ],
+          "content": [
+            "object has been modified"
+          ]
+        }
+      ],
+      "source_signals": [
+        {
+          "name": "source gets then updates one PVC object",
+          "pattern": "(?is)(?:Get|reads?).{0,180}(?:PVC|PersistentVolumeClaim).{0,260}(?:single|one|later).{0,100}Update|(?:PVC|PersistentVolumeClaim).{0,180}(?:Get|reads?).{0,260}Update",
+          "must": true
+        },
+        {
+          "name": "source has no conflict retry",
+          "pattern": "(?is)(?:ExpectNoError|terminal|does not retry|without retry).{0,180}(?:conflict|Update)",
+          "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "source_id": "primary",
+          "path": "test/e2e/testsuites/dynamically_provisioned_resize_volume_tester.go",
+          "line_start": 71,
+          "line_end": 105
+        }
+      ]
+    },
+    {
+      "id": "kubernetes-two-step-upgrade-missing-kubelet",
+      "stable_id": "e1e10d24d14f039abe2f",
+      "bucket": "kubernetes-ci-logs",
+      "fixture_asset": "kubernetes-two-step-upgrade-kubelet-2093510175414554624-redacted-v2.tar.gz",
+      "fixture_sha256": "efab5a1ccb6071f82e1e5e5d489a79a59de0a1b4caa67c05bb51d32fa1fc28a9",
+      "job_type": "periodic",
+      "job_name": "ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1",
+      "build_id": "2093510175414554624",
+      "web_url": "https://gcsweb.k8s.io/gcs/kubernetes-ci-logs/logs/ci-kubernetes-e2e-kind-two-steps-upgrade-n-minus-1/2093510175414554624/",
+      "commit": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
+      "repo_version": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
+      "repo_refs": {
+        "kubernetes/kubernetes": "e72c2715ade37738aa5c029e8de5285cbe1c9441",
+        "kubernetes/test-infra": "3eb4c55b33029c73a56d30123d7c2f8b5412173b"
+      },
+      "source_refs": [
+        {
+          "id": "kubernetes",
+          "repository": "kubernetes/kubernetes",
+          "revision": "e72c2715ade37738aa5c029e8de5285cbe1c9441"
+        },
+        {
+          "id": "test-infra",
+          "repository": "kubernetes/test-infra",
+          "revision": "3eb4c55b33029c73a56d30123d7c2f8b5412173b"
+        }
+      ],
+      "primary_source_id": "test-infra",
+      "test_name": "[build] two-step compatibility-version upgrade",
+      "test_source": "build",
+      "failure_message": "error: client version error: could not parse pre-release/metadata (-master+$Format:%H$) in version \"v0.0.0-master+$Format:%H$\"",
+      "evidence_mode": "artifact_and_source",
+      "consecutive_failures": 20,
+      "reference_diagnosis": "The wrapper invokes emulated-version-upgrade.sh before downloading the current-version binaries. That script cannot find a local kubelet, but its failure is piped to tee without pipefail and is masked. The next standalone kubectl version command uses an incompletely versioned source binary, reports v0.0.0-master+$Format:%H$, and terminates the job. This is deterministic upgrade-harness ordering and error-propagation behavior after 411 tests passed, not a workload-cluster control-plane failure.",
+      "reference_is_transient": false,
+      "expected_transient": false,
+      "opposite_diagnosis": "The job failed because the upgraded kube-apiserver, controller-manager, or scheduler became unhealthy and broke the workload cluster conformance tests.",
+      "opposite_is_transient": false,
+      "signals": [
+        {
+          "name": "identifies current binaries downloaded too late",
+          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,160}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
+          "must": true
+        },
+        {
+          "name": "identifies masked missing-kubelet failure",
+          "pattern": "(?is)(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet.{0,260}(?:tee|pipefail|masked|continues)|(?:tee|pipefail|masked).{0,260}(?:missing|cannot find|could not find|Failed to find binary).{0,100}kubelet",
+          "must": true
+        },
+        {
+          "name": "identifies fatal kubectl version parse",
+          "pattern": "(?is)kubectl version.{0,260}(?:(?:failed|error|exit|fatal|terminat).{0,180})?(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata)|(?:v0[.]0[.]0-master|Format:%H|pre-release/metadata).{0,260}kubectl version",
+          "must": true
+        },
+        {
+          "name": "recognizes conformance tests passed first",
+          "pattern": "(?is)(?:411|conformance).{0,120}(?:passed|success)|(?:passed|success).{0,120}(?:411|conformance)"
+        }
+      ],
+      "forbidden": [
+        {
+          "name": "control-plane runtime treated as root cause",
+          "pattern": "(?is)(?:root cause|caused by|failed because).{0,100}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failed|failure|unhealthy).{0,100}(?:was|is).{0,40}(?:the )?(?:root cause|cause)",
+          "negated": "(?is)(?:not|isn.t|wasn.t|rather than|instead of).{0,120}(?:kube-apiserver|controller-manager|scheduler|control plane).{0,120}(?:failure|failed|unhealthy)|(?:kube-apiserver|controller-manager|scheduler|control plane).{0,100}(?:failure|failed|unhealthy).{0,80}(?:was|is)?\\s*(?:not|isn.t|wasn.t).{0,60}(?:root cause|cause)"
+        }
+      ],
+      "evidence_groups": [
+        {
+          "id": "upgrade-without-kubelet",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "--no-kubelet"
+          ]
+        },
+        {
+          "id": "emulated-upgrade-stage",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "emulated-version-upgrade[.]sh"
+          ]
+        },
+        {
+          "id": "conformance-tests-passed",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "SUCCESS! -- 411 Passed"
+          ]
+        },
+        {
+          "id": "missing-kubelet-binary",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "Failed to find binary kubelet"
+          ]
+        },
+        {
+          "id": "fatal-kubectl-version",
+          "paths": [
+            "(?i)(?:^|/)build-log[.]txt$"
+          ],
+          "content": [
+            "could not parse pre-release/metadata .*v0[.]0[.]0-master"
+          ]
+        }
+      ],
+      "source_signals": [
+        {
+          "name": "source orders emulated upgrade before current download",
+          "pattern": "(?is)(?:emulated-version-upgrade|second stage).{0,320}(?:before|prior to).{0,180}(?:download_current_version_bins|current-version binaries)|(?:download_current_version_bins|current-version binaries).{0,220}(?:later|after).{0,220}(?:emulated-version-upgrade|second stage)",
+          "must": true
+        },
+        {
+          "name": "source masks pipeline failure without pipefail",
+          "pattern": "(?is)(?:emulated-version-upgrade|missing kubelet).{0,260}(?:pipe|tee).{0,180}(?:no pipefail|without pipefail|masked|continues)|(?:no pipefail|without pipefail|masked).{0,260}(?:emulated-version-upgrade|missing kubelet)",
+          "must": true
+        },
+        {
+          "name": "source requires local kubelet",
+          "pattern": "(?is)(?:find-binary|requires|looks for|find|cannot find|could not find).{0,120}(?:local )?kubelet|kubelet.{0,120}(?:find-binary|required local binary|must exist)",
+          "must": true
+        }
+      ],
+      "expected_source_ranges": [
+        {
+          "source_id": "test-infra",
+          "path": "experiment/compatibility-versions/common.sh",
+          "line_start": 331,
+          "line_end": 349
+        },
+        {
+          "source_id": "test-infra",
+          "path": "experiment/compatibility-versions/e2e-two-steps-upgrade.sh",
+          "line_start": 96,
+          "line_end": 140
+        },
+        {
+          "source_id": "test-infra",
+          "path": "experiment/compatibility-versions/emulated-version-upgrade.sh",
+          "line_start": 84,
+          "line_end": 93
+        },
+        {
+          "source_id": "test-infra",
+          "path": "experiment/compatibility-versions/e2e-two-steps-upgrade.sh",
+          "line_start": 18,
+          "line_end": 20
+        }
+      ]
+    }
+  ]
+}
