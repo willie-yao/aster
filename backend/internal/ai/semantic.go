@@ -38,6 +38,9 @@ const (
 	semanticJudgeMaxCandidatePaths    = 3
 	semanticJudgeMaxLineBytes         = 768
 	semanticJudgeMaxSubjects          = 6
+	semanticJudgeMaxSourceQuotes      = 2
+	semanticJudgeEvidenceQuoteBytes   = 1000
+	semanticJudgeFallbackQuoteBytes   = 500
 	semanticJudgeMaxSummaryBytes      = 4 << 10
 	semanticJudgeMaxRootCauseBytes    = 8 << 10
 	semanticJudgeMaxSuggestedFixBytes = 4 << 10
@@ -122,12 +125,18 @@ type semanticMandatoryEvidence struct {
 	CandidatePaths []string `json:"candidate_paths"`
 }
 
+type semanticSourceEvidence struct {
+	Path   string   `json:"path"`
+	Quotes []string `json:"quotes"`
+}
+
 type semanticEvidenceDigest struct {
 	EvidenceRevision        int                              `json:"evidence_revision"`
 	ReadArtifactCount       int                              `json:"read_artifact_count"`
 	EvidenceTruncated       bool                             `json:"evidence_truncated,omitempty"`
 	MandatoryPlanComplete   bool                             `json:"mandatory_plan_complete"`
 	ValidatedCitations      []models.EvidenceCitation        `json:"validated_citations,omitempty"`
+	VerifiedSourceEvidence  []semanticSourceEvidence         `json:"verified_source_evidence,omitempty"`
 	HighSpecificityErrors   []semanticEvidenceLine           `json:"high_specificity_errors,omitempty"`
 	LaterSuccessEvidence    []semanticSuccessCounterevidence `json:"later_success_counterevidence,omitempty"`
 	UnusedMandatoryEvidence []semanticMandatoryEvidence      `json:"unused_mandatory_evidence,omitempty"`
@@ -289,7 +298,7 @@ func formatSemanticJudgeInput(state *agentState, stage string, parsed analysisRe
 		Stage:           stage,
 		Draft:           boundedSemanticDraft(parsed, state.analysisEvidence),
 		InitialFindings: semanticFindingClassList(initialFindings),
-		Evidence:        buildSemanticEvidenceDigest(state, parsed),
+		Evidence:        buildSemanticEvidenceDigest(state, parsed, prior),
 	}
 	if prior != nil {
 		bounded := boundedSemanticDraft(*prior, state.analysisEvidence)
@@ -316,6 +325,9 @@ func trimSemanticJudgeInput(input *semanticJudgeInput) bool {
 	}
 	if n := len(input.Evidence.LaterSuccessEvidence); n > 0 {
 		input.Evidence.LaterSuccessEvidence = input.Evidence.LaterSuccessEvidence[:n-1]
+		return true
+	}
+	if trimSemanticSourceEvidence(&input.Evidence.VerifiedSourceEvidence) {
 		return true
 	}
 	if n := len(input.Evidence.HighSpecificityErrors); n > 1 {
@@ -376,9 +388,9 @@ func validatedSemanticCitations(parsed analysisResponse, evidence map[string]*an
 			for line := citation.LineStart; line <= citation.LineEnd; line++ {
 				lines = append(lines, entry.Lines[line])
 			}
-			citation.Quote = semanticClamp(strings.Join(lines, "\n"), 1000)
+			citation.Quote = semanticClamp(strings.Join(lines, "\n"), semanticJudgeEvidenceQuoteBytes)
 		} else {
-			citation.Quote = semanticClamp(strings.Join(strings.Fields(citation.Quote), " "), 500)
+			citation.Quote = semanticClamp(strings.Join(strings.Fields(citation.Quote), " "), semanticJudgeFallbackQuoteBytes)
 		}
 		out = append(out, citation)
 		if len(out) == semanticJudgeMaxCitations {
@@ -388,13 +400,14 @@ func validatedSemanticCitations(parsed analysisResponse, evidence map[string]*an
 	return out
 }
 
-func buildSemanticEvidenceDigest(state *agentState, parsed analysisResponse) semanticEvidenceDigest {
+func buildSemanticEvidenceDigest(state *agentState, parsed analysisResponse, prior *analysisResponse) semanticEvidenceDigest {
 	digest := semanticEvidenceDigest{
-		EvidenceRevision:      state.evidenceRevision,
-		ReadArtifactCount:     len(state.readArtifactsFull),
-		EvidenceTruncated:     state.analysisEvidenceFull,
-		MandatoryPlanComplete: !state.initialArtifactTree.failed && !state.initialArtifactTree.truncated,
-		ValidatedCitations:    validatedSemanticCitations(parsed, state.analysisEvidence),
+		EvidenceRevision:       state.evidenceRevision,
+		ReadArtifactCount:      len(state.readArtifactsFull),
+		EvidenceTruncated:      state.analysisEvidenceFull,
+		MandatoryPlanComplete:  !state.initialArtifactTree.failed && !state.initialArtifactTree.truncated,
+		ValidatedCitations:     validatedSemanticCitations(parsed, state.analysisEvidence),
+		VerifiedSourceEvidence: boundedSemanticSourceEvidence(state, parsed, prior),
 	}
 	errors := semanticErrorCandidates(state.analysisEvidence, parsed)
 	for _, candidate := range errors {
@@ -406,6 +419,139 @@ func buildSemanticEvidenceDigest(state *agentState, parsed analysisResponse) sem
 	digest.LaterSuccessEvidence = semanticLaterSuccessEvidence(state.analysisEvidence, errors)
 	digest.UnusedMandatoryEvidence = semanticUnusedMandatoryEvidence(state, digest.ValidatedCitations)
 	return digest
+}
+
+func boundedSemanticSourceEvidence(state *agentState, parsed analysisResponse, prior *analysisResponse) []semanticSourceEvidence {
+	if state == nil || len(state.sourceContentByPath) == 0 {
+		return nil
+	}
+	paths := semanticSourceEvidencePaths(state.sourceContentByPath, parsed, prior)
+	out := make([]semanticSourceEvidence, 0, min(len(paths), semanticJudgeMaxCitations))
+	quoteCount := 0
+	for _, path := range paths {
+		quotes := make([]string, 0, semanticJudgeMaxSourceQuotes)
+		seen := map[string]bool{}
+		for _, content := range state.sourceContentByPath[path] {
+			limit := semanticJudgeEvidenceQuoteBytes
+			if len(quotes) > 0 {
+				limit = semanticJudgeFallbackQuoteBytes
+			}
+			quote := semanticClamp(content, limit)
+			if quote == "" || seen[quote] {
+				continue
+			}
+			seen[quote] = true
+			quotes = append(quotes, quote)
+			quoteCount++
+			if len(quotes) == semanticJudgeMaxSourceQuotes || quoteCount == semanticJudgeMaxErrorLines {
+				break
+			}
+		}
+		if len(quotes) > 0 {
+			out = append(out, semanticSourceEvidence{Path: semanticClamp(path, 1024), Quotes: quotes})
+		}
+		if len(out) == semanticJudgeMaxCitations || quoteCount == semanticJudgeMaxErrorLines {
+			break
+		}
+	}
+	return out
+}
+
+func semanticSourceEvidencePaths(contentByPath map[string][]string, parsed analysisResponse, prior *analysisResponse) []string {
+	available := make([]string, 0, len(contentByPath))
+	for path := range contentByPath {
+		available = append(available, path)
+	}
+	sort.Strings(available)
+	match := func(candidate string) string {
+		_, normalized := canonicalTrackedArtifactPath(candidate)
+		if _, ok := contentByPath[normalized]; ok {
+			return normalized
+		}
+		best := ""
+		for _, availablePath := range available {
+			if !strings.HasSuffix(normalized, "/"+availablePath) || len(availablePath) <= len(best) {
+				continue
+			}
+			best = availablePath
+		}
+		return best
+	}
+	draftPaths := func(draft analysisResponse) []string {
+		seen := map[string]bool{}
+		var paths []string
+		add := func(candidate string) {
+			path := match(candidate)
+			if path == "" || seen[path] {
+				return
+			}
+			seen[path] = true
+			paths = append(paths, path)
+		}
+		for _, path := range draft.RelevantFiles {
+			add(path)
+		}
+		if draft.CauseLocation != nil && !draft.CauseLocation.External {
+			for _, path := range draft.CauseLocation.Files {
+				add(path)
+			}
+		}
+		for _, field := range draft.proseFields() {
+			for _, path := range sourceCitationRE.FindAllString(field, -1) {
+				add(path)
+			}
+		}
+		return paths
+	}
+	currentPaths := draftPaths(parsed)
+	var priorPaths []string
+	if prior != nil {
+		priorPaths = draftPaths(*prior)
+	}
+	seen := map[string]bool{}
+	paths := make([]string, 0, len(currentPaths)+len(priorPaths))
+	add := func(candidate string) {
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		paths = append(paths, candidate)
+	}
+	if len(currentPaths) > 0 {
+		add(currentPaths[0])
+	}
+	for _, candidate := range priorPaths {
+		if !seen[candidate] {
+			add(candidate)
+			break
+		}
+	}
+	for i := 0; i < max(len(currentPaths), len(priorPaths)); i++ {
+		if i < len(currentPaths) {
+			add(currentPaths[i])
+		}
+		if i < len(priorPaths) {
+			add(priorPaths[i])
+		}
+	}
+	return paths
+}
+
+func trimSemanticSourceEvidence(evidence *[]semanticSourceEvidence) bool {
+	if evidence == nil || len(*evidence) == 0 {
+		return false
+	}
+	for i := len(*evidence) - 1; i >= 0; i-- {
+		if len((*evidence)[i].Quotes) > 1 {
+			(*evidence)[i].Quotes = (*evidence)[i].Quotes[:len((*evidence)[i].Quotes)-1]
+			return true
+		}
+	}
+	if len(*evidence) > 2 {
+		*evidence = (*evidence)[:len(*evidence)-1]
+		return true
+	}
+	return false
 }
 
 type semanticLineCandidate struct {

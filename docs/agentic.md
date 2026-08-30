@@ -164,10 +164,12 @@ Cache acceptance is evaluated separately under the configured critique policy.
 ### Semantic review
 
 The semantic judge evaluates causal and evidence quality after deterministic
-checks. It can request a bounded revision, but a later draft does not win merely
-because it is newer. Draft selection prevents new hard failures, unsupported
-root-cause changes, and regressions that drop high-confidence cited facts without
-an equally supported replacement.
+checks. Its bounded evidence digest includes validated artifact evidence and
+verified excerpts from the project source files read during the investigation.
+It can request a bounded revision, but a later draft does not win merely because
+it is newer. Draft selection prevents new hard failures, unsupported root-cause
+changes, and regressions that drop high-confidence cited facts without an equally
+supported replacement.
 
 If a repair response is unusable, the engine can retain the best earlier
 parseable draft. Only the selected draft controls cache acceptance and

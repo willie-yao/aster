@@ -3,6 +3,10 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,6 +51,57 @@ func TestSemanticCritique_EmptyMeansSound(t *testing.T) {
 	}
 	if len(result.Findings) != 0 {
 		t.Errorf("expected no findings, got %v", result.Findings)
+	}
+}
+
+func TestSemanticCritiquePassesSourceGroundedCausalClaim(t *testing.T) {
+	shrinkCallDelay(t)
+	var sawSource atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil || len(request.Messages) == 0 {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var input semanticJudgeInput
+		if json.Unmarshal([]byte(request.Messages[len(request.Messages)-1].Content), &input) != nil {
+			http.Error(w, "invalid semantic input", http.StatusBadRequest)
+			return
+		}
+		grounded := len(input.Evidence.VerifiedSourceEvidence) == 1 &&
+			input.Evidence.VerifiedSourceEvidence[0].Path == "test/e2e/resize.go" &&
+			strings.Contains(strings.Join(input.Evidence.VerifiedSourceEvidence[0].Quotes, "\n"), "RetryOnConflict")
+		sawSource.Store(grounded)
+		response := `{"findings":[{"class":"causal_link_unsupported","detail":"The source implementation was not provided."}]}`
+		if grounded {
+			response = `{"findings":[]}`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatRespFinal(response)))
+	}))
+	t.Cleanup(server.Close)
+
+	client := newAgenticTestClient(t, server.URL)
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{},
+		readSourceFull: map[string]bool{"test/e2e/resize.go": true},
+		sourceContentByPath: map[string][]string{
+			"test/e2e/resize.go": {"return retry.RetryOnConflict(backoff, updatePVC)"},
+		},
+	}
+	result, err := client.semanticCritique(context.Background(), state, semanticJudgeStageDraft, analysisResponse{
+		RootCause:    "test/e2e/resize.go retries the stale PVC update conflict.",
+		SuggestedFix: "Keep the RetryOnConflict update path.", RelevantFiles: []string{"test/e2e/resize.go"},
+	}, nil, nil, contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawSource.Load() || len(result.Findings) != 0 {
+		t.Fatalf("source-grounded review = saw_source:%t findings:%+v", sawSource.Load(), result.Findings)
 	}
 }
 
@@ -394,6 +449,11 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 				20: "2026-08-07T10:00:05Z PodGroup v1beta1 request completed successfully",
 			}},
 		},
+		readSourceFull: map[string]bool{"test/e2e/reconcile.go": true},
+		sourceContentByPath: map[string][]string{
+			"test/e2e/reconcile.go": {"func reconcile() error { return retry.RetryOnConflict(backoff, update) }"},
+			"test/e2e/legacy.go":    {"func legacyReconcile() error { return updateOnce() }"},
+		},
 		initialEvidencePlan: []skills.PlannedSkill{{
 			ID: "engine.generic", RequiredEvidence: []skills.PlannedEvidenceGroup{{
 				ID: "secondary", Description: "secondary controller evidence", CandidatePaths: []string{"unused.log"},
@@ -402,10 +462,11 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 		evidenceRevision: 3,
 	}
 	current := analysisResponse{
-		Summary: "request failed", RootCause: "The PodGroup v1beta1 request returned 404 NotFound and blocked startup.", SuggestedFix: "Use the served API.",
+		Summary: "request failed", RootCause: "The PodGroup v1beta1 request returned 404 NotFound and test/e2e/reconcile.go retries it.", SuggestedFix: "Use the served API.",
+		RelevantFiles:     []string{"test/e2e/reconcile.go"},
 		EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 10, LineEnd: 10, Quote: "PodGroup v1beta1 request returned 404"}},
 	}
-	prior := analysisResponse{RootCause: "A later timeout caused the failure.", SuggestedFix: "Increase the timeout."}
+	prior := analysisResponse{RootCause: "test/e2e/legacy.go performs one update before a later timeout.", SuggestedFix: "Increase the timeout.", RelevantFiles: []string{"test/e2e/legacy.go"}}
 	raw, err := formatSemanticJudgeInput(state, semanticJudgeStageRevision, current, &prior, []semanticFinding{{Class: semanticFindingSpecificErrorIgnored, Detail: "Use the specific request error."}})
 	if err != nil {
 		t.Fatal(err)
@@ -426,6 +487,13 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 	if len(input.Evidence.ValidatedCitations) != 1 || input.Evidence.ValidatedCitations[0].Quote != state.analysisEvidence["build.log"].Lines[10] {
 		t.Fatalf("validated citation lines = %+v", input.Evidence.ValidatedCitations)
 	}
+	if len(input.Evidence.VerifiedSourceEvidence) != 2 || input.Evidence.VerifiedSourceEvidence[0].Path != "test/e2e/reconcile.go" ||
+		len(input.Evidence.VerifiedSourceEvidence[0].Quotes) != 1 || !strings.Contains(input.Evidence.VerifiedSourceEvidence[0].Quotes[0], "RetryOnConflict") {
+		t.Fatalf("verified source evidence = %+v", input.Evidence.VerifiedSourceEvidence)
+	}
+	if input.Evidence.VerifiedSourceEvidence[1].Path != "test/e2e/legacy.go" || !strings.Contains(input.Evidence.VerifiedSourceEvidence[1].Quotes[0], "updateOnce") {
+		t.Fatalf("prior source evidence = %+v", input.Evidence.VerifiedSourceEvidence)
+	}
 	if len(input.Evidence.HighSpecificityErrors) == 0 || input.Evidence.HighSpecificityErrors[0].Line != 10 {
 		t.Fatalf("specific errors = %+v", input.Evidence.HighSpecificityErrors)
 	}
@@ -437,17 +505,97 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 	}
 }
 
+func TestBoundedSemanticSourceEvidence(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]string{
+		"priority.go": {strings.Repeat("a", 2000), strings.Repeat("b", 2000), strings.Repeat("c", 2000)},
+	}}
+	for i := range 10 {
+		state.sourceContentByPath[fmt.Sprintf("pkg/file-%02d.go", i)] = []string{strings.Repeat("x", 2000)}
+	}
+	relevant := []string{"priority.go"}
+	for i := range 10 {
+		relevant = append(relevant, fmt.Sprintf("pkg/file-%02d.go", i))
+	}
+	evidence := boundedSemanticSourceEvidence(state, analysisResponse{RelevantFiles: relevant}, nil)
+	if len(evidence) == 0 || evidence[0].Path != "priority.go" || len(evidence) > semanticJudgeMaxCitations {
+		t.Fatalf("source evidence paths = %+v", evidence)
+	}
+	quotes := 0
+	for _, item := range evidence {
+		quotes += len(item.Quotes)
+	}
+	if quotes != semanticJudgeMaxErrorLines || len(evidence[0].Quotes) != semanticJudgeMaxSourceQuotes ||
+		len(evidence[0].Quotes[0]) != semanticJudgeEvidenceQuoteBytes || len(evidence[0].Quotes[1]) != semanticJudgeFallbackQuoteBytes {
+		t.Fatalf("source evidence bounds = paths:%d quotes:%d first:%d second:%d", len(evidence), quotes, len(evidence[0].Quotes[0]), len(evidence[0].Quotes[1]))
+	}
+	if unreferenced := boundedSemanticSourceEvidence(state, analysisResponse{}, nil); len(unreferenced) != 0 {
+		t.Fatalf("unreferenced source evidence = %+v", unreferenced)
+	}
+}
+
+func TestSemanticSourceEvidencePrefersExactAndLongestPaths(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]string{
+		"foo.go":     {"short path"},
+		"pkg/foo.go": {"exact path"},
+	}}
+	exact := boundedSemanticSourceEvidence(state, analysisResponse{RelevantFiles: []string{"pkg/foo.go"}}, nil)
+	if len(exact) != 1 || exact[0].Path != "pkg/foo.go" || exact[0].Quotes[0] != "exact path" {
+		t.Fatalf("exact source evidence = %+v", exact)
+	}
+	qualified := boundedSemanticSourceEvidence(state, analysisResponse{RelevantFiles: []string{"github.com/example/project/pkg/foo.go"}}, nil)
+	if len(qualified) != 1 || qualified[0].Path != "pkg/foo.go" || qualified[0].Quotes[0] != "exact path" {
+		t.Fatalf("qualified source evidence = %+v", qualified)
+	}
+}
+
+func TestSemanticSourceEvidenceReservesPriorDraftCapacity(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]string{}}
+	current := analysisResponse{}
+	prior := analysisResponse{}
+	for i := range 4 {
+		currentPath := fmt.Sprintf("current-%d.go", i)
+		priorPath := fmt.Sprintf("prior-%d.go", i)
+		state.sourceContentByPath[currentPath] = []string{"current primary", "current secondary"}
+		state.sourceContentByPath[priorPath] = []string{"prior primary", "prior secondary"}
+		current.RelevantFiles = append(current.RelevantFiles, currentPath)
+		prior.RelevantFiles = append(prior.RelevantFiles, priorPath)
+	}
+	evidence := boundedSemanticSourceEvidence(state, current, &prior)
+	paths := make([]string, len(evidence))
+	for i, item := range evidence {
+		paths[i] = item.Path
+	}
+	for _, expected := range []string{"current-0.go", "prior-0.go", "current-1.go", "prior-1.go"} {
+		if !slices.Contains(paths, expected) {
+			t.Fatalf("source evidence paths = %v, missing %q", paths, expected)
+		}
+	}
+}
+
 func TestFormatSemanticJudgeInputTrimsToHardByteLimit(t *testing.T) {
-	state := &agentState{readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{}}
+	state := &agentState{
+		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{},
+		sourceContentByPath: map[string][]string{
+			"current.go": {strings.Repeat("current source ", 200)},
+			"prior.go":   {strings.Repeat("prior source ", 200)},
+		},
+	}
 	huge := strings.Repeat("resource-v1beta1 returned 404 NotFound because the operation failed. ", 1000)
-	current := analysisResponse{Summary: huge, RootCause: huge, SuggestedFix: huge}
-	prior := analysisResponse{Summary: huge, RootCause: huge, SuggestedFix: huge}
+	current := analysisResponse{Summary: huge, RootCause: huge, SuggestedFix: huge, RelevantFiles: []string{"current.go"}}
+	prior := analysisResponse{Summary: huge, RootCause: huge, SuggestedFix: huge, RelevantFiles: []string{"prior.go"}}
 	raw, err := formatSemanticJudgeInput(state, semanticJudgeStageRevision, current, &prior, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(raw) > semanticJudgeInputMaxBytes {
 		t.Fatalf("semantic input bytes = %d, maximum = %d", len(raw), semanticJudgeInputMaxBytes)
+	}
+	var input semanticJudgeInput
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		t.Fatal(err)
+	}
+	if len(input.Evidence.VerifiedSourceEvidence) < 2 || input.Evidence.VerifiedSourceEvidence[0].Path != "current.go" || input.Evidence.VerifiedSourceEvidence[1].Path != "prior.go" {
+		t.Fatalf("trimmed source evidence = %+v", input.Evidence.VerifiedSourceEvidence)
 	}
 }
 
