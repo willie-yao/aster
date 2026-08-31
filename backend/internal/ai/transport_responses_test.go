@@ -55,12 +55,6 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if store, ok := requests[0]["store"].(bool); !ok || store {
 		t.Fatalf("store = %#v, want false", requests[0]["store"])
 	}
-	if _, ok := requests[0]["type"]; ok {
-		t.Fatalf("HTTP request included websocket type: %#v", requests[0])
-	}
-	if _, ok := requests[0]["previous_response_id"]; ok {
-		t.Fatalf("HTTP request included previous_response_id: %#v", requests[0])
-	}
 	if _, ok := requests[0]["service_tier"]; ok {
 		t.Fatalf("default request included service_tier: %#v", requests[0])
 	}
@@ -288,7 +282,6 @@ func TestServiceTierConfiguration(t *testing.T) {
 	for _, opts := range []Options{
 		{API: APIChatCompletions, Endpoint: "https://api.openai.com/v1/chat/completions", Model: "m", ServiceTier: modelprovider.ServiceTierFlex},
 		{API: APIResponses, Endpoint: "https://api.githubcopilot.com/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex},
-		{API: APIResponses, Endpoint: "https://api.openai.com/v1/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex, ResponsesWebSocket: true},
 	} {
 		if err := NewClientWithOptions(opts).ValidateConfiguration(); err == nil {
 			t.Fatalf("invalid service tier configuration passed: %+v", opts)

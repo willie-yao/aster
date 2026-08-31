@@ -71,9 +71,6 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 	if err := ai.ValidateToolCallingConfiguration(provider.API, provider.Model, provider.ReasoningEffort); err != nil {
 		return nil, err
 	}
-	if cfg.AI != nil && cfg.AI.ResponsesWebSocket && provider.API != project.AIAPIResponses {
-		return nil, fmt.Errorf("ai.responses_websocket requires ai.api %q", project.AIAPIResponses)
-	}
 	if provider.Endpoint == "" || provider.Model == "" {
 		return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
 	}
@@ -156,18 +153,16 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if opts.Project == nil || opts.Project.Config == nil {
 		return nil, fmt.Errorf("analysis project configuration is required")
 	}
-	responsesWebSocket := opts.Project.Config.AI != nil && opts.Project.Config.AI.ResponsesWebSocket
 	client := ai.NewClientWithOptions(ai.Options{
-		Token:              opts.Token,
-		CacheDir:           opts.DataDir,
-		API:                opts.Project.Provider.API,
-		Endpoint:           opts.Project.Provider.Endpoint,
-		Model:              opts.Project.Provider.Model,
-		ReasoningEffort:    opts.Project.Provider.ReasoningEffort,
-		ServiceTier:        opts.Project.Provider.ServiceTier,
-		ExtraHeaders:       opts.Project.Provider.Headers,
-		MaxOutputTokens:    opts.MaxOutputTokens,
-		ResponsesWebSocket: responsesWebSocket,
+		Token:           opts.Token,
+		CacheDir:        opts.DataDir,
+		API:             opts.Project.Provider.API,
+		Endpoint:        opts.Project.Provider.Endpoint,
+		Model:           opts.Project.Provider.Model,
+		ReasoningEffort: opts.Project.Provider.ReasoningEffort,
+		ServiceTier:     opts.Project.Provider.ServiceTier,
+		ExtraHeaders:    opts.Project.Provider.Headers,
+		MaxOutputTokens: opts.MaxOutputTokens,
 	})
 	if err := client.ValidateToolConfiguration(); err != nil {
 		return nil, err

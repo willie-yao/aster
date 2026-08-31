@@ -102,7 +102,7 @@ agentLoop:
 			}
 		}
 		requestStart := time.Now()
-		resp, err := c.callAgenticModelRequest(ctx, modelRequest{
+		resp, err := c.callModelRequest(ctx, modelRequest{
 			Model: c.model, Messages: messages, Tools: schemas,
 			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
 		})
