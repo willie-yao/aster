@@ -421,18 +421,6 @@ func buildSemanticEvidenceDigest(state *agentState, parsed analysisResponse, pri
 	return digest
 }
 
-type semanticSourceRange struct {
-	Start int
-	End   int
-}
-
-type semanticSourceRangeHint struct {
-	Path string
-	semanticSourceRange
-}
-
-var semanticSourceClaimConnectorRE = regexp.MustCompile(`(?i)^\s*(?:at\s+)?$`)
-
 func boundedSemanticSourceEvidence(state *agentState, parsed analysisResponse, prior *analysisResponse) []semanticSourceEvidence {
 	if state == nil || len(state.sourceContentByPath) == 0 {
 		return nil
@@ -443,12 +431,12 @@ func boundedSemanticSourceEvidence(state *agentState, parsed analysisResponse, p
 	for _, path := range paths {
 		quotes := make([]string, 0, semanticJudgeMaxSourceQuotes)
 		seen := map[string]bool{}
-		for _, snippet := range prioritizedSemanticSourceSnippets(state.sourceContentByPath, path, parsed, prior) {
+		for _, content := range state.sourceContentByPath[path] {
 			limit := semanticJudgeEvidenceQuoteBytes
 			if len(quotes) > 0 {
 				limit = semanticJudgeFallbackQuoteBytes
 			}
-			quote := semanticClamp(snippet.Text, limit)
+			quote := semanticClamp(content, limit)
 			if quote == "" || seen[quote] {
 				continue
 			}
@@ -469,177 +457,31 @@ func boundedSemanticSourceEvidence(state *agentState, parsed analysisResponse, p
 	return out
 }
 
-func prioritizedSemanticSourceSnippets(contentByPath map[string][]sourceContentSnippet, path string, parsed analysisResponse, prior *analysisResponse) []sourceContentSnippet {
-	snippets := append([]sourceContentSnippet(nil), contentByPath[path]...)
-	ranges := semanticSourceReferenceRanges(contentByPath, path, parsed, prior)
-	sort.SliceStable(snippets, func(i, j int) bool {
-		iOverlap := semanticSourceSnippetOverlaps(snippets[i], ranges)
-		jOverlap := semanticSourceSnippetOverlaps(snippets[j], ranges)
-		if iOverlap != jOverlap {
-			return iOverlap
-		}
-		if snippets[i].Targeted != snippets[j].Targeted {
-			return snippets[i].Targeted
-		}
-		return false
-	})
-	return snippets
-}
-
-func captureSemanticSourceRangeHints(parsed analysisResponse) analysisResponse {
-	seen := map[semanticSourceRangeHint]bool{}
-	for _, field := range parsed.proseFields() {
-		for _, claim := range proseLineClaims(field) {
-			if !claim.Valid || claim.Path == "" || !isSourceCitation(claim.Path) {
-				continue
-			}
-			hint := semanticSourceRangeHint{
-				Path: claim.Path, semanticSourceRange: semanticSourceRange{Start: claim.Start, End: claim.End},
-			}
-			if seen[hint] {
-				continue
-			}
-			seen[hint] = true
-			parsed.sourceRangeHints = append(parsed.sourceRangeHints, hint)
-			if len(parsed.sourceRangeHints) == semanticJudgeMaxErrorLines {
-				return parsed
-			}
-		}
-	}
-	return parsed
-}
-
-func semanticSourceReferenceRanges(contentByPath map[string][]sourceContentSnippet, path string, parsed analysisResponse, prior *analysisResponse) []semanticSourceRange {
-	available := semanticSourceAvailablePaths(contentByPath)
-	var ranges []semanticSourceRange
-	addDraft := func(draft analysisResponse) {
-		for _, hint := range draft.sourceRangeHints {
-			if matchSemanticSourcePath(contentByPath, available, hint.Path) != path {
-				continue
-			}
-			ranges = append(ranges, hint.semanticSourceRange)
-			if len(ranges) == semanticJudgeMaxErrorLines {
-				return
-			}
-		}
-	}
-	addDraft(parsed)
-	if prior != nil && len(ranges) < semanticJudgeMaxErrorLines {
-		addDraft(*prior)
-	}
-	return ranges
-}
-
-func semanticSourceLineClaimSupported(claim proseLineClaim, contentByPath map[string][]sourceContentSnippet) bool {
-	if !claim.Valid || claim.Path == "" || len(contentByPath) == 0 {
-		return false
-	}
-	available := semanticSourceAvailablePaths(contentByPath)
-	path := matchSemanticSourcePath(contentByPath, available, claim.Path)
-	for _, snippet := range contentByPath[path] {
-		if snippet.LineStart > 0 && snippet.LineStart <= claim.Start && claim.End <= snippet.LineEnd {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *agentState) removeVerifiedSourceLineReferences(text string) string {
-	if s == nil || len(s.sourceContentByPath) == 0 || text == "" {
-		return text
-	}
-	pathMatches := lineClaimPathMatches(text)
-	var out strings.Builder
-	last := 0
-	changed := false
-	for _, claim := range proseLineClaims(text) {
-		if !semanticSourceLineClaimSupported(claim, s.sourceContentByPath) {
-			continue
-		}
-		start := claim.MatchStart
-		for i := len(pathMatches) - 1; i >= 0; i-- {
-			pathMatch := pathMatches[i]
-			if pathMatch[1] > claim.MatchStart || NormalizeArtifactCitation(text[pathMatch[0]:pathMatch[1]]) != claim.Path {
-				continue
-			}
-			if semanticSourceClaimConnectorRE.MatchString(text[pathMatch[1]:claim.MatchStart]) {
-				start = pathMatch[1]
-			}
-			break
-		}
-		if start < last {
-			continue
-		}
-		out.WriteString(text[last:start])
-		last = claim.MatchEnd
-		changed = true
-	}
-	if !changed {
-		return text
-	}
-	out.WriteString(text[last:])
-	return out.String()
-}
-
-func (s *agentState) removePublishedSourceLineReferences(parsed analysisResponse) analysisResponse {
-	parsed.RootCause = s.removeVerifiedSourceLineReferences(parsed.RootCause)
-	parsed.Summary = s.removeVerifiedSourceLineReferences(parsed.Summary)
-	parsed.SuggestedFix = s.removeVerifiedSourceLineReferences(parsed.SuggestedFix)
-	for i, value := range parsed.RelevantFiles {
-		parsed.RelevantFiles[i] = s.removeVerifiedSourceLineReferences(value)
-	}
-	if parsed.CauseLocation != nil {
-		parsed.CauseLocation = parsed.CauseLocation.Clone()
-		for i, value := range parsed.CauseLocation.Files {
-			parsed.CauseLocation.Files[i] = s.removeVerifiedSourceLineReferences(value)
-		}
-	}
-	return parsed
-}
-
-func semanticSourceSnippetOverlaps(snippet sourceContentSnippet, ranges []semanticSourceRange) bool {
-	if snippet.LineStart <= 0 || snippet.LineEnd < snippet.LineStart {
-		return false
-	}
-	for _, reference := range ranges {
-		if snippet.LineStart <= reference.End && reference.Start <= snippet.LineEnd {
-			return true
-		}
-	}
-	return false
-}
-
-func semanticSourceAvailablePaths(contentByPath map[string][]sourceContentSnippet) []string {
+func semanticSourceEvidencePaths(contentByPath map[string][]string, parsed analysisResponse, prior *analysisResponse) []string {
 	available := make([]string, 0, len(contentByPath))
 	for path := range contentByPath {
 		available = append(available, path)
 	}
 	sort.Strings(available)
-	return available
-}
-
-func matchSemanticSourcePath(contentByPath map[string][]sourceContentSnippet, available []string, candidate string) string {
-	_, normalized := canonicalTrackedArtifactPath(candidate)
-	if _, ok := contentByPath[normalized]; ok {
-		return normalized
-	}
-	best := ""
-	for _, availablePath := range available {
-		if !strings.HasSuffix(normalized, "/"+availablePath) || len(availablePath) <= len(best) {
-			continue
+	match := func(candidate string) string {
+		_, normalized := canonicalTrackedArtifactPath(candidate)
+		if _, ok := contentByPath[normalized]; ok {
+			return normalized
 		}
-		best = availablePath
+		best := ""
+		for _, availablePath := range available {
+			if !strings.HasSuffix(normalized, "/"+availablePath) || len(availablePath) <= len(best) {
+				continue
+			}
+			best = availablePath
+		}
+		return best
 	}
-	return best
-}
-
-func semanticSourceEvidencePaths(contentByPath map[string][]sourceContentSnippet, parsed analysisResponse, prior *analysisResponse) []string {
-	available := semanticSourceAvailablePaths(contentByPath)
 	draftPaths := func(draft analysisResponse) []string {
 		seen := map[string]bool{}
 		var paths []string
 		add := func(candidate string) {
-			path := matchSemanticSourcePath(contentByPath, available, candidate)
+			path := match(candidate)
 			if path == "" || seen[path] {
 				return
 			}
@@ -1527,7 +1369,7 @@ func semanticInitialFindingsAllowCauseReplacement(classes []string) bool {
 // compared with the prior draft before deterministic selection.
 func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, reviewedAttempt int, headroom contextHeadroom, policy CritiqueCachePolicy) analysisResponse {
 	if state.bestDraft == nil {
-		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, state.citationContext())
+		out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		candidate := state.newDraftCandidate("finalize", finalContent, finalProviderItems, parsed, out)
 		reviewedAttempt = candidate.attempt
 		state.considerFallbackDraft(candidate, false)
@@ -1564,7 +1406,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 		log.Printf("  ✗ semantic judge (post-loop): %d finding(s); refinalize did not parse, keeping draft", len(result.Findings))
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, state.citationContext())
+	out := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(rp, &out, treeSet)

@@ -151,7 +151,7 @@ func tryParseAnalysis(s string) (analysisResponse, bool) {
 	if out.RootCause == "" && out.Summary == "" {
 		return analysisResponse{}, false
 	}
-	return captureSemanticSourceRangeHints(out), true
+	return out, true
 }
 
 var toolsUnsupportedRe = regexp.MustCompile(`(?i)tool[s_]?call|function[s_]?call|tools_choice|tools provided|tools?\s+(?:are\s+)?not supported|function calling`)

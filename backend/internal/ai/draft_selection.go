@@ -247,14 +247,13 @@ func (s *agentState) publishedCritiqueOutcome(parsed analysisResponse) critiqueO
 }
 
 func (s *agentState) publishedAnalysis(parsed analysisResponse) analysisResponse {
-	parsed = s.removePublishedSourceLineReferences(parsed)
-	parsed = sanitizePublishedCitations(parsed, s.citationContext())
+	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	parsed = s.preparePublishedAnalysis(parsed)
 	return parsed
 }
 
 func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOutcome {
-	out := critiqueDraftWithContent(parsed, s.readArtifactsFull, s.readArtifactsBase, s.evidenceContentByPath, s.readSourceFull, matchSkillsForDraft(s, parsed), s.consecutiveFailures, s.citationContext())
+	out := critiqueDraftWithContent(parsed, s.readArtifactsFull, s.readArtifactsBase, s.evidenceContentByPath, s.readSourceFull, matchSkillsForDraft(s, parsed), s.consecutiveFailures, analysisCitationContext{Evidence: s.analysisEvidence, Full: s.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := s.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)

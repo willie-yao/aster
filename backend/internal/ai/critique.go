@@ -234,7 +234,7 @@ func remediationClauses(text string) []string {
 // That covers both a materially stronger gate and a publication rule whose old
 // output no longer reflects what the model said. Cosmetic prompt-shape changes
 // do not bump.
-const currentCritiqueVersion = 14
+const currentCritiqueVersion = 15
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned
@@ -489,18 +489,8 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 }
 
 type analysisCitationContext struct {
-	Evidence      map[string]*analysisChatEvidence
-	SourceContent map[string][]sourceContentSnippet
-	Full          bool
-}
-
-func (s *agentState) citationContext() analysisCitationContext {
-	if s == nil {
-		return analysisCitationContext{}
-	}
-	return analysisCitationContext{
-		Evidence: s.analysisEvidence, SourceContent: s.sourceContentByPath, Full: s.analysisEvidenceFull,
-	}
+	Evidence map[string]*analysisChatEvidence
+	Full     bool
 }
 
 type proseLineClaim struct {
@@ -654,13 +644,8 @@ var bareLineClaimRE = regexp.MustCompile(`\bL(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?
 func validateAnalysisCitations(parsed analysisResponse, context analysisCitationContext) []string {
 	claims := proseLineClaims(parsed.RootCause + "\n" + parsed.Summary)
 	if context.Full {
-		if len(parsed.EvidenceCitations) > 0 {
+		if len(parsed.EvidenceCitations) > 0 || len(claims) > 0 {
 			return []string{"evidence read budget was exceeded"}
-		}
-		for _, claim := range claims {
-			if !semanticSourceLineClaimSupported(claim, context.SourceContent) {
-				return []string{"evidence read budget was exceeded"}
-			}
 		}
 		return nil
 	}
@@ -676,9 +661,6 @@ func validateAnalysisCitations(parsed analysisResponse, context analysisCitation
 	for _, claim := range claims {
 		if !claim.Valid {
 			issues = append(issues, fmt.Sprintf("prose line claim %q is invalid", claim.Raw))
-			continue
-		}
-		if semanticSourceLineClaimSupported(claim, context.SourceContent) {
 			continue
 		}
 		matched := false
