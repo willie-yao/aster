@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -390,28 +389,6 @@ func TestDetectContextWindowTokens(t *testing.T) {
 			t.Error("expected ok=false when endpoint isn't a chat-completions URL")
 		}
 	})
-}
-
-func TestResponsesWebSocketValidation(t *testing.T) {
-	chat := NewClientWithOptions(Options{
-		API: APIChatCompletions, Endpoint: "https://example/v1/chat/completions", Model: "m", ResponsesWebSocket: true,
-	})
-	if err := chat.ValidateConfiguration(); err == nil || !strings.Contains(err.Error(), "responses websocket requires") {
-		t.Fatalf("chat validation error = %v", err)
-	}
-	responses := NewClientWithOptions(Options{
-		API: APIResponses, Endpoint: "https://example/v1/responses", Model: "m", ResponsesWebSocket: true,
-	})
-	if err := responses.ValidateConfiguration(); err != nil {
-		t.Fatalf("responses validation error = %v", err)
-	}
-	defaultResponses := NewClientWithOptions(Options{API: APIResponses, Endpoint: "https://example/v1/responses", Model: "m"})
-	if defaultResponses.conversation != nil || responses.conversation == nil {
-		t.Fatalf("conversation defaults: default=%T enabled=%T", defaultResponses.conversation, responses.conversation)
-	}
-	if defaultResponses.ModelFingerprint() != responses.ModelFingerprint() {
-		t.Fatalf("websocket changed model fingerprint: default=%q enabled=%q", defaultResponses.ModelFingerprint(), responses.ModelFingerprint())
-	}
 }
 
 func TestModelFingerprintSeparatesResponsesWithoutChangingChat(t *testing.T) {

@@ -861,25 +861,19 @@ func (c *Client) doAnalyzeAgentic(
 	defer cancel()
 	state.traceCtx = loopCtx
 
-	analysisClient, closeConversation, err := c.newAgenticConversation(loopCtx)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer closeConversation()
-
-	loop, err := analysisClient.runAgenticLoop(loopCtx, state, messages, schemas)
+	loop, err := c.runAgenticLoop(loopCtx, state, messages, schemas)
 	if err != nil {
 		return nil, nil, err
 	}
 	// The deterministic post-loop repair paths share one bounded retry budget.
 	critiqueRetries := &critiqueRetryBudget{max: in.Opts.CritiqueMaxRetries}
-	parsed := analysisClient.applyPostLoopCritique(loopCtx, state, loop.messages, loop.finalContent, loop.finalProviderItems, loop.parsed, in.Opts, critiqueRetries, loop.finalDraftObserved, loop.finalDraftAttempt, loop.draftPhase)
+	parsed := c.applyPostLoopCritique(loopCtx, state, loop.messages, loop.finalContent, loop.finalProviderItems, loop.parsed, in.Opts, critiqueRetries, loop.finalDraftObserved, loop.finalDraftAttempt, loop.draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, loop.gcsFloorOnlyRetries)
-	parsed = analysisClient.prepareCacheablePublishedAnalysis(loopCtx, state, loop.messages, parsed, in.Opts)
+	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, loop.messages, parsed, in.Opts)
 
 	state.notifyDraftSelection()
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
-	record := analysisRecordFromState(parsed, analysisClient, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
+	record := analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
 	record, ok = stampRecordDisposition(record)
 	if !ok {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "rejected", ErrorCode: "unsafe_analysis"})
@@ -890,10 +884,10 @@ func (c *Client) doAnalyzeAgentic(
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
 	}
-	analysisClient.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
-	analysisClient.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
+	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
+	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
 
-	record = analysisRecordFromState(parsed, analysisClient, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
+	record = analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
 	record, ok = stampRecordDisposition(record)
 	if !ok {
 		return nil, nil, ErrRejectedAnalysis
@@ -1304,7 +1298,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 			return state.bestDraft.parsed
 		}
 		requestStart := time.Now()
-		resp, err := c.callAgenticModelRequest(ctx, modelRequest{
+		resp, err := c.callModelRequest(ctx, modelRequest{
 			Model: c.model, Messages: repairMessages, Tools: schemas,
 			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
 		})

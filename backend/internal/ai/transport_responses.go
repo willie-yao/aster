@@ -24,20 +24,18 @@ func newResponsesTransport(api *httpAPIClient) *responsesTransport {
 }
 
 type responsesRequest struct {
-	Type               string               `json:"type,omitempty"`
-	PreviousResponseID string               `json:"previous_response_id,omitempty"`
-	Model              string               `json:"model"`
-	Input              []any                `json:"input"`
-	Tools              []responsesTool      `json:"tools,omitempty"`
-	Text               *responsesTextConfig `json:"text,omitempty"`
-	ToolChoice         *responsesToolChoice `json:"tool_choice,omitempty"`
-	Reasoning          *responsesReasoning  `json:"reasoning,omitempty"`
-	ParallelToolCalls  *bool                `json:"parallel_tool_calls,omitempty"`
-	Store              bool                 `json:"store"`
-	Include            []string             `json:"include,omitempty"`
-	MaxOutputTokens    int                  `json:"max_output_tokens,omitempty"`
-	PromptCacheKey     string               `json:"prompt_cache_key,omitempty"`
-	ServiceTier        string               `json:"service_tier,omitempty"`
+	Model             string               `json:"model"`
+	Input             []any                `json:"input"`
+	Tools             []responsesTool      `json:"tools,omitempty"`
+	Text              *responsesTextConfig `json:"text,omitempty"`
+	ToolChoice        *responsesToolChoice `json:"tool_choice,omitempty"`
+	Reasoning         *responsesReasoning  `json:"reasoning,omitempty"`
+	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
+	Store             bool                 `json:"store"`
+	Include           []string             `json:"include,omitempty"`
+	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
+	PromptCacheKey    string               `json:"prompt_cache_key,omitempty"`
+	ServiceTier       string               `json:"service_tier,omitempty"`
 }
 
 type responsesReasoning struct {

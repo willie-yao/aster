@@ -94,7 +94,7 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
 	parallel := false
-	resp, err := c.callAgenticModelRequest(ctx, modelRequest{
+	resp, err := c.callModelRequest(ctx, modelRequest{
 		Model: c.model, Messages: messages, Tools: toolDefs,
 		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 	})

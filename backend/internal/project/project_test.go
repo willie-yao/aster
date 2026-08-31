@@ -1,7 +1,6 @@
 package project
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -593,23 +592,6 @@ func TestParse_AgenticInlineFields(t *testing.T) {
 	}
 }
 
-func TestParseResponsesWebSocketIsPrivate(t *testing.T) {
-	cfg, err := parse(strings.NewReader(validYAML + "\nai:\n  api: responses\n  responses_websocket: true\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.AI == nil || !cfg.AI.ResponsesWebSocket {
-		t.Fatalf("AI = %+v", cfg.AI)
-	}
-	raw, err := json.Marshal(cfg.AI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "responses_websocket") {
-		t.Fatalf("public AI JSON contains responses_websocket: %s", raw)
-	}
-}
-
 func TestParse_CritiqueMaxRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1022,14 +1004,6 @@ func TestValidateAIProviderRejectsUnknownReasoningEffort(t *testing.T) {
 	provider := (&Config{}).ResolveAIProvider("", "endpoint", "model", "ultra")
 	if err := ValidateAIProvider(provider); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
 		t.Fatalf("ValidateAIProvider error = %v", err)
-	}
-}
-
-func TestValidateRejectsResponsesWebSocketWithExplicitChat(t *testing.T) {
-	cfg := validConfig()
-	cfg.AI = &AI{API: AIAPIChatCompletions, ResponsesWebSocket: true}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ai.responses_websocket") {
-		t.Fatalf("Validate() error = %v", err)
 	}
 }
 

@@ -89,56 +89,6 @@ func TestClientCallModelRecordsRequestBytesOnProviderError(t *testing.T) {
 	}
 }
 
-type recordingConversation struct {
-	recordingTransport
-	closed bool
-}
-
-func (c *recordingConversation) Close() error {
-	c.closed = true
-	return nil
-}
-
-type fixedConversationTransport struct {
-	conversation modelConversation
-}
-
-func (t fixedConversationTransport) NewConversation(context.Context) (modelConversation, error) {
-	return t.conversation, nil
-}
-
-func TestAgenticConversationLeavesSemanticJudgeOnHTTP(t *testing.T) {
-	base := &recordingTransport{result: &modelResponse{
-		HasMessage: true, Message: modelMessage{Role: "assistant", Content: strPtr(`{"findings":[]}`)},
-	}}
-	conversation := &recordingConversation{recordingTransport: recordingTransport{result: &modelResponse{
-		HasMessage: true, Message: modelMessage{Role: "assistant", Content: strPtr("agentic")},
-	}}}
-	client := &Client{model: "model", transport: base, conversation: fixedConversationTransport{conversation: conversation}}
-	agenticClient, closeConversation, err := client.newAgenticConversation(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeConversation()
-
-	_, err = agenticClient.semanticCritique(t.Context(),
-		&agentState{readArtifactsFull: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{}},
-		semanticJudgeStageDraft, analysisResponse{RootCause: "cause"}, nil, nil,
-		contextHeadroomFor(AgenticOptions{ContextByteBudget: 100_000}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if base.calls != 1 || conversation.calls != 0 {
-		t.Fatalf("semantic calls base=%d conversation=%d", base.calls, conversation.calls)
-	}
-	if _, err := agenticClient.callAgenticModelRequest(t.Context(), modelRequest{Model: "model"}); err != nil {
-		t.Fatal(err)
-	}
-	if base.calls != 1 || conversation.calls != 1 {
-		t.Fatalf("agentic calls base=%d conversation=%d", base.calls, conversation.calls)
-	}
-}
-
 func TestClientCallModelRecordsUsageOperation(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{RetentionDays: 30, RecentOperations: 10, Now: func() time.Time { return now }})

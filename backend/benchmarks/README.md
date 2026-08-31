@@ -93,10 +93,6 @@ Options:
 - `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set
   `BENCH_REPETITION_START=<index>` when an isolated operation must retain its
   planned repetition number instead of restarting at 1.
-- `BENCH_RESPONSES_WEBSOCKET=true` enables the production Responses WebSocket
-  path for the authoritative analysis. It is valid only with
-  `AI_API=responses`. The setting is recorded in the provider and effective
-  input identities so HTTP and WebSocket runs cannot share a cold-cache path.
 - `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
   namespace used by production.
 - `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a
