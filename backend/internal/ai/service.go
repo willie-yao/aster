@@ -509,7 +509,7 @@ func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
 // private entry is always preferred, because serving it costs no model call
 // and may carry a grounded result a concurrent analysis of the same key wrote.
 func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey, promptHash string) bool {
-	if s.client == nil || s.client.preliminaryAttempts(cacheKey) < maxPreliminaryAttempts {
+	if s.client == nil || s.client.preliminaryAttempts(cacheKey, s.agenticOpts.SemanticJudge) < maxPreliminaryAttempts {
 		return false
 	}
 	_, reason := LookupAgenticCache(s.client.cache, cacheKey, s.agenticCachePolicyFor(tc, promptHash, 0))
@@ -526,6 +526,7 @@ func (s *Service) analysisPromptHashWithSources(tc *models.TestCase, userPrompt 
 	// repo must therefore invalidate cached analyses rather than reuse a
 	// classification made against the previous repository.
 	effectiveSystemPrompt := s.systemPrompt + agToolDocs + agenticSourceContextSection(sources, s.sourceRepoOwner, s.sourceRepoName)
+	effectiveSystemPrompt += semanticJudgeFingerprintSuffix(s.agenticOpts.SemanticJudge)
 	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
 		return PromptFingerprint(effectiveSystemPrompt + "\x00" + userPrompt)
 	}

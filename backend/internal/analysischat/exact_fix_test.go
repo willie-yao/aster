@@ -597,7 +597,7 @@ func TestConversationCitationsBoundsTotalQuoteBytes(t *testing.T) {
 // preliminary original analysis no longer blocks a chat answer that carries its
 // own validated evidence. Chat exists to improve such an analysis, so requiring
 // the original to be grounded made the improvement unreachable. An analysis
-// whose causal claim the semantic judge left contested stays ineligible.
+// with a blocking semantic objection stays ineligible; advisory findings remain usable.
 func TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.T) {
 	reply := Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
@@ -605,18 +605,21 @@ func TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.
 		ProposedRevision: &Revision{RootCause: "The terminal branch omits Ready.", SuggestedFix: "Record Ready before returning."},
 	}
 	for _, tc := range []struct {
-		name     string
-		warnings []string
-		wantErr  bool
+		name         string
+		warnings     []string
+		semanticMode string
+		wantErr      bool
 	}{
 		{name: "remediation warning", warnings: []string{models.AnalysisWarningRemediation}},
 		{name: "artifact grounding warning", warnings: []string{models.AnalysisWarningArtifactGrounding}},
-		{name: "unresolved semantic objection", warnings: []string{models.AnalysisWarningSemanticReview}, wantErr: true},
+		{name: "advisory semantic objection", warnings: []string{models.AnalysisWarningSemanticReview}, semanticMode: "advisory"},
+		{name: "blocking semantic objection", warnings: []string{models.AnalysisWarningSemanticReview}, semanticMode: "blocking", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			analyzed := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
 			analyzed.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
 			analyzed.AIAnalysis.DispositionWarnings = tc.warnings
+			analyzed.AIAnalysis.SemanticJudgeMode = tc.semanticMode
 			service, session, requestID := exactFixServiceWithTest(t, reply, analyzed)
 			_, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID)
 			if tc.wantErr {
@@ -644,6 +647,7 @@ func TestPersistedResolvedAnalysisRetainsDispositionWarnings(t *testing.T) {
 				GeneratedAt: "2026-08-13T01:00:00Z", RootCause: "cause", Severity: "High",
 				Disposition:         models.AnalysisDispositionPreliminary,
 				DispositionWarnings: []string{models.AnalysisWarningSemanticReview},
+				SemanticJudgeMode:   "blocking",
 			},
 		},
 	}
@@ -676,6 +680,7 @@ func TestServiceAnalysisFixCandidateRejectsNewlyContestedAnalysis(t *testing.T) 
 	contested := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
 	contested.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
 	contested.AIAnalysis.DispositionWarnings = []string{models.AnalysisWarningSemanticReview}
+	contested.AIAnalysis.SemanticJudgeMode = "blocking"
 	detail := testDetail(contested)
 	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
 	writeJobDetail(t, service.dataDir, detail)

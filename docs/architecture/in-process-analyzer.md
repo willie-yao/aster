@@ -192,7 +192,8 @@ findings cover evidence availability and remediation-quality warnings. The
 configured cache policy determines which classifications block reuse:
 `strict` accepts almost no warnings, `hard` blocks hard findings, and `advisory`
 records findings without making critique itself a cache barrier. Semantic review
-is separate; an unresolved semantic objection prevents cache acceptance.
+is separate: `advisory` records findings without blocking publication or cache
+reuse, `blocking` applies those gates, and `off` skips the review.
 
 If finalization fails, the loop prefers an earlier parseable draft, including a
 strict structured candidate attached to a tool-bearing turn. The selected draft

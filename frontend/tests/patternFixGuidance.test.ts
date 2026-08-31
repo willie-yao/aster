@@ -512,6 +512,7 @@ test("cause Fix routing skips a semantically contested higher-severity failure",
           ...analysis,
           severity: "critical",
           disposition: "preliminary",
+          semantic_judge_mode: "blocking",
           disposition_warnings: ["semantic_review_unresolved"],
           file_links: { "pkg/contested.go": "https://github.com/o/r/blob/4f2a9c1e83b7d0526ab1c94f7e3d81a06b5c2f97/pkg/contested.go" },
         },
@@ -535,4 +536,21 @@ test("cause Fix routing skips a semantically contested higher-severity failure",
     buildID: "700",
     testName: "usable lower severity",
   });
+
+  const advisory = structuredClone(build);
+  advisory.test_cases[0].ai_analysis!.semantic_judge_mode = "advisory";
+  assert.deepEqual(causalGroupFixTarget(group, [advisory]), {
+    buildID: "700",
+    testName: "contested higher severity",
+  });
+
+  for (const mode of ["off", undefined, "unknown"] as const) {
+    const failClosed = structuredClone(build);
+    const analysisWithMode = failClosed.test_cases[0].ai_analysis as unknown as { semantic_judge_mode?: string };
+    analysisWithMode.semantic_judge_mode = mode;
+    assert.deepEqual(causalGroupFixTarget(group, [failClosed]), {
+      buildID: "700",
+      testName: "usable lower severity",
+    });
+  }
 });

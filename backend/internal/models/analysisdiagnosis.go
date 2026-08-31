@@ -3,8 +3,8 @@ package models
 import "slices"
 
 // AnalysisHasUsableDiagnosis reports whether an analysis carries a safe
-// structured diagnosis whose causal claim the semantic judge did not leave
-// contested.
+// structured diagnosis. A blocking semantic objection contests the diagnosis;
+// an advisory objection remains available to downstream evidence-backed flows.
 //
 // It is deliberately weaker than a grounded disposition. Remediation quality,
 // evidence coverage, and investigation budget make an analysis preliminary
@@ -20,7 +20,10 @@ func AnalysisHasUsableDiagnosis(analysis *AIAnalysis) bool {
 	case AnalysisDispositionGrounded:
 		return true
 	case AnalysisDispositionPreliminary:
-		return !slices.Contains(analysis.DispositionWarnings, AnalysisWarningSemanticReview)
+		if slices.Contains(analysis.DispositionWarnings, AnalysisWarningSemanticReview) {
+			return analysis.SemanticJudgeMode == "advisory"
+		}
+		return true
 	default:
 		return false
 	}

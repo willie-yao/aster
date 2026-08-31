@@ -1389,6 +1389,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	}
 	recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "objected", result, ""))
 	state.judgeObjected = true
+	state.semanticFindings = semanticFindingClassList(result.Findings)
 	prior := state.bestDraft.parsed
 	msgs := append(messages,
 		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
@@ -1427,6 +1428,7 @@ func (c *Client) applySemanticJudgePostLoop(ctx context.Context, state *agentSta
 	}
 	state.considerFallbackDraftForPolicy(candidate, true, policy)
 	state.judgeRevised = true
+	state.semanticFindings = nil
 	recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised", IssueCount: len(result.Findings)})
 	log.Printf("  ✓ semantic judge (post-loop): accepted refinalized draft")
 	return state.bestDraft.parsed

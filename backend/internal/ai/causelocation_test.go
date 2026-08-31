@@ -378,6 +378,7 @@ func TestAnalysisPromptHashTracksTheProjectRepository(t *testing.T) {
 // a working copy must not be able to mutate the analysis it was cloned from.
 func TestCloneTestCaseCopiesCauseOwnership(t *testing.T) {
 	original := models.TestCase{AIAnalysis: &models.AIAnalysis{
+		SemanticFindings: []string{"ownership_not_established"},
 		CauseLocation: &models.AnalysisCauseLocation{
 			Repository: "kubernetes/kubernetes", External: true,
 			Files: []string{"pkg/kubelet/cm/devicemanager/manager.go"},
@@ -385,11 +386,12 @@ func TestCloneTestCaseCopiesCauseOwnership(t *testing.T) {
 	}}
 
 	cloned := cloneTestCase(original)
+	cloned.AIAnalysis.SemanticFindings[0] = "mutated"
 	cloned.AIAnalysis.CauseLocation.Repository = "other/repo"
 	cloned.AIAnalysis.CauseLocation.Files[0] = "mutated"
 
 	source := original.AIAnalysis.CauseLocation
-	if source.Repository != "kubernetes/kubernetes" || source.Files[0] != "pkg/kubelet/cm/devicemanager/manager.go" {
+	if original.AIAnalysis.SemanticFindings[0] != "ownership_not_established" || source.Repository != "kubernetes/kubernetes" || source.Files[0] != "pkg/kubelet/cm/devicemanager/manager.go" {
 		t.Fatalf("clone aliased the original cause location: %+v", source)
 	}
 }

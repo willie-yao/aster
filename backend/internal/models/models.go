@@ -225,14 +225,16 @@ type AIAnalysis struct {
 	CachePersistenceAccepted   bool     `json:"-"`
 	CachePolicyRejectionReason string   `json:"-"`
 	JudgeRevisionRejected      bool     `json:"-"`
+	SemanticJudgeMode          string   `json:"semantic_judge_mode,omitempty"`
 
 	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
 	// whether the second-line LLM judge ran, whether it raised objections, and
-	// whether its objections drove an accepted revision. Recorded so the judge's
-	// value can be measured before deciding to keep it always-on.
-	JudgeRan      bool `json:"judge_ran,omitempty"`
-	JudgeObjected bool `json:"judge_objected,omitempty"`
-	JudgeRevised  bool `json:"judge_revised,omitempty"`
+	// whether its objections drove an accepted revision. Blocking policy remains
+	// private; public output exposes the finding state and disposition warning.
+	JudgeRan         bool     `json:"judge_ran,omitempty"`
+	JudgeObjected    bool     `json:"judge_objected,omitempty"`
+	JudgeRevised     bool     `json:"judge_revised,omitempty"`
+	SemanticFindings []string `json:"semantic_findings,omitempty"`
 
 	// CritiqueVersion records the critique contract this analysis passed.
 	// Cache gates require the current version.

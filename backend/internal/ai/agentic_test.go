@@ -2193,7 +2193,7 @@ func TestAgentic_HardPolicyRunsSemanticJudgeWithSoftWarnings(t *testing.T) {
 	key := "agentic:test:hard-policy-soft-semantic"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard, SemanticJudge: true,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard, SemanticJudge: SemanticJudgeBlocking,
 	}), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -2269,7 +2269,7 @@ func TestAgentic_AdvisoryPolicySkipsSemanticJudgeForHardFailures(t *testing.T) {
 	key := "agentic:test:advisory-hard-no-semantic"
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true,
+		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: SemanticJudgeBlocking,
 	}), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -4384,7 +4384,7 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{
 		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.ProjectOwner = "example"

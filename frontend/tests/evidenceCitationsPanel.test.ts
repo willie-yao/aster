@@ -92,6 +92,37 @@ test("an analysis without citations shows no evidence section at all", () => {
   }
 });
 
+
+test("a grounded advisory semantic finding remains visible without becoming preliminary", () => {
+  const analysis = analysisWith([
+    { path: "build-log.txt", line_start: 1, line_end: 1, quote: "failure" },
+  ]);
+  analysis.disposition = "grounded";
+  analysis.semantic_judge_mode = "advisory";
+  analysis.semantic_findings = ["causal_link_unsupported"];
+  analysis.disposition_warnings = ["semantic_review_unresolved"];
+  const rendered = text(render(analysis));
+  assert.match(rendered, /Semantic review noted unresolved concerns/u);
+  assert.match(rendered, /semantic finding itself is non-blocking/u);
+  assert.doesNotMatch(rendered, /Preliminary analysis/u);
+});
+
+test("a preliminary advisory finding separates direct actions from follow-up", () => {
+  const analysis = analysisWith([
+    { path: "build-log.txt", line_start: 1, line_end: 1, quote: "failure" },
+  ]);
+  analysis.disposition = "preliminary";
+  analysis.semantic_judge_mode = "advisory";
+  analysis.semantic_findings = ["causal_link_unsupported"];
+  analysis.disposition_warnings = ["semantic_review_unresolved", "investigation_incomplete"];
+  const rendered = text(render(analysis));
+  assert.match(rendered, /cannot directly authorize an action/u);
+  assert.match(rendered, /evidence-backed follow-up may still use its diagnosis/u);
+  assert.match(rendered, /semantic finding itself is non-blocking/u);
+  assert.match(rendered, /other unresolved checks may still block an action/u);
+  assert.doesNotMatch(rendered, /cannot be used for remediation, actions, or fixes/u);
+});
+
 test("a cited artifact quote is rendered verbatim next to its location", () => {
   const html = render(analysisWith([
     {
