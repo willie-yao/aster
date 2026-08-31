@@ -113,8 +113,16 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		// invocation. Replay its arguments as assistant content on later repairs so
 		// Responses does not require a synthetic function_call_output.
 		content := resp.Message.ToolCalls[0].Function.Arguments
-		captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, modelMessage{Role: "assistant", Content: strPtr(content)}))
-		return content, nil, true
+		items := []json.RawMessage(nil)
+		phase := ""
+		if c.apiMode == APIResponses {
+			phase = "final_answer"
+			items = responsesAssistantProviderItem(content, phase)
+		}
+		captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, modelMessage{
+			Role: "assistant", Content: strPtr(content), Phase: phase, ProviderItems: items,
+		}))
+		return content, items, true
 	}
 	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
 	if resp.Message.Content != nil {

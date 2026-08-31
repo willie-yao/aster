@@ -290,7 +290,7 @@ func appendToolsFreeAssistant(messages []modelMessage, msg modelMessage) []model
 	if msg.Content == nil && len(msg.ProviderItems) == 0 {
 		return messages
 	}
-	return append(messages, modelMessage{Role: "assistant", Content: msg.Content, ProviderItems: msg.ProviderItems})
+	return append(messages, modelMessage{Role: "assistant", Content: msg.Content, Phase: msg.Phase, ProviderItems: msg.ProviderItems})
 }
 
 func (c *Client) runToolLoopFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, error) {

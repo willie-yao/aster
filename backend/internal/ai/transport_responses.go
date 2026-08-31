@@ -112,6 +112,7 @@ type responsesOutputItem struct {
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+	Phase     string `json:"phase"`
 	Content   []struct {
 		Type    string `json:"type"`
 		Text    string `json:"text"`
@@ -234,7 +235,11 @@ func encodeResponsesInput(messages []modelMessage) []any {
 				})
 			}
 			if message.Content != nil {
-				items = append(items, map[string]any{"role": "assistant", "content": *message.Content})
+				item := map[string]any{"role": "assistant", "content": *message.Content}
+				if message.Phase != "" {
+					item["phase"] = message.Phase
+				}
+				items = append(items, item)
 			}
 		default:
 			if message.Content != nil {
@@ -243,6 +248,67 @@ func encodeResponsesInput(messages []modelMessage) []any {
 		}
 	}
 	return items
+}
+
+func responsesAssistantMessagesFromProviderItems(items []json.RawMessage) []modelMessage {
+	var messages []modelMessage
+	for _, raw := range items {
+		var item struct {
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Phase   string          `json:"phase"`
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(raw, &item) != nil || item.Role != "assistant" {
+			continue
+		}
+		text := ""
+		if json.Unmarshal(item.Content, &text) != nil {
+			var parts []struct {
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Refusal string `json:"refusal"`
+			}
+			if json.Unmarshal(item.Content, &parts) != nil {
+				continue
+			}
+			for _, part := range parts {
+				if part.Type == "output_text" {
+					text += part.Text
+				}
+				if part.Type == "refusal" {
+					text += part.Refusal
+				}
+			}
+		}
+		if text == "" {
+			continue
+		}
+		messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(text), Phase: item.Phase})
+	}
+	return messages
+}
+
+func responsesPhaseFromProviderItems(items []json.RawMessage) string {
+	for i := len(items) - 1; i >= 0; i-- {
+		var item responsesOutputItem
+		if json.Unmarshal(items[i], &item) == nil && item.Phase != "" {
+			return item.Phase
+		}
+	}
+	return ""
+}
+
+func responsesAssistantProviderItem(content, phase string) []json.RawMessage {
+	item := map[string]any{"role": "assistant", "content": content}
+	if phase != "" {
+		item["phase"] = phase
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return nil
+	}
+	return []json.RawMessage{raw}
 }
 
 func encodeResponsesTools(schemas []tools.Schema) []responsesTool {
@@ -284,6 +350,9 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		var item responsesOutputItem
 		if json.Unmarshal(raw, &item) != nil {
 			continue
+		}
+		if item.Phase != "" {
+			message.Phase = item.Phase
 		}
 		switch item.Type {
 		case "function_call":

@@ -99,6 +99,23 @@ func TestResponsesTokenUsageDistinguishesCacheWriteAbsentZeroAndPositive(t *test
 	}
 }
 
+func TestResponsesAssistantPhaseRoundTrip(t *testing.T) {
+	response := responsesResponse{
+		ID: "response", Status: "completed",
+		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","content":[{"type":"output_text","text":"draft"}]}`)},
+	}
+	decoded := decodeResponsesResponse(response)
+	if decoded.Message.Phase != "analysis" || decoded.Message.Content == nil || *decoded.Message.Content != "draft" {
+		t.Fatalf("decoded message = %+v", decoded.Message)
+	}
+	decoded.Message.ProviderItems = nil
+	input := encodeResponsesInput([]modelMessage{decoded.Message})
+	item := input[0].(map[string]any)
+	if item["phase"] != "analysis" {
+		t.Fatalf("encoded assistant = %#v", item)
+	}
+}
+
 func TestResponsesTransportFlattensTools(t *testing.T) {
 	schemas := []tools.Schema{{Type: "function", Function: tools.FunctionDecl{Name: "read", Description: "read", Parameters: map[string]any{"type": "object"}}}}
 	got := encodeResponsesTools(schemas)
