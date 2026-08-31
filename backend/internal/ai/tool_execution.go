@@ -114,7 +114,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
 				s.recordSourceRead(repoPath)
 			}
-			s.recordSourceContent(tc, visiblePayload, result.Observation)
+			s.recordSourceContent(tc, visiblePayload)
 		}
 	}
 
@@ -522,70 +522,32 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 	return casePath, NormalizeArtifactCitation(casePath)
 }
 
-func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}, observation any) {
+func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}) {
 	if payload == nil {
 		return
 	}
 	if s.sourceContentByPath == nil {
-		s.sourceContentByPath = map[string][]sourceContentSnippet{}
+		s.sourceContentByPath = map[string][]string{}
 	}
-	add := func(rawPath, content string, lineStart, lineEnd int, targeted bool) {
+	add := func(rawPath, content string) {
 		_, norm := canonicalTrackedArtifactPath(rawPath)
 		if norm == "" || strings.TrimSpace(content) == "" {
 			return
 		}
-		s.sourceContentByPath[norm] = append(s.sourceContentByPath[norm], sourceContentSnippet{
-			Text: content, LineStart: lineStart, LineEnd: lineEnd, Targeted: targeted,
-		})
+		s.sourceContentByPath[norm] = append(s.sourceContentByPath[norm], content)
 	}
 	switch tc.Function.Name {
 	case "read_repo_file":
 		path := extractToolPathArg(tc.Function.Arguments)
-		lineStart, lineEnd := 0, 0
-		if read, ok := observation.(repotree.ReadObservation); ok {
-			lineStart, lineEnd = read.LineStart, read.LineEnd
-		}
 		if content, _ := payload["content"].(string); content != "" {
-			add(path, content, lineStart, lineEnd, false)
+			add(path, content)
 		}
 	case "grep_repo":
-		matches := analysisChatEvidenceMatches(payload["matches"])
-		var ranges []repotree.GrepMatchObservation
-		if grep, ok := observation.(repotree.GrepObservation); ok {
-			ranges = grep.Matches
-		}
-		used := make([]bool, len(ranges))
-		for _, match := range matches {
+		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
 			path, _ := match["path"].(string)
-			lineStart, lineEnd := matchingSourceGrepRange(path, payloadLineNumber(match["line"]), ranges, used)
-			add(path, flattenGrepContext(match["context"]), lineStart, lineEnd, true)
+			add(path, flattenGrepContext(match["context"]))
 		}
 	}
-}
-
-func matchingSourceGrepRange(rawPath string, line int, ranges []repotree.GrepMatchObservation, used []bool) (int, int) {
-	_, normalized := canonicalTrackedArtifactPath(rawPath)
-	for i, candidate := range ranges {
-		_, candidatePath := canonicalTrackedArtifactPath(candidate.Path)
-		if used[i] || candidatePath != normalized || line > 0 && (line < candidate.LineStart || line > candidate.LineEnd) {
-			continue
-		}
-		used[i] = true
-		return candidate.LineStart, candidate.LineEnd
-	}
-	return 0, 0
-}
-
-func payloadLineNumber(value interface{}) int {
-	switch value := value.(type) {
-	case int:
-		return value
-	case float64:
-		if value > 0 && value == float64(int(value)) {
-			return int(value)
-		}
-	}
-	return 0
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

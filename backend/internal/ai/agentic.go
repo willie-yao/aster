@@ -497,12 +497,6 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 	}
 }
 
-type sourceContentSnippet struct {
-	Text               string
-	LineStart, LineEnd int
-	Targeted           bool
-}
-
 type agentState struct {
 	browser                artifacts.Browser
 	sources                *tools.SourceCatalog
@@ -572,7 +566,7 @@ type agentState struct {
 	analysisEvidenceBudget   int
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
-	sourceContentByPath map[string][]sourceContentSnippet
+	sourceContentByPath map[string][]string
 
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
@@ -909,10 +903,9 @@ func (c *Client) doAnalyzeAgentic(
 }
 
 func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
-	parsed = state.removePublishedSourceLineReferences(parsed)
-	parsed = sanitizePublishedCitations(parsed, state.citationContext())
+	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	parsed = state.preparePublishedAnalysis(parsed)
-	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, state.citationContext())
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -948,10 +941,9 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			content = string(raw)
 		}
 		parsed = c.applySemanticJudgePostLoop(ctx, state, messages, content, nil, parsed, selectedDraftAttempt(state), contextHeadroomFor(opts), policy)
-		parsed = state.removePublishedSourceLineReferences(parsed)
-		parsed = sanitizePublishedCitations(parsed, state.citationContext())
+		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		parsed = state.preparePublishedAnalysis(parsed)
-		out = critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, state.citationContext())
+		out = critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 		if len(out.MissingSkillEvidence) > 0 {
 			if treeSet := state.artifactTreeSet(); treeSet != nil {
 				pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -1037,7 +1029,6 @@ func cliFlagMatches(text string) []cliFlagMatch {
 }
 
 func (s *agentState) preparePublishedAnalysis(parsed analysisResponse) analysisResponse {
-	parsed = s.removePublishedSourceLineReferences(parsed)
 	matchedSkills := matchSkillsForDraft(s, parsed)
 	verified := make([]string, 0, len(parsed.RelevantFiles))
 	suggestions := append([]string(nil), parsed.SearchSuggestions...)
@@ -1126,9 +1117,7 @@ func (s *agentState) removeUngroundedCLIFlags(text string, matchedSkills []skill
 		grounding = append(grounding, snippets...)
 	}
 	for _, snippets := range s.sourceContentByPath {
-		for _, snippet := range snippets {
-			grounding = append(grounding, snippet.Text)
-		}
+		grounding = append(grounding, snippets...)
 	}
 	for _, skill := range matchedSkills {
 		grounding = append(grounding, skill.Procedure)
@@ -1181,7 +1170,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, state.citationContext())
+	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
@@ -1290,7 +1279,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		modelMessage{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
 
-	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, state.citationContext())
+	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(updated.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(parsed, &updated, treeSet)
@@ -1356,7 +1345,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		recordTrace(ctx, TraceEvent{Kind: "critique_retry", Outcome: "unparseable", Retry: retry, RetryAdmitted: true, InitialIssueCount: len(initial.Matches()), NewEvidenceReads: state.evidenceRevision - initialEvidenceRevision, RetryDurationMs: int(time.Since(started) / time.Millisecond), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond), SelectedAttempt: state.bestDraft.attempt})
 		return state.bestDraft.parsed
 	}
-	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, next), state.consecutiveFailures, state.citationContext())
+	out := critiqueDraftWithContent(next, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, next), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(out.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(next, &out, treeSet)
@@ -1372,7 +1361,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		state.critiquePassed = state.bestDraft.quality.Passed
 	}
 	selected := state.bestDraft
-	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures, state.citationContext())
+	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(selectedOut.MissingSkillEvidence) > 0 {
 		if treeSet := state.artifactTreeSet(); treeSet != nil {
 			pruneAbsentSkillEvidence(selected.parsed, &selectedOut, treeSet)
