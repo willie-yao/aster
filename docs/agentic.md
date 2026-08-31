@@ -166,6 +166,8 @@ Cache acceptance is evaluated separately under the configured critique policy.
 The semantic judge evaluates causal and evidence quality after deterministic
 checks. Its bounded evidence digest includes validated artifact evidence and
 verified excerpts from the project source files read during the investigation.
+Targeted repository-search excerpts that cover a draft's source line
+references are considered before broader file reads.
 It can request a bounded revision, but a later draft does not win merely because
 it is newer. Draft selection prevents new hard failures, unsupported root-cause
 changes, and regressions that drop high-confidence cited facts without an equally

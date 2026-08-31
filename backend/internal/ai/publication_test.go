@@ -129,8 +129,8 @@ func TestPreparePublishedAnalysisFiltersPathsAndCLIFlags(t *testing.T) {
 			"scripts/ci-e2e.sh": true,
 			"makefile":          true,
 		},
-		sourceContentByPath: map[string][]string{
-			"makefile": {"ci-e2e: ./scripts/ci-e2e.sh"},
+		sourceContentByPath: map[string][]sourceContentSnippet{
+			"makefile": sourceSnippets("ci-e2e: ./scripts/ci-e2e.sh"),
 		},
 	}
 	parsed := analysisResponse{
@@ -166,7 +166,7 @@ func TestQualifiedArtifactPathRequiresExactRead(t *testing.T) {
 }
 
 func TestPreparePublishedAnalysisKeepsGroundedFlag(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported"}}}
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{"Makefile": sourceSnippets("tool --supported")}}
 	parsed := analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}
 	if got := state.preparePublishedAnalysis(parsed).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("grounded flag removed: %q", got)
@@ -211,7 +211,7 @@ func TestPreparePublishedAnalysisRejectsArtifactGroundedRemediationPath(t *testi
 }
 
 func TestPreparePublishedAnalysisKeepsGroundedShortFlags(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool -abc", "helm uninstall -nprod release"}}}
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{"Makefile": sourceSnippets("tool -abc", "helm uninstall -nprod release")}}
 	for _, cause := range []string{"The job ran tool -abc.", "The job ran helm uninstall -nprod release."} {
 		if got := state.preparePublishedAnalysis(analysisResponse{RootCause: cause}).RootCause; got != cause {
 			t.Fatalf("grounded short flag changed: input=%q output=%q", cause, got)
@@ -220,7 +220,7 @@ func TestPreparePublishedAnalysisKeepsGroundedShortFlags(t *testing.T) {
 }
 
 func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{"Makefile": {"tool --supported-extra"}}}
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{"Makefile": sourceSnippets("tool --supported-extra")}}
 	parsed := analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}
 	if got := state.preparePublishedAnalysis(parsed).RootCause; strings.Contains(got, "--supported") {
 		t.Fatalf("substring-grounded flag survived: %q", got)
@@ -233,7 +233,7 @@ func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
 		"matches": []interface{}{map[string]interface{}{
 			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
 		}},
-	})
+	}, nil)
 	if got := state.preparePublishedAnalysis(analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("visible grep grounding was not recorded: %q", got)
 	}
