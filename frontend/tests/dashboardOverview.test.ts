@@ -508,6 +508,50 @@ test("featured recurring pattern exposes a current same-cause streak", () => {
   assert.doesNotMatch(running, /Failing now/);
 });
 
+test("featured recurring pattern keeps current failure separate from causal grouping", () => {
+  const pattern = recurringPattern("mixed", 4, ["3", "2", "1"], 0);
+  pattern.causal_groups?.push({
+    builds: ["4"],
+    root_cause: "latest cause is not confirmed",
+    confidence: "medium",
+  });
+  const failingJob = job({
+    job_id: "mixed",
+    name: "mixed",
+    current_status: "FAILING",
+    overall_status: "FLAKY",
+    recent_runs: [
+      { build_id: "4", passed: false, result: "FAILURE", timestamp: "2026-08-31T07:00:00Z" },
+      { build_id: "3", passed: false, result: "FAILURE", timestamp: "2026-08-28T05:00:00Z" },
+      { build_id: "2", passed: false, result: "FAILURE", timestamp: "2026-08-25T03:00:00Z" },
+      { build_id: "1", passed: false, result: "FAILURE", timestamp: "2026-08-22T02:00:00Z" },
+    ],
+  });
+
+  assert.equal(currentPatternFailureStreak(pattern, failingJob), 0);
+  const failing = render(createElement(FeaturedPatternRow, {
+    pattern,
+    rank: 1,
+    prefix: "",
+    stale: false,
+    job: failingJob,
+  }));
+  assert.match(failing, /Failing now/);
+  assert.match(failing, /3 same-cause failures across 4 analyzed builds/);
+  assert.doesNotMatch(failing, /in a row/);
+  assert.doesNotMatch(failing, />Flaky</);
+
+  const passing = render(createElement(FeaturedPatternRow, {
+    pattern,
+    rank: 1,
+    prefix: "",
+    stale: false,
+    job: { ...failingJob, current_status: "PASSING" },
+  }));
+  assert.match(passing, /Passing now/);
+  assert.doesNotMatch(passing, />Flaky/);
+});
+
 test("featured analysis link precedes separate recent-run links", () => {
   const recurring: PatternAnalysis = {
     id: "pattern-1",

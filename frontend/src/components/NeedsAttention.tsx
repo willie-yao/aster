@@ -153,17 +153,15 @@ export function FeaturedPatternRow({
   const lead = rank === 1;
   const compactOnMobile = rank > 1;
   const failureStreak = currentPatternFailureStreak(pattern, job);
-  const currentFailure = failureStreak > 0;
-  const running = job?.current_status === "RUNNING";
-  const statusValue = running ? "RUNNING" : currentFailure ? "FAILING" : job?.overall_status;
-  const color = statusValue ? statusToMuiColor(statusValue) : "default";
-  const status = running
-    ? `Running now${currentFailure ? ` · after ${countLabel(failureStreak, "same-cause failure")}` : ""}`
-    : currentFailure
+  const currentStatus = job?.current_status;
+  const color = currentStatus ? statusToMuiColor(currentStatus) : "default";
+  const status = currentStatus === "RUNNING"
+    ? `Running now${failureStreak > 0 ? ` · after ${countLabel(failureStreak, "same-cause failure")}` : ""}`
+    : currentStatus === "FAILING"
       ? `Failing now${failureStreak > 1 ? ` · ${failureStreak} in a row` : ""}`
-      : job?.current_status === "PASSING" && job.overall_status !== "PASSING"
-        ? `${statusLabel(job.overall_status)} · Passing now`
-        : job ? statusLabel(job.overall_status) : "Recurring";
+      : currentStatus === "PASSING"
+        ? "Passing now"
+        : currentStatus === "UNKNOWN" ? "Current status unknown" : "Recurring";
   const signal = attentionSignal(pattern.confidence, stale);
   const jobName = shortJobName(pattern.subject, prefix);
 
