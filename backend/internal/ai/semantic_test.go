@@ -13,8 +13,17 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
+
+func sourceSnippets(values ...string) []sourceContentSnippet {
+	out := make([]sourceContentSnippet, len(values))
+	for i, value := range values {
+		out[i].Text = value
+	}
+	return out
+}
 
 func TestSemanticCritique_ParsesFindings(t *testing.T) {
 	shrinkCallDelay(t)
@@ -89,8 +98,8 @@ func TestSemanticCritiquePassesSourceGroundedCausalClaim(t *testing.T) {
 	state := &agentState{
 		readArtifactsFull: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{},
 		readSourceFull: map[string]bool{"test/e2e/resize.go": true},
-		sourceContentByPath: map[string][]string{
-			"test/e2e/resize.go": {"return retry.RetryOnConflict(backoff, updatePVC)"},
+		sourceContentByPath: map[string][]sourceContentSnippet{
+			"test/e2e/resize.go": sourceSnippets("return retry.RetryOnConflict(backoff, updatePVC)"),
 		},
 	}
 	result, err := client.semanticCritique(context.Background(), state, semanticJudgeStageDraft, analysisResponse{
@@ -450,9 +459,9 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 			}},
 		},
 		readSourceFull: map[string]bool{"test/e2e/reconcile.go": true},
-		sourceContentByPath: map[string][]string{
-			"test/e2e/reconcile.go": {"func reconcile() error { return retry.RetryOnConflict(backoff, update) }"},
-			"test/e2e/legacy.go":    {"func legacyReconcile() error { return updateOnce() }"},
+		sourceContentByPath: map[string][]sourceContentSnippet{
+			"test/e2e/reconcile.go": sourceSnippets("func reconcile() error { return retry.RetryOnConflict(backoff, update) }"),
+			"test/e2e/legacy.go":    sourceSnippets("func legacyReconcile() error { return updateOnce() }"),
 		},
 		initialEvidencePlan: []skills.PlannedSkill{{
 			ID: "engine.generic", RequiredEvidence: []skills.PlannedEvidenceGroup{{
@@ -506,11 +515,11 @@ func TestFormatSemanticJudgeInputIncludesBoundedEvidenceAndPriorDraft(t *testing
 }
 
 func TestBoundedSemanticSourceEvidence(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{
-		"priority.go": {strings.Repeat("a", 2000), strings.Repeat("b", 2000), strings.Repeat("c", 2000)},
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{
+		"priority.go": sourceSnippets(strings.Repeat("a", 2000), strings.Repeat("b", 2000), strings.Repeat("c", 2000)),
 	}}
 	for i := range 10 {
-		state.sourceContentByPath[fmt.Sprintf("pkg/file-%02d.go", i)] = []string{strings.Repeat("x", 2000)}
+		state.sourceContentByPath[fmt.Sprintf("pkg/file-%02d.go", i)] = sourceSnippets(strings.Repeat("x", 2000))
 	}
 	relevant := []string{"priority.go"}
 	for i := range 10 {
@@ -533,10 +542,101 @@ func TestBoundedSemanticSourceEvidence(t *testing.T) {
 	}
 }
 
+func TestSemanticSourceEvidencePrioritizesCitedTargetedGrep(t *testing.T) {
+	state := &agentState{readSourceFull: map[string]bool{"pkg/reconcile.go": true}}
+	state.recordSourceContent(modelToolCall{Function: modelFunction{
+		Name: "read_repo_file", Arguments: `{"path":"pkg/reconcile.go"}`,
+	}}, map[string]interface{}{
+		"content": "package controller\n\nfunc unrelated() {}",
+	}, repotree.ReadObservation{Path: "pkg/reconcile.go", LineStart: 1, LineEnd: 100})
+	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo"}}, map[string]interface{}{
+		"matches": []interface{}{map[string]interface{}{
+			"path": "pkg/reconcile.go", "line": float64(42), "context": []interface{}{"> 42: return retry.RetryOnConflict(backoff, update)"},
+		}},
+	}, repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{{Path: "pkg/reconcile.go", LineStart: 42, LineEnd: 42}}})
+	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo"}}, map[string]interface{}{
+		"matches": []interface{}{
+			map[string]interface{}{"path": "pkg/reconcile.go", "line": float64(5), "context": []interface{}{"> 5: unrelatedOne()"}},
+			map[string]interface{}{"path": "pkg/reconcile.go", "line": float64(90), "context": []interface{}{"> 90: unrelatedTwo()"}},
+		},
+	}, repotree.GrepObservation{Matches: []repotree.GrepMatchObservation{
+		{Path: "pkg/reconcile.go", LineStart: 5, LineEnd: 5},
+		{Path: "pkg/reconcile.go", LineStart: 90, LineEnd: 90},
+	}})
+
+	parsed, ok := tryParseAnalysis(`{
+		"summary":"The update retries conflicts.",
+		"is_transient":false,
+		"root_cause":"pkg/reconcile.go at line 42 retries the stale update.",
+		"severity":"High",
+		"suggested_fix":"Keep RetryOnConflict in pkg/reconcile.go and add a regression test.",
+		"relevant_files":["pkg/reconcile.go"]
+	}`)
+	if !ok {
+		t.Fatal("source-grounded draft did not parse")
+	}
+	state.analysisEvidenceFull = true
+	out := critiqueDraftWithContent(parsed, nil, nil, nil, state.readSourceFull, nil, 0, state.citationContext())
+	if !out.Passed {
+		t.Fatalf("source range hint failed deterministic critique: %+v", out)
+	}
+	published := state.publishedAnalysis(parsed)
+	if strings.Contains(published.RootCause, "line 42") || strings.Contains(published.RootCause, " at ") || !strings.Contains(published.RootCause, "retries the stale update") {
+		t.Fatalf("source line hint was not safely removed: %q", published.RootCause)
+	}
+
+	raw, err := formatSemanticJudgeInput(state, semanticJudgeStageDraft, published, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input semanticJudgeInput
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		t.Fatal(err)
+	}
+	evidence := input.Evidence.VerifiedSourceEvidence
+	if len(evidence) != 1 || len(evidence[0].Quotes) != semanticJudgeMaxSourceQuotes {
+		t.Fatalf("source evidence = %+v", evidence)
+	}
+	if !strings.Contains(evidence[0].Quotes[0], "RetryOnConflict") {
+		t.Fatalf("cited targeted grep was not prioritized: %+v", evidence[0].Quotes)
+	}
+
+	unsupported, ok := tryParseAnalysis(`{
+		"summary":"The update retries conflicts.",
+		"is_transient":false,
+		"root_cause":"pkg/reconcile.go:142 retries the stale update.",
+		"severity":"High",
+		"suggested_fix":"Keep RetryOnConflict in pkg/reconcile.go and add a regression test.",
+		"relevant_files":["pkg/reconcile.go"]
+	}`)
+	if !ok {
+		t.Fatal("unsupported source-range draft did not parse")
+	}
+	if critiqueDraftWithContent(unsupported, nil, nil, nil, state.readSourceFull, nil, 0, state.citationContext()).Passed {
+		t.Fatal("an unread source line range passed deterministic critique")
+	}
+}
+
+func TestSemanticSourceEvidenceUsesPriorDraftRange(t *testing.T) {
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{
+		"pkg/reconcile.go": {
+			{Text: "unrelatedOne()", LineStart: 5, LineEnd: 5, Targeted: true},
+			{Text: "return retry.RetryOnConflict(backoff, update)", LineStart: 42, LineEnd: 42, Targeted: true},
+		},
+	}}
+	current := analysisResponse{RelevantFiles: []string{"pkg/reconcile.go"}}
+	prior := captureSemanticSourceRangeHints(analysisResponse{RootCause: "pkg/reconcile.go#L42-L42 retries the update."})
+
+	evidence := boundedSemanticSourceEvidence(state, current, &prior)
+	if len(evidence) != 1 || len(evidence[0].Quotes) == 0 || !strings.Contains(evidence[0].Quotes[0], "RetryOnConflict") {
+		t.Fatalf("prior cited range was not prioritized: %+v", evidence)
+	}
+}
+
 func TestSemanticSourceEvidencePrefersExactAndLongestPaths(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{
-		"foo.go":     {"short path"},
-		"pkg/foo.go": {"exact path"},
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{
+		"foo.go":     sourceSnippets("short path"),
+		"pkg/foo.go": sourceSnippets("exact path"),
 	}}
 	exact := boundedSemanticSourceEvidence(state, analysisResponse{RelevantFiles: []string{"pkg/foo.go"}}, nil)
 	if len(exact) != 1 || exact[0].Path != "pkg/foo.go" || exact[0].Quotes[0] != "exact path" {
@@ -549,14 +649,14 @@ func TestSemanticSourceEvidencePrefersExactAndLongestPaths(t *testing.T) {
 }
 
 func TestSemanticSourceEvidenceReservesPriorDraftCapacity(t *testing.T) {
-	state := &agentState{sourceContentByPath: map[string][]string{}}
+	state := &agentState{sourceContentByPath: map[string][]sourceContentSnippet{}}
 	current := analysisResponse{}
 	prior := analysisResponse{}
 	for i := range 4 {
 		currentPath := fmt.Sprintf("current-%d.go", i)
 		priorPath := fmt.Sprintf("prior-%d.go", i)
-		state.sourceContentByPath[currentPath] = []string{"current primary", "current secondary"}
-		state.sourceContentByPath[priorPath] = []string{"prior primary", "prior secondary"}
+		state.sourceContentByPath[currentPath] = sourceSnippets("current primary", "current secondary")
+		state.sourceContentByPath[priorPath] = sourceSnippets("prior primary", "prior secondary")
 		current.RelevantFiles = append(current.RelevantFiles, currentPath)
 		prior.RelevantFiles = append(prior.RelevantFiles, priorPath)
 	}
@@ -575,9 +675,9 @@ func TestSemanticSourceEvidenceReservesPriorDraftCapacity(t *testing.T) {
 func TestFormatSemanticJudgeInputTrimsToHardByteLimit(t *testing.T) {
 	state := &agentState{
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{}, analysisEvidence: map[string]*analysisChatEvidence{},
-		sourceContentByPath: map[string][]string{
-			"current.go": {strings.Repeat("current source ", 200)},
-			"prior.go":   {strings.Repeat("prior source ", 200)},
+		sourceContentByPath: map[string][]sourceContentSnippet{
+			"current.go": sourceSnippets(strings.Repeat("current source ", 200)),
+			"prior.go":   sourceSnippets(strings.Repeat("prior source ", 200)),
 		},
 	}
 	huge := strings.Repeat("resource-v1beta1 returned 404 NotFound because the operation failed. ", 1000)

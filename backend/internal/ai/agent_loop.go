@@ -132,7 +132,7 @@ agentLoop:
 
 		if len(msg.ToolCalls) > 0 && msg.Content != nil {
 			if parsedCandidate, parsedOK := tryParseAnalysis(*msg.Content); parsedOK {
-				candidateCritique := critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+				candidateCritique := critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, state.citationContext())
 				if len(candidateCritique.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet)
@@ -163,7 +163,7 @@ agentLoop:
 			var candidateCritique critiqueOutcome
 			var candidateDraft *critiqueDraftCandidate
 			if parsedOK {
-				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+				candidateCritique = critiqueDraftWithContent(parsedCandidate, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsedCandidate), state.consecutiveFailures, state.citationContext())
 				if len(candidateCritique.MissingSkillEvidence) > 0 {
 					if treeSet := state.artifactTreeSet(); treeSet != nil {
 						if n := pruneAbsentSkillEvidence(parsedCandidate, &candidateCritique, treeSet); n > 0 {
@@ -335,7 +335,7 @@ agentLoop:
 							revised, revisedItems, safe := c.runFinalizeRoundTracked(ctx, state, repairMessages, headroom)
 							if safe {
 								if rp, ok := tryParseAnalysis(revised); ok {
-									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
+									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, state.citationContext())
 									if len(revisedCritique.MissingSkillEvidence) > 0 {
 										if treeSet := state.artifactTreeSet(); treeSet != nil {
 											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)

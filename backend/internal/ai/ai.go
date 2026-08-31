@@ -355,6 +355,7 @@ type analysisResponse struct {
 	SearchSuggestions []string                      `json:"search_suggestions,omitempty"`
 	CauseLocation     *models.AnalysisCauseLocation `json:"cause_location,omitempty"`
 	EvidenceCitations []models.EvidenceCitation     `json:"evidence_citations,omitempty"`
+	sourceRangeHints  []semanticSourceRangeHint
 }
 
 // proseFields returns RootCause + Summary + SuggestedFix + RelevantFiles
