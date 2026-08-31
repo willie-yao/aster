@@ -851,7 +851,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		CritiqueMaxRetries:  *agentic.Critique.MaxRetries,
 		CritiqueCachePolicy: ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy()),
 		SingleToolCall:      agentic.SingleToolCall,
-		SemanticJudge:       true,
+		SemanticJudge:       ai.SemanticJudgeMode(agentic.SemanticJudge),
 	}
 	serviceConfig.BrowserFactory = factory
 	serviceConfig.ToolRegistry = registry
@@ -877,7 +877,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	toolUsage.sourceObservations = append([]ai.SourceEvidenceObservation(nil), sourceObservations...)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
-	requestCap := deriveBenchmarkRequestCap(agentic, true)
+	requestCap := deriveBenchmarkRequestCap(agentic, agentic.SemanticJudge != project.SemanticJudgeOff)
 	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d semantic_revision_reviews=%d per_operation=%d",
 		requestCap.ConfiguredIterations, requestCap.ByteFloorExtensions, requestCap.MainLoopRequests, requestCap.ForcedFinalizationRequests,
 		requestCap.CritiqueToolRequests, requestCap.CritiqueFinalizationRequests, requestCap.SemanticJudgeRequests,
@@ -2068,13 +2068,24 @@ func TestBenchBudgetsUsesFrozenContextWithoutProviderDetection(t *testing.T) {
 func defaultBenchAgentic() project.Agentic {
 	critiqueRetries := benchEnvInt("BENCH_CRITIQUE_RETRIES", 0)
 	a := project.Agentic{
-		MaxIters:     benchEnvInt("BENCH_MAX_ITERS", 15),
-		Timeout:      benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
-		MinToolCalls: benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
-		MinGCSBytes:  benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
-		Critique:     project.AgenticCritique{MaxRetries: &critiqueRetries},
+		MaxIters:      benchEnvInt("BENCH_MAX_ITERS", 15),
+		Timeout:       benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
+		MinToolCalls:  benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
+		MinGCSBytes:   benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
+		SemanticJudge: project.SemanticJudgeAdvisory,
+		Critique:      project.AgenticCritique{MaxRetries: &critiqueRetries},
 	}
 	return a
+}
+
+func TestDefaultBenchAgenticUsesAdvisorySemanticJudge(t *testing.T) {
+	agentic := defaultBenchAgentic()
+	if agentic.SemanticJudge != project.SemanticJudgeAdvisory {
+		t.Fatalf("SemanticJudge = %q, want %q", agentic.SemanticJudge, project.SemanticJudgeAdvisory)
+	}
+	if cap := deriveBenchmarkRequestCap(agentic, agentic.SemanticJudge != project.SemanticJudgeOff); cap.SemanticJudgeRequests != 1 {
+		t.Fatalf("semantic judge requests = %d, want 1", cap.SemanticJudgeRequests)
+	}
 }
 
 // benchEnvInt reads a non-negative integer env override, falling back to def.

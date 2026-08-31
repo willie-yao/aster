@@ -466,6 +466,16 @@ func TestAgentic_Effective(t *testing.T) {
 			t.Errorf("Timeout = %v, want 30s", got.Timeout)
 		}
 	})
+	t.Run("SemanticJudge defaults to advisory and passes through", func(t *testing.T) {
+		if got := eff(Agentic{}).SemanticJudge; got != SemanticJudgeAdvisory {
+			t.Fatalf("SemanticJudge = %q, want %q", got, SemanticJudgeAdvisory)
+		}
+		for _, mode := range []SemanticJudgeMode{SemanticJudgeBlocking, SemanticJudgeOff} {
+			if got := eff(Agentic{SemanticJudge: mode}).SemanticJudge; got != mode {
+				t.Fatalf("SemanticJudge = %q, want %q", got, mode)
+			}
+		}
+	})
 	t.Run("SingleToolCall flips through", func(t *testing.T) {
 		if eff(Agentic{}).SingleToolCall {
 			t.Error("SingleToolCall should default to false")
@@ -541,6 +551,7 @@ func agenticEqual(a, b Agentic) bool {
 		b.Critique.MaxRetries != nil &&
 		*a.Critique.MaxRetries == *b.Critique.MaxRetries &&
 		a.Critique.CachePolicy == b.Critique.CachePolicy &&
+		a.SemanticJudge == b.SemanticJudge &&
 		a.SingleToolCall == b.SingleToolCall &&
 		equalStrings(a.Tools, b.Tools)
 }
@@ -589,6 +600,27 @@ func TestParse_AgenticInlineFields(t *testing.T) {
 	}
 	if !equalStrings(c.AI.Agentic.Tools, []string{"filesystem"}) {
 		t.Errorf("Tools = %v, want [filesystem]", c.AI.Agentic.Tools)
+	}
+}
+
+func TestParseSemanticJudge(t *testing.T) {
+	for _, mode := range []SemanticJudgeMode{SemanticJudgeAdvisory, SemanticJudgeBlocking, SemanticJudgeOff} {
+		yml := validYAML + "\nai:\n  semantic_judge: " + string(mode) + "\n"
+		cfg, err := parse(strings.NewReader(yml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.AI.EffectiveAgentic().SemanticJudge; got != mode {
+			t.Fatalf("SemanticJudge = %q, want %q", got, mode)
+		}
+	}
+}
+
+func TestValidateRejectsUnknownSemanticJudge(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI = &AI{Agentic: Agentic{SemanticJudge: "sometimes"}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ai.semantic_judge") {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 

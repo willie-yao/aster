@@ -88,9 +88,18 @@ export function AiAnalysisPanel({
   const dispositionPanel = analysis.disposition !== "grounded" ? (
     <Alert severity="warning" variant="outlined">
       Preliminary analysis. The structured result is safe to review, but evidence or
-      quality checks remain unresolved. It cannot be used for remediation, actions, or fixes.
+      quality checks remain unresolved. It cannot directly authorize an action, although
+      evidence-backed follow-up may still use its diagnosis.
     </Alert>
   ) : null;
+
+  const advisorySemanticPanel = analysis.semantic_judge_mode === "advisory" &&
+    (analysis.semantic_findings?.length ?? 0) > 0 ? (
+      <Alert severity="info" variant="outlined">
+        Semantic review noted unresolved concerns. The semantic finding itself is non-blocking,
+        but other unresolved checks may still block an action.
+      </Alert>
+    ) : null;
 
   const rootCause = detailAppearance ? (
     <BriefingSection label="Root cause">
@@ -224,6 +233,7 @@ export function AiAnalysisPanel({
     <Stack spacing={detailAppearance ? 2.25 : 2}>
       {statusRow}
       {dispositionPanel}
+      {advisorySemanticPanel}
       {rootCause}
       {suggestedFix}
       {upstream}

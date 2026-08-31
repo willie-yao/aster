@@ -1160,6 +1160,7 @@ func cloneTestCase(testCase models.TestCase) models.TestCase {
 		analysis.SearchSuggestions = slices.Clone(analysis.SearchSuggestions)
 		analysis.EvidenceCitations = slices.Clone(analysis.EvidenceCitations)
 		analysis.DispositionWarnings = slices.Clone(analysis.DispositionWarnings)
+		analysis.SemanticFindings = slices.Clone(analysis.SemanticFindings)
 		analysis.FileLinks = maps.Clone(analysis.FileLinks)
 		analysis.CauseLocation = analysis.CauseLocation.Clone()
 		testCase.AIAnalysis = &analysis

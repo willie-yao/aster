@@ -573,6 +573,8 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 			// The warnings qualify the disposition, so dropping them would make a
 			// contested diagnosis look usable to the session snapshot.
 			DispositionWarnings: slices.Clone(analysis.DispositionWarnings),
+			SemanticJudgeMode:   analysis.SemanticJudgeMode,
+			SemanticFindings:    slices.Clone(analysis.SemanticFindings),
 		}
 	}
 	if source, ok := resolveBuildSourceRepository(resolved.build, sourceRepo); ok {

@@ -310,9 +310,10 @@ ai:
 ```
 
 The engine defaults to 15 iterations, a 5-minute per-failure timeout, two tool
-calls, no byte floor, parallel tool calls, zero critique repair requests, and
-the `hard` critique cache policy. Override one of those defaults only after a
-measured provider or artifact constraint requires it.
+calls, no byte floor, parallel tool calls, zero critique repair requests, the
+`hard` critique cache policy, and advisory semantic review. Override one of
+those defaults only after a measured provider or artifact constraint requires
+it.
 
 `critique.max_retries` controls provider repair attempts only. `0` evaluates
 critique without making a critique repair request. `critique.cache_policy`
@@ -328,11 +329,27 @@ Evidence that is deterministically unavailable remains a warning under every
 policy. Structural validation, publication sanitization, and critique-version
 validation remain mandatory.
 
+`semantic_judge` controls the second-line model review:
+
+- `advisory` is the default. Bounded finding classes are recorded on the
+  analysis and may drive a better revision, but an unresolved objection does
+  not force preliminary disposition or reject cache reuse. A preliminary
+  diagnosis carrying the semantic warning
+  remains usable downstream only in this explicit advisory mode.
+- `blocking` makes an unresolved objection force preliminary disposition and
+  participate in cache rejection.
+- `off` skips the semantic judge request.
+
+Non-default modes use distinct cache identity, so changing the mode does not
+reuse an analysis produced under different semantic-review behavior.
+
 Publication disposition is separate from cache policy. A draft whose causal claim
 has no validated artifact citation is published as `preliminary` with an
-`artifact_grounding_incomplete` warning under every policy, and a preliminary
-result cannot feed patterns, actions, or Fix. Cache
-policy can still change which draft is published: it gates whether a draft
+`artifact_grounding_incomplete` warning under every policy. Preliminary
+publication does not directly authorize an action. A diagnosis that passes the
+separate usable-diagnosis check may still feed correlation or chat-derived Fix
+flows that apply their own evidence gates. Cache policy can still change which
+draft is published: it gates whether a draft
 reaches post-loop semantic review, and a policy-unaccepted semantic revision
 cannot replace the selected draft.
 

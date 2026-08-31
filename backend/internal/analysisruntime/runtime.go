@@ -371,7 +371,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 			CritiqueMaxRetries:  *eff.Critique.MaxRetries,
 			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
 			SingleToolCall:      eff.SingleToolCall,
-			SemanticJudge:       true,
+			SemanticJudge:       ai.SemanticJudgeMode(eff.SemanticJudge),
 		},
 		BrowserFactory:    artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket),
 		ToolRegistry:      r.Registry,
@@ -402,9 +402,9 @@ func (r *Runtime) LogConfiguration() {
 		return
 	}
 	eff := r.Project.Config.AI.EffectiveAgentic()
-	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d cache_policy=%s, tools=%v)",
+	log.Printf("🤖 Agentic AI enabled (%d iters, %dKB model, %dMB gcs, %s timeout, min_tools=%d, min_gcs_kb=%d, critique=on/%d cache_policy=%s, semantic_judge=%s, tools=%v)",
 		eff.MaxIters, r.ModelByteBudget/1024, gcsByteBudget/1024/1024, eff.Timeout, eff.MinToolCalls, eff.MinGCSBytes/1024,
-		*eff.Critique.MaxRetries, eff.Critique.EffectiveCachePolicy(), r.EnabledTools)
+		*eff.Critique.MaxRetries, eff.Critique.EffectiveCachePolicy(), eff.SemanticJudge, r.EnabledTools)
 	if set := r.Project.SkillSet; set != nil {
 		log.Printf("🧰 AI skills loaded (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			r.Project.ProfileSelection.String(), set.EngineCount(), set.ConsumerCount(), set.ConsumerBundlePresent(), ShortHash(set.Hash()))
@@ -455,6 +455,7 @@ func NewReusePlanner(project *Project) *ai.Service {
 			MinGCSBytes:         eff.MinGCSBytes,
 			CritiqueMaxRetries:  *eff.Critique.MaxRetries,
 			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
+			SemanticJudge:       ai.SemanticJudgeMode(eff.SemanticJudge),
 		},
 		Skills:          project.SkillSet,
 		SourceRepoOwner: sourceRepo.Owner,

@@ -20,6 +20,10 @@ func TestRepresentativeAnalyzedFailureAcceptsUsablePreliminary(t *testing.T) {
 			},
 		}
 	}
+	blockingSemantic := failure("semantic blocking", models.AnalysisDispositionPreliminary, models.AnalysisWarningSemanticReview)
+	blockingSemantic.AIAnalysis.SemanticJudgeMode = "blocking"
+	advisorySemantic := failure("semantic advisory", models.AnalysisDispositionPreliminary, models.AnalysisWarningSemanticReview)
+	advisorySemantic.AIAnalysis.SemanticJudgeMode = "advisory"
 	for _, tc := range []struct {
 		name     string
 		testCase models.TestCase
@@ -36,10 +40,8 @@ func TestRepresentativeAnalyzedFailureAcceptsUsablePreliminary(t *testing.T) {
 			testCase: failure("grounding", models.AnalysisDispositionPreliminary, models.AnalysisWarningArtifactGrounding),
 			want:     true,
 		},
-		{
-			name:     "unresolved semantic objection",
-			testCase: failure("semantic", models.AnalysisDispositionPreliminary, models.AnalysisWarningSemanticReview),
-		},
+		{name: "blocking semantic objection", testCase: blockingSemantic},
+		{name: "advisory semantic objection", testCase: advisorySemantic, want: true},
 		{name: "unstamped", testCase: failure("unstamped", "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

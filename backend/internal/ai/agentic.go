@@ -33,7 +33,8 @@ const maxPreliminaryAttempts = 3
 
 // preliminaryAttemptsData is the retry budget spent on one analysis key.
 type preliminaryAttemptsData struct {
-	Attempts int `json:"attempts"`
+	Attempts          int    `json:"attempts"`
+	SemanticJudgeMode string `json:"semantic_judge_mode,omitempty"`
 }
 
 // preliminaryAttemptsKey namespaces the retry budget in its own cache entry.
@@ -45,7 +46,7 @@ func preliminaryAttemptsKey(cacheKey string) string {
 }
 
 // preliminaryAttempts returns the retry budget already spent on one key.
-func (c *Client) preliminaryAttempts(cacheKey string) int {
+func (c *Client) preliminaryAttempts(cacheKey string, mode SemanticJudgeMode) int {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return 0
 	}
@@ -54,7 +55,7 @@ func (c *Client) preliminaryAttempts(cacheKey string) int {
 		return 0
 	}
 	var data preliminaryAttemptsData
-	if err := json.Unmarshal(raw, &data); err != nil || data.Attempts < 0 {
+	if err := json.Unmarshal(raw, &data); err != nil || data.Attempts < 0 || data.SemanticJudgeMode != string(mode) {
 		return 0
 	}
 	return data.Attempts
@@ -62,7 +63,7 @@ func (c *Client) preliminaryAttempts(cacheKey string) int {
 
 // recordPreliminaryAttempt advances the retry budget for a preliminary result
 // and clears it once an analysis reaches a grounded disposition.
-func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int) {
+func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int, mode SemanticJudgeMode) {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return
 	}
@@ -71,7 +72,7 @@ func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAtt
 		c.cache.Delete(key)
 		return
 	}
-	if err := c.cache.Set(key, preliminaryAttemptsData{Attempts: priorAttempts + 1}); err != nil {
+	if err := c.cache.Set(key, preliminaryAttemptsData{Attempts: priorAttempts + 1, SemanticJudgeMode: string(mode)}); err != nil {
 		log.Printf("  ⚠ failed to record preliminary retry budget: %v", err)
 	}
 }
@@ -91,6 +92,19 @@ var ErrMissingArtifactCitation = errors.New("no validated artifact citation supp
 
 // ErrRejectedAnalysis means no safe structured analysis was available to publish.
 var ErrRejectedAnalysis = errors.New("analysis result failed the safe publication contract")
+
+// SemanticJudgeMode controls how semantic findings affect publication.
+type SemanticJudgeMode string
+
+const (
+	SemanticJudgeAdvisory SemanticJudgeMode = "advisory"
+	SemanticJudgeBlocking SemanticJudgeMode = "blocking"
+	SemanticJudgeOff      SemanticJudgeMode = "off"
+)
+
+func (m SemanticJudgeMode) enabled() bool {
+	return m == SemanticJudgeAdvisory || m == SemanticJudgeBlocking
+}
 
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
@@ -139,12 +153,10 @@ type AgenticOptions struct {
 	// tool calls keep their efficiency.
 	SingleToolCall bool
 
-	// SemanticJudge enables the second-line LLM judge that reviews an accepted
-	// draft's reasoning for a fluent-but-wrong root cause (see semantic.go). It
-	// runs at most once per analysis and only drives a re-prompt. Engine-owned
-	// and set by the fetcher; not a project.yaml knob. Defaults to false so
-	// deterministic-critique unit tests are not perturbed by the extra call.
-	SemanticJudge bool
+	// SemanticJudge controls the second-line LLM judge. Empty and off skip it,
+	// advisory records findings without blocking publication, and blocking
+	// preserves the strict disposition and cache gate.
+	SemanticJudge SemanticJudgeMode
 }
 
 // SourceEvidenceObservation is private, content-free source range telemetry.
@@ -399,19 +411,21 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // project's current floors.
 type agenticCacheData struct {
 	analysisResponse
-	GeneratedAt            string `json:"generated_at,omitempty"`
-	Model                  string `json:"model,omitempty"`
-	ToolCalls              int    `json:"tool_calls,omitempty"`
-	ModelBytes             int    `json:"model_bytes,omitempty"`
-	GCSBytes               int    `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered    bool   `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted bool   `json:"gcs_floor_retry_exhausted,omitempty"`
-	BudgetExhausted        bool   `json:"budget_exhausted,omitempty"`
-	SameFailureReuse       bool   `json:"same_failure_reuse,omitempty"`
-	JudgeRan               bool   `json:"judge_ran,omitempty"`
-	JudgeObjected          bool   `json:"judge_objected,omitempty"`
-	JudgeRevised           bool   `json:"judge_revised,omitempty"`
-	JudgeRevisionRejected  bool   `json:"judge_revision_rejected,omitempty"`
+	GeneratedAt            string   `json:"generated_at,omitempty"`
+	Model                  string   `json:"model,omitempty"`
+	ToolCalls              int      `json:"tool_calls,omitempty"`
+	ModelBytes             int      `json:"model_bytes,omitempty"`
+	GCSBytes               int      `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered    bool     `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted bool     `json:"gcs_floor_retry_exhausted,omitempty"`
+	BudgetExhausted        bool     `json:"budget_exhausted,omitempty"`
+	SameFailureReuse       bool     `json:"same_failure_reuse,omitempty"`
+	JudgeRan               bool     `json:"judge_ran,omitempty"`
+	JudgeObjected          bool     `json:"judge_objected,omitempty"`
+	JudgeRevised           bool     `json:"judge_revised,omitempty"`
+	JudgeRevisionRejected  bool     `json:"judge_revision_rejected,omitempty"`
+	SemanticJudgeMode      string   `json:"semantic_judge_mode,omitempty"`
+	SemanticFindings       []string `json:"semantic_findings,omitempty"`
 
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
@@ -597,13 +611,14 @@ type agentState struct {
 	// cache key so a new preliminary result increments rather than resets it.
 	priorPreliminaryAttempts int
 
-	// Semantic-judge telemetry, for measuring the always-on second-line judge.
+	// Semantic-judge telemetry for the configured second-line review.
 	// judgeRan is set when the judge was invoked; judgeObjected when it raised
 	// objections; judgeRevised when its objections drove an accepted revision.
 	judgeRan              bool
 	judgeObjected         bool
 	judgeRevised          bool
 	judgeRevisionRejected bool
+	semanticFindings      []string
 
 	// initialArtifactTree is the single bounded listing shared by the seed and
 	// ranked plan. A complete snapshot also supports absence pruning without a
@@ -724,11 +739,20 @@ type AgenticInputs struct {
 	SourceEvidenceObserver SourceEvidenceObserver
 }
 
+func semanticJudgeFingerprintSuffix(mode SemanticJudgeMode) string {
+	switch mode {
+	case SemanticJudgeBlocking, SemanticJudgeOff:
+		return "\x00semantic-judge=" + string(mode)
+	default:
+		return ""
+	}
+}
+
 func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName))
+	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName) + semanticJudgeFingerprintSuffix(in.Opts.SemanticJudge))
 }
 
 // cachedAgenticAnalysis serves one accepted cache entry. It also reports the
@@ -739,7 +763,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	if in.Skills != nil {
 		skillSetHash = in.Skills.Hash()
 	}
-	attempts := c.preliminaryAttempts(cacheKey)
+	attempts := c.preliminaryAttempts(cacheKey, in.Opts.SemanticJudge)
 	record, reason := lookupAgenticCacheRecord(c.cache, cacheKey, agenticCachePolicy(
 		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
 	))
@@ -754,7 +778,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	record, ok := stampRecordDisposition(record)
 	result := projectFailureAnalysis(record)
 	if !ok {
-		return result.Summary, result.Analysis, attempts, true
+		return nil, nil, attempts, false
 	}
 	if record.disposition == models.AnalysisDispositionPreliminary {
 		// Retrying spent artifacts cannot surface new evidence, so serve the
@@ -884,7 +908,7 @@ func (c *Client) doAnalyzeAgentic(
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
 	}
-	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
+	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts, state.opts.SemanticJudge)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
 
 	record = analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
@@ -929,7 +953,7 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			state.bestDraft.providerItems = nil
 		}
 	}
-	if opts.SemanticJudge && !state.judgeRan && len(out.HardRuleIDs()) == 0 {
+	if opts.SemanticJudge.enabled() && !state.judgeRan && len(out.HardRuleIDs()) == 0 {
 		content := ""
 		if raw, err := json.Marshal(parsed); err == nil {
 			content = string(raw)
@@ -1181,6 +1205,7 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
+			state.semanticFindings = nil
 			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	} else if state.bestDraft == nil {
@@ -1190,12 +1215,13 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 		state.considerFallbackDraft(candidate, semanticAccepted)
 		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
 			state.judgeRevised = true
+			state.semanticFindings = nil
 			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 		}
 	}
 	if out.Passed {
 		recordTrace(ctx, critiqueTraceEvent("passed", out))
-		if opts.SemanticJudge && !state.judgeRan {
+		if opts.SemanticJudge.enabled() && !state.judgeRan {
 			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, reviewedAttempt, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
 		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
@@ -1349,7 +1375,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 	state.considerFallbackDraft(candidate, false)
 	state.considerDraft(candidate, false)
 	state.critiquePassed = state.bestDraft.quality.Passed
-	if state.critiquePassed && opts.SemanticJudge && !state.judgeRan {
+	if state.critiquePassed && opts.SemanticJudge.enabled() && !state.judgeRan {
 		selected := state.bestDraft
 		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, selected.attempt, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
 		state.critiquePassed = state.bestDraft.quality.Passed
@@ -1482,7 +1508,7 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
 		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
-		JudgeRevisionRejected: state.judgeRevisionRejected,
+		JudgeRevisionRejected: state.judgeRevisionRejected, SemanticJudgeMode: string(opts.SemanticJudge),
 	}
 	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy)
 	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {

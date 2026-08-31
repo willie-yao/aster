@@ -128,7 +128,7 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 		GCSByteBudget:      100_000,
 		Timeout:            30 * time.Second,
 		CritiqueMaxRetries: 2,
-		SemanticJudge:      true,
+		SemanticJudge:      SemanticJudgeBlocking,
 	}
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:semantic", "sys", "user")
@@ -140,6 +140,9 @@ func TestAgentic_SemanticJudge_ObjectsThenReprompts(t *testing.T) {
 	}
 	if !strings.Contains(analysis.RootCause, "route table") {
 		t.Errorf("expected corrected root cause, got %q", analysis.RootCause)
+	}
+	if len(analysis.SemanticFindings) != 0 {
+		t.Fatalf("resolved semantic findings = %v, want none", analysis.SemanticFindings)
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 4 {
 		t.Errorf("call count = %d, want 4 (draft + judge + corrected + revision review)", got)
@@ -159,7 +162,7 @@ func TestAgentic_SemanticJudgeErrorKeepsPassingRepair(t *testing.T) {
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 		}), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +191,7 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 		}), key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +205,7 @@ func TestAgentic_UnparseableSemanticRepairKeepsSelectedDraft(t *testing.T) {
 	_, cached, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 		}), key, "sys", "user")
 	if err != nil || !cached.CacheHit || !cached.JudgeRevisionRejected {
 		t.Fatalf("cached semantic resolution = %+v err=%v", cached, err)
@@ -226,7 +229,7 @@ func TestAgentic_ForcedFinalizeSemanticRepairCanBeSelected(t *testing.T) {
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 		}), "agentic:test:semantic-forced-finalize", "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +284,7 @@ func TestApplyPostLoopCritiqueAssociatesSemanticReviewWithFinalDraft(t *testing.
 	}
 	final := analysisResponse{Summary: "final", RootCause: "final cause", SuggestedFix: "Apply the final fix."}
 	client.applyPostLoopCritique(context.Background(), state, nil, "final", nil, final, AgenticOptions{
-		SemanticJudge: true, ContextByteBudget: 100_000,
+		SemanticJudge: SemanticJudgeBlocking, ContextByteBudget: 100_000,
 	}, &critiqueRetryBudget{}, true, 2, "finalize")
 
 	if len(observations) != 1 || observations[0].Attempt != 2 || observations[0].Stage != semanticJudgeStageDraft || observations[0].Outcome != "passed" {
@@ -386,9 +389,9 @@ func TestApplySemanticJudgePostLoop_NoObjectionsKeepsDraft(t *testing.T) {
 }
 
 // TestAgentic_SemanticJudge_DisabledByDefault verifies the judge does not fire
-// when SemanticJudge is unset, so a single passing draft is accepted with no
+// when SemanticJudge is off, so a single passing draft is accepted with no
 // extra call.
-func TestAgentic_SemanticJudge_DisabledByDefault(t *testing.T) {
+func TestAgentic_SemanticJudge_Off(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(cleanFinalJSON))
@@ -396,6 +399,7 @@ func TestAgentic_SemanticJudge_DisabledByDefault(t *testing.T) {
 	opts := AgenticOptions{
 		MaxIters: 5, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 		CritiqueMaxRetries: 2, // retries available, but judge is off
+		SemanticJudge:      SemanticJudgeOff,
 	}
 	if _, _, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:nojudge", "sys", "user"); err != nil {
@@ -415,14 +419,14 @@ func TestAgentic_SemanticNonSanitizableRevisionRejectedKeepsPassingDraftCacheabl
 	srv.push(200, chatRespFinal(`{"summary":"revised","is_transient":true,"root_cause":"temporary provider failure","severity":"High","suggested_fix":"Set the supported configuration.","relevant_files":[]}`))
 	client := newAgenticTestClient(t, srv.URL)
 	key := "agentic:test:semantic-rejected-cache"
-	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: true}
+	opts := AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: SemanticJudgeBlocking}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.ConsecutiveFailures = transientPersistThreshold
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(), in, key, "sys", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !analysis.CritiquePassed || !analysis.JudgeObjected || analysis.JudgeRevised || analysis.RootCause != "verified root cause" {
+	if !analysis.CritiquePassed || !analysis.JudgeObjected || analysis.JudgeRevised || analysis.RootCause != "verified root cause" || !slices.Equal(analysis.SemanticFindings, []string{semanticFindingCausalLinkUnsupported}) {
 		t.Fatalf("analysis = %+v", analysis)
 	}
 	if _, ok := client.Cache().Get(key); !ok {
@@ -434,7 +438,7 @@ func TestAgentic_SemanticNonSanitizableRevisionRejectedKeepsPassingDraftCacheabl
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cached.CacheHit || !cached.JudgeRan || !cached.JudgeObjected || cached.JudgeRevised || atomic.LoadInt32(&srv.calls) != 3 {
+	if !cached.CacheHit || !cached.JudgeRan || !cached.JudgeObjected || cached.JudgeRevised || !slices.Equal(cached.SemanticFindings, []string{semanticFindingCausalLinkUnsupported}) || atomic.LoadInt32(&srv.calls) != 3 {
 		t.Fatalf("cached=%+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }
@@ -893,7 +897,7 @@ func TestAgentic_SemanticRevisionReviewFailureKeepsEarlierDraft(t *testing.T) {
 	_, analysis, err := client.doAnalyzeAgentic(context.Background(),
 		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 			MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 		}), "agentic:test:semantic-revision-review-error", "sys", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -947,7 +951,7 @@ func TestAgentic_SemanticRevisionFindingKeepsEarlierDraft(t *testing.T) {
 	var observations []SemanticReviewObservation
 	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
 		MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: true,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
 	})
 	in.SemanticReviewObserver = func(observation SemanticReviewObservation) {
 		snapshot := observation
@@ -962,8 +966,16 @@ func TestAgentic_SemanticRevisionFindingKeepsEarlierDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if analysis.RootCause != "the PR broke it" || !analysis.JudgeRevisionRejected || analysis.JudgeRevised {
+	if analysis.RootCause != "the PR broke it" || !analysis.JudgeRevisionRejected || analysis.JudgeRevised || !slices.Equal(analysis.SemanticFindings, []string{semanticFindingOwnershipNotEstablished}) {
 		t.Fatalf("revision finding replaced prior draft: %+v", analysis)
+	}
+	cachedRaw, ok := client.Cache().Get("agentic:test:semantic-revision-finding")
+	if !ok {
+		t.Fatal("semantic result was not cached")
+	}
+	var cached agenticCacheData
+	if json.Unmarshal(cachedRaw, &cached) != nil || !slices.Equal(cached.SemanticFindings, []string{semanticFindingOwnershipNotEstablished}) {
+		t.Fatalf("cached semantic findings = %v, want initial finding", cached.SemanticFindings)
 	}
 	if len(observations) != 2 || observations[0].Attempt != 1 || observations[0].Stage != semanticJudgeStageDraft || observations[0].Outcome != "objected" ||
 		len(observations[0].Findings) != 1 || observations[0].Findings[0].Class != semanticFindingOwnershipNotEstablished || observations[0].Findings[0].Detail != "The draft does not establish ownership." ||

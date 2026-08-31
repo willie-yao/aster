@@ -36,6 +36,18 @@ func TestAnalysisDisposition(t *testing.T) {
 			value.CritiqueSoftWarnings = []string{string(CritiqueRuleEvidenceAvailableUnread)}
 		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningInvestigation}},
 		{name: "budget exhausted", mutate: func(value *models.AIAnalysis) { value.BudgetExhausted = true }, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningInvestigation}},
+		{name: "semantic objection is advisory", mutate: func(value *models.AIAnalysis) {
+			value.JudgeRan = true
+			value.JudgeObjected = true
+			value.SemanticJudgeMode = string(SemanticJudgeAdvisory)
+			value.SemanticFindings = []string{semanticFindingCausalLinkUnsupported}
+		}, disposition: models.AnalysisDispositionGrounded, warnings: []string{models.AnalysisWarningSemanticReview}},
+		{name: "blocking semantic objection", mutate: func(value *models.AIAnalysis) {
+			value.JudgeRan = true
+			value.JudgeObjected = true
+			value.SemanticJudgeMode = string(SemanticJudgeBlocking)
+			value.SemanticFindings = []string{semanticFindingCausalLinkUnsupported}
+		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningSemanticReview}},
 		{name: "source warning", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRuleSourceUnverified)}
@@ -44,6 +56,12 @@ func TestAnalysisDisposition(t *testing.T) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRuleRerunOnlyRemediation)}
 		}, disposition: models.AnalysisDispositionPreliminary, warnings: []string{models.AnalysisWarningRemediation}},
+		{name: "unknown semantic judge mode", mutate: func(value *models.AIAnalysis) {
+			value.SemanticJudgeMode = "unknown"
+		}},
+		{name: "unknown semantic finding", mutate: func(value *models.AIAnalysis) {
+			value.SemanticFindings = []string{"unknown"}
+		}},
 		{name: "unsafe", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueHardFailures = []string{string(CritiqueRulePathUnsafe)}

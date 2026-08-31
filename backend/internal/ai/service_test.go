@@ -61,6 +61,19 @@ func TestAnalysisPromptHashIncludesAgenticToolGuidance(t *testing.T) {
 	}
 }
 
+func TestAnalysisPromptHashSeparatesNonDefaultSemanticJudgeModes(t *testing.T) {
+	base := (&Service{systemPrompt: "system", agenticOpts: AgenticOptions{SemanticJudge: SemanticJudgeAdvisory}}).analysisPromptHash(&models.TestCase{}, "")
+	legacy := (&Service{systemPrompt: "system"}).analysisPromptHash(&models.TestCase{}, "")
+	if base != legacy {
+		t.Fatal("default advisory mode changed the historical prompt fingerprint")
+	}
+	blocking := (&Service{systemPrompt: "system", agenticOpts: AgenticOptions{SemanticJudge: SemanticJudgeBlocking}}).analysisPromptHash(&models.TestCase{}, "")
+	off := (&Service{systemPrompt: "system", agenticOpts: AgenticOptions{SemanticJudge: SemanticJudgeOff}}).analysisPromptHash(&models.TestCase{}, "")
+	if blocking == base || off == base || blocking == off {
+		t.Fatalf("semantic judge prompt hashes are not distinct: base=%q blocking=%q off=%q", base, blocking, off)
+	}
+}
+
 func TestNewServiceAppliesConfig(t *testing.T) {
 	client := &Client{}
 	module := &stubModule{name: "kubernetes"}
@@ -869,16 +882,70 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 
 // TestPreliminaryAttemptsBudgetLifecycle pins that the retry budget advances on
 // preliminary results and is cleared once an analysis becomes grounded.
+func TestSemanticJudgeModeChangeIsNotForgivenBySpentPreliminaryBudget(t *testing.T) {
+	client := newAgenticTestClient(t, "http://example.invalid")
+	service := &Service{
+		client: client, systemPrompt: "sys", cacheGeneration: "generation",
+		agenticOpts: AgenticOptions{MinToolCalls: 2, SemanticJudge: SemanticJudgeBlocking},
+	}
+	promptHash := service.analysisPromptHash(&models.TestCase{}, "")
+	analysis := &models.AIAnalysis{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339), Mode: AgenticMode,
+		RootCause: "cause", Severity: "High", SuggestedFix: "fix",
+		Disposition: models.AnalysisDispositionPreliminary, CritiquePassed: true,
+		CritiqueVersion: currentCritiqueVersion, CacheGeneration: "generation",
+		SemanticJudgeMode: string(SemanticJudgeAdvisory),
+	}
+	published := reusablePublishedTestCase(analysis)
+	if !service.reanalysisRequired(published, promptHash, true) {
+		t.Fatal("spent preliminary budget forgave semantic judge mode change")
+	}
+	analysis.SemanticJudgeMode = string(SemanticJudgeBlocking)
+	if service.reanalysisRequired(published, promptHash, true) {
+		t.Fatal("matching semantic judge mode did not forgive the tool floor")
+	}
+}
+
+func TestPreliminaryAttemptsResetWhenSemanticJudgeModeChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		from, to SemanticJudgeMode
+	}{
+		{name: "blocking to advisory", from: SemanticJudgeBlocking, to: SemanticJudgeAdvisory},
+		{name: "advisory to blocking", from: SemanticJudgeAdvisory, to: SemanticJudgeBlocking},
+		{name: "advisory to off", from: SemanticJudgeAdvisory, to: SemanticJudgeOff},
+		{name: "off to advisory", from: SemanticJudgeOff, to: SemanticJudgeAdvisory},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newAgenticTestClient(t, "http://example.invalid")
+			const key = "agentic:kubernetes:job:1:mode-change"
+			for i := range maxPreliminaryAttempts {
+				client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, i, tc.from)
+			}
+			if got := client.preliminaryAttempts(key, tc.from); got != maxPreliminaryAttempts {
+				t.Fatalf("old mode attempts = %d, want %d", got, maxPreliminaryAttempts)
+			}
+			if got := client.preliminaryAttempts(key, tc.to); got != 0 {
+				t.Fatalf("new mode inherited %d attempts", got)
+			}
+			client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, 0, tc.to)
+			if got := client.preliminaryAttempts(key, tc.to); got != 1 {
+				t.Fatalf("new mode attempts = %d, want 1", got)
+			}
+		})
+	}
+}
+
 func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	const key = "agentic:kubernetes:job:1:abcd"
 
-	if got := client.preliminaryAttempts(key); got != 0 {
+	if got := client.preliminaryAttempts(key, ""); got != 0 {
 		t.Fatalf("unseen key attempts = %d, want 0", got)
 	}
 	for want := 1; want <= 3; want++ {
-		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, want-1)
-		if got := client.preliminaryAttempts(key); got != want {
+		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, want-1, "")
+		if got := client.preliminaryAttempts(key, ""); got != want {
 			t.Fatalf("attempts after %d preliminary results = %d, want %d", want, got, want)
 		}
 	}
@@ -888,8 +955,8 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 		t.Fatalf("budget should be spent at %d attempts", maxPreliminaryAttempts)
 	}
 
-	client.recordPreliminaryAttempt(key, models.AnalysisDispositionGrounded, 3)
-	if got := client.preliminaryAttempts(key); got != 0 {
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionGrounded, 3, "")
+	if got := client.preliminaryAttempts(key, ""); got != 0 {
 		t.Fatalf("attempts after a grounded result = %d, want 0", got)
 	}
 	if s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
@@ -950,7 +1017,7 @@ func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
 		t.Fatal("different builds must not share a cache key")
 	}
 	for i := range maxPreliminaryAttempts {
-		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, i)
+		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, i, "")
 	}
 	if !s.preliminaryBudgetSpent(&models.TestCase{}, first, "") {
 		t.Fatal("first build budget should be spent")
@@ -965,7 +1032,7 @@ func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
 func TestPreliminaryBudgetEntryIsNotServableAnalysis(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	const key = "agentic:kubernetes:job:1:abcd"
-	client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, 0)
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, 0, "")
 	if _, ok := client.cache.Lookup(key); ok {
 		t.Fatal("budget write must not create an entry under the analysis key")
 	}
@@ -987,7 +1054,7 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 	key := s.agenticCacheKey("job", "1", "Test A", "boom")
 	promptHash := PromptFingerprint("sys")
 	for i := range maxPreliminaryAttempts {
-		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, i)
+		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, i, "")
 	}
 	published := reusablePublishedTestCase(&models.AIAnalysis{
 		Mode: AgenticMode, Disposition: models.AnalysisDispositionPreliminary,

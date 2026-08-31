@@ -31,6 +31,7 @@ branding:
 # Optional: read source from a repository that differs from branding and write
 # targets. Public repositories work without a token.
 # ai:
+#   semantic_judge: advisory
 #   source_repo:
 #     owner: "kubernetes-sigs"
 #     name: "your-project"

@@ -45,6 +45,7 @@ are:
 | `ai.tools` | Selects registered read-only tool groups. |
 | `ai.concurrency` | Runs independent analyses in parallel. Keep it low for rate-limited providers. |
 | `ai.critique.*` | Selects bounded repair and cache acceptance policy. |
+| `ai.semantic_judge` | Selects advisory, blocking, or disabled semantic review. |
 | `ai.cache_generation` | Creates an intentional reversible reanalysis namespace. |
 
 Start with defaults. Raise investigation floors only when observed analyses
@@ -171,6 +172,12 @@ it is newer. Draft selection prevents new hard failures, unsupported root-cause
 changes, and regressions that drop high-confidence cited facts without an equally
 supported replacement.
 
+`ai.semantic_judge` defaults to `advisory`. Advisory review records bounded
+finding classes on the analysis, adds the semantic-review warning, and can
+select a better revision, but an
+unresolved objection does not force preliminary disposition or reject cache
+reuse. `blocking` applies those gates. `off` skips the semantic judge request.
+
 If a repair response is unusable, the engine can retain the best earlier
 parseable draft. Only the selected draft controls cache acceptance and
 publication.
@@ -179,7 +186,8 @@ publication.
 
 A reusable entry must match the analysis key, be within the retention window,
 contain a valid current-format result, meet current investigation floors, and
-satisfy the current critique and semantic-review acceptance contract.
+satisfy the current critique contract plus any configured blocking semantic
+review.
 
 Aster checks both places that may hold an analysis:
 

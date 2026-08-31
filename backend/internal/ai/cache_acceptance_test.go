@@ -94,13 +94,31 @@ func TestAgenticCacheAcceptanceReasons(t *testing.T) {
 		}(), policy: func() AgenticCachePolicy { p := policy; p.CritiquePolicy = CritiqueCachePolicyAdvisory; return p }()},
 		{name: "critique version", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: policy, want: CacheRejectedCritiqueUnclassified},
 		{name: "publication contract rejects old version in advisory mode", entry: func() CacheEntry { d := base; d.CritiqueVersion--; return entry(d) }(), policy: func() AgenticCachePolicy { p := policy; p.CritiquePolicy = CritiqueCachePolicyAdvisory; return p }(), want: CacheRejectedCritiqueUnclassified},
-		{name: "unresolved semantic objection", entry: func() CacheEntry { d := base; d.JudgeObjected = true; return entry(d) }(), policy: policy, want: CacheRejectedSemanticObjection},
+		{name: "advisory semantic objection", entry: func() CacheEntry {
+			d := base
+			d.SemanticJudgeMode = string(SemanticJudgeAdvisory)
+			d.JudgeRan = true
+			d.JudgeObjected = true
+			d.SemanticFindings = []string{semanticFindingCausalLinkUnsupported}
+			return entry(d)
+		}(), policy: func() AgenticCachePolicy { p := policy; p.SemanticJudge = SemanticJudgeAdvisory; return p }()},
+		{name: "unresolved semantic objection", entry: func() CacheEntry {
+			d := base
+			d.JudgeRan = true
+			d.JudgeObjected = true
+			d.SemanticJudgeMode = string(SemanticJudgeBlocking)
+			d.SemanticFindings = []string{semanticFindingCausalLinkUnsupported}
+			return entry(d)
+		}(), policy: func() AgenticCachePolicy { p := policy; p.SemanticJudge = SemanticJudgeBlocking; return p }(), want: CacheRejectedSemanticObjection},
 		{name: "deterministically rejected semantic revision", entry: func() CacheEntry {
 			d := base
+			d.SemanticJudgeMode = string(SemanticJudgeAdvisory)
+			d.JudgeRan = true
 			d.JudgeObjected = true
 			d.JudgeRevisionRejected = true
+			d.SemanticFindings = []string{semanticFindingCausalLinkUnsupported}
 			return entry(d)
-		}(), policy: policy},
+		}(), policy: func() AgenticCachePolicy { p := policy; p.SemanticJudge = SemanticJudgeAdvisory; return p }()},
 		{name: "unknown critique rule", entry: func() CacheEntry { d := base; d.CritiqueSoftWarnings = []string{"unknown.rule"}; return entry(d) }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "hard rule misclassified as soft", entry: func() CacheEntry { d := base; d.CritiqueSoftWarnings = []string{"citation.unread"}; return entry(d) }(), policy: policy, want: CacheRejectedMalformed},
 		{name: "wrong cache key", entry: func() CacheEntry { e := entry(base); e.Key = "other"; return e }(), policy: policy, want: CacheRejectedMalformed},
@@ -209,7 +227,7 @@ func TestCachedAgenticAnalysisMatchesSharedAcceptance(t *testing.T) {
 func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 	now := time.Now().UTC()
 	const key = "agentic:universal:job:1:failure"
-	policy := AgenticCachePolicy{MinToolCalls: 2, MinGCSBytes: 50, CritiquePolicy: CritiqueCachePolicyStrict, Model: "model", ModelHash: "model-hash", PromptHash: "prompt-hash", SkillSetHash: "skills", Now: now}
+	policy := AgenticCachePolicy{MinToolCalls: 2, MinGCSBytes: 50, CritiquePolicy: CritiqueCachePolicyStrict, Model: "model", ModelHash: "model-hash", PromptHash: "prompt-hash", SkillSetHash: "skills", SemanticJudge: SemanticJudgeAdvisory, Now: now}
 	result := FailureAnalysisResult{
 		Summary: &models.AISummary{Summary: "summary", IsTransient: true},
 		Analysis: &models.AIAnalysis{
@@ -218,7 +236,8 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 			ToolCalls: 2, ContextBytes: 100, GCSBytes: 50, EvidencePlanCovered: true, GCSFloorRetryExhausted: true, BudgetExhausted: true, SameFailureReuse: true,
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, SkillSetHash: "skills", ModelHash: "model-hash", PromptHash: "prompt-hash",
 			CritiqueSoftWarnings: []string{"evidence.unavailable"},
-			JudgeObjected:        true, JudgeRevisionRejected: true,
+			SemanticJudgeMode:    string(SemanticJudgeAdvisory), SemanticFindings: []string{semanticFindingCausalLinkUnsupported},
+			JudgeRan: true, JudgeObjected: true, JudgeRevisionRejected: true,
 		},
 	}
 	entry, err := NewAgenticCacheEntry(key, result, now.Add(-time.Minute))
@@ -276,13 +295,13 @@ func TestAmbiguousSemanticRevisionCacheIsRejected(t *testing.T) {
 	const key = "agentic:universal:job:1:failure"
 	data := agenticCacheData{
 		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root"},
-		CritiquePassed:   true, CritiqueVersion: currentCritiqueVersion, JudgeObjected: true,
+		CritiquePassed:   true, CritiqueVersion: currentCritiqueVersion, JudgeRan: true, JudgeObjected: true, SemanticJudgeMode: string(SemanticJudgeBlocking), SemanticFindings: []string{semanticFindingCausalLinkUnsupported},
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, reason := AcceptAgenticCacheEntry(CacheEntry{Key: key, CreatedAt: now, Data: raw}, key, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict})
+	_, reason := AcceptAgenticCacheEntry(CacheEntry{Key: key, CreatedAt: now, Data: raw}, key, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict, SemanticJudge: SemanticJudgeBlocking})
 	if reason != CacheRejectedSemanticObjection {
 		t.Fatalf("reason = %q, want %q", reason, CacheRejectedSemanticObjection)
 	}
@@ -295,10 +314,10 @@ func TestAgenticResultRejectionRejectsUnresolvedSemanticObjection(t *testing.T) 
 		Analysis: &models.AIAnalysis{
 			GeneratedAt: now.Format(time.RFC3339), Mode: AgenticMode, RootCause: "root",
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-			JudgeObjected: true,
+			JudgeRan: true, JudgeObjected: true, SemanticJudgeMode: string(SemanticJudgeBlocking), SemanticFindings: []string{semanticFindingCausalLinkUnsupported},
 		},
 	}
-	if got := AgenticResultRejection(result, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict}); got != CacheRejectedSemanticObjection {
+	if got := AgenticResultRejection(result, AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyStrict, SemanticJudge: SemanticJudgeBlocking}); got != CacheRejectedSemanticObjection {
 		t.Fatalf("reason = %q, want %q", got, CacheRejectedSemanticObjection)
 	}
 }
@@ -308,7 +327,7 @@ func TestNewAgenticCacheEntryRejectsUnresolvedSemanticObjection(t *testing.T) {
 		Summary: &models.AISummary{Summary: "summary"},
 		Analysis: &models.AIAnalysis{
 			Mode: AgenticMode, RootCause: "root", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-			JudgeObjected: true,
+			JudgeRan: true, JudgeObjected: true, SemanticJudgeMode: string(SemanticJudgeBlocking), SemanticFindings: []string{semanticFindingCausalLinkUnsupported},
 		},
 	}
 	if _, err := NewAgenticCacheEntry("agentic:key", result, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "unresolved semantic objection") {
@@ -331,9 +350,86 @@ func TestAgenticResultRejectionReportsCacheGeneration(t *testing.T) {
 	}
 }
 
+func TestCachePersistenceSemanticJudgePolicy(t *testing.T) {
+	state := &agentState{critiquePassed: true, judgeObjected: true}
+	if got := cachePersistenceRejection(state, AgenticOptions{SemanticJudge: SemanticJudgeAdvisory}); got != CacheAccepted {
+		t.Fatalf("advisory rejection = %q, want accepted", got)
+	}
+	if got := cachePersistenceRejection(state, AgenticOptions{SemanticJudge: SemanticJudgeBlocking}); got != CacheRejectedSemanticObjection {
+		t.Fatalf("blocking rejection = %q, want %q", got, CacheRejectedSemanticObjection)
+	}
+}
+
 func TestLookupAgenticCacheReportsLookupMissing(t *testing.T) {
 	if _, got := LookupAgenticCache(NewCache(t.TempDir()), "missing", AgenticCachePolicy{}); got != CacheRejectedLookupMissing {
 		t.Fatalf("reason = %q, want %q", got, CacheRejectedLookupMissing)
+	}
+}
+
+func TestUnknownSemanticFindingIsRejectedFromPublishedAndPrivateCache(t *testing.T) {
+	now := time.Now().UTC()
+	result := FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
+		Analysis: &models.AIAnalysis{
+			GeneratedAt: now.Format(time.RFC3339), Mode: AgenticMode, RootCause: "root", Severity: "High", SuggestedFix: "fix",
+			EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}},
+			CritiquePassed:    true, CritiqueVersion: currentCritiqueVersion,
+			SemanticJudgeMode: string(SemanticJudgeAdvisory), JudgeRan: true, JudgeObjected: true, SemanticFindings: []string{"unknown"},
+		},
+	}
+	policy := AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyHard, SemanticJudge: SemanticJudgeAdvisory}
+	if got := AgenticResultRejection(result, policy); got != CacheRejectedMalformed {
+		t.Fatalf("published rejection = %q, want %q", got, CacheRejectedMalformed)
+	}
+	if _, err := NewAgenticCacheEntry("agentic:key", result, now); err == nil || !strings.Contains(err.Error(), "semantic metadata") {
+		t.Fatalf("new cache entry error = %v", err)
+	}
+	data := agenticCacheData{
+		analysisResponse: analysisResponse{Summary: "summary", RootCause: "root", Severity: "High", SuggestedFix: "fix", EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}}},
+		CritiquePassed:   true, CritiqueVersion: currentCritiqueVersion,
+		SemanticJudgeMode: string(SemanticJudgeAdvisory), JudgeRan: true, JudgeObjected: true, SemanticFindings: []string{"unknown"},
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := CacheEntry{Key: "agentic:key", CreatedAt: now, Data: raw}
+	if _, got := AcceptAgenticCacheEntry(entry, entry.Key, policy); got != CacheRejectedMalformed {
+		t.Fatalf("private rejection = %q, want %q", got, CacheRejectedMalformed)
+	}
+}
+
+func TestSemanticJudgeModeChangesInvalidatePublishedAndPrivateEntries(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name     string
+		from, to SemanticJudgeMode
+	}{
+		{name: "advisory to blocking", from: SemanticJudgeAdvisory, to: SemanticJudgeBlocking},
+		{name: "blocking to advisory", from: SemanticJudgeBlocking, to: SemanticJudgeAdvisory},
+		{name: "advisory to off", from: SemanticJudgeAdvisory, to: SemanticJudgeOff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := FailureAnalysisResult{
+				Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
+				Analysis: &models.AIAnalysis{
+					GeneratedAt: now.Format(time.RFC3339), Mode: AgenticMode, RootCause: "root", Severity: "High", SuggestedFix: "fix",
+					EvidenceCitations: []models.EvidenceCitation{{Path: "build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}},
+					CritiquePassed:    true, CritiqueVersion: currentCritiqueVersion, SemanticJudgeMode: string(tc.from),
+				},
+			}
+			policy := AgenticCachePolicy{Now: now, CritiquePolicy: CritiqueCachePolicyHard, SemanticJudge: tc.to}
+			if got := AgenticResultRejection(result, policy); got != CacheRejectedSemanticJudgeMode {
+				t.Fatalf("published rejection = %q, want %q", got, CacheRejectedSemanticJudgeMode)
+			}
+			entry, err := NewAgenticCacheEntry("agentic:key", result, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, got := AcceptAgenticCacheEntry(entry, "agentic:key", policy); got != CacheRejectedSemanticJudgeMode {
+				t.Fatalf("private rejection = %q, want %q", got, CacheRejectedSemanticJudgeMode)
+			}
+		})
 	}
 }
 

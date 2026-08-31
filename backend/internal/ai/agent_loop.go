@@ -313,7 +313,7 @@ agentLoop:
 					// The initial semantic review runs only on the selected draft.
 					// An objected draft may spend one tools-free refinalization and
 					// one revision-review call. Failures preserve the selected draft.
-					if state.opts.SemanticJudge && !state.judgeRan && state.bestDraft == candidateDraft {
+					if state.opts.SemanticJudge.enabled() && !state.judgeRan && state.bestDraft == candidateDraft {
 						state.judgeRan = true
 						result, err := c.semanticCritiqueTracked(ctx, state, candidateDraft.attempt, semanticJudgeStageDraft, parsed, nil, nil, headroom)
 						switch {
@@ -323,6 +323,7 @@ agentLoop:
 						case len(result.Findings) > 0:
 							recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "objected", result, ""))
 							state.judgeObjected = true
+							state.semanticFindings = semanticFindingClassList(result.Findings)
 							prior := parsed
 							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 							if msg.Content != nil {
@@ -350,6 +351,7 @@ agentLoop:
 									} else if decision.accepted {
 										state.considerFallbackDraftForPolicy(semanticCandidate, true, policy)
 										state.judgeRevised = true
+										state.semanticFindings = nil
 										recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
 									} else {
 										recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_not_selected"})
@@ -380,6 +382,7 @@ agentLoop:
 					// draft means its objections drove an accepted revision.
 					if state.judgeObjected && !state.judgeRevisionRejected && state.bestDraft != nil && candidateDraft != nil && state.bestDraft.attempt == candidateDraft.attempt {
 						state.judgeRevised = true
+						state.semanticFindings = nil
 					}
 					state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 				} else {
