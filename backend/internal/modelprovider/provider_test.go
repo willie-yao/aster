@@ -199,3 +199,27 @@ func TestEndpointHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateServiceTier(t *testing.T) {
+	tests := []struct {
+		name, api, endpoint, tier string
+		wantErr                   bool
+	}{
+		{name: "unset", api: APIResponses, endpoint: "https://example.invalid/v1/responses"},
+		{name: "OpenAI Responses", api: APIResponses, endpoint: "https://api.openai.com/v1/responses", tier: " FLEX "},
+		{name: "chat completions", api: APIChatCompletions, endpoint: "https://api.openai.com/v1/chat/completions", tier: ServiceTierFlex, wantErr: true},
+		{name: "Copilot", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", tier: ServiceTierFlex, wantErr: true},
+		{name: "Azure", api: APIResponses, endpoint: "https://example.openai.azure.com/openai/responses", tier: ServiceTierFlex, wantErr: true},
+		{name: "compatible server", api: APIResponses, endpoint: "https://models.example.com/v1/responses", tier: ServiceTierFlex, wantErr: true},
+		{name: "plain HTTP", api: APIResponses, endpoint: "http://api.openai.com/v1/responses", tier: ServiceTierFlex, wantErr: true},
+		{name: "unknown tier", api: APIResponses, endpoint: "https://api.openai.com/v1/responses", tier: "priority", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateServiceTier(tt.api, tt.endpoint, tt.tier)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateServiceTier() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

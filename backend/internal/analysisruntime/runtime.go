@@ -164,6 +164,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		Endpoint:           opts.Project.Provider.Endpoint,
 		Model:              opts.Project.Provider.Model,
 		ReasoningEffort:    opts.Project.Provider.ReasoningEffort,
+		ServiceTier:        opts.Project.Provider.ServiceTier,
 		ExtraHeaders:       opts.Project.Provider.Headers,
 		MaxOutputTokens:    opts.MaxOutputTokens,
 		ResponsesWebSocket: responsesWebSocket,

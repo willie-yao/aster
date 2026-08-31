@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
@@ -35,6 +37,7 @@ type responsesRequest struct {
 	Include            []string             `json:"include,omitempty"`
 	MaxOutputTokens    int                  `json:"max_output_tokens,omitempty"`
 	PromptCacheKey     string               `json:"prompt_cache_key,omitempty"`
+	ServiceTier        string               `json:"service_tier,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -67,10 +70,11 @@ type responsesTool struct {
 }
 
 type responsesResponse struct {
-	ID     string            `json:"id"`
-	Status string            `json:"status"`
-	Output []json.RawMessage `json:"output"`
-	Usage  *responsesUsage   `json:"usage"`
+	ID          string            `json:"id"`
+	Status      string            `json:"status"`
+	Output      []json.RawMessage `json:"output"`
+	Usage       *responsesUsage   `json:"usage"`
+	ServiceTier string            `json:"service_tier,omitempty"`
 }
 
 type responsesUsage struct {
@@ -89,7 +93,7 @@ type responsesOutputTokenDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-func responsesRequestFor(req modelRequest) responsesRequest {
+func responsesRequestFor(req modelRequest, serviceTier string) responsesRequest {
 	include := []string{"reasoning.encrypted_content"}
 	if req.OmitReasoning {
 		include = nil
@@ -99,7 +103,7 @@ func responsesRequestFor(req modelRequest) responsesRequest {
 		Tools: encodeResponsesTools(req.Tools), Text: encodeResponsesText(req.ResponseFormat),
 		ToolChoice: encodeResponsesToolChoice(req.ToolChoice), Reasoning: encodeResponsesReasoning(req.ReasoningEffort),
 		ParallelToolCalls: req.ParallelToolCalls, Store: false, Include: include, MaxOutputTokens: req.MaxOutputTokens,
-		PromptCacheKey: req.PromptCacheKey,
+		PromptCacheKey: req.PromptCacheKey, ServiceTier: serviceTier,
 	}
 }
 
@@ -117,16 +121,22 @@ type responsesOutputItem struct {
 
 func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
 	time.Sleep(callDelay)
-	body, err := json.Marshal(responsesRequestFor(req))
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
 
+	serviceTier := t.api.serviceTier
 	var resp *http.Response
+	var raw []byte
+	responseRead := false
+	consecutiveFlexUnavailable := 0
 	attempts := 0
 	wireRequestBytes := 0
 	for attempt := 0; attempt < 3; attempt++ {
 		attempts = attempt + 1
+		raw = nil
+		responseRead = false
+		body, err := json.Marshal(responsesRequestFor(req, serviceTier))
+		if err != nil {
+			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("marshal request: %w", err)
+		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
 			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("build request: %w", err)
@@ -137,25 +147,41 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		if err != nil {
 			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("post: %w", err)
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if attempt == 2 {
-				break
-			}
-			wait := retryAfter(resp.Header.Get("Retry-After"), time.Duration(2<<attempt)*time.Second)
-			_ = resp.Body.Close()
-			select {
-			case <-ctx.Done():
-				return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
+		if resp.StatusCode != http.StatusTooManyRequests {
+			break
 		}
-		break
+
+		if t.api.serviceTier == modelprovider.ServiceTierFlex {
+			raw, _ = readModelResponseBody(resp.Body, 4096)
+			responseRead = true
+			if flexResourceUnavailable(raw) {
+				consecutiveFlexUnavailable++
+			} else {
+				consecutiveFlexUnavailable = 0
+			}
+		}
+		if attempt == 2 {
+			break
+		}
+		wait := retryAfter(resp.Header.Get("Retry-After"), time.Duration(2<<attempt)*time.Second)
+		_ = resp.Body.Close()
+		if serviceTier == modelprovider.ServiceTierFlex && consecutiveFlexUnavailable >= 2 && attempt == 1 {
+			serviceTier = modelprovider.ServiceTierAuto
+			recordTrace(ctx, TraceEvent{Kind: "service_tier", Outcome: "fallback", Status: serviceTier})
+		}
+		select {
+		case <-ctx.Done():
+			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, ctx.Err()
+		case <-time.After(wait):
+		}
 	}
 	defer resp.Body.Close()
-	raw, err := readModelResponseBody(resp.Body, req.MaxResponseBytes)
-	if err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("read response: %w", err)
+	if !responseRead {
+		var err error
+		raw, err = readModelResponseBody(resp.Body, req.MaxResponseBytes)
+		if err != nil {
+			return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("read response: %w", err)
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, newModelHTTPError("responses", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
@@ -165,13 +191,18 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
 	}
 	if wire.Status != "completed" {
-		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, ServiceTier: wire.ServiceTier, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
 	}
 	out := decodeResponsesResponse(wire)
 	out.Attempts = attempts
 	out.HTTPStatus = resp.StatusCode
 	out.WireRequestBytes = wireRequestBytes
 	return out, nil
+}
+
+func flexResourceUnavailable(raw []byte) bool {
+	text := strings.ToLower(string(raw))
+	return strings.Contains(text, "resource unavailable")
 }
 
 func encodeResponsesInput(messages []modelMessage) []any {
@@ -281,7 +312,7 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		finish = "stop"
 	}
 	return &modelResponse{
-		Message: message, FinishReason: finish, ResponseID: resp.ID, Status: resp.Status,
+		Message: message, FinishReason: finish, ResponseID: resp.ID, Status: resp.Status, ServiceTier: resp.ServiceTier,
 		Usage:      responsesTokenUsage(resp.Usage),
 		HasMessage: len(resp.Output) > 0,
 	}

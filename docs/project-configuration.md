@@ -293,6 +293,11 @@ optional `AI_REASONING_EFFORT`, and `AI_TOKEN` from the deployment. For cache ge
 `AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
 historical cache-key shape. Generation values are limited to 64 characters and
 may contain alphanumerics, dot, underscore, and hyphen.
+`ai.service_tier: flex` enables OpenAI Flex processing only when `ai.api` is
+`responses` and the endpoint host is exactly `api.openai.com`. Other providers
+are rejected before any request. Flex raises an effective timeout below 15
+minutes to 15 minutes and falls back to `auto` after repeated provider capacity
+responses.
 `ai.responses_websocket` is an optional private transport setting for measured,
 tool-heavy Responses analyses. It defaults to `false` and requires the resolved
 API to be `responses`. When enabled, each authoritative failure analysis uses

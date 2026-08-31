@@ -67,7 +67,7 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
 	wantBytes := requestSizeEstimate([]modelMessage{{Role: "user", Content: strPtr("user")}}, 0)
-	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ToolCallCount != 1 || event.Bytes != wantBytes || event.WireRequestBytes != 321 {
+	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ServiceTier != "" || event.ToolCallCount != 1 || event.Bytes != wantBytes || event.WireRequestBytes != 321 {
 		t.Fatalf("event = %+v", event)
 	}
 }

@@ -100,7 +100,7 @@ func (c *responsesWebSocketConversation) Complete(ctx context.Context, req model
 	}
 	time.Sleep(callDelay)
 
-	request := responsesRequestFor(req)
+	request := responsesRequestFor(req, "")
 	fullInput := request.Input
 	canonicalInput, err := canonicalResponsesItems(fullInput)
 	if err != nil {

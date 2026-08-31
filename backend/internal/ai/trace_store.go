@@ -306,6 +306,9 @@ func normalizeAnalysisTrace(trace AnalysisTrace) AnalysisTrace {
 		event.Status = traceText(event.Status)
 		event.FinishReason = traceText(event.FinishReason)
 		event.ReasoningEffort = safeReasoningEffortTrace(event.ReasoningEffort)
+		if event.ServiceTier != "" {
+			event.ServiceTier = traceCode(event.ServiceTier)
+		}
 		event.Tool = traceText(event.Tool)
 		if event.ErrorCode != "" {
 			event.ErrorCode = traceCode(event.ErrorCode)

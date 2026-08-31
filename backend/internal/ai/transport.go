@@ -189,6 +189,9 @@ func (c *Client) callModelRequestWithTransport(ctx context.Context, request mode
 	if c.reasoningEffortErr != nil {
 		return nil, c.reasoningEffortErr
 	}
+	if c.serviceTierErr != nil {
+		return nil, c.serviceTierErr
+	}
 	if c.maxOutputTokensErr != nil {
 		return nil, c.maxOutputTokensErr
 	}
@@ -214,6 +217,7 @@ func (c *Client) callModelRequestWithTransport(ctx context.Context, request mode
 		event.ResponseID = resp.ResponseID
 		event.Status = resp.Status
 		event.FinishReason = resp.FinishReason
+		event.ServiceTier = resp.ServiceTier
 		event.Attempts = resp.Attempts
 		event.HTTPStatus = resp.HTTPStatus
 		event.UsageReported = resp.Usage.Reported
@@ -281,6 +285,7 @@ type modelResponse struct {
 	HasMessage       bool
 	ResponseID       string
 	Status           string
+	ServiceTier      string
 	Attempts         int
 	HTTPStatus       int
 	Usage            aiusage.TokenUsage
@@ -316,6 +321,7 @@ type httpAPIClient struct {
 	endpoint     string
 	token        string
 	extraHeaders map[string]string
+	serviceTier  string
 }
 
 func newHTTPAPIClient(endpoint, token string, extraHeaders map[string]string) *httpAPIClient {

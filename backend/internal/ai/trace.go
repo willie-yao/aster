@@ -137,6 +137,7 @@ type TraceEvent struct {
 	OutputTokens                  int                 `json:"output_tokens,omitempty"`
 	ReasoningTokens               int                 `json:"reasoning_tokens,omitempty"`
 	ReasoningEffort               string              `json:"reasoning_effort,omitempty"`
+	ServiceTier                   string              `json:"service_tier,omitempty"`
 	EstimatedPromptTokens         int                 `json:"estimated_prompt_tokens,omitempty"`
 	ContextLimitTokens            int                 `json:"context_limit_tokens,omitempty"`
 	ReservedTokens                int                 `json:"reserved_tokens,omitempty"`

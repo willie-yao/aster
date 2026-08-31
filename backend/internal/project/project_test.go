@@ -1007,9 +1007,9 @@ func TestValidateFixVerifyTimeout(t *testing.T) {
 }
 
 func TestResolveAIProviderAPI(t *testing.T) {
-	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m"}}
+	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex}}
 	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model", " HIGH ")
-	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" || got.ReasoningEffort != "high" {
+	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" || got.ReasoningEffort != "high" || got.ServiceTier != modelprovider.ServiceTierFlex {
 		t.Fatalf("provider = %+v", got)
 	}
 	defaults := (&Config{}).ResolveAIProvider("", "endpoint", "model", "")
@@ -1776,5 +1776,31 @@ func TestCommentEnabled(t *testing.T) {
 				t.Fatalf("CommentEnabled() = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateAIProviderServiceTier(t *testing.T) {
+	valid := AIProvider{API: AIAPIResponses, Endpoint: "https://api.openai.com/v1/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex}
+	if err := ValidateAIProvider(valid); err != nil {
+		t.Fatalf("valid flex provider: %v", err)
+	}
+	for _, provider := range []AIProvider{
+		{API: AIAPIChatCompletions, Endpoint: "https://api.openai.com/v1/chat/completions", Model: "m", ServiceTier: modelprovider.ServiceTierFlex},
+		{API: AIAPIResponses, Endpoint: "https://api.githubcopilot.com/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex},
+	} {
+		if err := ValidateAIProvider(provider); err == nil {
+			t.Fatalf("invalid flex provider passed: %+v", provider)
+		}
+	}
+}
+
+func TestEffectiveAgenticFlexTimeout(t *testing.T) {
+	ai := &AI{ServiceTier: modelprovider.ServiceTierFlex, Agentic: Agentic{Timeout: time.Minute}}
+	if got := ai.EffectiveAgentic().Timeout; got != 15*time.Minute {
+		t.Fatalf("flex timeout = %v, want 15m", got)
+	}
+	ai.Agentic.Timeout = 20 * time.Minute
+	if got := ai.EffectiveAgentic().Timeout; got != 20*time.Minute {
+		t.Fatalf("explicit longer flex timeout = %v, want 20m", got)
 	}
 }
