@@ -298,6 +298,7 @@ type modelMessage struct {
 	Role          string            `json:"role"`
 	Content       *string           `json:"content,omitempty"`
 	Name          string            `json:"name,omitempty"`
+	Phase         string            `json:"phase,omitempty"`
 	ToolCallID    string            `json:"tool_call_id,omitempty"`
 	ToolCalls     []modelToolCall   `json:"tool_calls,omitempty"`
 	ProviderItems []json.RawMessage `json:"provider_items,omitempty"`

@@ -169,6 +169,11 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 	if requestSizeEstimate(large, 0) < requestSizeEstimate(small, 0)+1024 {
 		t.Fatal("provider items were not counted")
 	}
+	duplicate := append([]modelMessage(nil), large...)
+	duplicate[0].Content = strPtr(strings.Repeat("x", 1024))
+	if requestSizeEstimate(duplicate, 0) != requestSizeEstimate(large, 0) {
+		t.Fatal("assistant content was double-counted beside provider items")
+	}
 	compacted, _ := compactMessages(large, 0, 1)
 	if len(compacted[0].ProviderItems) != 1 {
 		t.Fatal("compaction dropped provider state")
@@ -190,17 +195,40 @@ func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 	}
 }
 
+func TestCompactMessagesPreservesMultipleAssistantPhases(t *testing.T) {
+	messages := []modelMessage{
+		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "assistant", Content: strPtr("commentaryfinal"), ProviderItems: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"commentary"}]}`),
+			json.RawMessage(`{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"final"}]}`),
+		}},
+		{Role: "user", Content: strPtr("revise")},
+	}
+	got, elided := compactMessages(messages, 0, 350)
+	if elided != 1 || len(got) != 5 {
+		t.Fatalf("compacted messages = %+v, elided=%d", got, elided)
+	}
+	if got[2].Phase != "commentary" || got[2].Content == nil || *got[2].Content != "commentary" ||
+		got[3].Phase != "final_answer" || got[3].Content == nil || *got[3].Content != "final" {
+		t.Fatalf("phased assistant boundaries were not preserved: %+v", got)
+	}
+}
+
 func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
-		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","padding":"` + strings.Repeat("x", 2000) + `","content":[{"type":"output_text","text":"draft"}]}`)}},
 		{Role: "user", Content: strPtr("revise")},
 	}
 	got, elided := compactMessages(messages, 0, 600)
 	if elided != 1 {
 		t.Fatalf("elided = %d, want 1", elided)
 	}
-	if len(got[2].ProviderItems) != 0 || got[2].Content == nil || *got[2].Content != "draft" {
-		t.Fatalf("tools-free Responses turn was not reduced to text: %+v", got[2])
+	if len(got[2].ProviderItems) != 0 || got[2].Content == nil || *got[2].Content != "draft" || got[2].Phase != "analysis" {
+		t.Fatalf("tools-free Responses turn was not reduced to phased text: %+v", got[2])
+	}
+	item := encodeResponsesInput(got)[2].(map[string]any)
+	if item["phase"] != "analysis" {
+		t.Fatalf("replayed assistant phase = %#v", item)
 	}
 }

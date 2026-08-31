@@ -209,7 +209,7 @@ func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
 	total := schemaBytes + 64 // request framing
 	for i := range messages {
 		total += compactionMsgOverhead
-		if messages[i].Content != nil {
+		if messages[i].Content != nil && (messages[i].Role != "assistant" || len(messages[i].ProviderItems) == 0) {
 			total += len(*messages[i].Content)
 		}
 		for _, tc := range messages[i].ToolCalls {
@@ -279,7 +279,20 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) > 0 || m.Content == nil {
 			continue
 		}
-		m.ProviderItems = nil
+		replay := responsesAssistantMessagesFromProviderItems(m.ProviderItems)
+		if len(replay) == 0 {
+			if m.Phase == "" {
+				m.Phase = responsesPhaseFromProviderItems(m.ProviderItems)
+			}
+			m.ProviderItems = nil
+		} else {
+			replacement := make([]modelMessage, 0, len(messages)+len(replay)-1)
+			replacement = append(replacement, messages[:i]...)
+			replacement = append(replacement, replay...)
+			replacement = append(replacement, messages[i+1:]...)
+			messages = replacement
+			i += len(replay) - 1
+		}
 		elided++
 	}
 	// Stage 5: remove older Responses assistant turns and their paired tool

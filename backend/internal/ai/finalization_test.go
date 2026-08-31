@@ -19,9 +19,15 @@ func TestResponsesForcedFinalizationReplaysAsAssistantContent(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
-		if requests == 2 && hasOrphanResponsesFunctionCall(request.Input, "submit-1") {
-			http.Error(w, `{"error":{"message":"No tool output found for function call submit-1.","code":"invalid_request_body"}}`, http.StatusBadRequest)
-			return
+		if requests == 2 {
+			if hasOrphanResponsesFunctionCall(request.Input, "submit-1") {
+				http.Error(w, `{"error":{"message":"No tool output found for function call submit-1.","code":"invalid_request_body"}}`, http.StatusBadRequest)
+				return
+			}
+			if !hasResponsesAssistantPhase(request.Input, "final_answer") {
+				http.Error(w, `{"error":{"message":"assistant phase missing","code":"invalid_request_body"}}`, http.StatusBadRequest)
+				return
+			}
 		}
 		callID := fmt.Sprintf("submit-%d", requests)
 		_, _ = fmt.Fprintf(w, `{"id":"resp-%d","status":"completed","output":[{"id":"reason-%d","type":"reasoning","encrypted_content":"state-%d","summary":[]},{"type":"function_call","call_id":%q,"name":"submit_analysis","arguments":%q}]}`, requests, requests, requests, callID, cleanFinalJSON)
@@ -46,6 +52,19 @@ func TestResponsesForcedFinalizationReplaysAsAssistantContent(t *testing.T) {
 	if requests != 2 {
 		t.Fatalf("requests=%d, want 2", requests)
 	}
+}
+
+func hasResponsesAssistantPhase(items []json.RawMessage, phase string) bool {
+	for _, raw := range items {
+		var item struct {
+			Role  string `json:"role"`
+			Phase string `json:"phase"`
+		}
+		if json.Unmarshal(raw, &item) == nil && item.Role == "assistant" && item.Phase == phase {
+			return true
+		}
+	}
+	return false
 }
 
 func hasOrphanResponsesFunctionCall(items []json.RawMessage, callID string) bool {

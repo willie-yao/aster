@@ -160,6 +160,8 @@ Flex processing is accepted only for this exact OpenAI host and the Responses
 API. Aster uses a minimum 15-minute analysis timeout, retries provider capacity
 responses with backoff, then sends the final attempt with `service_tier: auto`.
 The provider-echoed tier is recorded on each model-request trace.
+Aster also preserves the Responses assistant `phase` field when compaction or
+forced finalization reconstructs an assistant message for a later request.
 
 Chat Completions:
 
