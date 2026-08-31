@@ -34,6 +34,8 @@ type Client struct {
 	model               string
 	reasoningEffort     ReasoningEffort
 	reasoningEffortErr  error
+	serviceTier         string
+	serviceTierErr      error
 	maxOutputTokens     int
 	maxOutputTokensErr  error
 	responsesWebSocket  bool
@@ -71,6 +73,8 @@ type Options struct {
 	// ReasoningEffort requests provider reasoning depth. Empty preserves the
 	// provider default and the historical request and cache identity.
 	ReasoningEffort ReasoningEffort
+	// ServiceTier enables OpenAI flex processing for Responses requests.
+	ServiceTier string
 	// ExtraHeaders are merged into every request after the defaults. Use
 	// this for provider-specific routing headers or to override the default
 	// Authorization scheme.
@@ -91,11 +95,16 @@ func NewClientWithOptions(opts Options) *Client {
 	if opts.MaxOutputTokens < 0 || opts.MaxOutputTokens > 131072 {
 		maxOutputTokensErr = fmt.Errorf("max output tokens must be between 0 and 131072")
 	}
-	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
 	apiMode := strings.ToLower(strings.TrimSpace(opts.API))
 	if apiMode == "" {
 		apiMode = APIChatCompletions
 	}
+	serviceTier, serviceTierErr := modelprovider.NormalizeServiceTier(opts.ServiceTier)
+	if serviceTierErr == nil {
+		serviceTierErr = modelprovider.ValidateServiceTier(apiMode, opts.Endpoint, serviceTier)
+	}
+	api := newHTTPAPIClient(opts.Endpoint, opts.Token, opts.ExtraHeaders)
+	api.serviceTier = serviceTier
 	var transport modelTransport
 	var conversation conversationTransport
 	switch apiMode {
@@ -114,6 +123,7 @@ func NewClientWithOptions(opts Options) *Client {
 		api: api, transport: transport, conversation: conversation, apiMode: apiMode,
 		apiURL: opts.Endpoint, model: opts.Model,
 		reasoningEffort: reasoningEffort, reasoningEffortErr: reasoningEffortErr,
+		serviceTier: serviceTier, serviceTierErr: serviceTierErr,
 		maxOutputTokens: opts.MaxOutputTokens, maxOutputTokensErr: maxOutputTokensErr,
 		responsesWebSocket: opts.ResponsesWebSocket,
 		cache:              NewCache(opts.CacheDir),
@@ -161,13 +171,19 @@ func (c *Client) APIMode() string { return c.apiMode }
 // ReasoningEffort returns the normalized requested effort. Empty uses the provider default.
 func (c *Client) ReasoningEffort() ReasoningEffort { return c.reasoningEffort }
 
+// ServiceTier returns the normalized requested processing tier.
+func (c *Client) ServiceTier() string { return c.serviceTier }
+
 // ValidateConfiguration rejects unsupported client options before provider I/O.
 func (c *Client) ValidateConfiguration() error {
 	var responsesWebSocketErr error
 	if c.responsesWebSocket && c.apiMode != APIResponses {
 		responsesWebSocketErr = fmt.Errorf("responses websocket requires api %q", APIResponses)
 	}
-	return errors.Join(c.reasoningEffortErr, c.maxOutputTokensErr, responsesWebSocketErr)
+	if c.responsesWebSocket && c.serviceTier != "" {
+		responsesWebSocketErr = fmt.Errorf("responses websocket does not support service tier %q", c.serviceTier)
+	}
+	return errors.Join(c.reasoningEffortErr, c.serviceTierErr, c.maxOutputTokensErr, responsesWebSocketErr)
 }
 
 // ModelFingerprint hashes the model, endpoint, and non-default API contract.

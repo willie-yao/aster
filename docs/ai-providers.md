@@ -153,7 +153,13 @@ ai:
   api: responses
   endpoint: https://api.openai.com/v1/responses
   model: <model-id>
+  service_tier: flex  # optional
 ```
+
+Flex processing is accepted only for this exact OpenAI host and the Responses
+API. Aster uses a minimum 15-minute analysis timeout, retries provider capacity
+responses with backoff, then sends the final attempt with `service_tier: auto`.
+The provider-echoed tier is recorded on each model-request trace.
 
 Chat Completions:
 

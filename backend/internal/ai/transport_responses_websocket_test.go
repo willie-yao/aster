@@ -83,7 +83,7 @@ func TestResponsesWebSocketContinuesWithIncrementalInput(t *testing.T) {
 		t.Fatalf("wire bytes = (%d,%d), payloads = (%d,%d)", first.WireRequestBytes, second.WireRequestBytes, len(payloads[0]), len(payloads[1]))
 	}
 	firstRequest := decodeWebSocketRequest(t, payloads[0])
-	if firstRequest.Type != "response.create" || firstRequest.PreviousResponseID != "" || firstRequest.Store || len(firstRequest.Input) != 2 {
+	if firstRequest.Type != "response.create" || firstRequest.PreviousResponseID != "" || firstRequest.ServiceTier != "" || firstRequest.Store || len(firstRequest.Input) != 2 {
 		t.Fatalf("first request = %+v", firstRequest)
 	}
 	secondRequest := decodeWebSocketRequest(t, payloads[1])

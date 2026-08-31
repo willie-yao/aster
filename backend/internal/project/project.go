@@ -473,6 +473,10 @@ type AI struct {
 	// from manifest.json.
 	Model string `yaml:"model,omitempty" json:"-"`
 
+	// ServiceTier enables OpenAI flex processing for Responses requests.
+	// It is excluded from manifest.json.
+	ServiceTier string `yaml:"service_tier,omitempty" json:"-"`
+
 	// CacheGeneration selects a reversible namespace for all AI cache keys.
 	// AI_CACHE_GENERATION overrides it when non-empty. Excluded from public JSON.
 	CacheGeneration string `yaml:"cache_generation,omitempty" json:"-"`
@@ -642,6 +646,7 @@ type AIProvider struct {
 	Endpoint        string
 	Model           string
 	ReasoningEffort modelprovider.ReasoningEffort
+	ServiceTier     string
 	Headers         map[string]string
 }
 
@@ -664,6 +669,7 @@ func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback,
 	if c.AI.Model != "" {
 		out.Model = c.AI.Model
 	}
+	out.ServiceTier = strings.ToLower(strings.TrimSpace(c.AI.ServiceTier))
 	out.Headers = c.AI.Headers
 	return out
 }
@@ -673,8 +679,10 @@ func ValidateAIProvider(provider AIProvider) error {
 	if err := ValidateAIAPI(provider.API); err != nil {
 		return err
 	}
-	_, err := modelprovider.NormalizeReasoningEffort(string(provider.ReasoningEffort))
-	return err
+	if _, err := modelprovider.NormalizeReasoningEffort(string(provider.ReasoningEffort)); err != nil {
+		return err
+	}
+	return modelprovider.ValidateServiceTier(provider.API, provider.Endpoint, provider.ServiceTier)
 }
 
 // FixPRs configures the agent-proposed fix-PR feature: when a maintainer asks
@@ -1152,6 +1160,9 @@ func (a *AI) EffectiveAgentic() Agentic {
 	}
 	if a.Agentic.Timeout > 0 {
 		out.Timeout = a.Agentic.Timeout
+	}
+	if strings.EqualFold(strings.TrimSpace(a.ServiceTier), modelprovider.ServiceTierFlex) && out.Timeout < 15*time.Minute {
+		out.Timeout = 15 * time.Minute
 	}
 	if a.Agentic.MinToolCalls > 0 {
 		out.MinToolCalls = a.Agentic.MinToolCalls

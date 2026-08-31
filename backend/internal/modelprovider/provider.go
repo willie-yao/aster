@@ -16,6 +16,9 @@ const (
 	APIChatCompletions = "chat_completions"
 	APIResponses       = "responses"
 
+	ServiceTierFlex = "flex"
+	ServiceTierAuto = "auto"
+
 	CredentialModeDirect  = "direct"
 	CredentialModeGateway = "gateway"
 
@@ -72,6 +75,31 @@ func Normalize(config Config) Config {
 		config.Auth.TokenEnv = TokenEnv
 	}
 	return config
+}
+
+// NormalizeServiceTier validates the optional OpenAI processing tier.
+func NormalizeServiceTier(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == ServiceTierFlex {
+		return value, nil
+	}
+	return "", fmt.Errorf("model provider service tier %q is unsupported", value)
+}
+
+// ValidateServiceTier gates service-tier requests to OpenAI Responses.
+func ValidateServiceTier(api, endpoint, tier string) error {
+	tier, err := NormalizeServiceTier(tier)
+	if err != nil || tier == "" {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(api)) != APIResponses {
+		return fmt.Errorf("service tier %q requires api %q", tier, APIResponses)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(strings.TrimSuffix(parsed.Hostname(), "."), "api.openai.com") {
+		return fmt.Errorf("service tier %q requires an https://api.openai.com endpoint", tier)
+	}
+	return nil
 }
 
 // EndpointHeaders returns the headers every caller must send to this endpoint,
