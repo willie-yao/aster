@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -62,6 +63,11 @@ type analysisChatEvidenceFailure struct {
 	Detail string
 }
 
+type analysisChatSourceCitationContext struct {
+	Primary  tools.RepoSource
+	Evidence map[string]*analysisChatEvidence
+}
+
 type analysisChatValidationError struct {
 	category string
 	err      error
@@ -91,6 +97,14 @@ func parseAnalysisChatReply(raw string, evidence map[string]*analysisChatEvidenc
 func parseAnalysisChatReplyCandidates(
 	raw string,
 	evidence map[string]*analysisChatEvidence,
+) (analysischat.Reply, analysisChatParseStats, error) {
+	return parseAnalysisChatReplyCandidatesWithSource(raw, evidence, nil)
+}
+
+func parseAnalysisChatReplyCandidatesWithSource(
+	raw string,
+	evidence map[string]*analysisChatEvidence,
+	source *analysisChatSourceCitationContext,
 ) (analysischat.Reply, analysisChatParseStats, error) {
 	stats := analysisChatParseStats{}
 	if strings.TrimSpace(raw) == "" {
@@ -136,7 +150,7 @@ func parseAnalysisChatReplyCandidates(
 	rejected := make([]rejectedCandidate, 0, len(scan.candidates))
 	bestErr := newAnalysisChatValidationError(analysisChatValidationJSON, errors.New("response is not valid analysis-chat JSON"))
 	for _, candidate := range scan.candidates {
-		reply, failure, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence)
+		reply, failure, err := decodeAnalysisChatReplyCandidate(candidate.value, evidence, source)
 		if err == nil {
 			candidate.replyLike = true
 			valid = append(valid, validCandidate{reply: reply, failure: failure, span: candidate})
@@ -310,12 +324,13 @@ func analysisChatCandidateLooksLikeReply(candidate string) bool {
 func decodeAnalysisChatReplyCandidate(
 	candidate string,
 	evidence map[string]*analysisChatEvidence,
+	source *analysisChatSourceCitationContext,
 ) (analysischat.Reply, *analysisChatEvidenceFailure, error) {
 	reply, err := decodeAnalysisChatReplyContract(candidate)
 	if err != nil {
 		return analysischat.Reply{}, nil, err
 	}
-	failure := validateAnalysisChatCitations(&reply, evidence)
+	failure := validateAnalysisChatCitations(&reply, evidence, source)
 	return reply, failure, nil
 }
 
@@ -410,6 +425,7 @@ func decodeAnalysisChatReplyContract(candidate string) (analysischat.Reply, erro
 func validateAnalysisChatCitations(
 	reply *analysischat.Reply,
 	evidence map[string]*analysisChatEvidence,
+	source *analysisChatSourceCitationContext,
 ) *analysisChatEvidenceFailure {
 	citations := reply.Citations
 	warnings := make([]string, 0, min(len(citations), analysisChatMaxEvidenceWarnings))
@@ -423,23 +439,35 @@ func validateAnalysisChatCitations(
 	}
 	gate := ""
 	valid := make([]analysischat.Citation, 0, min(len(citations), 20))
+	retainedArtifact := false
+	discarded := false
+	allDiscardedSource := true
 	for i := range citations {
 		if len(valid) == 20 {
 			addWarning("additional citations were discarded after 20 verified entries")
+			discarded = true
+			allDiscardedSource = false
 			if gate == "" {
 				gate = analysischat.UnverifiedCitation
 			}
 			break
 		}
 		citation := citations[i]
-		if failure := validateAnalysisChatCitation(&citation, evidence, i+1); failure != nil {
+		if failure := validateAnalysisChatCitation(&citation, evidence, source, i+1); failure != nil {
 			addWarning(failure.Detail)
+			discarded = true
+			if !isAnalysisChatSourceCitation(citation) {
+				allDiscardedSource = false
+			}
 			if gate == "" || failure.Gate == analysischat.UnverifiedReference {
 				gate = failure.Gate
 			}
 			continue
 		}
 		valid = append(valid, citation)
+		if !isAnalysisChatSourceCitation(citation) {
+			retainedArtifact = true
+		}
 	}
 	if omittedWarnings > 0 {
 		summary := fmt.Sprintf("%d additional citation warning(s) were omitted", omittedWarnings+1)
@@ -447,10 +475,11 @@ func validateAnalysisChatCitations(
 	}
 	reply.Citations = valid
 	reply.EvidenceWarnings = warnings
-	reply.Answer = removeUncitedLineClaims(reply.Answer, analysisChatModelCitations(valid))
+	sourceClaimSupported := analysisChatSourceLineClaimSupported(valid)
+	reply.Answer = removeUncitedLineClaims(reply.Answer, analysisChatModelCitations(valid), sourceClaimSupported)
 	if reply.ProposedRevision != nil {
-		reply.ProposedRevision.RootCause = removeUncitedLineClaims(reply.ProposedRevision.RootCause, analysisChatModelCitations(valid))
-		reply.ProposedRevision.SuggestedFix = removeUncitedLineClaims(reply.ProposedRevision.SuggestedFix, analysisChatModelCitations(valid))
+		reply.ProposedRevision.RootCause = removeUncitedLineClaims(reply.ProposedRevision.RootCause, analysisChatModelCitations(valid), sourceClaimSupported)
+		reply.ProposedRevision.SuggestedFix = removeUncitedLineClaims(reply.ProposedRevision.SuggestedFix, analysisChatModelCitations(valid), sourceClaimSupported)
 	}
 	if (reply.Assessment == "supports" || reply.Assessment == "challenges") && len(valid) == 0 && len(warnings) == 0 {
 		gate = analysischat.UnverifiedMissing
@@ -458,6 +487,9 @@ func validateAnalysisChatCitations(
 		reply.EvidenceWarnings = warnings
 	}
 	if len(warnings) == 0 {
+		return nil
+	}
+	if retainedArtifact && discarded && allDiscardedSource {
 		return nil
 	}
 	failure := &analysisChatEvidenceFailure{Gate: gate, Detail: strings.Join(warnings, "; ")}
@@ -471,22 +503,53 @@ func validateAnalysisChatCitations(
 }
 
 func analysisChatModelCitations(citations []analysischat.Citation) []models.EvidenceCitation {
-	out := make([]models.EvidenceCitation, len(citations))
-	for i, citation := range citations {
-		out[i] = models.EvidenceCitation{
-			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
+	out := make([]models.EvidenceCitation, 0, len(citations))
+	for _, citation := range citations {
+		if isAnalysisChatSourceCitation(citation) {
+			continue
 		}
+		out = append(out, models.EvidenceCitation{
+			Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
+		})
 	}
 	return out
+}
+
+func analysisChatSourceLineClaimSupported(citations []analysischat.Citation) func(proseLineClaim) bool {
+	return func(claim proseLineClaim) bool {
+		if !claim.Valid || claim.Path == "" || !isSourceCitation(claim.Path) {
+			return false
+		}
+		for _, citation := range citations {
+			if citation.Repository == "" || citation.Revision == "" || citation.LineStart <= 0 ||
+				citation.LineStart != claim.Start || citation.LineEnd != claim.End {
+				continue
+			}
+			if NormalizeArtifactCitation(citation.Path) == claim.Path {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func isAnalysisChatSourceCitation(citation analysischat.Citation) bool {
+	return strings.TrimSpace(citation.Repository) != "" || strings.TrimSpace(citation.Revision) != ""
 }
 
 func validateAnalysisChatCitation(
 	citation *analysischat.Citation,
 	evidence map[string]*analysisChatEvidence,
+	source *analysisChatSourceCitationContext,
 	index int,
 ) *analysisChatEvidenceFailure {
+	citation.Repository = strings.TrimSpace(citation.Repository)
+	citation.Revision = strings.TrimSpace(citation.Revision)
 	citation.Path = strings.TrimSpace(citation.Path)
 	citation.Quote = strings.TrimSpace(citation.Quote)
+	if isAnalysisChatSourceCitation(*citation) {
+		return validateAnalysisChatSourceCitation(citation, source, index)
+	}
 	safe, err := artifacts.SafePath(citation.Path)
 	if err != nil || safe == "" {
 		return &analysisChatEvidenceFailure{
@@ -501,14 +564,69 @@ func validateAnalysisChatCitation(
 		}
 	}
 	citation.Path = safe
+	return validateAnalysisChatCitationEvidence(citation, artifactEvidence, index, "artifact")
+}
+
+func validateAnalysisChatSourceCitation(
+	citation *analysischat.Citation,
+	source *analysisChatSourceCitationContext,
+	index int,
+) *analysisChatEvidenceFailure {
+	if citation.Repository == "" || citation.Revision == "" {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d requires both repository and revision", index),
+		}
+	}
+	if source == nil || source.Primary.Owner == "" || source.Primary.Name == "" || source.Primary.Revision == "" {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has no immutable source catalog", index),
+		}
+	}
+	repository := source.Primary.Owner + "/" + source.Primary.Name
+	if !strings.EqualFold(citation.Repository, repository) || citation.Revision != source.Primary.Revision {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d does not match the active source revision", index),
+		}
+	}
+	safe, err := artifacts.SafePath(citation.Path)
+	if err != nil || safe == "" {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an unsafe source path", index),
+		}
+	}
+	recorded := source.Evidence[safe]
+	if recorded == nil {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedReference,
+			Detail: fmt.Sprintf("citation %d names source not read during this turn", index),
+		}
+	}
+	citation.Repository = repository
+	citation.Revision = source.Primary.Revision
+	citation.Path = safe
+	return validateAnalysisChatCitationEvidence(citation, recorded, index, "source")
+}
+
+func validateAnalysisChatCitationEvidence(
+	citation *analysischat.Citation,
+	recorded *analysisChatEvidence,
+	index int,
+	kind string,
+) *analysisChatEvidenceFailure {
 	coordinatesUsable := citation.LineStart >= 0 && citation.LineEnd >= 0 &&
 		(citation.LineStart == 0) == (citation.LineEnd == 0) &&
 		(citation.LineEnd == 0 || citation.LineStart <= citation.LineEnd)
+	if kind == "source" && !coordinatesUsable {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf("citation %d has an invalid source line range", index),
+		}
+	}
 	locator := NormalizeCitationText(citation.Quote)
 	if len(citation.Quote) < 4 || locator == "" {
 		return &analysisChatEvidenceFailure{
 			Gate:   analysischat.UnverifiedCitation,
-			Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the artifact", index),
+			Detail: fmt.Sprintf("citation %d requires a quote of at least 4 bytes from the %s", index, kind),
 		}
 	}
 	tooLong := &analysisChatEvidenceFailure{
@@ -517,9 +635,15 @@ func validateAnalysisChatCitation(
 			"citation %d quote is too long to record; quote the passage that supports the answer", index,
 		),
 	}
-	if coordinatesUsable && citation.LineStart > 0 && len(artifactEvidence.Lines) > 0 && citation.LineEnd-citation.LineStart <= analysisChatMaxQuoteLines {
-		quote, ok := analysisChatQuoteForRange(artifactEvidence.Lines, citation.LineStart, citation.LineEnd)
-		if ok && analysisChatEvidenceContains(artifactEvidence, quote) {
+	if coordinatesUsable && citation.LineStart > 0 && len(recorded.Lines) > 0 && citation.LineEnd-citation.LineStart <= analysisChatMaxQuoteLines {
+		quote, ok := analysisChatQuoteForRange(recorded.Lines, citation.LineStart, citation.LineEnd)
+		if ok && analysisChatEvidenceContains(recorded, quote) {
+			if kind == "source" && !strings.Contains(NormalizeCitationText(quote), locator) {
+				return &analysisChatEvidenceFailure{
+					Gate:   analysischat.UnverifiedCitation,
+					Detail: fmt.Sprintf("citation %d quote does not appear in the cited source line range", index),
+				}
+			}
 			clamped, kept := clampAnalysisChatQuote(quote)
 			if clamped != quote && !strings.Contains(NormalizeCitationText(clamped), locator) {
 				return tooLong
@@ -529,7 +653,13 @@ func validateAnalysisChatCitation(
 			return nil
 		}
 	}
-	return attributeAnalysisChatCitation(citation, artifactEvidence, index, locator, tooLong)
+	if kind == "source" && citation.LineStart > 0 {
+		return &analysisChatEvidenceFailure{
+			Gate:   analysischat.UnverifiedCitation,
+			Detail: fmt.Sprintf("citation %d line range was not returned by the cited source read", index),
+		}
+	}
+	return attributeAnalysisChatCitation(citation, recorded, index, locator, tooLong, kind)
 }
 
 func attributeAnalysisChatCitation(
@@ -538,6 +668,7 @@ func attributeAnalysisChatCitation(
 	index int,
 	locator string,
 	tooLong *analysisChatEvidenceFailure,
+	kind string,
 ) *analysisChatEvidenceFailure {
 	quote, matches := attributeAnalysisChatQuote(evidence, citation.Quote)
 	switch {
@@ -545,14 +676,14 @@ func attributeAnalysisChatCitation(
 		return &analysisChatEvidenceFailure{
 			Gate: analysischat.UnverifiedCitation,
 			Detail: fmt.Sprintf(
-				"citation %d quote does not appear in the cited artifact read; quote text the tools returned", index,
+				"citation %d quote does not appear in the cited %s read; quote text the tools returned", index, kind,
 			),
 		}
 	case matches > 1:
 		return &analysisChatEvidenceFailure{
 			Gate: analysischat.UnverifiedCitation,
 			Detail: fmt.Sprintf(
-				"citation %d quote matches more than one passage in the cited artifact; quote a longer, unique passage", index,
+				"citation %d quote matches more than one passage in the cited %s; quote a longer, unique passage", index, kind,
 			),
 		}
 	}
@@ -579,14 +710,14 @@ func analysisChatDecodeError(err error) error {
 	if strings.HasPrefix(err.Error(), "json: unknown field ") {
 		return newAnalysisChatValidationError(
 			analysisChatValidationContract,
-			errors.New("a nested object uses an unsupported key; a citation uses only path, line_start, line_end, and quote, and proposed_revision uses only root_cause and suggested_fix"),
+			errors.New("a nested object uses an unsupported key; a citation uses only repository, revision, path, line_start, line_end, and quote, and proposed_revision uses only root_cause and suggested_fix"),
 		)
 	}
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
 		return newAnalysisChatValidationError(
 			analysisChatValidationContract,
-			errors.New("a response field has the wrong type; answer is a string, citations is an array, citation path and quote are strings, citation line_start and line_end are integers or null, assessment is a string or null, and proposed_revision is null or an object with string root_cause and suggested_fix"),
+			errors.New("a response field has the wrong type; answer is a string, citations is an array, citation repository, revision, path, and quote are strings or null where allowed, citation line_start and line_end are integers or null, assessment is a string or null, and proposed_revision is null or an object with string root_cause and suggested_fix"),
 		)
 	}
 	return newAnalysisChatValidationError(

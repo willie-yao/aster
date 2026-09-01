@@ -112,6 +112,11 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 	if p["file_size"].(int) != len("replicas: 1\nimage: foo:v1\n") {
 		t.Errorf("file_size = %v", p["file_size"])
 	}
+	observation, ok := res.Observation.(ReadObservation)
+	if !ok || observation.LineStart != 1 || observation.LineEnd != 2 ||
+		observation.ByteStart != 0 || observation.ByteEnd != len("replicas: 1\nimage: foo:v1\n") {
+		t.Fatalf("observation = %#v", res.Observation)
+	}
 	// Second read is served from the cache: no extra ReadFile call.
 	if repo.reads != 1 {
 		t.Fatalf("reads = %d after first read, want 1", repo.reads)
@@ -369,16 +374,16 @@ func mustJSON(v map[string]interface{}) json.RawMessage {
 func TestCompleteReadLineRange(t *testing.T) {
 	content := "first\nsecond\nthird"
 	for _, tc := range []struct {
-		offset, end, start, finish int
-		ok                         bool
+		offset, end, start, finish, byteStart, byteEnd int
+		ok                                             bool
 	}{
-		{0, len(content), 1, 3, true},
-		{2, 13, 2, 2, true},
-		{1, 4, 0, 0, false},
+		{0, len(content), 1, 3, 0, len(content), true},
+		{2, 13, 2, 2, 4, 11, true},
+		{1, 4, 0, 0, 0, 0, false},
 	} {
-		start, finish, ok := completeReadLineRange(content, tc.offset, tc.end)
-		if start != tc.start || finish != tc.finish || ok != tc.ok {
-			t.Fatalf("%+v got %d %d %t", tc, start, finish, ok)
+		start, finish, byteStart, byteEnd, ok := completeReadLineRange(content, tc.offset, tc.end)
+		if start != tc.start || finish != tc.finish || byteStart != tc.byteStart || byteEnd != tc.byteEnd || ok != tc.ok {
+			t.Fatalf("%+v got %d %d %d %d %t", tc, start, finish, byteStart, byteEnd, ok)
 		}
 	}
 }

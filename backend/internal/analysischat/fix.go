@@ -393,7 +393,7 @@ func conversationEvidenceWarnings(messages []Message, requestID string) []string
 	return warnings
 }
 
-// conversationCitations returns the validated citations accumulated by the
+// conversationCitations returns the validated artifact citations accumulated by the
 // conversation up to and including the promoted answer, most recent first.
 // Evidence validated in an earlier turn stays trustworthy, so a conversation with verified
 // citations does not have to re-read artifacts to keep a later answer
@@ -412,6 +412,9 @@ func conversationCitations(messages []Message, requestID string) []Citation {
 	quoteBytes := 0
 	collect := func(message *Message) {
 		for _, citation := range message.Citations {
+			if citation.Repository != "" || citation.Revision != "" {
+				continue
+			}
 			if len(citations) >= maxConversationFixCitations || quoteBytes >= maxConversationFixQuoteBytes {
 				return
 			}

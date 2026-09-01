@@ -76,6 +76,8 @@ export type AnalysisChatReference =
   | CauseAnalysisChatReference;
 
 export interface AnalysisChatCitation {
+  repository?: string;
+  revision?: string;
   path: string;
   line_start?: number;
   line_end?: number;

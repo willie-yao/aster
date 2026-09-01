@@ -432,7 +432,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 		}
 	}
 	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
-		Token: token, DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
+		Token: token, GitHubReadToken: githubReadTokenFromEnv(), DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configuring analysis chat runtime: %w", err)
