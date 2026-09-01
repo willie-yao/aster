@@ -48,6 +48,9 @@ func TestDeriveContextBudgets_ReservesHeadroom(t *testing.T) {
 	if budgets.RequestTokenBudget+contextReservedTokens != budgets.ContextWindowTokens {
 		t.Fatalf("request=%d reserved=%d window=%d", budgets.RequestTokenBudget, contextReservedTokens, budgets.ContextWindowTokens)
 	}
+	if budgets.ContextByteBudget != budgets.RequestTokenBudget {
+		t.Fatalf("byte budget=%d request budget=%d", budgets.ContextByteBudget, budgets.RequestTokenBudget)
+	}
 	if budgets.UsedFallback {
 		t.Fatal("detected window unexpectedly marked fallback")
 	}
@@ -60,7 +63,7 @@ func TestDeriveContextBudgets_FallbackIsBounded(t *testing.T) {
 	}
 }
 
-func TestConservativePromptTokenEstimate_CoversDenseData(t *testing.T) {
+func TestConservativePromptTokenEstimate_UsesOneBytePerToken(t *testing.T) {
 	messages := []modelMessage{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr(strings.Repeat("/very/long/artifact/path/日本語/", 600))},
@@ -69,8 +72,8 @@ func TestConservativePromptTokenEstimate_CoversDenseData(t *testing.T) {
 	}
 	bytes := requestSizeEstimate(messages, 2048)
 	tokens := conservativePromptTokenEstimate(messages, 2048)
-	if tokens <= bytes {
-		t.Fatalf("tokens=%d must reserve provider framing above serialized bytes=%d", tokens, bytes)
+	if want := bytes + requestSerializationReserveTokens; tokens != want {
+		t.Fatalf("tokens=%d, want serialized bytes plus framing reserve=%d", tokens, want)
 	}
 }
 
