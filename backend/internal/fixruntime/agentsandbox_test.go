@@ -1138,3 +1138,26 @@ func TestAgentSandboxRuntimeRetainsReviewScopeClassification(t *testing.T) {
 		t.Fatalf("result=%+v deleted=%v", result, api.deleted)
 	}
 }
+
+func TestDecodeExecutionResultRejectsUnknownImageFields(t *testing.T) {
+	_, err := decodeExecutionResult(`{"version":2,"base_sha":"0123456789abcdef0123456789abcdef01234567","files":{},"terminal_state":"failed","failure_reason":"failed","future_executor_field":{"value":true}}`)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestAgentSandboxRuntimeEnrichesProviderErrorReferences(t *testing.T) {
+	opts := testAgentSandboxOptions()
+	opts.ModelProvider = testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "gpt-fixture")
+	opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
+	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, opts)
+	result := engineruntime.ExecutionResult{ProviderError: &engineruntime.ProviderErrorDetail{
+		StatusCode: 403, Message: "Forbidden", ProviderID: "github-copilot",
+	}}
+	runtime.enrichProviderError(&result)
+	if result.ProviderError == nil || result.ProviderError.AuthSecretName != opts.ProviderSecretRef.Name ||
+		result.ProviderError.AuthSecretKey != opts.ProviderSecretRef.Key ||
+		result.ProviderError.Endpoint != opts.ModelProvider.Endpoint || result.ProviderError.Model != opts.ModelProvider.Model {
+		t.Fatalf("provider error = %+v", result.ProviderError)
+	}
+}

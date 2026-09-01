@@ -17,7 +17,8 @@ export function chatFixRequestPresentation(request: ChatFixRequest): ChatFixRequ
     };
   }
   if (request.status === "failed") {
-    const canRegenerate = request.failure?.category === "no_reviewable_patch";
+    const canRegenerate = request.failure?.category === "no_reviewable_patch"
+      || request.failure?.category === "provider_credential";
     return {
       severity: canRegenerate ? "warning" : "error",
       message: failureMessage(request),
@@ -35,7 +36,7 @@ function failureMessage(request: ChatFixRequest): string {
     case "runtime_infrastructure":
       return "Fix preview generation failed in the isolated runtime.";
     case "provider_credential":
-      return "The model provider rejected the sandbox credential. Fix the credential before requesting another preview.";
+      return providerCredentialMessage(request);
     case "result_contract":
       return "Fix preview generation returned an invalid result contract.";
     case "safety_integrity":
@@ -48,6 +49,17 @@ function failureMessage(request: ChatFixRequest): string {
       return "Fix preview generation timed out.";
     default:
       return request.error || "Fix preview generation failed a safety, integrity, or runtime check.";
+  }
+}
+
+function providerCredentialMessage(request: ChatFixRequest): string {
+  switch (request.failure?.detail) {
+    case "provider_unauthorized":
+      return "The model provider rejected the sandbox credential (HTTP 401). Check the configured Secret reference, then retry the preview.";
+    case "provider_forbidden":
+      return "The model provider refused the request (HTTP 403). Check credential access, model entitlement, organization policy, quota, and proxy or mesh authorization before retrying.";
+    default:
+      return "The model provider refused the sandbox request. Check the provider diagnostic and configuration references before retrying.";
   }
 }
 

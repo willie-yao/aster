@@ -670,3 +670,33 @@ func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
 	}
 	return options
 }
+
+func TestValidateCredentialFreeResultChecksProviderError(t *testing.T) {
+	credentialValue := "fixture-provider-credential"
+	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
+	credential, err := modelprovider.NewCredentialGuard(provider, func(name string) (string, bool) {
+		return credentialValue, name == modelprovider.TokenEnv
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"message", "provider_id", "endpoint", "model"} {
+		t.Run(field, func(t *testing.T) {
+			detail := &engineruntime.ProviderErrorDetail{}
+			switch field {
+			case "message":
+				detail.Message = credentialValue
+			case "provider_id":
+				detail.ProviderID = credentialValue
+			case "endpoint":
+				detail.Endpoint = credentialValue
+			case "model":
+				detail.Model = credentialValue
+			}
+			err := validateCredentialFreeResult(credential, engineruntime.ExecutionResult{ProviderError: detail})
+			if !errors.Is(err, modelprovider.ErrCredentialExposure) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}

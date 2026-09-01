@@ -65,7 +65,11 @@ export interface SafeCommandResult {
   timed_out?: boolean;
 }
 
-export type AnalysisFixFailureDetail = "no_repository_change" | "review_scope_exceeded";
+export type AnalysisFixFailureDetail =
+  | "no_repository_change"
+  | "review_scope_exceeded"
+  | "provider_unauthorized"
+  | "provider_forbidden";
 
 export interface AnalysisFixFailure {
   category: AnalysisFixFailureCategory;

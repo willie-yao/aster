@@ -344,3 +344,44 @@ func TestExecutionRequestDirectBearerContractContainsNoSecretReference(t *testin
 		t.Fatal("serialized request does not pin the fixed credential environment")
 	}
 }
+
+func TestExecutionResultDecodesOldImagePayloadWithoutProviderError(t *testing.T) {
+	request := executionRequest()
+	payload := `{"version":2,"base_sha":"0123456789abcdef0123456789abcdef01234567","files":{},"terminal_state":"failed","failure_code":"provider_credential","failure_reason":"model provider rejected the sandbox credential (HTTP 401)"}`
+	var result ExecutionResult
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ProviderError != nil {
+		t.Fatalf("provider error = %+v", result.ProviderError)
+	}
+	if err := result.Validate(request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecutionResultProviderErrorIsOptionalOnWire(t *testing.T) {
+	result := executionResult()
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "provider_error") {
+		t.Fatalf("serialized result contains absent provider detail: %s", data)
+	}
+
+	result.TerminalState = TerminalFailed
+	result.FailureReason = "model provider refused the sandbox request (HTTP 403)"
+	result.FailureCode = ExecutionFailureProviderCredential
+	result.ChangedFiles = nil
+	result.Files = map[string]string{}
+	result.Diff = ""
+	result.ProviderError = &ProviderErrorDetail{StatusCode: 403, Message: "Forbidden", ProviderID: "github-copilot"}
+	data, err = json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"provider_error":{"status_code":403`) {
+		t.Fatalf("serialized result missing provider detail: %s", data)
+	}
+}
