@@ -217,7 +217,7 @@ AGENT_SANDBOX_ANALYSIS_STAGER_IMAGE='<stager>@sha256:<digest>' \
 ANALYZER_BENCH_IMAGE_CONTRACT_JSON='<private-image-contract.json>' \
 BENCH_MODEL_CONTEXT_TOKENS='<frozen-context-limit>' \
 BENCH_MODEL_OUTPUT_TOKENS='<frozen-output-limit>' \
-go test ./benchmarks -run TestAgentSandboxAnalyzerBenchmark -count=1
+go -C backend/benchmarks test . -run TestAgentSandboxAnalyzerBenchmark -count=1
 ```
 
 Generate the private image contract with

@@ -137,8 +137,8 @@ backend/                         Go 1.25
     textutil/                    Small shared string helpers
     e2e/                         Hermetic end-to-end pipeline regression test
 
-  benchmarks/                    Opt-in model-quality benchmarks; gated by RUN_*/BENCH_*
-                                 env vars and never run in CI
+  benchmarks/                    Separate Go module for opt-in model-quality benchmarks;
+                                 gated by RUN_*/BENCH_* and excluded from main CI
 
 frontend/                        React 19 + Vite 8 + MUI 9
   public/data/                   Fetcher writes JSON here; Vite serves it
@@ -188,7 +188,7 @@ dependencies between `fetcher`, `actions`, and `server` (for example `resolve`,
 ```bash
 # Backend (Go 1.25)
 make build           # cd backend && go build -o ../bin/aster ./cmd/aster/
-make test            # cd backend && go test ./... -count=1
+make test            # main module only: cd backend && go test ./... -count=1
 make tidy            # go mod tidy
 make check-repo-map  # AGENTS.md repo layout matches backend/cmd + backend/internal
 make check-doc-links # relative links between Markdown files resolve
@@ -242,8 +242,9 @@ needed for local dev (defaults to `/`).
 
 ## Testing instructions
 
-- **All tests:** `cd backend && go test ./... -count=1` (also `make test`)
+- **Main-module tests:** `cd backend && go test ./... -count=1` (also `make test`)
 - **Single package:** `cd backend && go test ./internal/ai/... -count=1`
+- **Benchmark-module tests:** `go -C backend/benchmarks test ./... -count=1` (live cases remain gated)
 - **Single test:** `go test ./internal/ai -run TestService_CacheKeyShape -v`
 - **Race detector** (AI subsystem only): `go test -race -count=1 ./internal/ai/...`
 - **Vet:** `cd backend && go vet ./...`
@@ -251,8 +252,9 @@ needed for local dev (defaults to `/`).
 - **Static analysis:** `cd backend && staticcheck ./...` (expected clean; any
   warning from code you touched is a regression).
 
-CI (`.github/workflows/ci.yml`) runs build + test + vet on backend and
-build + lint on frontend. CI does not run staticcheck; please still run it
+CI (`.github/workflows/ci.yml`) runs build + test + vet on the main backend
+module and build + lint on frontend. The separate benchmark module is excluded.
+CI does not run staticcheck; please still run it
 locally before opening a PR.
 
 ### Anchor pin tests

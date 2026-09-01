@@ -1,12 +1,13 @@
 # AI quality benchmark
 
-This package holds the opt-in quality benchmarks. They score real agentic
-analysis against labeled historical CI failures as prompts, tools, and the
-harness change. Every benchmark here is gated behind its own `RUN_*` or
-`BENCH_*` environment variable and skips by default, so `go test ./...` compiles
-them but runs none of them.
+This directory is a separate Go module for opt-in quality benchmarks. The main
+backend module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do not
+compile it. Live benchmarks remain gated behind their own `RUN_*` or `BENCH_*`
+environment variable. The module's local `replace` directive binds its Aster
+dependency to the parent checkout. Run `go -C backend/benchmarks mod tidy` after
+changing benchmark-only dependencies.
 
-They live outside `internal/e2e` on purpose: that package now holds only
+They live outside `backend/internal/e2e` on purpose: that package now holds only
 `pipeline_test.go`, the hermetic regression test that uses a scripted model and
 never calls a real endpoint.
 
@@ -21,15 +22,16 @@ format.
 
 ## Running it
 
-The benchmark is gated: it is skipped under `go test ./...` unless
-`RUN_AI_BENCHMARK` is set and an endpoint is configured. It costs real model
-tokens or GPU.
+Run these commands from the repository root. The live benchmark is skipped
+unless `RUN_AI_BENCHMARK` is set and an endpoint is configured. It costs real
+model tokens or GPU. Provider-free harness tests can be run with
+`go -C backend/benchmarks test ./... -count=1`.
 
 ```bash
 RUN_AI_BENCHMARK=1 \
 AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
 AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
-go test ./benchmarks -run TestAIBenchmark -v -timeout 60m
+go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
 The frozen cross-project evaluation cohort is available as an external manifest.
@@ -38,13 +40,13 @@ consumer commit plus `project.yaml` and `prompts/system.md` hashes before making
 provider requests:
 
 ```bash
-manifest="$PWD/benchmarks/testdata/benchmarks/cross-project-eval.json"
+manifest="$PWD/backend/benchmarks/testdata/benchmarks/cross-project-eval.json"
 
 run_case() {
   RUN_AI_BENCHMARK=1 BENCH_MANIFEST="$manifest" \
   BENCH_CASE="$1" BENCH_PROJECT_DIR="$2" \
   AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
-  go test ./benchmarks -run TestAIBenchmark -v -timeout 90m
+  go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 90m
 }
 
 run_case secrets-store-csi-image-scan /path/to/secrets-store-csi-prow-dashboard-eval
@@ -249,12 +251,12 @@ AI_TOKEN=<available-in-environment> \
 BENCH_MODEL_LABEL=<anonymous-label> \
 BENCH_PROVIDER_PATH=<provider>/<model> \
 BENCH_TRANSPORT_ID=<transport-id> \
-BENCH_MANIFEST="$PWD/benchmarks/testdata/benchmarks/cross-project-eval.json" \
+BENCH_MANIFEST="$PWD/backend/benchmarks/testdata/benchmarks/cross-project-eval.json" \
 BENCH_CASE=kueue-was-podgroup-api-mismatch \
 BENCH_PROJECT_DIR=/private/bench/kueue-consumer \
 BENCH_CACHE_MODE=cold \
 BENCH_RESULTS_JSONL=/private/bench/kueue-oracle.jsonl \
-go test ./benchmarks -run TestAIBenchmark -v -timeout 60m
+go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
 A miss with `model_received_evidence=true` is evidence of a reasoning or causal
@@ -263,7 +265,7 @@ Verify the pinned extraction without a provider by running:
 
 ```bash
 RUN_BENCHMARK_FIXTURE_VALIDATION=1 \
-go test ./benchmarks -run TestKueueOracleEvidenceFixture -v -count=1
+go -C backend/benchmarks test . -run TestKueueOracleEvidenceFixture -v -count=1
 ```
 
 ## Signal tiers
@@ -398,13 +400,13 @@ improvement in more than one case, complete request/token/cost telemetry, bounde
 cost and latency, and complete cleanup.
 
 The provider-free analyzer integrity harness lives in
-`internal/analysisexecutor`. It is opt-in, uses a deterministic loopback TLS
+`backend/internal/analysisexecutor`. It is opt-in, uses a deterministic loopback TLS
 Chat Completions server, and runs inside the exact analysis executor image for
 Azure Files and Kata differential checks. Its JSON summary contains only
 content-free source integrity snapshots and aggregate tool telemetry.
 
 The provider-free evidence-handle scale harness is also in
-`internal/analysisexecutor`. It runs the exact Aster-pinned OpenCode 1.18.2
+`backend/internal/analysisexecutor`. It runs the exact Aster-pinned OpenCode 1.18.2
 runtime against a deterministic loopback TLS gateway and representative large
 source and artifact trees. Broad directory greps reproduce high-cardinality range
 handling. Its summary contains only bounded counts, status, truncation, usage
@@ -430,8 +432,8 @@ comparison build `2092830007742173184`, where it selected v1.35.6.
 ```bash
 RUN_CAUSE_RESOLUTION_BENCHMARK=1 \
 AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
-go test ./benchmarks -run TestAnalysisChatCauseResolutionBenchmark -v -timeout 20m
+go -C backend/benchmarks test . -run TestAnalysisChatCauseResolutionBenchmark -v -timeout 20m
 ```
 
-The fixture-integrity test runs in normal CI. The model benchmark remains opt-in
-because it makes provider calls.
+The fixture-integrity test runs with the benchmark module tests. The model
+benchmark remains opt-in because it makes provider calls.
