@@ -17,49 +17,30 @@ type critiqueQuality struct {
 }
 
 type critiqueDraftCandidate struct {
-	parsed                        analysisResponse
-	content                       string
-	providerItems                 []json.RawMessage
-	rawQuality                    critiqueQuality
-	quality                       critiqueQuality
-	attempt                       int
-	evidenceRevision              int
-	createdEvidenceRevision       int
-	supportedFacts                []supportedCausalFact
-	semanticInitialFindingClasses []string
-	semanticFindingClasses        []string
-	semanticReviewPassed          bool
-	semanticRevision              bool
+	parsed           analysisResponse
+	content          string
+	providerItems    []json.RawMessage
+	rawQuality       critiqueQuality
+	quality          critiqueQuality
+	attempt          int
+	evidenceRevision int
 }
 
 type draftReplacementDecision struct {
 	accepted                 bool
 	reason                   string
 	rootCauseChanged         bool
-	rawSemanticRegression    bool
 	publishedStrictDominance bool
 	currentQualityRefreshed  bool
-	currentSupportedFacts    int
-	candidateSupportedFacts  int
-	supportedFactsRetained   int
-	supportedFactsAdded      int
-	supportedFactsDropped    int
-	supportedCauseRegression bool
 }
 
 const (
 	draftReasonCandidatePublishedDominates  = "candidate_published_dominates"
 	draftReasonCandidatePublishedHard       = "candidate_has_published_hard_failure"
-	draftReasonCandidateSemanticRegression  = "candidate_adds_semantic_regression"
 	draftReasonCandidateRootWithoutEvidence = "candidate_changes_root_without_evidence"
 	draftReasonCandidateEvidenceBackedRoot  = "candidate_evidence_backed_root_change"
-	draftReasonCandidateSemanticFindings    = "candidate_has_semantic_findings"
-	draftReasonCandidateSemanticUnavailable = "candidate_semantic_review_unavailable"
-	draftReasonCandidatePolicyUnaccepted    = "candidate_not_accepted_for_policy"
-	draftReasonCandidateDropsSupportedCause = "candidate_drops_supported_cause"
 	draftReasonCandidateNotBetter           = "candidate_not_strictly_better"
 	draftReasonTiePreservesEarlier          = "tie_preserves_earlier"
-	draftReasonSemanticTieReplaces          = "semantic_tie_replaces"
 	draftReasonFallbackPromoted             = "fallback_promoted"
 )
 
@@ -169,19 +150,6 @@ func critiqueHardRegression(candidate, current critiqueQuality) bool {
 	return candidate.HardIssueCount > current.HardIssueCount || !stringSetSubset(candidate.HardRules, current.HardRules)
 }
 
-func critiqueQualityAcceptedForPolicy(quality critiqueQuality, policy CritiqueCachePolicy) bool {
-	switch policy {
-	case CritiqueCachePolicyAdvisory:
-		return true
-	case CritiqueCachePolicyHard:
-		return quality.HardIssueCount == 0
-	case CritiqueCachePolicyStrict:
-		return quality.Passed
-	default:
-		return false
-	}
-}
-
 func stringSetSubset(candidate, current []string) bool {
 	if len(candidate) > len(current) {
 		return false
@@ -229,16 +197,13 @@ func (s *agentState) newDraftCandidate(phase, content string, providerItems []js
 	published := s.publishedAnalysis(parsed)
 	publishedOut := s.currentCritiqueOutcome(published)
 	return &critiqueDraftCandidate{
-		parsed:                  parsed,
-		content:                 content,
-		providerItems:           providerItems,
-		rawQuality:              critiqueQualityFor(out),
-		quality:                 critiqueQualityFor(publishedOut),
-		attempt:                 s.observeDraft(phase, parsed, out, publishedOut),
-		evidenceRevision:        s.evidenceRevision,
-		createdEvidenceRevision: s.evidenceRevision,
-		supportedFacts:          supportedCausalFacts(published, s.analysisEvidence, s.analysisEvidenceRevision),
-		semanticRevision:        phase == "semantic_retry",
+		parsed:           parsed,
+		content:          content,
+		providerItems:    providerItems,
+		rawQuality:       critiqueQualityFor(out),
+		quality:          critiqueQualityFor(publishedOut),
+		attempt:          s.observeDraft(phase, parsed, out, publishedOut),
+		evidenceRevision: s.evidenceRevision,
 	}
 }
 
@@ -263,17 +228,12 @@ func (s *agentState) currentCritiqueOutcome(parsed analysisResponse) critiqueOut
 }
 
 // considerDraft applies deterministic quality ordering and records the decision.
-func (s *agentState) considerDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	return s.considerDraftDecision(candidate, semanticAccepted).accepted
+func (s *agentState) considerDraft(candidate *critiqueDraftCandidate) bool {
+	return s.considerDraftDecision(candidate).accepted
 }
 
-func (s *agentState) considerDraftDecision(candidate *critiqueDraftCandidate, semanticAccepted bool) draftReplacementDecision {
-	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy)
-	return s.considerDraftDecisionForPolicy(candidate, semanticAccepted, policy)
-}
-
-func (s *agentState) considerDraftDecisionForPolicy(candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
-	decision := s.evaluateDraftReplacement(s.bestDraft, candidate, semanticAccepted, policy)
+func (s *agentState) considerDraftDecision(candidate *critiqueDraftCandidate) draftReplacementDecision {
+	decision := s.evaluateDraftReplacement(s.bestDraft, candidate)
 	s.recordDraftDecision("best", s.bestDraft, candidate, decision)
 	if decision.accepted {
 		s.bestDraft = candidate
@@ -281,13 +241,8 @@ func (s *agentState) considerDraftDecisionForPolicy(candidate *critiqueDraftCand
 	return decision
 }
 
-func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	policy := effectiveCritiqueCachePolicy(s.opts.CritiqueCachePolicy)
-	return s.considerFallbackDraftForPolicy(candidate, semanticAccepted, policy)
-}
-
-func (s *agentState) considerFallbackDraftForPolicy(candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) bool {
-	decision := s.evaluateDraftReplacement(s.fallbackDraft, candidate, semanticAccepted, policy)
+func (s *agentState) considerFallbackDraft(candidate *critiqueDraftCandidate) bool {
+	decision := s.evaluateDraftReplacement(s.fallbackDraft, candidate)
 	s.recordDraftDecision("fallback", s.fallbackDraft, candidate, decision)
 	if decision.accepted {
 		s.fallbackDraft = candidate
@@ -295,7 +250,7 @@ func (s *agentState) considerFallbackDraftForPolicy(candidate *critiqueDraftCand
 	return decision.accepted
 }
 
-func (s *agentState) evaluateDraftReplacement(current, candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
+func (s *agentState) evaluateDraftReplacement(current, candidate *critiqueDraftCandidate) draftReplacementDecision {
 	refreshed := false
 	if current != nil && candidate != nil {
 		rootChanged := rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
@@ -303,17 +258,13 @@ func (s *agentState) evaluateDraftReplacement(current, candidate *critiqueDraftC
 		// Preserve the earlier draft's historical quality when new evidence drove a
 		// different diagnosis. Re-evaluating it with evidence fetched for the new
 		// diagnosis can give the earlier text credit for evidence it never used.
-		preserveHistorical := !semanticAccepted && rootChanged && newEvidence
-		if semanticAccepted {
-			current.rawQuality = critiqueQualityFor(s.currentCritiqueOutcome(current.parsed))
-		}
-		if current.evidenceRevision < candidate.evidenceRevision && !preserveHistorical {
+		if current.evidenceRevision < candidate.evidenceRevision && !(rootChanged && newEvidence) {
 			s.refreshPublishedDraftQuality(current)
 			current.evidenceRevision = candidate.evidenceRevision
 			refreshed = true
 		}
 	}
-	decision := decideDraftReplacement(current, candidate, semanticAccepted, policy)
+	decision := decideDraftReplacement(current, candidate)
 	decision.currentQualityRefreshed = refreshed
 	return decision
 }
@@ -325,7 +276,7 @@ func (s *agentState) refreshPublishedDraftQuality(candidate *critiqueDraftCandid
 	candidate.quality = critiqueQualityFor(s.publishedCritiqueOutcome(candidate.parsed))
 }
 
-func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semanticAccepted bool, policy CritiqueCachePolicy) draftReplacementDecision {
+func decideDraftReplacement(current, candidate *critiqueDraftCandidate) draftReplacementDecision {
 	decision := draftReplacementDecision{reason: draftReasonCandidateNotBetter}
 	if candidate == nil {
 		return decision
@@ -336,60 +287,17 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 		decision.reason = draftReasonCandidatePublishedDominates
 		return decision
 	}
-	factDelta := compareSupportedCausalFacts(
-		current.supportedFacts,
-		candidate.supportedFacts,
-		semanticInitialFindingsAllowCauseReplacement(candidate.semanticInitialFindingClasses),
-		current.createdEvidenceRevision,
-	)
-	decision.currentSupportedFacts = len(current.supportedFacts)
-	decision.candidateSupportedFacts = len(candidate.supportedFacts)
-	decision.supportedFactsRetained = factDelta.retained
-	decision.supportedFactsAdded = factDelta.added
-	decision.supportedFactsDropped = factDelta.dropped
 	decision.rootCauseChanged = rootCauseMateriallyChanged(current.parsed.RootCause, candidate.parsed.RootCause)
-	publishedHardRegression := critiqueHardRegression(candidate.quality, current.quality)
-	decision.rawSemanticRegression = semanticAccepted &&
-		critiqueHardRegression(candidate.rawQuality, current.rawQuality) && publishedHardRegression
-	if decision.rawSemanticRegression {
-		decision.reason = draftReasonCandidateSemanticRegression
-		return decision
-	}
-	if publishedHardRegression {
+	if critiqueHardRegression(candidate.quality, current.quality) {
 		decision.reason = draftReasonCandidatePublishedHard
 		return decision
 	}
-	if semanticAccepted && !critiqueQualityAcceptedForPolicy(candidate.quality, policy) {
-		if candidate.quality.HardIssueCount > 0 {
-			decision.reason = draftReasonCandidatePublishedHard
-		} else {
-			// A revision the semantic judge passed can still be blocked by a
-			// retained soft rule such as unread available evidence. Name that
-			// distinctly so telemetry does not read as "not better".
-			decision.reason = draftReasonCandidatePolicyUnaccepted
-		}
-		return decision
-	}
-	if semanticAccepted && candidate.semanticRevision && len(candidate.semanticFindingClasses) > 0 {
-		decision.reason = draftReasonCandidateSemanticFindings
-		return decision
-	}
-	if semanticAccepted && candidate.semanticRevision && !candidate.semanticReviewPassed {
-		decision.reason = draftReasonCandidateSemanticUnavailable
-		return decision
-	}
-	if semanticAccepted && candidate.semanticRevision && decision.rootCauseChanged && factDelta.dropped > 0 && !factDelta.strongerReplacement {
-		decision.supportedCauseRegression = true
-		decision.reason = draftReasonCandidateDropsSupportedCause
-		return decision
-	}
-	if decision.rootCauseChanged && candidate.evidenceRevision <= current.evidenceRevision && !semanticAccepted {
+	if decision.rootCauseChanged && candidate.evidenceRevision <= current.evidenceRevision {
 		decision.reason = draftReasonCandidateRootWithoutEvidence
 		return decision
 	}
 	comparison := compareCritiqueQuality(candidate.quality, current.quality)
-	evidenceBackedChange := !semanticAccepted && decision.rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
-	semanticTie := semanticAccepted && critiqueQualityEqual(candidate.quality, current.quality)
+	evidenceBackedChange := decision.rootCauseChanged && candidate.evidenceRevision > current.evidenceRevision && critiqueQualityNoWorse(candidate.quality, current.quality)
 	switch {
 	case comparison > 0:
 		decision.accepted = true
@@ -398,9 +306,6 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 	case evidenceBackedChange:
 		decision.accepted = true
 		decision.reason = draftReasonCandidateEvidenceBackedRoot
-	case semanticTie:
-		decision.accepted = true
-		decision.reason = draftReasonSemanticTieReplaces
 	case critiqueQualityEqual(candidate.quality, current.quality):
 		decision.reason = draftReasonTiePreservesEarlier
 	default:
@@ -409,8 +314,8 @@ func decideDraftReplacement(current, candidate *critiqueDraftCandidate, semantic
 	return decision
 }
 
-func draftShouldReplace(current, candidate *critiqueDraftCandidate, semanticAccepted bool) bool {
-	return decideDraftReplacement(current, candidate, semanticAccepted, CritiqueCachePolicyHard).accepted
+func draftShouldReplace(current, candidate *critiqueDraftCandidate) bool {
+	return decideDraftReplacement(current, candidate).accepted
 }
 
 func critiqueQualityEqual(a, b critiqueQuality) bool {
@@ -435,15 +340,8 @@ func (s *agentState) recordDraftDecision(target string, current, candidate *crit
 		CandidatePublishedPunts:         candidate.quality.PuntCount,
 		CandidateEvidenceRevision:       candidate.evidenceRevision,
 		RootCauseMateriallyChanged:      decision.rootCauseChanged,
-		RawSemanticRegression:           decision.rawSemanticRegression,
 		PublishedStrictDominance:        decision.publishedStrictDominance,
 		CurrentQualityRefreshed:         decision.currentQualityRefreshed,
-		CurrentSupportedFacts:           decision.currentSupportedFacts,
-		CandidateSupportedFacts:         decision.candidateSupportedFacts,
-		SupportedFactsRetained:          decision.supportedFactsRetained,
-		SupportedFactsAdded:             decision.supportedFactsAdded,
-		SupportedFactsDropped:           decision.supportedFactsDropped,
-		SupportedCauseRegression:        decision.supportedCauseRegression,
 		ReplacementAccepted:             decision.accepted,
 		ReplacementReason:               decision.reason,
 	}

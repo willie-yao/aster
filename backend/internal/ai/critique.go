@@ -234,7 +234,7 @@ func remediationClauses(text string) []string {
 // That covers both a materially stronger gate and a publication rule whose old
 // output no longer reflects what the model said. Cosmetic prompt-shape changes
 // do not bump.
-const currentCritiqueVersion = 16
+const currentCritiqueVersion = 17
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned

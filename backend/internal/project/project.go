@@ -1070,10 +1070,6 @@ type Agentic struct {
 	// <project_dir>/skills/*.yaml feed the gate whenever present.
 	Critique AgenticCritique `yaml:"critique,omitempty" json:"critique,omitempty"`
 
-	// SemanticJudge controls the second-line model review. Advisory is the
-	// default, blocking preserves the strict disposition gate, and off skips it.
-	SemanticJudge SemanticJudgeMode `yaml:"semantic_judge,omitempty" json:"semantic_judge,omitempty"`
-
 	// SingleToolCall makes the loop execute at most one tool call per assistant
 	// turn. Extra tool calls are dropped, and the model can request them later.
 	// Use it for endpoints whose chat template rejects multiple tool calls in one
@@ -1089,15 +1085,6 @@ type Agentic struct {
 	// projects should set ["filesystem"] to avoid empty k8s probes.
 	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
-
-// SemanticJudgeMode controls how semantic findings affect publication.
-type SemanticJudgeMode string
-
-const (
-	SemanticJudgeAdvisory SemanticJudgeMode = "advisory"
-	SemanticJudgeBlocking SemanticJudgeMode = "blocking"
-	SemanticJudgeOff      SemanticJudgeMode = "off"
-)
 
 // AgenticCritique tunes the always-on critique gate. See Agentic.Critique for
 // the operational semantics.
@@ -1147,11 +1134,10 @@ func (c AgenticCritique) MarshalJSON() ([]byte, error) {
 // The iteration and timeout defaults allow deep exploration while bounding
 // runaway loops. Byte budgets are derived or fixed in fetcher wiring.
 var DefaultAgentic = Agentic{
-	MaxIters:      15,
-	Timeout:       5 * time.Minute,
-	MinToolCalls:  2,
-	MinGCSBytes:   0,
-	SemanticJudge: SemanticJudgeAdvisory,
+	MaxIters:     15,
+	Timeout:      5 * time.Minute,
+	MinToolCalls: 2,
+	MinGCSBytes:  0,
 	Critique: AgenticCritique{
 		MaxRetries: intPtr(0),
 	},
@@ -1184,9 +1170,6 @@ func (a *AI) EffectiveAgentic() Agentic {
 		out.Critique.MaxRetries = a.Agentic.Critique.MaxRetries
 	}
 	out.Critique.CachePolicy = a.Agentic.Critique.CachePolicy
-	if a.Agentic.SemanticJudge != "" {
-		out.SemanticJudge = a.Agentic.SemanticJudge
-	}
 	out.SingleToolCall = a.Agentic.SingleToolCall
 	if len(a.Agentic.Tools) > 0 {
 		out.Tools = append([]string(nil), a.Agentic.Tools...)
@@ -1468,11 +1451,6 @@ func (c *Config) Validate() error {
 		}
 		if err := ValidateAICacheGeneration(c.AI.CacheGeneration); err != nil {
 			return fmt.Errorf("ai.cache_generation: %w", err)
-		}
-		switch c.AI.Agentic.SemanticJudge {
-		case "", SemanticJudgeAdvisory, SemanticJudgeBlocking, SemanticJudgeOff:
-		default:
-			return fmt.Errorf("ai.semantic_judge %q is invalid (want %q, %q, or %q)", c.AI.Agentic.SemanticJudge, SemanticJudgeAdvisory, SemanticJudgeBlocking, SemanticJudgeOff)
 		}
 	}
 

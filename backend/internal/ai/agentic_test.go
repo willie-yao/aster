@@ -1707,7 +1707,7 @@ func TestDraftShouldReplaceMonotonicRegressions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			current := &critiqueDraftCandidate{quality: tc.current, evidenceRevision: tc.currentRev, parsed: analysisResponse{RootCause: tc.currentRoot}}
 			candidate := &critiqueDraftCandidate{quality: tc.candidate, evidenceRevision: tc.candidateRev, parsed: analysisResponse{RootCause: tc.candidateRoot}}
-			if got := draftShouldReplace(current, candidate, false); got != tc.want {
+			if got := draftShouldReplace(current, candidate); got != tc.want {
 				t.Fatalf("draftShouldReplace() = %t, want %t", got, tc.want)
 			}
 		})
@@ -1724,7 +1724,7 @@ func TestConsiderDraftRefreshesSelectedPublishedQuality(t *testing.T) {
 		parsed: parsed, attempt: 1, evidenceRevision: 1, quality: critiqueQuality{MissingEvidenceCount: 1},
 	}
 	candidate := &critiqueDraftCandidate{parsed: parsed, attempt: 2, evidenceRevision: 2, quality: critiqueQuality{Passed: true}}
-	if state.considerDraft(candidate, false) {
+	if state.considerDraft(candidate) {
 		t.Fatal("later draft replaced an earlier draft after refreshed quality became equal")
 	}
 	if state.bestDraft.attempt != 1 || !state.bestDraft.quality.Passed || state.bestDraft.quality.MissingEvidenceCount != 0 {
@@ -1791,7 +1791,7 @@ func TestAzureEvidenceBackedRepairUsesHistoricalPublishedQuality(t *testing.T) {
 	if current.quality.MissingEvidenceCount != 5 || current.quality.PuntCount != 1 {
 		t.Fatalf("refreshed current quality = %+v, want missing=5 punt=1", current.quality)
 	}
-	oldDecision := decideDraftReplacement(current, candidate, false, CritiqueCachePolicyHard)
+	oldDecision := decideDraftReplacement(current, candidate)
 	if oldDecision.accepted || oldDecision.reason != draftReasonCandidateNotBetter {
 		t.Fatalf("old decision = %+v, want candidate_not_strictly_better", oldDecision)
 	}
@@ -1802,7 +1802,7 @@ func TestAzureEvidenceBackedRepairUsesHistoricalPublishedQuality(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "azure-selection", APIMode: APIChatCompletions})
 	state.traceCtx = withAnalysisTrace(context.Background(), trace)
-	decision := state.considerDraftDecision(candidate, false)
+	decision := state.considerDraftDecision(candidate)
 	trace.Finish("success", nil)
 	if !decision.accepted || decision.reason != draftReasonCandidatePublishedDominates || !decision.publishedStrictDominance || decision.currentQualityRefreshed {
 		t.Fatalf("fixed decision = %+v", decision)
@@ -1830,27 +1830,12 @@ func TestDraftReplacementReasons(t *testing.T) {
 		name      string
 		current   *critiqueDraftCandidate
 		candidate *critiqueDraftCandidate
-		semantic  bool
 		want      string
 	}{
 		{
 			name: "published hard failure", current: &critiqueDraftCandidate{quality: critiqueQuality{}, parsed: analysisResponse{RootCause: "same"}},
 			candidate: &critiqueDraftCandidate{quality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, parsed: analysisResponse{RootCause: "same"}},
 			want:      draftReasonCandidatePublishedHard,
-		},
-		{
-			name: "raw semantic regression", current: &critiqueDraftCandidate{rawQuality: critiqueQuality{}, quality: critiqueQuality{}, parsed: analysisResponse{RootCause: "same"}},
-			candidate: &critiqueDraftCandidate{
-				rawQuality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1},
-				quality:    critiqueQuality{HardRules: hardUnread, HardIssueCount: 1},
-				parsed:     analysisResponse{RootCause: "same"},
-			},
-			semantic: true, want: draftReasonCandidateSemanticRegression,
-		},
-		{
-			name: "sanitized raw semantic finding can dominate", current: &critiqueDraftCandidate{rawQuality: critiqueQuality{}, quality: critiqueQuality{MissingEvidenceCount: 2}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "same"}},
-			candidate: &critiqueDraftCandidate{rawQuality: critiqueQuality{HardRules: hardUnread, HardIssueCount: 1}, quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 2, parsed: analysisResponse{RootCause: "same"}},
-			semantic:  true, want: draftReasonCandidatePublishedDominates,
 		},
 		{
 			name: "evidence-backed equal-quality root change", current: &critiqueDraftCandidate{quality: critiqueQuality{MissingEvidenceCount: 1}, evidenceRevision: 1, parsed: analysisResponse{RootCause: "old cause"}},
@@ -1874,7 +1859,7 @@ func TestDraftReplacementReasons(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			decision := decideDraftReplacement(tc.current, tc.candidate, tc.semantic, CritiqueCachePolicyHard)
+			decision := decideDraftReplacement(tc.current, tc.candidate)
 			if decision.reason != tc.want {
 				t.Fatalf("reason = %q, want %q; decision=%+v", decision.reason, tc.want, decision)
 			}
@@ -2184,31 +2169,6 @@ func TestAgentic_CritiqueCachePoliciesWithZeroRepairBudget(t *testing.T) {
 	}
 }
 
-func TestAgentic_HardPolicyRunsSemanticJudgeWithSoftWarnings(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal(`{"findings":[]}`))
-	client := newAgenticTestClient(t, srv.URL)
-	key := "agentic:test:hard-policy-soft-semantic"
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
-		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard, SemanticJudge: SemanticJudgeBlocking,
-	}), key, "sys", "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("call count = %d, want 2 (draft + semantic judge, no critique repair)", got)
-	}
-	if !analysis.JudgeRan || analysis.JudgeObjected || !analysis.CachePersistenceAccepted || !slices.Equal(analysis.CritiqueSoftWarnings, []string{"remediation.punt"}) {
-		t.Fatalf("analysis = %+v", analysis)
-	}
-	if _, ok := client.Cache().Get(key); !ok {
-		t.Fatal("hard-safe soft-warning draft was not cached")
-	}
-}
-
 func TestAgentic_CachePersistenceTraceRecordsPolicyReason(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -2258,27 +2218,6 @@ func TestAgentic_AdvisoryPolicyStillUsesRepairBudget(t *testing.T) {
 	}
 	if _, ok := client.Cache().Get(key); !ok {
 		t.Fatal("advisory policy did not cache the repaired soft-warning draft")
-	}
-}
-
-func TestAgentic_AdvisoryPolicySkipsSemanticJudgeForHardFailures(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
-	client := newAgenticTestClient(t, srv.URL)
-	key := "agentic:test:advisory-hard-no-semantic"
-	_, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{files: map[string][]byte{"manager.log": []byte("controller failed")}}, AgenticOptions{
-		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
-		CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyAdvisory, SemanticJudge: SemanticJudgeBlocking,
-	}), key, "sys", "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 1 {
-		t.Fatalf("call count = %d, want 1 (no critique repair or semantic judge)", got)
-	}
-	if analysis.JudgeRan || !analysis.CachePersistenceAccepted || !slices.Equal(analysis.CritiqueHardFailures, []string{"citation.unread"}) {
-		t.Fatalf("analysis = %+v", analysis)
 	}
 }
 
@@ -4307,7 +4246,7 @@ func TestDraftDecisionTraceDoesNotPersistDraftContent(t *testing.T) {
 		attempt: 2, evidenceRevision: 2, parsed: analysisResponse{RootCause: private + " changed"},
 		quality: critiqueQuality{SoftRules: []string{"evidence.available_unread"}, MissingEvidenceCount: 1},
 	}
-	state.considerDraftDecision(candidate, false)
+	state.considerDraftDecision(candidate)
 	trace.Finish("success", nil)
 	encoded, err := json.Marshal(store.Snapshot())
 	if err != nil {
@@ -4379,12 +4318,11 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	srv.push(200, chatRespFinal(ungrounded))
 	srv.push(200, chatRespFinal(ungrounded))
 	srv.push(200, chatRespFinal(ungrounded))
-	srv.push(200, chatRespFinal(`{"findings":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
 	opts := AgenticOptions{
 		MaxIters: 2, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueMaxRetries: 1, SemanticJudge: SemanticJudgeBlocking,
+		Timeout: 30 * time.Second, CritiqueMaxRetries: 1,
 	}
 	in := newTestAgenticInputs(t, &fakeBrowser{}, opts)
 	in.ProjectOwner = "example"
@@ -4398,7 +4336,7 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !analysis.CritiquePassed || !analysis.JudgeRan || analysis.JudgeObjected {
+	if !analysis.CritiquePassed {
 		t.Fatalf("analysis gates = %+v", analysis)
 	}
 	if strings.Contains(analysis.RootCause, "scripts/ci-e2e.sh") || strings.Contains(analysis.SuggestedFix, "scripts/ci-e2e.sh") || len(analysis.RelevantFiles) != 0 {
@@ -4408,7 +4346,7 @@ func TestAgentic_PublishedSanitizationCanSatisfyCritiqueAndCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cached.CacheHit || !cached.CritiquePassed || atomic.LoadInt32(&srv.calls) != 4 {
+	if !cached.CacheHit || !cached.CritiquePassed || atomic.LoadInt32(&srv.calls) != 3 {
 		t.Fatalf("cache result = %+v calls=%d", cached, atomic.LoadInt32(&srv.calls))
 	}
 }

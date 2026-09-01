@@ -20,8 +20,8 @@ func TestAnalysisRecordProjectsPublicAndCacheShapes(t *testing.T) {
 		generatedAt: "2026-08-25T12:00:00Z", model: "model", modelHash: "model-hash",
 		promptHash: "prompt-hash", skillSetHash: "skill-hash", cacheGeneration: "generation",
 		critiquePassed: true, critiqueSoftWarnings: []string{string(CritiqueRuleEvidenceUnavailable)},
-		critiqueVersion: currentCritiqueVersion, judgeRan: true, judgeObjected: true,
-		judgeRevised: true, semanticJudgeMode: SemanticJudgeBlocking, semanticFindings: []string{semanticFindingCausalLinkUnsupported}, disposition: models.AnalysisDispositionPreliminary,
+		critiqueVersion:     currentCritiqueVersion,
+		disposition:         models.AnalysisDispositionPreliminary,
 		dispositionWarnings: []string{models.AnalysisWarningInvestigation},
 		mode:                AgenticMode, toolCalls: 4, contextBytes: 500, gcsBytes: 300,
 		evidencePlanCovered: true, gcsFloorRetryExhausted: true, budgetExhausted: true,
@@ -39,8 +39,8 @@ func TestAnalysisRecordProjectsPublicAndCacheShapes(t *testing.T) {
 		analysis.ModelHash != "model-hash" || analysis.PromptHash != "prompt-hash" || analysis.SkillSetHash != "skill-hash" ||
 		analysis.CacheGeneration != "generation" || analysis.ToolCalls != 4 || analysis.ContextBytes != 500 || analysis.GCSBytes != 300 ||
 		!analysis.EvidencePlanCovered || !analysis.GCSFloorRetryExhausted || !analysis.BudgetExhausted || !analysis.CacheHit ||
-		!analysis.SameFailureReuse || analysis.ElapsedMs != 42 || !analysis.CritiquePassed || !analysis.JudgeRan ||
-		!analysis.JudgeObjected || !analysis.JudgeRevised || !slices.Equal(analysis.SemanticFindings, []string{semanticFindingCausalLinkUnsupported}) || !analysis.CachePersistenceAttempted || !analysis.CachePersistenceAccepted {
+		!analysis.SameFailureReuse || analysis.ElapsedMs != 42 || !analysis.CritiquePassed ||
+		!analysis.CachePersistenceAttempted || !analysis.CachePersistenceAccepted {
 		t.Fatalf("public projection = %+v %+v", result.Summary, analysis)
 	}
 
@@ -49,7 +49,7 @@ func TestAnalysisRecordProjectsPublicAndCacheShapes(t *testing.T) {
 		cached.Model != "model" || cached.ToolCalls != 4 || cached.ModelBytes != 500 || cached.GCSBytes != 300 ||
 		!cached.EvidencePlanCovered || !cached.GCSFloorRetryExhausted || !cached.BudgetExhausted || !cached.SameFailureReuse ||
 		!cached.CritiquePassed || cached.CritiqueVersion != currentCritiqueVersion || cached.ModelHash != "model-hash" ||
-		cached.PromptHash != "prompt-hash" || cached.SkillSetHash != "skill-hash" || !slices.Equal(cached.SemanticFindings, []string{semanticFindingCausalLinkUnsupported}) {
+		cached.PromptHash != "prompt-hash" || cached.SkillSetHash != "skill-hash" {
 		t.Fatalf("cache projection = %+v", cached)
 	}
 	encoded, err := json.Marshal(cached)

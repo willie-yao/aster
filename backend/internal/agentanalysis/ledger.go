@@ -79,9 +79,6 @@ type AuthoritativeSnapshot struct {
 	GCSBytes          int                       `json:"gcs_bytes,omitempty"`
 	CacheHit          bool                      `json:"cache_hit,omitempty"`
 	CritiquePassed    bool                      `json:"critique_passed,omitempty"`
-	JudgeRan          bool                      `json:"judge_ran,omitempty"`
-	JudgeObjected     bool                      `json:"judge_objected,omitempty"`
-	JudgeRevised      bool                      `json:"judge_revised,omitempty"`
 }
 
 // EvidenceManifestEntry records frozen evidence identity without its content.
@@ -252,7 +249,7 @@ func NewAuthoritativeSnapshot(summary *models.AISummary, analysis *models.AIAnal
 		RelevantFiles: slices.Clone(analysis.RelevantFiles), EvidenceCitations: slices.Clone(analysis.EvidenceCitations),
 		ElapsedMs: analysis.ElapsedMs, InputTokens: analysis.InputTokens, OutputTokens: analysis.OutputTokens,
 		ModelRequests: analysis.ModelRequests, ToolCalls: analysis.ToolCalls, GCSBytes: analysis.GCSBytes, CacheHit: analysis.CacheHit,
-		CritiquePassed: analysis.CritiquePassed, JudgeRan: analysis.JudgeRan, JudgeObjected: analysis.JudgeObjected, JudgeRevised: analysis.JudgeRevised,
+		CritiquePassed: analysis.CritiquePassed,
 	}
 	payload := struct {
 		Summary           string                    `json:"summary"`

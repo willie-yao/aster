@@ -42,12 +42,6 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		grounded = false
 		warnings[models.AnalysisWarningInvestigation] = true
 	}
-	if analysis.JudgeObjected && !analysis.JudgeRevised {
-		if SemanticJudgeMode(analysis.SemanticJudgeMode) == SemanticJudgeBlocking {
-			grounded = false
-		}
-		warnings[models.AnalysisWarningSemanticReview] = true
-	}
 	codes := make([]string, 0, len(warnings))
 	for code := range warnings {
 		codes = append(codes, code)
@@ -83,9 +77,6 @@ func safeStructuredAnalysis(analysis *models.AIAnalysis) bool {
 		return false
 	}
 	if !slices.Contains([]string{"Critical", "High", "Medium", "Low", "Transient-Ignore"}, analysis.Severity) {
-		return false
-	}
-	if !validSemanticMetadata(analysis) {
 		return false
 	}
 	for _, citation := range analysis.EvidenceCitations {

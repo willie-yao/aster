@@ -7,19 +7,16 @@ import (
 )
 
 type benchmarkRequestCap struct {
-	ConfiguredIterations           int
-	ByteFloorExtensions            int
-	MainLoopRequests               int
-	ForcedFinalizationRequests     int
-	CritiqueToolRequests           int
-	CritiqueFinalizationRequests   int
-	SemanticJudgeRequests          int
-	SemanticFinalizationRequests   int
-	SemanticRevisionReviewRequests int
-	PerOperation                   int
+	ConfiguredIterations         int
+	ByteFloorExtensions          int
+	MainLoopRequests             int
+	ForcedFinalizationRequests   int
+	CritiqueToolRequests         int
+	CritiqueFinalizationRequests int
+	PerOperation                 int
 }
 
-func deriveBenchmarkRequestCap(agentic project.Agentic, semanticJudge bool) benchmarkRequestCap {
+func deriveBenchmarkRequestCap(agentic project.Agentic) benchmarkRequestCap {
 	configured := max(agentic.MaxIters, 0)
 	byteFloorExtensions := 0
 	if configured > 0 && agentic.MinGCSBytes > 0 {
@@ -31,28 +28,16 @@ func deriveBenchmarkRequestCap(agentic project.Agentic, semanticJudge bool) benc
 		critiqueToolRequests = 1
 		critiqueFinalizationRequests = 1
 	}
-	semanticJudgeRequests := 0
-	semanticFinalizationRequests := 0
-	semanticRevisionReviewRequests := 0
-	if semanticJudge {
-		semanticJudgeRequests = 1
-		semanticFinalizationRequests = 1
-		semanticRevisionReviewRequests = 1
-	}
 	cap := benchmarkRequestCap{
-		ConfiguredIterations:           configured,
-		ByteFloorExtensions:            byteFloorExtensions,
-		MainLoopRequests:               configured + byteFloorExtensions,
-		ForcedFinalizationRequests:     1,
-		CritiqueToolRequests:           critiqueToolRequests,
-		CritiqueFinalizationRequests:   critiqueFinalizationRequests,
-		SemanticJudgeRequests:          semanticJudgeRequests,
-		SemanticFinalizationRequests:   semanticFinalizationRequests,
-		SemanticRevisionReviewRequests: semanticRevisionReviewRequests,
+		ConfiguredIterations:         configured,
+		ByteFloorExtensions:          byteFloorExtensions,
+		MainLoopRequests:             configured + byteFloorExtensions,
+		ForcedFinalizationRequests:   1,
+		CritiqueToolRequests:         critiqueToolRequests,
+		CritiqueFinalizationRequests: critiqueFinalizationRequests,
 	}
 	cap.PerOperation = cap.MainLoopRequests + cap.ForcedFinalizationRequests +
-		cap.CritiqueToolRequests + cap.CritiqueFinalizationRequests +
-		cap.SemanticJudgeRequests + cap.SemanticFinalizationRequests + cap.SemanticRevisionReviewRequests
+		cap.CritiqueToolRequests + cap.CritiqueFinalizationRequests
 	return cap
 }
 
@@ -65,14 +50,13 @@ func TestDeriveBenchmarkRequestCap(t *testing.T) {
 	cap := deriveBenchmarkRequestCap(project.Agentic{
 		MaxIters: 11, MinGCSBytes: 5_000_000,
 		Critique: project.AgenticCritique{MaxRetries: &oneRetry},
-	}, true)
+	})
 	if cap.ConfiguredIterations != 11 || cap.ByteFloorExtensions != 1 || cap.MainLoopRequests != 12 ||
-		cap.ForcedFinalizationRequests != 1 || cap.CritiqueToolRequests != 1 || cap.CritiqueFinalizationRequests != 1 ||
-		cap.SemanticJudgeRequests != 1 || cap.SemanticFinalizationRequests != 1 || cap.SemanticRevisionReviewRequests != 1 || cap.PerOperation != 18 {
+		cap.ForcedFinalizationRequests != 1 || cap.CritiqueToolRequests != 1 || cap.CritiqueFinalizationRequests != 1 || cap.PerOperation != 15 {
 		t.Fatalf("cap = %+v", cap)
 	}
-	if total := cap.total(2, 4); total != 74 {
-		t.Fatalf("total cap = %d, want 74", total)
+	if total := cap.total(2, 4); total != 62 {
+		t.Fatalf("total cap = %d, want 62", total)
 	}
 }
 
@@ -81,9 +65,8 @@ func TestDeriveBenchmarkRequestCapDisablesOptionalPaths(t *testing.T) {
 	cap := deriveBenchmarkRequestCap(project.Agentic{
 		MaxIters: 11,
 		Critique: project.AgenticCritique{MaxRetries: &zeroRetries},
-	}, false)
-	if cap.ByteFloorExtensions != 0 || cap.CritiqueToolRequests != 0 || cap.CritiqueFinalizationRequests != 0 ||
-		cap.SemanticJudgeRequests != 0 || cap.SemanticFinalizationRequests != 0 || cap.SemanticRevisionReviewRequests != 0 || cap.PerOperation != 12 {
+	})
+	if cap.ByteFloorExtensions != 0 || cap.CritiqueToolRequests != 0 || cap.CritiqueFinalizationRequests != 0 || cap.PerOperation != 12 {
 		t.Fatalf("cap = %+v", cap)
 	}
 }
@@ -93,7 +76,7 @@ func TestDeriveBenchmarkRequestCapBoundsCritiqueRepairOnce(t *testing.T) {
 	cap := deriveBenchmarkRequestCap(project.Agentic{
 		MaxIters: 1,
 		Critique: project.AgenticCritique{MaxRetries: &configuredRetries},
-	}, false)
+	})
 	if cap.CritiqueToolRequests != 1 || cap.CritiqueFinalizationRequests != 1 || cap.PerOperation != 4 {
 		t.Fatalf("cap = %+v", cap)
 	}

@@ -221,7 +221,6 @@ test("event details retain every existing public metadata field in order", () =>
     retry: 1,
     issue_count: 2,
     critique_rules: ["missing_citation"],
-    semantic_findings: ["unsupported_cause"],
     cache_rejection_reason: "below_floor",
     validation_code: "schema_mismatch",
     error_code: "quality_floor_exhausted",
@@ -243,7 +242,6 @@ test("event details retain every existing public metadata field in order", () =>
     "retry 1",
     "2 issues",
     "rules missing_citation",
-    "findings unsupported_cause",
     "not cached: below_floor",
     "schema_mismatch",
     "quality_floor_exhausted",
@@ -282,7 +280,6 @@ test("health classification separates failures, degradations, retries, and clean
       events: [
         { sequence: 1, elapsed_ms: 10, kind: "critique", outcome: "objected", issue_count: 2 },
         { sequence: 2, elapsed_ms: 20, kind: "critique_retry", outcome: "completed" },
-        { sequence: 3, elapsed_ms: 30, kind: "semantic_judge", outcome: "revised" },
         { sequence: 4, elapsed_ms: 40, kind: "critique", outcome: "published_passed" },
       ],
     }),
@@ -291,7 +288,6 @@ test("health classification separates failures, degradations, retries, and clean
   assert.deepEqual(retried.reasons, [
     "Critique objected: 2 issues",
     "Critique retry: completed",
-    "Semantic judge revised the draft",
   ]);
 
   const rejected = analysisHealthVerdict(
@@ -395,12 +391,6 @@ test("context headroom and structured fallbacks separate recovery from real loss
     "Still over the context budget after compaction",
     "Conversation compacted",
   ]);
-
-  const judgeFailed = analysisHealthVerdict(
-    trace({ events: [{ sequence: 1, elapsed_ms: 10, kind: "semantic_judge", outcome: "error" }] }),
-  );
-  assert.equal(judgeFailed.severity, "degraded");
-  assert.deepEqual(judgeFailed.reasons, ["Semantic judge failed to run"]);
 
   const failedRepair = analysisHealthVerdict(
     trace({ events: [{ sequence: 1, elapsed_ms: 10, kind: "critique_retry", outcome: "unparseable" }] }),

@@ -18,7 +18,6 @@ type agentLoopResult struct {
 	finalContent        string
 	finalProviderItems  []json.RawMessage
 	finalDraftObserved  bool
-	finalDraftAttempt   int
 	draftPhase          string
 	gcsFloorOnlyRetries int
 }
@@ -52,7 +51,6 @@ func (c *Client) runAgenticLoop(ctx context.Context, state *agentState, messages
 	headroom := contextHeadroomFor(state.opts)
 
 	finalDraftObserved := false
-	finalDraftAttempt := 0
 	draftPhase := "initial"
 
 	// When single_tool_call is on, request parallel_tool_calls=false so
@@ -73,7 +71,6 @@ agentLoop:
 				finalContent = fallback.content
 				finalProviderItems = fallback.providerItems
 				finalDraftObserved = true
-				finalDraftAttempt = fallback.attempt
 				recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "best_draft", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
 				log.Printf("  ⚠ agentic context headroom exhausted; publishing the best prior draft without another provider request")
 				break agentLoop
@@ -118,7 +115,6 @@ agentLoop:
 				finalContent = fallback.content
 				finalProviderItems = fallback.providerItems
 				finalDraftObserved = true
-				finalDraftAttempt = fallback.attempt
 				recordTrace(ctx, TraceEvent{Kind: "draft_recovery", Outcome: "model_request_error", SelectedAttempt: fallback.attempt})
 				log.Printf("  ⚠ agentic request failed (%v); publishing the best prior draft", err)
 				break agentLoop
@@ -139,8 +135,7 @@ agentLoop:
 					}
 				}
 				candidateDraft := state.newDraftCandidate(draftPhase, *msg.Content, msg.ProviderItems, parsedCandidate, candidateCritique)
-				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-				state.considerFallbackDraft(candidateDraft, semanticAccepted)
+				state.considerFallbackDraft(candidateDraft)
 				recordTrace(ctx, TraceEvent{Kind: "draft_recovery", Outcome: "tool_bearing_candidate", SelectedAttempt: candidateDraft.attempt})
 			}
 		}
@@ -172,8 +167,7 @@ agentLoop:
 					}
 				}
 				candidateDraft = state.newDraftCandidate(draftPhase, candidate, msg.ProviderItems, parsedCandidate, candidateCritique)
-				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-				state.considerFallbackDraft(candidateDraft, semanticAccepted)
+				state.considerFallbackDraft(candidateDraft)
 			}
 
 			floors := evalFloors(state, state.opts)
@@ -204,13 +198,9 @@ agentLoop:
 						if fallback := state.promoteFallbackDraft(); fallback != nil {
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
-							finalDraftAttempt = fallback.attempt
 						} else {
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
-							if candidateDraft != nil {
-								finalDraftAttempt = candidateDraft.attempt
-							}
 						}
 						finalDraftObserved = parsedOK
 						recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -258,7 +248,7 @@ agentLoop:
 					// worse draft becomes the first candidate the critique gate
 					// sees and wins against an empty selection.
 					if candidateDraft != nil {
-						state.considerDraft(candidateDraft, draftPhase == "semantic_retry" && state.judgeObjected)
+						state.considerDraft(candidateDraft)
 					}
 					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
@@ -274,13 +264,9 @@ agentLoop:
 						if fallback := state.promoteFallbackDraft(); fallback != nil {
 							finalContent = fallback.content
 							finalProviderItems = fallback.providerItems
-							finalDraftAttempt = fallback.attempt
 						} else {
 							finalContent = candidate
 							finalProviderItems = msg.ProviderItems
-							if candidateDraft != nil {
-								finalDraftAttempt = candidateDraft.attempt
-							}
 						}
 						finalDraftObserved = parsedOK
 						recordTrace(ctx, TraceEvent{Kind: "context_headroom", Outcome: "retry_denied", ContextLimitTokens: headroom.limitTokens, ReservedTokens: headroom.reservedTokens})
@@ -304,86 +290,11 @@ agentLoop:
 			// path, or fails recipe-driven evidence. Only fires on parseable
 			// candidates; unparseable finals fall through to runFinalizeRound
 			// below.
-			if parsed, ok := parsedCandidate, parsedOK; ok {
+			if _, ok := parsedCandidate, parsedOK; ok {
 				out := candidateCritique
-				semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-				state.considerDraft(candidateDraft, semanticAccepted)
+				state.considerDraft(candidateDraft)
 				if out.Passed {
 					recordTrace(ctx, critiqueTraceEvent("passed", out))
-					// The initial semantic review runs only on the selected draft.
-					// An objected draft may spend one tools-free refinalization and
-					// one revision-review call. Failures preserve the selected draft.
-					if state.opts.SemanticJudge.enabled() && !state.judgeRan && state.bestDraft == candidateDraft {
-						state.judgeRan = true
-						result, err := c.semanticCritiqueTracked(ctx, state, candidateDraft.attempt, semanticJudgeStageDraft, parsed, nil, nil, headroom)
-						switch {
-						case err != nil:
-							recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "error", result, "semantic_judge_error"))
-							log.Printf("  ⓘ semantic judge: skipped (%v)", err)
-						case len(result.Findings) > 0:
-							recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "objected", result, ""))
-							state.judgeObjected = true
-							state.semanticFindings = semanticFindingClassList(result.Findings)
-							prior := parsed
-							echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
-							if msg.Content != nil {
-								echo.Content = msg.Content
-							}
-							repairMessages := append(messages, echo, modelMessage{
-								Role:    "user",
-								Content: strPtr(formatSemanticFindings(result.Findings)),
-							})
-							revised, revisedItems, safe := c.runFinalizeRoundTracked(ctx, state, repairMessages, headroom)
-							if safe {
-								if rp, ok := tryParseAnalysis(revised); ok {
-									revisedCritique := critiqueDraftWithContent(rp, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, rp), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-									if len(revisedCritique.MissingSkillEvidence) > 0 {
-										if treeSet := state.artifactTreeSet(); treeSet != nil {
-											pruneAbsentSkillEvidence(rp, &revisedCritique, treeSet)
-										}
-									}
-									semanticCandidate := state.newDraftCandidate("semantic_retry", revised, revisedItems, rp, revisedCritique)
-									policy := effectiveCritiqueCachePolicy(state.opts.CritiqueCachePolicy)
-									decision := c.reviewSemanticRevision(ctx, state, prior, result.Findings, semanticCandidate, headroom, policy)
-									if !decision.accepted && semanticRevisionRejected(decision, semanticCandidate, policy) {
-										state.judgeRevisionRejected = true
-										recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_rejected", IssueCount: len(semanticCandidate.semanticFindingClasses)})
-									} else if decision.accepted {
-										state.considerFallbackDraftForPolicy(semanticCandidate, true, policy)
-										state.judgeRevised = true
-										state.semanticFindings = nil
-										recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
-									} else {
-										recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_not_selected"})
-									}
-								} else {
-									state.judgeRevisionRejected = true
-									recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_unparseable", IssueCount: len(result.Findings)})
-								}
-							} else {
-								state.judgeRevisionRejected = true
-								recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revision_denied", IssueCount: len(result.Findings)})
-							}
-							fallback := state.promoteFallbackDraft()
-							finalContent = fallback.content
-							finalProviderItems = fallback.providerItems
-							finalDraftObserved = true
-							finalDraftAttempt = fallback.attempt
-							state.critiquePassed = fallback.quality.Passed
-							break agentLoop
-						default:
-							recordTrace(ctx, semanticJudgeTraceEvent(semanticJudgeStageDraft, "passed", result, ""))
-							log.Printf("  ✓ semantic judge: no findings")
-							state.considerDraft(candidateDraft, true)
-							state.considerFallbackDraft(candidateDraft, true)
-						}
-					}
-					// Reaching acceptance after the judge objected on an earlier
-					// draft means its objections drove an accepted revision.
-					if state.judgeObjected && !state.judgeRevisionRejected && state.bestDraft != nil && candidateDraft != nil && state.bestDraft.attempt == candidateDraft.attempt {
-						state.judgeRevised = true
-						state.semanticFindings = nil
-					}
 					state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 				} else {
 					state.critiquePassed = false
@@ -393,13 +304,9 @@ agentLoop:
 			if parsedOK && state.bestDraft != nil {
 				finalContent = state.bestDraft.content
 				finalProviderItems = state.bestDraft.providerItems
-				finalDraftAttempt = state.bestDraft.attempt
 			} else {
 				finalContent = candidate
 				finalProviderItems = msg.ProviderItems
-				if candidateDraft != nil {
-					finalDraftAttempt = candidateDraft.attempt
-				}
 			}
 			finalDraftObserved = parsedOK
 			break
@@ -464,7 +371,6 @@ agentLoop:
 		finalContent = fallback.content
 		finalProviderItems = fallback.providerItems
 		finalDraftObserved = true
-		finalDraftAttempt = fallback.attempt
 		parsed, ok = tryParseAnalysis(finalContent)
 		recordTrace(ctx, TraceEvent{Kind: "finalize_recovery", Outcome: "retained_draft", SelectedAttempt: fallback.attempt})
 		log.Printf("  ⚠ agentic repair: finalize did not parse; keeping selected draft")
@@ -477,7 +383,7 @@ agentLoop:
 	return agentLoopResult{
 		messages: messages, parsed: parsed,
 		finalContent: finalContent, finalProviderItems: finalProviderItems,
-		finalDraftObserved: finalDraftObserved, finalDraftAttempt: finalDraftAttempt, draftPhase: draftPhase,
+		finalDraftObserved: finalDraftObserved, draftPhase: draftPhase,
 		gcsFloorOnlyRetries: gcsFloorOnlyRetries,
 	}, nil
 }

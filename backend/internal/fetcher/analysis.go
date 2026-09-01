@@ -200,13 +200,12 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	}
 
 	var transientSkipped atomic.Int64
-	var judgeRan, judgeObjected, judgeRevised atomic.Int64
 	analysisCtx, cancelAnalysis := context.WithCancel(ctx)
 	defer cancelAnalysis()
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
-	finish := func(item aiWork, before *models.AISummary, result ai.FailureAnalysisResult, analyzeErr error, recordJudge bool) {
+	finish := func(item aiWork, before *models.AISummary, result ai.FailureAnalysisResult, analyzeErr error) {
 		item.tc.AISummary = result.Summary
 		item.tc.AIAnalysis = result.Analysis
 		if analyzeErr != nil {
@@ -214,19 +213,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		}
 		if before == nil && item.tc.AISummary != nil && item.tc.AISummary.IsTransient && item.tc.AIAnalysis == nil {
 			transientSkipped.Add(1)
-		}
-		if recordJudge {
-			if analysis := item.tc.AIAnalysis; analysis != nil {
-				if analysis.JudgeRan {
-					judgeRan.Add(1)
-				}
-				if analysis.JudgeObjected {
-					judgeObjected.Add(1)
-				}
-				if analysis.JudgeRevised {
-					judgeRevised.Add(1)
-				}
-			}
 		}
 		outcome := fetchprogress.OutcomeSucceeded
 		if analyzeErr != nil {
@@ -256,7 +242,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			before := item.tc.AISummary
 			request := item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], p.cacheGenerationFingerprint())
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, request)
-			finish(item, before, result, analyzeErr, true)
+			finish(item, before, result, analyzeErr)
 		}()
 	}
 	for _, item := range work {
@@ -270,9 +256,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		return ctx.Err()
 	}
 	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
-	if n := judgeRan.Load(); n > 0 {
-		log.Printf("⚖️ semantic judge: ran on %d, objected on %d, revised %d", n, judgeObjected.Load(), judgeRevised.Load())
-	}
 	if err := p.persistIndividualAnalysisCheckpoint(runtime, traceStore); err != nil {
 		return err
 	}

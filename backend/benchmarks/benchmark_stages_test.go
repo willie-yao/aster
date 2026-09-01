@@ -660,7 +660,7 @@ func TestBuildBenchmarkEvidenceStageReportUsesRootCauseOnly(t *testing.T) {
 	}
 	observations := []benchmarkDraftObservation{
 		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "scheduler v1beta1 request returned 404"}},
-		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "generic readiness timeout"}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "critique_retry", RootCause: "generic readiness timeout"}},
 	}
 	report := buildBenchmarkEvidenceStageReport(bc, prep, coverage, tc, observations, 2, true, "valid_result")
 	if err := validateBenchmarkEvidenceStageReport(bc, report); err != nil {
@@ -828,7 +828,7 @@ func TestBenchmarkCausalSignalsRejectNegatedFacts(t *testing.T) {
 
 	observations := []benchmarkDraftObservation{
 		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "The scheduler's v1beta1 PodGroup request returned 404, which prevented startup."}},
-		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "The v1beta1 PodGroup API returned 404, but that mismatch was incidental and did not cause the timeout."}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "critique_retry", RootCause: "The v1beta1 PodGroup API returned 404, but that mismatch was incidental and did not cause the timeout."}},
 	}
 	revisions := benchmarkEvidenceRevisions(kueue.evidenceGroups, observations, 1)
 	if len(revisions) != 1 || !slices.Contains(revisions[0].Dropped, "podgroup-api-response") {
@@ -836,7 +836,7 @@ func TestBenchmarkCausalSignalsRejectNegatedFacts(t *testing.T) {
 	}
 	retained := benchmarkEvidenceRevisions(kueue.evidenceGroups, []benchmarkDraftObservation{
 		{DraftObservation: ai.DraftObservation{Attempt: 1, Phase: "initial", RootCause: "The scheduler's v1beta1 PodGroup request returned 404, which prevented startup."}},
-		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "semantic_retry", RootCause: "The scheduler v1beta1 PodGroup request returned 404, which prevented handler synchronization and caused the timeout. The later image-pull warning was unrelated."}},
+		{DraftObservation: ai.DraftObservation{Attempt: 2, Phase: "critique_retry", RootCause: "The scheduler v1beta1 PodGroup request returned 404, which prevented handler synchronization and caused the timeout. The later image-pull warning was unrelated."}},
 	}, 2)
 	if len(retained) != 1 || !slices.Contains(retained[0].Retained, "podgroup-api-response") || slices.Contains(retained[0].Dropped, "podgroup-api-response") {
 		t.Fatalf("unrelated noise dropped a causal fact: %+v", retained)

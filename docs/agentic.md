@@ -16,7 +16,7 @@ both GitHub Pages and Kubernetes. The same Go implementation owns:
 
 - provider requests and tool schemas;
 - evidence planning and investigation bounds;
-- deterministic critique and semantic review;
+- deterministic critique and bounded repair;
 - cache identity and acceptance;
 - public analysis output;
 - private traces and usage accounting.
@@ -45,7 +45,6 @@ are:
 | `ai.tools` | Selects registered read-only tool groups. |
 | `ai.concurrency` | Runs independent analyses in parallel. Keep it low for rate-limited providers. |
 | `ai.critique.*` | Selects bounded repair and cache acceptance policy. |
-| `ai.semantic_judge` | Selects advisory, blocking, or disabled semantic review. |
 | `ai.cache_generation` | Creates an intentional reversible reanalysis namespace. |
 
 Start with defaults. Raise investigation floors only when observed analyses
@@ -64,7 +63,7 @@ flowchart TD
     F --> C
     D -->|No| G["Parse structured draft"]
     G --> H{"Current quality gates pass?"}
-    H -->|No| I["Bounded floor, evidence-plan, critique, or semantic-review feedback"]
+    H -->|No| I["Bounded floor, evidence-plan, or critique feedback"]
     I --> C
     H -->|Yes| J["Cache and publish"]
 ```
@@ -140,13 +139,11 @@ Investigation floors run on the finalize branch:
 
 Floors measure investigation effort, not correctness. Evidence-plan coverage is
 a separate gate that measures whether the available evidence was actually read.
-Critique and semantic review remain independent of both.
+Critique remains independent of both.
 
-## Critique and semantic review
+## Deterministic critique
 
 Every parseable final is evaluated in its exact sanitized publication form.
-
-### Deterministic critique
 
 The deterministic judge rejects hard safety or grounding failures such as:
 
@@ -154,29 +151,13 @@ The deterministic judge rejects hard safety or grounding failures such as:
 - a remediation that leaves nothing to act on, such as a rerun instruction;
 - a citation to an artifact that was never read;
 - missing required artifact citations after evidence was read;
-- invalid source or artifact paths and ranges;
+- invalid source or artifact paths and ranges, including quotes absent from cited lines;
 - missing evidence required by an applicable diagnostic skill.
 
 When configured, one bounded repair operation can inject verified evidence,
 allow one tool-enabled turn when evidence remains unresolved, and force one
 structured finalization. It does not reopen an unlimited investigation loop.
 Cache acceptance is evaluated separately under the configured critique policy.
-
-### Semantic review
-
-The semantic judge evaluates causal and evidence quality after deterministic
-checks. Its bounded evidence digest includes validated artifact evidence and
-verified excerpts from the project source files read during the investigation.
-It can request a bounded revision, but a later draft does not win merely because
-it is newer. Draft selection prevents new hard failures, unsupported root-cause
-changes, and regressions that drop high-confidence cited facts without an equally
-supported replacement.
-
-`ai.semantic_judge` defaults to `advisory`. Advisory review records bounded
-finding classes on the analysis, adds the semantic-review warning, and can
-select a better revision, but an
-unresolved objection does not force preliminary disposition or reject cache
-reuse. `blocking` applies those gates. `off` skips the semantic judge request.
 
 If a repair response is unusable, the engine can retain the best earlier
 parseable draft. Only the selected draft controls cache acceptance and
@@ -186,8 +167,7 @@ publication.
 
 A reusable entry must match the analysis key, be within the retention window,
 contain a valid current-format result, meet current investigation floors, and
-satisfy the current critique contract plus any configured blocking semantic
-review.
+satisfy the current critique contract.
 
 Aster checks both places that may hold an analysis:
 
@@ -237,7 +217,7 @@ They are excluded from `/data/*` and removed from Pages publication.
 Private traces retain bounded control-flow facts such as provider attempts,
 logical request size, Responses wire-request size, tool counts, compaction,
 floor nudges, evidence-plan coverage and the group IDs it
-reopened for, critique stages, semantic-review stages, timeouts, and completion
+reopened for, critique stages, timeouts, and completion
 status. They do not retain prompts, assistant text, reasoning, tool arguments,
 tool output, credentials, endpoint URLs, or raw provider bodies. Authenticated
 server mode can expose the sanitized trace snapshot to administrators.
@@ -279,7 +259,6 @@ cache acceptance, pattern state, or actions.
 - `backend/internal/ai/evidenceplan/`: ranked evidence planning.
 - `backend/internal/ai/skills/`: engine and consumer evidence recipes.
 - `backend/internal/ai/critique.go`: deterministic critique.
-- `backend/internal/ai/semantic.go`: semantic review.
 - `backend/internal/ai/service.go`, `cache.go`, and `cache_acceptance.go`: cache
   identity and acceptance.
 - `backend/internal/ai/tools/`: read-only artifact, Kubernetes-shaped, and source

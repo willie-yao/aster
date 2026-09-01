@@ -61,7 +61,7 @@ func (m *Module) Name() string { return ModuleName }
 
 // AnalysisPrompt returns the universal seed prompt followed by the shared
 // failure context. Investigation instructions are unchanged so the analysis is
-// gated by the same critique and judge rules as every other one.
+// gated by the same deterministic critique rules as every other one.
 func (m *Module) AnalysisPrompt(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase, consecutive int) string {
 	var sb strings.Builder
 	sb.WriteString(m.fallback.AnalysisPrompt(ctx, client, run, tc, consecutive))

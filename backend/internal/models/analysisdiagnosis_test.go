@@ -2,25 +2,24 @@ package models
 
 import "testing"
 
-func TestAnalysisHasUsableDiagnosisSemanticJudgePolicy(t *testing.T) {
-	base := AIAnalysis{Disposition: AnalysisDispositionPreliminary, DispositionWarnings: []string{AnalysisWarningSemanticReview}}
+func TestAnalysisHasUsableDiagnosisAcceptsGroundedAndPreliminary(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		mode string
-		want bool
+		name        string
+		disposition string
+		want        bool
 	}{
-		{name: "advisory", mode: "advisory", want: true},
-		{name: "blocking", mode: "blocking"},
-		{name: "off", mode: "off"},
-		{name: "missing"},
-		{name: "unknown", mode: "unknown"},
+		{name: "grounded", disposition: AnalysisDispositionGrounded, want: true},
+		{name: "preliminary", disposition: AnalysisDispositionPreliminary, want: true},
+		{name: "unstamped"},
+		{name: "unknown", disposition: "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			analysis := base
-			analysis.SemanticJudgeMode = tc.mode
-			if got := AnalysisHasUsableDiagnosis(&analysis); got != tc.want {
+			if got := AnalysisHasUsableDiagnosis(&AIAnalysis{Disposition: tc.disposition}); got != tc.want {
 				t.Fatalf("AnalysisHasUsableDiagnosis() = %t, want %t", got, tc.want)
 			}
 		})
+	}
+	if AnalysisHasUsableDiagnosis(nil) {
+		t.Fatal("nil analysis was usable")
 	}
 }

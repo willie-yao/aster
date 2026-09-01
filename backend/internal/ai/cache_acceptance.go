@@ -21,8 +21,6 @@ const (
 	CacheRejectedCritiqueHardFailure   CacheRejectionReason = "critique_hard_failure"
 	CacheRejectedCritiqueStrictWarning CacheRejectionReason = "critique_strict_warning"
 	CacheRejectedCritiqueUnclassified  CacheRejectionReason = "critique_unclassified"
-	CacheRejectedSemanticObjection     CacheRejectionReason = "semantic_objection"
-	CacheRejectedSemanticJudgeMode     CacheRejectionReason = "semantic_judge_mode"
 	CacheRejectedMalformed             CacheRejectionReason = "malformed"
 	CacheRejectedCacheGeneration       CacheRejectionReason = "cache_generation"
 	CacheRejectedNotPersisted          CacheRejectionReason = "not_persisted"
@@ -37,7 +35,6 @@ type AgenticCachePolicy struct {
 	Model               string
 	ModelHash           string
 	PromptHash          string
-	SemanticJudge       SemanticJudgeMode
 	CacheGeneration     string
 	// CritiquePolicy independently controls deterministic critique enforcement.
 	// The version is always required so cached output satisfies the current
@@ -95,13 +92,6 @@ func acceptAgenticCacheRecord(entry CacheEntry, expectedKey string, policy Agent
 	if !validCritiqueRuleClassification(cached.CritiqueHardFailures, cached.CritiqueSoftWarnings) {
 		return analysisRecord{}, CacheRejectedMalformed
 	}
-	if !validSemanticMetadata(&models.AIAnalysis{
-		SemanticJudgeMode: cached.SemanticJudgeMode, SemanticFindings: cached.SemanticFindings,
-		JudgeRan: cached.JudgeRan, JudgeObjected: cached.JudgeObjected, JudgeRevised: cached.JudgeRevised,
-		JudgeRevisionRejected: cached.JudgeRevisionRejected,
-	}) {
-		return analysisRecord{}, CacheRejectedMalformed
-	}
 	generatedAt := entry.CreatedAt
 	if cached.GeneratedAt != "" {
 		parsedGeneratedAt, err := time.Parse(time.RFC3339, cached.GeneratedAt)
@@ -129,9 +119,6 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 		return CacheRejectedMalformed
 	}
 	analysis := result.Analysis
-	if !validSemanticMetadata(analysis) {
-		return CacheRejectedMalformed
-	}
 	if strings.TrimSpace(result.Summary.Summary) == "" && strings.TrimSpace(analysis.RootCause) == "" {
 		return CacheRejectedMalformed
 	}
@@ -145,9 +132,6 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 			return CacheRejectedExpired
 		}
 	}
-	if SemanticJudgeMode(analysis.SemanticJudgeMode) != policy.SemanticJudge {
-		return CacheRejectedSemanticJudgeMode
-	}
 	if analysis.ToolCalls < policy.MinToolCalls {
 		return CacheRejectedToolFloor
 	}
@@ -158,9 +142,6 @@ func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePol
 		return CacheRejectedCritiqueUnclassified
 	}
 	if reason := critiqueCacheRejection(analysis, policy.CritiquePolicy); reason != CacheAccepted {
-		return reason
-	}
-	if reason := semanticCacheRejection(analysis); reason != CacheAccepted {
 		return reason
 	}
 	if analysis.CacheGeneration != policy.CacheGeneration {
@@ -182,12 +163,6 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	}
 	if !validCritiqueRuleClassification(result.Analysis.CritiqueHardFailures, result.Analysis.CritiqueSoftWarnings) {
 		return CacheEntry{}, fmt.Errorf("agentic cache result has invalid critique rule classification")
-	}
-	if !validSemanticMetadata(result.Analysis) {
-		return CacheEntry{}, fmt.Errorf("agentic cache result has invalid semantic metadata")
-	}
-	if reason := semanticCacheRejection(result.Analysis); reason != CacheAccepted {
-		return CacheEntry{}, fmt.Errorf("agentic cache result has unresolved semantic objection")
 	}
 	generatedAt := result.Analysis.GeneratedAt
 	if generatedAt == "" {
@@ -212,7 +187,6 @@ func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promp
 		CritiquePolicy:      effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy),
 		SkillSetHash:        skillSetHash,
 		PromptHash:          promptHash,
-		SemanticJudge:       opts.SemanticJudge,
 	}
 	if client != nil {
 		policy.Model = client.model
@@ -249,52 +223,6 @@ func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePol
 	default:
 		return CacheRejectedCritiqueUnclassified
 	}
-}
-
-func semanticCacheRejection(analysis *models.AIAnalysis) CacheRejectionReason {
-	if analysis != nil && SemanticJudgeMode(analysis.SemanticJudgeMode) == SemanticJudgeBlocking && analysis.JudgeObjected && !analysis.JudgeRevised && !analysis.JudgeRevisionRejected {
-		return CacheRejectedSemanticObjection
-	}
-	return CacheAccepted
-}
-
-func validSemanticMetadata(analysis *models.AIAnalysis) bool {
-	if analysis == nil {
-		return false
-	}
-	mode := SemanticJudgeMode(analysis.SemanticJudgeMode)
-	switch mode {
-	case "", SemanticJudgeAdvisory, SemanticJudgeBlocking, SemanticJudgeOff:
-	default:
-		return false
-	}
-	if !validSemanticResolution(analysis.JudgeObjected, analysis.JudgeRevised, analysis.JudgeRevisionRejected) {
-		return false
-	}
-	if mode == "" || mode == SemanticJudgeOff {
-		return !analysis.JudgeRan && !analysis.JudgeObjected && !analysis.JudgeRevised && !analysis.JudgeRevisionRejected && len(analysis.SemanticFindings) == 0
-	}
-	if analysis.JudgeObjected && !analysis.JudgeRan || analysis.JudgeRevised && !analysis.JudgeObjected {
-		return false
-	}
-	for _, finding := range analysis.SemanticFindings {
-		if !semanticFindingClasses[finding] {
-			return false
-		}
-	}
-	if analysis.JudgeObjected && !analysis.JudgeRevised && len(analysis.SemanticFindings) == 0 {
-		return false
-	}
-	if len(analysis.SemanticFindings) > 0 && (!analysis.JudgeObjected || analysis.JudgeRevised) {
-		return false
-	}
-	return true
-}
-
-// validSemanticResolution reports whether the semantic review state is coherent.
-// A rejected revision must follow an objection that was never revised.
-func validSemanticResolution(objected, revised, revisionRejected bool) bool {
-	return !revisionRejected || (objected && !revised)
 }
 
 // MeetsCurrentCritiqueContract reports whether an analysis passed the current deterministic critique contract.

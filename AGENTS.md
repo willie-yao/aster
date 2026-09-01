@@ -82,7 +82,6 @@ backend/                         Go 1.25
       toolloop.go                Tool dispatch and transcript management
       service.go                 Cache key, staleness, shouldReanalyze
       critique.go                Deterministic judge that gates drafts
-      semantic.go                Semantic judge pass
       compose.go                 BasePrompt + consumer system.md + ResponseFormatFooter
       cache.go / cache_acceptance.go  On-disk cache and its acceptance floors
       evidenceplan/              Ranked evidence planning + deterministic repair
@@ -170,7 +169,7 @@ Prow/TestGrid -> fetcher -> ai -> output -> server -> frontend
    `storage`, and decides what needs analyzing. Start here for anything about
    what data lands in the dashboard.
 2. **`ai`** analyzes one failure with the agentic loop: the model calls tools to
-   browse artifacts, and floors, critique, and the semantic judge gate the answer
+   browse artifacts, and investigation floors plus deterministic critique gate the answer
    before it is cached. Start here for analysis quality.
 3. **`output`** writes `dashboard.json`, `jobs/*.json`, and the rest of the JSON
    contract. Both deploy paths read the identical contract.

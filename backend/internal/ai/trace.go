@@ -82,15 +82,8 @@ type DraftDecisionTrace struct {
 	CurrentEvidenceRevision         int      `json:"current_evidence_revision"`
 	CandidateEvidenceRevision       int      `json:"candidate_evidence_revision"`
 	RootCauseMateriallyChanged      bool     `json:"root_cause_materially_changed"`
-	RawSemanticRegression           bool     `json:"raw_semantic_regression"`
 	PublishedStrictDominance        bool     `json:"published_strict_dominance"`
 	CurrentQualityRefreshed         bool     `json:"current_quality_refreshed"`
-	CurrentSupportedFacts           int      `json:"current_supported_facts"`
-	CandidateSupportedFacts         int      `json:"candidate_supported_facts"`
-	SupportedFactsRetained          int      `json:"supported_facts_retained"`
-	SupportedFactsAdded             int      `json:"supported_facts_added"`
-	SupportedFactsDropped           int      `json:"supported_facts_dropped"`
-	SupportedCauseRegression        bool     `json:"supported_cause_regression"`
 	ReplacementAccepted             bool     `json:"replacement_accepted"`
 	ReplacementReason               string   `json:"replacement_reason"`
 }
@@ -165,7 +158,6 @@ type TraceEvent struct {
 	CritiqueRules                 []string            `json:"critique_rules,omitempty"`
 	CritiqueHardRules             []string            `json:"critique_hard_rules,omitempty"`
 	CritiqueSoftRules             []string            `json:"critique_soft_rules,omitempty"`
-	SemanticFindings              []string            `json:"semantic_findings,omitempty"`
 	CacheRejectionReason          string              `json:"cache_rejection_reason,omitempty"`
 	DraftDecision                 *DraftDecisionTrace `json:"draft_decision,omitempty"`
 	EvidencePlan                  *EvidencePlanTrace  `json:"evidence_plan,omitempty"`
@@ -323,7 +315,6 @@ func (r *runRecord) append(event TraceEvent) {
 	default:
 		event.StructuredOutcome = ""
 	}
-	event.SemanticFindings = sanitizeSemanticFindingClasses(event.SemanticFindings)
 	if event.DraftDecision != nil {
 		decision := *event.DraftDecision
 		decision.Target = traceCode(decision.Target)
@@ -468,21 +459,6 @@ func sanitizeGrepCallObservation(observation tools.GrepCallObservation) *tools.G
 		})
 	}
 	return &out
-}
-
-func sanitizeSemanticFindingClasses(values []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if !semanticFindingClasses[value] || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func nextTraceSequence(events []TraceEvent) int {

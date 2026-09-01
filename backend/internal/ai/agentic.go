@@ -33,8 +33,7 @@ const maxPreliminaryAttempts = 3
 
 // preliminaryAttemptsData is the retry budget spent on one analysis key.
 type preliminaryAttemptsData struct {
-	Attempts          int    `json:"attempts"`
-	SemanticJudgeMode string `json:"semantic_judge_mode,omitempty"`
+	Attempts int `json:"attempts"`
 }
 
 // preliminaryAttemptsKey namespaces the retry budget in its own cache entry.
@@ -46,7 +45,7 @@ func preliminaryAttemptsKey(cacheKey string) string {
 }
 
 // preliminaryAttempts returns the retry budget already spent on one key.
-func (c *Client) preliminaryAttempts(cacheKey string, mode SemanticJudgeMode) int {
+func (c *Client) preliminaryAttempts(cacheKey string) int {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return 0
 	}
@@ -55,7 +54,7 @@ func (c *Client) preliminaryAttempts(cacheKey string, mode SemanticJudgeMode) in
 		return 0
 	}
 	var data preliminaryAttemptsData
-	if err := json.Unmarshal(raw, &data); err != nil || data.Attempts < 0 || data.SemanticJudgeMode != string(mode) {
+	if err := json.Unmarshal(raw, &data); err != nil || data.Attempts < 0 {
 		return 0
 	}
 	return data.Attempts
@@ -63,7 +62,7 @@ func (c *Client) preliminaryAttempts(cacheKey string, mode SemanticJudgeMode) in
 
 // recordPreliminaryAttempt advances the retry budget for a preliminary result
 // and clears it once an analysis reaches a grounded disposition.
-func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int, mode SemanticJudgeMode) {
+func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int) {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return
 	}
@@ -72,7 +71,7 @@ func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAtt
 		c.cache.Delete(key)
 		return
 	}
-	if err := c.cache.Set(key, preliminaryAttemptsData{Attempts: priorAttempts + 1, SemanticJudgeMode: string(mode)}); err != nil {
+	if err := c.cache.Set(key, preliminaryAttemptsData{Attempts: priorAttempts + 1}); err != nil {
 		log.Printf("  ⚠ failed to record preliminary retry budget: %v", err)
 	}
 }
@@ -92,19 +91,6 @@ var ErrMissingArtifactCitation = errors.New("no validated artifact citation supp
 
 // ErrRejectedAnalysis means no safe structured analysis was available to publish.
 var ErrRejectedAnalysis = errors.New("analysis result failed the safe publication contract")
-
-// SemanticJudgeMode controls how semantic findings affect publication.
-type SemanticJudgeMode string
-
-const (
-	SemanticJudgeAdvisory SemanticJudgeMode = "advisory"
-	SemanticJudgeBlocking SemanticJudgeMode = "blocking"
-	SemanticJudgeOff      SemanticJudgeMode = "off"
-)
-
-func (m SemanticJudgeMode) enabled() bool {
-	return m == SemanticJudgeAdvisory || m == SemanticJudgeBlocking
-}
 
 // AgenticOptions is the resolved per-failure budget config. Build it once per
 // fetcher run via project.AI.EffectiveAgentic and reuse it.
@@ -152,11 +138,6 @@ type AgenticOptions struct {
 	// assistant message. Defaults to false so providers that support parallel
 	// tool calls keep their efficiency.
 	SingleToolCall bool
-
-	// SemanticJudge controls the second-line LLM judge. Empty and off skip it,
-	// advisory records findings without blocking publication, and blocking
-	// preserves the strict disposition and cache gate.
-	SemanticJudge SemanticJudgeMode
 }
 
 // SourceEvidenceObservation is private, content-free source range telemetry.
@@ -204,23 +185,6 @@ type DraftObservation struct {
 // DraftObserver receives parseable draft snapshots in attempt order. It is nil
 // outside the opt-in quality benchmark.
 type DraftObserver func(DraftObservation)
-
-// SemanticFindingObservation is one bounded semantic-judge objection.
-type SemanticFindingObservation struct {
-	Class  string
-	Detail string
-}
-
-// SemanticReviewObservation records the judge result for one parseable draft.
-type SemanticReviewObservation struct {
-	Attempt  int
-	Stage    string
-	Outcome  string
-	Findings []SemanticFindingObservation
-}
-
-// SemanticReviewObserver receives semantic review results for quality benchmarks.
-type SemanticReviewObserver func(SemanticReviewObservation)
 
 // DraftSelectionObserver receives the selected parseable attempt number. It is
 // nil outside the opt-in quality benchmark.
@@ -411,22 +375,15 @@ If after this investigation the evidence is genuinely inconclusive, say so expli
 // project's current floors.
 type agenticCacheData struct {
 	analysisResponse
-	GeneratedAt            string   `json:"generated_at,omitempty"`
-	Model                  string   `json:"model,omitempty"`
-	ToolCalls              int      `json:"tool_calls,omitempty"`
-	ModelBytes             int      `json:"model_bytes,omitempty"`
-	GCSBytes               int      `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered    bool     `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted bool     `json:"gcs_floor_retry_exhausted,omitempty"`
-	BudgetExhausted        bool     `json:"budget_exhausted,omitempty"`
-	SameFailureReuse       bool     `json:"same_failure_reuse,omitempty"`
-	JudgeRan               bool     `json:"judge_ran,omitempty"`
-	JudgeObjected          bool     `json:"judge_objected,omitempty"`
-	JudgeRevised           bool     `json:"judge_revised,omitempty"`
-	JudgeRevisionRejected  bool     `json:"judge_revision_rejected,omitempty"`
-	SemanticJudgeMode      string   `json:"semantic_judge_mode,omitempty"`
-	SemanticFindings       []string `json:"semantic_findings,omitempty"`
-
+	GeneratedAt            string `json:"generated_at,omitempty"`
+	Model                  string `json:"model,omitempty"`
+	ToolCalls              int    `json:"tool_calls,omitempty"`
+	ModelBytes             int    `json:"model_bytes,omitempty"`
+	GCSBytes               int    `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered    bool   `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted bool   `json:"gcs_floor_retry_exhausted,omitempty"`
+	BudgetExhausted        bool   `json:"budget_exhausted,omitempty"`
+	SameFailureReuse       bool   `json:"same_failure_reuse,omitempty"`
 	// CritiquePassed marks entries that cleared the critique gate.
 	// Defaults to false on pre-critique entries and on entries written
 	// while critique was disabled. The cache-read gate uses this to
@@ -512,29 +469,28 @@ func evalFloors(state *agentState, opts AgenticOptions) floorStatus {
 }
 
 type agentState struct {
-	browser                artifacts.Browser
-	sources                *tools.SourceCatalog
-	opts                   AgenticOptions
-	registry               *tools.Registry
-	enabledTools           []string
-	cache                  *tools.Cache
-	webURLBase             string
-	startTime              time.Time
-	modelBytes             int
-	gcsBytes               int
-	calls                  int
-	budgetExhausted        bool
-	draftObserver          DraftObserver
-	semanticReviewObserver SemanticReviewObserver
-	selectionObserver      DraftSelectionObserver
-	sourceObserver         SourceEvidenceObserver
-	traceCtx               context.Context
-	draftAttempt           int
-	bestDraft              *critiqueDraftCandidate
-	fallbackDraft          *critiqueDraftCandidate
-	evidenceRevision       int
-	recentModelRequest     time.Duration
-	deadline               time.Time
+	browser            artifacts.Browser
+	sources            *tools.SourceCatalog
+	opts               AgenticOptions
+	registry           *tools.Registry
+	enabledTools       []string
+	cache              *tools.Cache
+	webURLBase         string
+	startTime          time.Time
+	modelBytes         int
+	gcsBytes           int
+	calls              int
+	budgetExhausted    bool
+	draftObserver      DraftObserver
+	selectionObserver  DraftSelectionObserver
+	sourceObserver     SourceEvidenceObserver
+	traceCtx           context.Context
+	draftAttempt       int
+	bestDraft          *critiqueDraftCandidate
+	fallbackDraft      *critiqueDraftCandidate
+	evidenceRevision   int
+	recentModelRequest time.Duration
+	deadline           time.Time
 
 	// critiquePassed records whether the accepted answer cleared the
 	// always-on critique gate. Stamped onto the published AIAnalysis so the
@@ -610,15 +566,6 @@ type agentState struct {
 	// priorPreliminaryAttempts carries the retry budget already spent on this
 	// cache key so a new preliminary result increments rather than resets it.
 	priorPreliminaryAttempts int
-
-	// Semantic-judge telemetry for the configured second-line review.
-	// judgeRan is set when the judge was invoked; judgeObjected when it raised
-	// objections; judgeRevised when its objections drove an accepted revision.
-	judgeRan              bool
-	judgeObjected         bool
-	judgeRevised          bool
-	judgeRevisionRejected bool
-	semanticFindings      []string
 
 	// initialArtifactTree is the single bounded listing shared by the seed and
 	// ranked plan. A complete snapshot also supports absence pruning without a
@@ -729,9 +676,6 @@ type AgenticInputs struct {
 	// production and receives value-only copies that cannot mutate runtime state.
 	DraftObserver DraftObserver
 
-	// SemanticReviewObserver is an optional in-memory benchmark hook.
-	SemanticReviewObserver SemanticReviewObserver
-
 	// DraftSelectionObserver reports the selected parseable attempt to the
 	// benchmark after production selection completes.
 	DraftSelectionObserver DraftSelectionObserver
@@ -739,20 +683,11 @@ type AgenticInputs struct {
 	SourceEvidenceObserver SourceEvidenceObserver
 }
 
-func semanticJudgeFingerprintSuffix(mode SemanticJudgeMode) string {
-	switch mode {
-	case SemanticJudgeBlocking, SemanticJudgeOff:
-		return "\x00semantic-judge=" + string(mode)
-	default:
-		return ""
-	}
-}
-
 func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 	if in.PromptHash != "" {
 		return in.PromptHash
 	}
-	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName) + semanticJudgeFingerprintSuffix(in.Opts.SemanticJudge))
+	return PromptFingerprint(sysPrompt + agToolDocs + agenticSourceContextSection(in.Sources, in.ProjectOwner, in.ProjectName))
 }
 
 // cachedAgenticAnalysis serves one accepted cache entry. It also reports the
@@ -763,7 +698,7 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt str
 	if in.Skills != nil {
 		skillSetHash = in.Skills.Hash()
 	}
-	attempts := c.preliminaryAttempts(cacheKey, in.Opts.SemanticJudge)
+	attempts := c.preliminaryAttempts(cacheKey)
 	record, reason := lookupAgenticCacheRecord(c.cache, cacheKey, agenticCachePolicy(
 		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
 	))
@@ -816,19 +751,18 @@ func (c *Client) doAnalyzeAgentic(
 	}
 
 	state := &agentState{
-		browser:                in.Browser,
-		sources:                in.Sources,
-		opts:                   in.Opts,
-		registry:               in.Registry,
-		enabledTools:           in.EnabledTools,
-		cache:                  in.Cache,
-		webURLBase:             in.WebURLBase,
-		startTime:              time.Now(),
-		promptHash:             effectiveAgenticPromptHash(in, sysPrompt),
-		draftObserver:          in.DraftObserver,
-		semanticReviewObserver: in.SemanticReviewObserver,
-		selectionObserver:      in.DraftSelectionObserver,
-		sourceObserver:         in.SourceEvidenceObserver,
+		browser:           in.Browser,
+		sources:           in.Sources,
+		opts:              in.Opts,
+		registry:          in.Registry,
+		enabledTools:      in.EnabledTools,
+		cache:             in.Cache,
+		webURLBase:        in.WebURLBase,
+		startTime:         time.Now(),
+		promptHash:        effectiveAgenticPromptHash(in, sysPrompt),
+		draftObserver:     in.DraftObserver,
+		selectionObserver: in.DraftSelectionObserver,
+		sourceObserver:    in.SourceEvidenceObserver,
 	}
 	state.priorPreliminaryAttempts = priorPreliminaryAttempts
 	// Skills are consulted inside the always-on critique gate. Recipe presence
@@ -891,9 +825,9 @@ func (c *Client) doAnalyzeAgentic(
 	}
 	// The deterministic post-loop repair paths share one bounded retry budget.
 	critiqueRetries := &critiqueRetryBudget{max: in.Opts.CritiqueMaxRetries}
-	parsed := c.applyPostLoopCritique(loopCtx, state, loop.messages, loop.finalContent, loop.finalProviderItems, loop.parsed, in.Opts, critiqueRetries, loop.finalDraftObserved, loop.finalDraftAttempt, loop.draftPhase)
+	parsed := c.applyPostLoopCritique(loopCtx, state, loop.messages, loop.finalContent, loop.finalProviderItems, loop.parsed, in.Opts, critiqueRetries, loop.finalDraftObserved, loop.draftPhase)
 	markGCSFloorRetryExhausted(loopCtx, state, in.Opts, loop.gcsFloorOnlyRetries)
-	parsed = c.prepareCacheablePublishedAnalysis(loopCtx, state, loop.messages, parsed, in.Opts)
+	parsed = prepareCacheablePublishedAnalysis(loopCtx, state, parsed, in.Opts)
 
 	state.notifyDraftSelection()
 	generatedAt := time.Now().UTC().Format(time.RFC3339)
@@ -908,7 +842,7 @@ func (c *Client) doAnalyzeAgentic(
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
 	}
-	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts, state.opts.SemanticJudge)
+	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
 
 	record = analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
@@ -920,7 +854,7 @@ func (c *Client) doAnalyzeAgentic(
 	return result.Summary, result.Analysis, nil
 }
 
-func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, messages []modelMessage, parsed analysisResponse, opts AgenticOptions) analysisResponse {
+func prepareCacheablePublishedAnalysis(ctx context.Context, state *agentState, parsed analysisResponse, opts AgenticOptions) analysisResponse {
 	parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	parsed = state.preparePublishedAnalysis(parsed)
 	out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
@@ -952,22 +886,6 @@ func (c *Client) prepareCacheablePublishedAnalysis(ctx context.Context, state *a
 			state.bestDraft.content = string(raw)
 			state.bestDraft.providerItems = nil
 		}
-	}
-	if opts.SemanticJudge.enabled() && !state.judgeRan && len(out.HardRuleIDs()) == 0 {
-		content := ""
-		if raw, err := json.Marshal(parsed); err == nil {
-			content = string(raw)
-		}
-		parsed = c.applySemanticJudgePostLoop(ctx, state, messages, content, nil, parsed, selectedDraftAttempt(state), contextHeadroomFor(opts), policy)
-		parsed = sanitizePublishedCitations(parsed, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-		parsed = state.preparePublishedAnalysis(parsed)
-		out = critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
-		if len(out.MissingSkillEvidence) > 0 {
-			if treeSet := state.artifactTreeSet(); treeSet != nil {
-				pruneAbsentSkillEvidence(parsed, &out, treeSet)
-			}
-		}
-		state.setCritiqueOutcome(out)
 	}
 	return parsed
 }
@@ -1184,7 +1102,7 @@ func compactPublishedStrings(values []string, limit int) []string {
 	return out
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftAttempt int, draftPhase string) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftPhase string) analysisResponse {
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
@@ -1194,68 +1112,25 @@ func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, m
 			pruneAbsentSkillEvidence(parsed, &out, treeSet)
 		}
 	}
-	reviewedAttempt := draftAttempt
 	if !draftObserved {
 		if draftPhase == "initial" {
 			draftPhase = "finalize"
 		}
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
-		reviewedAttempt = candidate.attempt
-		semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-		state.considerFallbackDraft(candidate, semanticAccepted)
-		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
-			state.judgeRevised = true
-			state.semanticFindings = nil
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
-		}
+		state.considerFallbackDraft(candidate)
+		state.considerDraft(candidate)
 	} else if state.bestDraft == nil {
 		candidate := state.newDraftCandidate(draftPhase, finalContent, finalProviderItems, parsed, out)
-		reviewedAttempt = candidate.attempt
-		semanticAccepted := draftPhase == "semantic_retry" && state.judgeObjected
-		state.considerFallbackDraft(candidate, semanticAccepted)
-		if state.considerDraft(candidate, semanticAccepted) && semanticAccepted {
-			state.judgeRevised = true
-			state.semanticFindings = nil
-			recordTrace(ctx, TraceEvent{Kind: "semantic_judge", Status: semanticJudgeStageRevision, Outcome: "revised"})
-		}
+		state.considerFallbackDraft(candidate)
+		state.considerDraft(candidate)
 	}
 	if out.Passed {
 		recordTrace(ctx, critiqueTraceEvent("passed", out))
-		if opts.SemanticJudge.enabled() && !state.judgeRan {
-			c.applySemanticJudgePostLoop(ctx, state, messages, finalContent, finalProviderItems, parsed, reviewedAttempt, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
-		}
 		state.critiquePassed = state.bestDraft != nil && state.bestDraft.quality.Passed
 		return state.bestDraft.parsed
 	}
 	recordTrace(ctx, critiqueTraceEvent("objected", out))
 	return c.runBoundedCritiqueRepair(ctx, state, messages, finalContent, finalProviderItems, parsed, out, opts, retries)
-}
-
-func (c *Client) semanticCritiqueTracked(ctx context.Context, state *agentState, attempt int, stage string, parsed analysisResponse, prior *analysisResponse, initialFindings []semanticFinding, headroom contextHeadroom) (semanticJudgeResult, error) {
-	started := time.Now()
-	result, err := c.semanticCritique(ctx, state, stage, parsed, prior, initialFindings, headroom)
-	state.recentModelRequest = time.Since(started)
-	state.observeSemanticReview(attempt, stage, result, err)
-	return result, err
-}
-
-func (s *agentState) observeSemanticReview(attempt int, stage string, result semanticJudgeResult, err error) {
-	if s.semanticReviewObserver == nil {
-		return
-	}
-	outcome := "passed"
-	if err != nil {
-		outcome = "error"
-	} else if len(result.Findings) > 0 {
-		outcome = "objected"
-	}
-	findings := make([]SemanticFindingObservation, len(result.Findings))
-	for i, finding := range result.Findings {
-		findings[i] = SemanticFindingObservation(finding)
-	}
-	s.semanticReviewObserver(SemanticReviewObservation{
-		Attempt: attempt, Stage: stage, Outcome: outcome, Findings: findings,
-	})
 }
 
 func critiqueTraceEvent(outcome string, out critiqueOutcome) TraceEvent {
@@ -1372,14 +1247,9 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		}
 	}
 	candidate := state.newDraftCandidate("critique_retry", revised, revisedItems, next, out)
-	state.considerFallbackDraft(candidate, false)
-	state.considerDraft(candidate, false)
+	state.considerFallbackDraft(candidate)
+	state.considerDraft(candidate)
 	state.critiquePassed = state.bestDraft.quality.Passed
-	if state.critiquePassed && opts.SemanticJudge.enabled() && !state.judgeRan {
-		selected := state.bestDraft
-		c.applySemanticJudgePostLoop(ctx, state, repairMessages, selected.content, selected.providerItems, selected.parsed, selected.attempt, contextHeadroomFor(opts), effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
-		state.critiquePassed = state.bestDraft.quality.Passed
-	}
 	selected := state.bestDraft
 	selectedOut := critiqueDraftWithContent(selected.parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, selected.parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
 	if len(selectedOut.MissingSkillEvidence) > 0 {
@@ -1469,8 +1339,8 @@ func prependPrompt(prompt, section string) string {
 	return section + "\n\n---\n\n" + prompt
 }
 
-// cacheAcceptedAnalysis evaluates the independent floor, critique, and semantic
-// gates, then records the exact persistence outcome.
+// cacheAcceptedAnalysis evaluates the independent floor and critique gates,
+// then records the exact persistence outcome.
 func (c *Client) cacheAcceptedAnalysis(ctx context.Context, cacheKey string, record analysisRecord, state *agentState, opts AgenticOptions) {
 	state.cachePersistenceAttempted = false
 	state.cachePersistenceAccepted = false
@@ -1507,12 +1377,6 @@ func cachePersistenceRejection(state *agentState, opts AgenticOptions) CacheReje
 	policyAnalysis := &models.AIAnalysis{
 		Mode: AgenticMode, CritiquePassed: state.critiquePassed, CritiqueVersion: currentCritiqueVersion,
 		CritiqueHardFailures: state.critiqueHardFailures, CritiqueSoftWarnings: state.critiqueSoftWarnings,
-		JudgeObjected: state.judgeObjected, JudgeRevised: state.judgeRevised,
-		JudgeRevisionRejected: state.judgeRevisionRejected, SemanticJudgeMode: string(opts.SemanticJudge),
 	}
-	policy := effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy)
-	if reason := critiqueCacheRejection(policyAnalysis, policy); reason != CacheAccepted {
-		return reason
-	}
-	return semanticCacheRejection(policyAnalysis)
+	return critiqueCacheRejection(policyAnalysis, effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy))
 }
