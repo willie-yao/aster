@@ -25,16 +25,17 @@ participate in normal analysis cache acceptance.
 
 Safe structured output has a separate publication disposition:
 
-- `preliminary` is displayable with bounded warnings but remains eligible for
-  reanalysis and cannot feed patterns, actions, or Fix;
-- `grounded` has verified artifact citations and no unresolved grounding or
-  quality warnings;
+- `preliminary` is displayable with bounded warnings and remains eligible for
+  reanalysis. It does not directly authorize an action, but a usable diagnosis
+  can feed correlation or chat-derived Fix flows with their own evidence gates;
+- `citations_verified` has verified artifact citations and no unresolved
+  condition that degrades the publication disposition;
 - rejected output has no usable `AIAnalysis` and follows the existing unavailable
   path.
 
-Action eligibility is never stored as analysis state. It is derived later from a
-grounded result plus the existing critique version, source verification,
-authentication, confirmation, deduplication, and Sandbox controls. Cache
+Direct action eligibility is never stored as analysis state. It is derived later
+from a `citations_verified` result plus the existing critique version, source
+verification, authentication, confirmation, deduplication, and Sandbox controls. Cache
 acceptance remains independent from safe publication.
 
 The disabled-by-default Agent Sandbox OpenCode analyzer is the implementation
@@ -154,7 +155,8 @@ line range, and exact quote. Deterministic critique also rejects unread artifact
 or source citations. Before publication, invalid citations are removed and
 unsupported line-number claims are stripped. The public citation list therefore
 reflects evidence actually returned to the model, not paths merely present in
-the artifact tree.
+the artifact tree. Citation validation does not determine whether a quote entails
+the initiating cause or supports each material causal link.
 
 `min_tool_calls` and `min_gcs_bytes` are cacheability floors. If a model tries to
 finish below a floor, the loop can nudge it to continue investigating. A final
@@ -226,7 +228,7 @@ full rebaseline that existing acceptance gates would otherwise allow.
 ## Publication and private state
 
 Public job JSON contains the failure summary, root cause, severity, suggested
-fix, grounded evidence citations, source links, and intentionally exposed
+fix, verified evidence citations, source links, and intentionally exposed
 per-analysis telemetry such as tool calls, context and artifact bytes, elapsed
 time, cache or same-failure reuse, budget state, critique status, and provenance
 fingerprints. The provider model name is not serialized.

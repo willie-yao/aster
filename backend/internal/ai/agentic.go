@@ -61,7 +61,7 @@ func (c *Client) preliminaryAttempts(cacheKey string) int {
 }
 
 // recordPreliminaryAttempt advances the retry budget for a preliminary result
-// and clears it once an analysis reaches a grounded disposition.
+// and clears it once an analysis reaches a citation-verified disposition.
 func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int) {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return
@@ -85,7 +85,7 @@ var ErrToolsUnsupported = errors.New("ai endpoint does not support function call
 var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
 
 // ErrMissingArtifactCitation is retained for callers that decode older private
-// benchmark records. Current analysis publishes safe ungrounded drafts as
+// benchmark records. Current analysis publishes safe drafts without validated citations as
 // preliminary instead of returning this error.
 var ErrMissingArtifactCitation = errors.New("no validated artifact citation supports the analysis")
 
@@ -840,7 +840,7 @@ func (c *Client) doAnalyzeAgentic(
 	if record.disposition == models.AnalysisDispositionPreliminary {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "preliminary"})
 	} else {
-		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "grounded"})
+		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "citations_verified"})
 	}
 	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)

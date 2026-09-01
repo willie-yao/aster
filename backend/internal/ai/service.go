@@ -465,8 +465,8 @@ func (s *Service) reanalysisRequired(tc *models.TestCase, promptHash string, pre
 		return true
 	}
 	disposition := tc.AIAnalysis.Disposition
-	if disposition != models.AnalysisDispositionGrounded && disposition != models.AnalysisDispositionPreliminary {
-		// An unstamped or unrecognized disposition is never grounded, so it must
+	if disposition != models.AnalysisDispositionCitationsVerified && disposition != models.AnalysisDispositionPreliminary {
+		// An unstamped or unrecognized disposition is never citation-verified, so it must
 		// be reanalyzed to regain a usable publication state.
 		return true
 	}
@@ -503,7 +503,7 @@ func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
 // preliminaryBudgetSpent reports whether one failure has used its bounded
 // preliminary retry budget with nothing better to fall back on. An accepted
 // private entry is always preferred, because serving it costs no model call
-// and may carry a grounded result a concurrent analysis of the same key wrote.
+// and may carry a citation-verified result a concurrent analysis of the same key wrote.
 func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey, promptHash string) bool {
 	if s.client == nil || s.client.preliminaryAttempts(cacheKey) < maxPreliminaryAttempts {
 		return false

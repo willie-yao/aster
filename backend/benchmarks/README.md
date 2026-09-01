@@ -71,7 +71,7 @@ The pinned baseline consumer commits are:
 The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be
 grounded in the frozen build evidence and are not source-grounding controls. The
 GCP PD CSI reference is medium confidence, so that case also accepts the engine's
-grounded-policy unavailable result instead of rewarding an unsupported owner.
+citation-policy unavailable result instead of rewarding an unsupported owner.
 
 Options:
 
@@ -199,11 +199,12 @@ telemetry without converting displayable analysis into a lifecycle failure. The
 JSONL row is written before a failing trial stops the test.
 
 Both arms record `structured_valid`, `displayable`, `analysis_disposition`, and
-`grounded` separately. `preliminary` means safe structured content with unresolved
-evidence or quality warnings. The full evidence-contract result remains a stricter
-grounding and causal-alignment dimension. A miss there does not retroactively make
-the runtime result malformed. Action eligibility is not a benchmark quality metric;
-it requires authenticated request-time policy and confirmation outside either arm.
+`citations_verified` separately. `preliminary` means safe structured content with
+unresolved evidence or quality warnings. Citation verification checks that cited
+artifact text was read and occurs at the stated range. It does not establish that
+the text entails the cause or supports every causal link. A miss in a separate
+benchmark evidence signal does not retroactively make the runtime result
+malformed. Action eligibility is not a benchmark quality metric; it requires authenticated request-time policy and confirmation outside either arm.
 
 `BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
 `kueue-oracle-v1` condition is available only for the pinned Kueue API-version

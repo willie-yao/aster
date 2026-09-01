@@ -44,7 +44,7 @@ func reusablePublishedTestCase(analysis *models.AIAnalysis) *models.TestCase {
 		analysis.GeneratedAt = generatedAt
 	}
 	if analysis.Disposition == "" {
-		analysis.Disposition = models.AnalysisDispositionGrounded
+		analysis.Disposition = models.AnalysisDispositionCitationsVerified
 	}
 	return &models.TestCase{
 		AISummary:  &models.AISummary{GeneratedAt: generatedAt, Summary: "cached summary"},
@@ -155,7 +155,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 
 	tc := newFailedTC("Test A", "msg")
 	tc.AISummary = &models.AISummary{GeneratedAt: time.Now().UTC().Format(time.RFC3339), Summary: "cached"}
-	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, Disposition: models.AnalysisDispositionGrounded}
+	tc.AIAnalysis = &models.AIAnalysis{GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "cached", Mode: AgenticMode, PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(), CritiquePassed: true, CritiqueVersion: currentCritiqueVersion, Disposition: models.AnalysisDispositionCitationsVerified}
 
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
 
@@ -189,7 +189,7 @@ func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 	tc.AIAnalysis = &models.AIAnalysis{
 		GeneratedAt: tc.AISummary.GeneratedAt, RootCause: "flake", Mode: AgenticMode, SkillSetHash: "old-skills", ModelHash: "old-model",
 		PromptHash: "old-prompt", CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-		Disposition: models.AnalysisDispositionGrounded,
+		Disposition: models.AnalysisDispositionCitationsVerified,
 	}
 
 	if s.NeedsAnalysis(t.Context(), &http.Client{}, newRun("j", "1"), tc, transientPersistThreshold) {
@@ -470,7 +470,7 @@ func TestService_CritiqueCachePolicyControlsReuse(t *testing.T) {
 
 // TestService_UnstampedDispositionForcesReanalysis pins that an analysis whose
 // disposition was never stamped is refreshed rather than reused forever. Such an
-// analysis is not grounded, so leaving it in place would strand it: never
+// analysis is not citation-verified, so leaving it in place would strand it: never
 // action-eligible and never re-evaluated.
 func TestService_UnstampedDispositionForcesReanalysis(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
@@ -490,7 +490,7 @@ func TestService_UnstampedDispositionForcesReanalysis(t *testing.T) {
 	}{
 		{name: "unstamped", disposition: "", wantReanalysis: true},
 		{name: "unrecognized", disposition: "somethingelse", wantReanalysis: true},
-		{name: "grounded", disposition: models.AnalysisDispositionGrounded},
+		{name: "citations verified", disposition: models.AnalysisDispositionCitationsVerified},
 		{name: "preliminary", disposition: models.AnalysisDispositionPreliminary, wantReanalysis: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -841,9 +841,9 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 		t.Fatal("preliminary analysis with a spent budget should be reused")
 	}
 
-	grounded := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionGrounded))
-	if s.reanalysisRequired(grounded, promptHash, false) {
-		t.Fatal("grounded analysis should be reused")
+	verified := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionCitationsVerified))
+	if s.reanalysisRequired(verified, promptHash, false) {
+		t.Fatal("citation-verified analysis should be reused")
 	}
 
 	// A spent budget must not resurrect an analysis that fails a current floor.
@@ -868,7 +868,7 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 }
 
 // TestPreliminaryAttemptsBudgetLifecycle pins that the retry budget advances on
-// preliminary results and is cleared once an analysis becomes grounded.
+// preliminary results and is cleared once an analysis has verified citations.
 func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	const key = "agentic:kubernetes:job:1:abcd"
@@ -888,12 +888,12 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 		t.Fatalf("budget should be spent at %d attempts", maxPreliminaryAttempts)
 	}
 
-	client.recordPreliminaryAttempt(key, models.AnalysisDispositionGrounded, 3)
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionCitationsVerified, 3)
 	if got := client.preliminaryAttempts(key); got != 0 {
-		t.Fatalf("attempts after a grounded result = %d, want 0", got)
+		t.Fatalf("attempts after a citation-verified result = %d, want 0", got)
 	}
 	if s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
-		t.Fatal("a grounded result must clear the spent budget")
+		t.Fatal("a citation-verified result must clear the spent budget")
 	}
 }
 
@@ -976,7 +976,7 @@ func TestPreliminaryBudgetEntryIsNotServableAnalysis(t *testing.T) {
 
 // TestPreliminaryBudgetPrefersAcceptedCacheEntry pins that a spent budget never
 // freezes a published preliminary analysis when the private cache can serve an
-// accepted one. A concurrent analysis of a shared key can settle grounded after
+// accepted one. A concurrent analysis of a shared key can settle with verified citations after
 // the preliminary result was published, and that better result must win.
 func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
@@ -997,9 +997,9 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 		t.Fatal("budget should be spent while the cache holds nothing servable")
 	}
 
-	// A concurrent same-key analysis settles grounded and persists its result.
-	grounded := FailureAnalysisResult{
-		Summary: &models.AISummary{Summary: "grounded summary"},
+	// A concurrent same-key analysis settles with verified citations and persists its result.
+	verified := FailureAnalysisResult{
+		Summary: &models.AISummary{Summary: "verified summary"},
 		Analysis: &models.AIAnalysis{
 			Mode: AgenticMode, Model: client.model, RootCause: "root", Severity: "High",
 			EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 7, LineEnd: 7, Quote: "boom"}},
@@ -1007,7 +1007,7 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 			ModelHash: client.modelFingerprint(), PromptHash: promptHash,
 		},
 	}
-	entry, err := NewAgenticCacheEntry(key, grounded, time.Now().UTC())
+	entry, err := NewAgenticCacheEntry(key, verified, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

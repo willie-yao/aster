@@ -461,7 +461,7 @@ func benchmarkTrialStatus(outcome benchmarkOutcome, analysisErr error, tc *model
 			return "timeout"
 		case contractViolation:
 			return "contract_violation"
-		case outcome == benchmarkOutcomeGroundedPolicyUnavailable:
+		case outcome == benchmarkOutcomeCitationPolicyUnavailable:
 			return "invalid_result"
 		case errors.Is(analysisErr, ai.ErrRejectedAnalysis):
 			return "invalid_result"
@@ -696,7 +696,7 @@ func TestBenchmarkTrialStatus(t *testing.T) {
 	}{
 		{name: "valid", outcome: benchmarkOutcomeUsable, result: valid, want: "valid_result"},
 		{name: "no result", outcome: benchmarkOutcomeUsable, want: "no_result"},
-		{name: "invalid", outcome: benchmarkOutcomeGroundedPolicyUnavailable, err: ai.ErrMissingArtifactCitation, want: "invalid_result"},
+		{name: "invalid", outcome: benchmarkOutcomeCitationPolicyUnavailable, err: ai.ErrMissingArtifactCitation, want: "invalid_result"},
 		{name: "contract warning", outcome: benchmarkOutcomeUsable, result: valid, trace: contract, want: "valid_result"},
 		{name: "rejected", outcome: benchmarkOutcomeUnknown, err: ai.ErrRejectedAnalysis, want: "invalid_result"},
 		{name: "timeout", outcome: benchmarkOutcomeUnknown, err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), want: "timeout"},

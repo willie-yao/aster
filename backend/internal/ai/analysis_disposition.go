@@ -15,8 +15,8 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		return "", nil
 	}
 	warnings := map[string]bool{}
-	grounded := len(analysis.EvidenceCitations) > 0
-	if !grounded {
+	citationsVerified := len(analysis.EvidenceCitations) > 0
+	if !citationsVerified {
 		warnings[models.AnalysisWarningArtifactGrounding] = true
 	}
 	for _, rule := range slices.Concat(analysis.CritiqueHardFailures, analysis.CritiqueSoftWarnings) {
@@ -24,7 +24,7 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		if !ok {
 			// safeStructuredAnalysis already rejected unregistered rules, so this
 			// degrades rather than discarding an otherwise usable diagnosis.
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningInvestigation] = true
 			continue
 		}
@@ -32,14 +32,14 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 			return "", nil
 		}
 		if descriptor.Effect == critiqueEffectDegrade {
-			grounded = false
+			citationsVerified = false
 		}
 		if descriptor.Warning != "" {
 			warnings[descriptor.Warning] = true
 		}
 	}
 	if analysis.BudgetExhausted {
-		grounded = false
+		citationsVerified = false
 		warnings[models.AnalysisWarningInvestigation] = true
 	}
 	codes := make([]string, 0, len(warnings))
@@ -47,8 +47,8 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 		codes = append(codes, code)
 	}
 	sort.Strings(codes)
-	if grounded {
-		return models.AnalysisDispositionGrounded, codes
+	if citationsVerified {
+		return models.AnalysisDispositionCitationsVerified, codes
 	}
 	return models.AnalysisDispositionPreliminary, codes
 }
@@ -65,11 +65,11 @@ func StampAnalysisDisposition(analysis *models.AIAnalysis) bool {
 	return true
 }
 
-// IsGroundedAnalysis reports whether an analysis is grounded under the current
-// contract. An unstamped or unrecognized disposition is not grounded, so an
-// analysis must be refreshed and stamped before it regains action eligibility.
-func IsGroundedAnalysis(analysis *models.AIAnalysis) bool {
-	return analysis != nil && analysis.Disposition == models.AnalysisDispositionGrounded
+// AnalysisCitationsVerified reports whether an analysis has passed the current
+// deterministic citation contract. An unstamped or unrecognized disposition
+// must be refreshed before it regains action eligibility.
+func AnalysisCitationsVerified(analysis *models.AIAnalysis) bool {
+	return analysis != nil && analysis.Disposition == models.AnalysisDispositionCitationsVerified
 }
 
 func safeStructuredAnalysis(analysis *models.AIAnalysis) bool {

@@ -59,7 +59,7 @@ func storePolicyUnavailable(cache *Cache, key string, policy AgenticCachePolicy,
 	return cache.StoreEntry(CacheEntry{Key: key, CreatedAt: now, Data: raw})
 }
 
-// LookupPolicyUnavailableCooldown validates a private grounded-unavailable marker.
+// LookupPolicyUnavailableCooldown validates a private citation-policy-unavailable marker.
 func LookupPolicyUnavailableCooldown(cache *Cache, key string, policy AgenticCachePolicy, now time.Time) bool {
 	if cache == nil || key == "" || policy.CritiquePolicy != CritiqueCachePolicyHard {
 		return false

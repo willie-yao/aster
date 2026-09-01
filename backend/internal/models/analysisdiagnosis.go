@@ -3,7 +3,7 @@ package models
 // AnalysisHasUsableDiagnosis reports whether an analysis carries a safe
 // structured diagnosis.
 //
-// It is deliberately weaker than a grounded disposition. Remediation quality,
+// It is deliberately weaker than a citation-verified disposition. Remediation quality,
 // evidence coverage, and investigation budget make an analysis preliminary
 // without making its root cause unusable. This is the bar for stages that
 // consume the diagnosis as context and carry their own grounding, such as
@@ -13,5 +13,5 @@ func AnalysisHasUsableDiagnosis(analysis *AIAnalysis) bool {
 	if analysis == nil {
 		return false
 	}
-	return analysis.Disposition == AnalysisDispositionGrounded || analysis.Disposition == AnalysisDispositionPreliminary
+	return analysis.Disposition == AnalysisDispositionCitationsVerified || analysis.Disposition == AnalysisDispositionPreliminary
 }

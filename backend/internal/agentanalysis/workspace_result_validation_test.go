@@ -199,12 +199,12 @@ func TestWorkspaceAnalysisDispositionSeparatesWarningsFromRejection(t *testing.T
 		EvidenceCitations: []models.EvidenceCitation{{Path: "logs/build.log", LineStart: 1, LineEnd: 1, Quote: "failure"}},
 	}
 	disposition, warnings := WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
-	if disposition != models.AnalysisDispositionGrounded || len(warnings) != 0 {
-		t.Fatalf("grounded disposition=%q warnings=%v", disposition, warnings)
+	if disposition != models.AnalysisDispositionCitationsVerified || len(warnings) != 0 {
+		t.Fatalf("citation-verified disposition=%q warnings=%v", disposition, warnings)
 	}
 	analysis.UnresolvedDetails = []string{"remediation pin was not verified"}
 	disposition, warnings = WorkspaceAnalysisDisposition(analysis, WorkspaceResultValidation{Status: WorkspaceResultAccepted}, false)
-	if disposition != models.AnalysisDispositionGrounded || !slices.Equal(warnings, []string{models.AnalysisWarningInvestigation}) {
+	if disposition != models.AnalysisDispositionCitationsVerified || !slices.Equal(warnings, []string{models.AnalysisWarningInvestigation}) {
 		t.Fatalf("advisory disposition=%q warnings=%v", disposition, warnings)
 	}
 	analysis.UnresolvedDetails = nil

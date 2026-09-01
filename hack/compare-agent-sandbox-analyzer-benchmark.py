@@ -374,21 +374,21 @@ def validate_record(record: dict[str, Any], runtime: str) -> tuple[str, int]:
         record["displayable"] = record["structured_valid"]
     if "analysis_disposition" not in record:
         has_artifact_grounding = bool(record.get("evidence_citations")) or record.get("artifact_citation_count", 0) > 0
-        record["analysis_disposition"] = "grounded" if record["displayable"] and has_artifact_grounding else ("preliminary" if record["displayable"] else "")
+        record["analysis_disposition"] = "citations_verified" if record["displayable"] and has_artifact_grounding else ("preliminary" if record["displayable"] else "")
     if "disposition_warnings" not in record:
         record["disposition_warnings"] = []
-    if "grounded" not in record:
-        record["grounded"] = record["analysis_disposition"] == "grounded"
+    if "citations_verified" not in record:
+        record["citations_verified"] = record["analysis_disposition"] == "citations_verified"
     if runtime == "inprocess" and "contract_violation" not in record:
         record["contract_violation"] = record.get("trial_status") == "contract_violation"
-    for field in ("structured_valid", "displayable", "grounded"):
+    for field in ("structured_valid", "displayable", "citations_verified"):
         if not isinstance(record.get(field), bool):
             raise ReportError(f"{runtime} line {record['_line']} field {field} must be boolean")
     disposition = record.get("analysis_disposition")
     warnings = record.get("disposition_warnings")
-    if disposition not in ("", "preliminary", "grounded") or not isinstance(warnings, list) or not all(isinstance(value, str) and value for value in warnings):
+    if disposition not in ("", "preliminary", "citations_verified") or not isinstance(warnings, list) or not all(isinstance(value, str) and value for value in warnings):
         raise ReportError(f"{runtime} line {record['_line']} analysis disposition is invalid")
-    if record["structured_valid"] != record["displayable"] or record["displayable"] != (disposition != "") or record["grounded"] != (disposition == "grounded"):
+    if record["structured_valid"] != record["displayable"] or record["displayable"] != (disposition != "") or record["citations_verified"] != (disposition == "citations_verified"):
         raise ReportError(f"{runtime} line {record['_line']} analysis disposition fields are inconsistent")
     if runtime == "inprocess" and not isinstance(record.get("contract_violation"), bool):
         raise ReportError(f"inprocess line {record['_line']} contract_violation must be boolean")
@@ -735,8 +735,8 @@ def inprocess_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "displayable_trials": sum(record["displayable"] for record in records),
         "displayable_rate": rate(sum(record["displayable"] for record in records), len(records)),
         "preliminary_trials": sum(record["analysis_disposition"] == "preliminary" for record in records),
-        "grounded_trials": sum(record["grounded"] for record in records),
-        "grounded_rate": rate(sum(record["grounded"] for record in records), len(records)),
+        "citations_verified_trials": sum(record["citations_verified"] for record in records),
+        "citations_verified_rate": rate(sum(record["citations_verified"] for record in records), len(records)),
         "contract_warning_trials": sum(record["contract_violation"] for record in records),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
@@ -796,8 +796,8 @@ def sandbox_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "displayable_trials": sum(record["displayable"] for record in records),
         "displayable_rate": rate(sum(record["displayable"] for record in records), len(records)),
         "preliminary_trials": sum(record["analysis_disposition"] == "preliminary" for record in records),
-        "grounded_trials": sum(record["grounded"] for record in records),
-        "grounded_rate": rate(sum(record["grounded"] for record in records), len(records)),
+        "citations_verified_trials": sum(record["citations_verified"] for record in records),
+        "citations_verified_rate": rate(sum(record["citations_verified"] for record in records), len(records)),
         "valid_trials": len(valid),
         "valid_rate": rate(len(valid), len(records)),
         "invalid_trials": sum(status == "invalid_result" for status in statuses),
@@ -1495,7 +1495,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "valid_rate": round((sandbox_summary["valid_rate"] or 0) - (inprocess_summary["valid_rate"] or 0), 4),
         },
         "disposition_follow_up": {
-            "required": inprocess_summary["grounded_trials"] == 0 and sandbox_summary["grounded_trials"] == 0 and inprocess_summary["preliminary_trials"] == len(keys) and sandbox_summary["preliminary_trials"] == len(keys),
+            "required": inprocess_summary["citations_verified_trials"] == 0 and sandbox_summary["citations_verified_trials"] == 0 and inprocess_summary["preliminary_trials"] == len(keys) and sandbox_summary["preliminary_trials"] == len(keys),
             "reason": "both analyzers completed only preliminary investigation_incomplete analyses; diagnose the shared stopping condition before another scored matrix",
         },
         "source_citation_capabilities": {

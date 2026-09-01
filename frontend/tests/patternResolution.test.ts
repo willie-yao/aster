@@ -484,7 +484,7 @@ function failingRun(buildID: string, testName: string): BuildResult {
         root_cause: "cause",
         severity: "high",
         suggested_fix: "fix",
-        disposition: "grounded",
+        disposition: "citations_verified",
         // An analysis with no file links has no verified source path, so the
         // Fix gate refuses it and no route would render.
         file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },

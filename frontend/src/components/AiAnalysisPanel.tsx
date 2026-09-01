@@ -85,7 +85,7 @@ export function AiAnalysisPanel({
     </Stack>
   );
 
-  const dispositionPanel = analysis.disposition !== "grounded" ? (
+  const dispositionPanel = analysis.disposition !== "citations_verified" ? (
     <Alert severity="warning" variant="outlined">
       Preliminary analysis. The structured result is safe to review, but evidence or
       quality checks remain unresolved. It cannot directly authorize an action, although

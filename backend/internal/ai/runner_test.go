@@ -103,7 +103,7 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 				GeneratedAt: generatedAt, RootCause: "cached", Mode: AgenticMode,
 				PromptHash: PromptFingerprint("sys"), ModelHash: client.modelFingerprint(),
 				CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
-				Disposition:   models.AnalysisDispositionGrounded,
+				Disposition:   models.AnalysisDispositionCitationsVerified,
 				RelevantFiles: []string{"a.go"}, FileLinks: map[string]string{"a.go": "https://example.invalid/a.go"},
 			},
 		},

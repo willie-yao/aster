@@ -93,7 +93,7 @@ export interface AIAnalysis {
   // links repository source. Absent on analyses cached before citations were
   // rendered, and on analyses whose citations all failed validation.
   evidence_citations?: EvidenceCitation[];
-  disposition?: "preliminary" | "grounded";
+  disposition?: "preliminary" | "citations_verified";
   disposition_warnings?: string[];
   // Verified GitHub links for cited source files keyed by cleaned path. When
   // present, this map is authoritative and absent files stay unlinked.

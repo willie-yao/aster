@@ -64,7 +64,7 @@ func shadowTestDetails(testNames ...string) []models.JobDetail {
 		cases = append(cases, models.TestCase{
 			Name: name, Status: "failed", FailureMessage: "failed request",
 			AISummary:  &models.AISummary{Summary: "authoritative"},
-			AIAnalysis: &models.AIAnalysis{Mode: ai.AgenticMode, RootCause: "cause", Severity: "High", SuggestedFix: "fix", CritiquePassed: true, Disposition: models.AnalysisDispositionGrounded},
+			AIAnalysis: &models.AIAnalysis{Mode: ai.AgenticMode, RootCause: "cause", Severity: "High", SuggestedFix: "fix", CritiquePassed: true, Disposition: models.AnalysisDispositionCitationsVerified},
 		})
 	}
 	return []models.JobDetail{{

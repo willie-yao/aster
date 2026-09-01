@@ -660,7 +660,7 @@ type benchmarkJSONLResult struct {
 	DispositionWarnings      []string                       `json:"disposition_warnings,omitempty"`
 	StructuredValid          bool                           `json:"structured_valid"`
 	Displayable              bool                           `json:"displayable"`
-	Grounded                 bool                           `json:"grounded"`
+	CitationsVerified        bool                           `json:"citations_verified"`
 	EvidenceStages           []benchmarkEvidenceStage       `json:"evidence_stages"`
 	EvidenceRevisions        []benchmarkEvidenceRevision    `json:"evidence_revisions"`
 	EvidenceGroupsSelected   []string                       `json:"evidence_groups_selected,omitempty"`
@@ -920,7 +920,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		result.DispositionWarnings = append([]string(nil), tc.AIAnalysis.DispositionWarnings...)
 		result.StructuredValid = result.AnalysisDisposition != ""
 		result.Displayable = result.StructuredValid
-		result.Grounded = result.AnalysisDisposition == models.AnalysisDispositionGrounded
+		result.CitationsVerified = result.AnalysisDisposition == models.AnalysisDispositionCitationsVerified
 		result.RootCause, result.SuggestedFix, result.Severity = tc.AIAnalysis.RootCause, tc.AIAnalysis.SuggestedFix, tc.AIAnalysis.Severity
 		result.GCSBytes = tc.AIAnalysis.GCSBytes
 		result.EvidencePlanCovered = tc.AIAnalysis.EvidencePlanCovered
@@ -1242,7 +1242,7 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 }
 
-func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
+func TestWriteBenchmarkJSONLRecordsCitationUnavailableOutcome(t *testing.T) {
 	t.Setenv("BENCH_MODEL_LABEL", "model-a")
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
@@ -1252,7 +1252,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
-	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
+	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeCitationPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions,
 	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
 	data, err := os.ReadFile(path)
@@ -1263,7 +1263,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != string(benchmarkOutcomeGroundedPolicyUnavailable) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
+	if result.Outcome != string(benchmarkOutcomeCitationPolicyUnavailable) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -1298,7 +1298,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 		wantUsable   bool
 	}{
 		{name: "no result", status: "no_result", outcome: benchmarkOutcomeUsable, wantOutcome: benchmarkOutcomeUnknown},
-		{name: "invalid result", status: "invalid_result", outcome: benchmarkOutcomeGroundedPolicyUnavailable, result: invalid, modelRequest: true, wantOutcome: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "invalid result", status: "invalid_result", outcome: benchmarkOutcomeCitationPolicyUnavailable, result: invalid, modelRequest: true, wantOutcome: benchmarkOutcomeCitationPolicyUnavailable},
 		{name: "timeout", status: "timeout", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
 		{name: "runtime failure", status: "runtime_failure", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
 		{name: "contract violation", status: "contract_violation", outcome: benchmarkOutcomeUsable, result: valid, modelRequest: true, wantOutcome: benchmarkOutcomeUsable, wantUsable: true},

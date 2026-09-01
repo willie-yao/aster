@@ -110,7 +110,7 @@ func patternCheckpointJob(jobID string) models.JobDetail {
 				AISummary: &models.AISummary{Summary: "failure"},
 				AIAnalysis: &models.AIAnalysis{
 					RootCause: "shared cause", SuggestedFix: "update configuration", Severity: "High", Mode: "agentic",
-					Disposition: models.AnalysisDispositionGrounded,
+					Disposition: models.AnalysisDispositionCitationsVerified,
 				},
 			}},
 		})

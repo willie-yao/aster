@@ -240,7 +240,7 @@ type agentSandboxAnalyzerBenchmarkRecord struct {
 	DispositionWarnings          []string                               `json:"disposition_warnings,omitempty"`
 	StructuredValid              bool                                   `json:"structured_valid"`
 	Displayable                  bool                                   `json:"displayable"`
-	Grounded                     bool                                   `json:"grounded"`
+	CitationsVerified            bool                                   `json:"citations_verified"`
 	ResultValidationStatus       string                                 `json:"result_validation_status,omitempty"`
 	ResultValidationCodes        []string                               `json:"result_validation_codes,omitempty"`
 	ArtifactCitationCount        int                                    `json:"artifact_citation_count"`
@@ -943,7 +943,7 @@ func agentSandboxAnalyzerRecordForResult(
 	}
 	record.StructuredValid = record.AnalysisDisposition != ""
 	record.Displayable = record.StructuredValid
-	record.Grounded = record.AnalysisDisposition == models.AnalysisDispositionGrounded
+	record.CitationsVerified = record.AnalysisDisposition == models.AnalysisDispositionCitationsVerified
 	record.AnalysisValid = record.StructuredValid
 	assessment := assessBenchmarkCase(prepared.bc, nil)
 	record.SignalTotal = assessment.total

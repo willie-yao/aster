@@ -159,6 +159,13 @@ allow one tool-enabled turn when evidence remains unresolved, and force one
 structured finalization. It does not reopen an unlimited investigation loop.
 Cache acceptance is evaluated separately under the configured critique policy.
 
+Safe structured output is published as `preliminary` or `citations_verified`.
+`citations_verified` means each retained citation names a safe artifact path that
+was read, uses a valid line range, and quotes text present in that range, with no
+unresolved critique warning that degrades the disposition. It does not verify
+that the quoted evidence entails the initiating cause, supports every causal
+link, or makes the conclusion correct.
+
 If a repair response is unusable, the engine can retain the best earlier
 parseable draft. Only the selected draft controls cache acceptance and
 publication.
