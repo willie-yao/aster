@@ -121,10 +121,13 @@ See [Diagnostic skills](skills.md).
 ### Context and evidence bounds
 
 The engine obtains the model context limit when the endpoint reports it, reserves
-completion and protocol headroom, and conservatively accounts for the serialized
-request. Old tool results may be compacted while retaining call/result pairing,
-the evidence ledger, and current repair instructions. If a safe request cannot
-fit, the engine does not send it.
+completion and protocol headroom, and counts each estimated serialized request
+byte as one token plus a fixed framing reserve. This provider-neutral bound may
+compact log, YAML, and JSON histories before a tokenizer-specific limit, but it
+keeps the hard preflight independent of the endpoint tokenizer. Old tool results
+may be compacted while retaining call/result pairing, the evidence ledger, and
+current repair instructions. If a safe request cannot fit, the engine does not
+send it.
 
 Investigation floors run on the finalize branch:
 
