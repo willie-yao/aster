@@ -44,8 +44,8 @@ request.
 
 Consumes Prow job configuration from kubernetes/test-infra, build artifacts and
 JUnit XML from GCS, and pinned repository source. Analysis runs an agentic
-tool-calling loop whose answers are gated by deterministic quality floors, a
-critique pass, and a semantic judge before caching.
+tool-calling loop whose answers are gated by deterministic quality floors and a
+deterministic critique pass before caching.
 
 Two deployments read one identical JSON contract:
 

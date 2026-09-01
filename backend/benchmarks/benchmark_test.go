@@ -818,16 +818,12 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	traceStore := ai.NewTraceStore()
 	serviceConfig.TraceStore = traceStore
 	var draftObservations []benchmarkDraftObservation
-	var semanticReviewObservations []ai.SemanticReviewObservation
 	selectedAttempt := 0
 	serviceConfig.DraftObserver = func(observation ai.DraftObservation) {
 		draftObservations = append(draftObservations, benchmarkDraftObservation{
 			DraftObservation: observation,
 			observedAt:       time.Now(),
 		})
-	}
-	serviceConfig.SemanticReviewObserver = func(observation ai.SemanticReviewObservation) {
-		semanticReviewObservations = append(semanticReviewObservations, observation)
 	}
 	serviceConfig.DraftSelectionObserver = func(attempt int) { selectedAttempt = attempt }
 	var sourceObservations []ai.SourceEvidenceObservation
@@ -851,7 +847,6 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 		CritiqueMaxRetries:  *agentic.Critique.MaxRetries,
 		CritiqueCachePolicy: ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy()),
 		SingleToolCall:      agentic.SingleToolCall,
-		SemanticJudge:       ai.SemanticJudgeMode(agentic.SemanticJudge),
 	}
 	serviceConfig.BrowserFactory = factory
 	serviceConfig.ToolRegistry = registry
@@ -877,11 +872,10 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	toolUsage := successfulBenchmarkToolUsage(snapshot)
 	toolUsage.sourceObservations = append([]ai.SourceEvidenceObservation(nil), sourceObservations...)
 	traceSummary := summarizeBenchmarkTrace(snapshot)
-	requestCap := deriveBenchmarkRequestCap(agentic, agentic.SemanticJudge != project.SemanticJudgeOff)
-	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d semantic_judges=%d semantic_finalizations=%d semantic_revision_reviews=%d per_operation=%d",
+	requestCap := deriveBenchmarkRequestCap(agentic)
+	t.Logf("provider request cap: configured_iterations=%d byte_floor_extensions=%d main_loop=%d forced_finalizations=%d critique_tool_turns=%d critique_finalizations=%d per_operation=%d",
 		requestCap.ConfiguredIterations, requestCap.ByteFloorExtensions, requestCap.MainLoopRequests, requestCap.ForcedFinalizationRequests,
-		requestCap.CritiqueToolRequests, requestCap.CritiqueFinalizationRequests, requestCap.SemanticJudgeRequests,
-		requestCap.SemanticFinalizationRequests, requestCap.SemanticRevisionReviewRequests, requestCap.PerOperation)
+		requestCap.CritiqueToolRequests, requestCap.CritiqueFinalizationRequests, requestCap.PerOperation)
 	if benchmarkPersistentCacheEnabled() {
 		if err := client.Cache().Save(); err != nil {
 			t.Fatalf("save benchmark cache: %v", err)
@@ -907,7 +901,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if err := validateBenchmarkEvidenceStageReport(bc, stageReport); err != nil {
 		t.Fatalf("validate benchmark evidence stages: %v", err)
 	}
-	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, semanticReviewObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage, stageReport)
+	writeBenchmarkJSONL(t, resultsPath, bc, repetition, tc, outcome, elapsed, snapshot, draftObservations, selectedAttempt, toolUsage, traceSummary, requestCap.PerOperation, cacheGeneration, critiquePolicy, cacheVerification, identity, evidenceCoverage, stageReport)
 	if trialStatus == "contract_violation" || trialStatus == "no_result" {
 		t.Fatalf("benchmark trial status is %s", trialStatus)
 	}
@@ -1060,9 +1054,6 @@ type benchmarkTraceSummary struct {
 	floorNudgeReasons        []string
 	contextCompactionApplied int
 	contextOverBudget        int
-	semanticJudgeOutcome     string
-	semanticJudgeOutcomes    []string
-	semanticFindingClasses   []string
 	critiqueRetries          int
 	evidenceRetries          int
 	unparseableRetries       int
@@ -1111,7 +1102,7 @@ func successfulBenchmarkToolUsage(snapshot ai.AnalysisTraceFile) benchmarkToolUs
 }
 
 func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummary {
-	summary := benchmarkTraceSummary{semanticJudgeOutcome: "not_run", providerAttemptsKnown: true}
+	summary := benchmarkTraceSummary{providerAttemptsKnown: true}
 	for _, trace := range snapshot.Traces {
 		if trace.Truncated {
 			summary.truncated = true
@@ -1130,11 +1121,6 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 				case "over_budget":
 					summary.contextOverBudget++
 				}
-			case "semantic_judge":
-				summary.semanticJudgeOutcome = benchmarkSemanticJudgeOutcome(event.Outcome)
-				stage := benchmarkSemanticJudgeStage(event.Status)
-				summary.semanticJudgeOutcomes = append(summary.semanticJudgeOutcomes, stage+":"+summary.semanticJudgeOutcome)
-				summary.semanticFindingClasses = append(summary.semanticFindingClasses, event.SemanticFindings...)
 			case "critique":
 				switch event.Outcome {
 				case "retry":
@@ -1171,47 +1157,13 @@ func summarizeBenchmarkTrace(snapshot ai.AnalysisTraceFile) benchmarkTraceSummar
 			}
 		}
 	}
-	summary.semanticJudgeOutcomes = uniqueSortedStrings(summary.semanticJudgeOutcomes)
-	summary.semanticFindingClasses = uniqueSortedStrings(summary.semanticFindingClasses)
 	return summary
-}
-
-func benchmarkSemanticJudgeStage(stage string) string {
-	switch stage {
-	case "draft", "revision":
-		return stage
-	default:
-		return "unknown"
-	}
-}
-
-func uniqueSortedStrings(values []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func benchmarkFloorNudgeReason(status string) string {
 	switch status {
 	case "tool_calls", "gcs_bytes", "tool_calls+gcs_bytes":
 		return status
-	default:
-		return "unknown"
-	}
-}
-
-func benchmarkSemanticJudgeOutcome(outcome string) string {
-	switch outcome {
-	case "passed", "error", "objected", "revision_denied", "revision_unparseable", "revision_rejected", "revision_not_selected", "revised":
-		return outcome
 	default:
 		return "unknown"
 	}
@@ -1248,13 +1200,13 @@ func benchmarkTelemetryLines(elapsed time.Duration, analysis *models.AIAnalysis,
 			elapsed, analysis.ToolCalls, toolUsage.names, toolUsage.counts, analysis.GCSBytes, analysis.ContextBytes, trace.contextCompactionApplied,
 			trace.modelRequests, trace.providerAttempts, trace.modelFailures, trace.toolFailures, trace.inputTokens, trace.outputTokens))
 		lines = append(lines, fmt.Sprintf(
-			"quality evidence_plan_covered=%v gcs_floor_retry_exhausted=%v gcs_floor_bypassed=%v critique_passed=%v critique_version=%d skill_set_hash=%s budget_exhausted=%v judge_ran=%v judge_objected=%v judge_revised=%v",
+			"quality evidence_plan_covered=%v gcs_floor_retry_exhausted=%v gcs_floor_bypassed=%v critique_passed=%v critique_version=%d skill_set_hash=%s budget_exhausted=%v",
 			analysis.EvidencePlanCovered, analysis.GCSFloorRetryExhausted, benchmarkGCSFloorBypassed(analysis, minGCSBytes), analysis.CritiquePassed, analysis.CritiqueVersion,
-			benchmarkSkillHashPrefix(analysis.SkillSetHash), analysis.BudgetExhausted, analysis.JudgeRan, analysis.JudgeObjected, analysis.JudgeRevised))
+			benchmarkSkillHashPrefix(analysis.SkillSetHash), analysis.BudgetExhausted))
 	}
 	lines = append(lines, fmt.Sprintf(
-		"trace floor_nudges=%d floor_nudge_reasons=%v context_compaction_applied=%d context_over_budget=%d semantic_judge_outcome=%s critique_retries=%d evidence_retries=%d unparseable_retries=%d accepted_uncached=%d",
-		trace.floorNudges, trace.floorNudgeReasons, trace.contextCompactionApplied, trace.contextOverBudget, trace.semanticJudgeOutcome,
+		"trace floor_nudges=%d floor_nudge_reasons=%v context_compaction_applied=%d context_over_budget=%d critique_retries=%d evidence_retries=%d unparseable_retries=%d accepted_uncached=%d",
+		trace.floorNudges, trace.floorNudgeReasons, trace.contextCompactionApplied, trace.contextOverBudget,
 		trace.critiqueRetries, trace.evidenceRetries, trace.unparseableRetries, trace.acceptedUncached))
 	return lines
 }
@@ -1323,7 +1275,7 @@ func benchmarkDraftTelemetryLines(bc benchCase, observations []benchmarkDraftObs
 
 func benchmarkRepairPhase(phase string) bool {
 	switch phase {
-	case "critique_retry", "evidence_retry", "semantic_retry":
+	case "critique_retry", "evidence_retry":
 		return true
 	default:
 		return false
@@ -1391,9 +1343,6 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 		{Kind: "context_compaction", Outcome: "applied"},
 		{Kind: "context_compaction", Outcome: "finalize"},
 		{Kind: "context_compaction", Outcome: "over_budget"},
-		{Kind: "semantic_judge", Status: "draft", Outcome: "objected", SemanticFindings: []string{"specific_error_ignored"}},
-		{Kind: "semantic_judge", Status: "revision", Outcome: "passed"},
-		{Kind: "semantic_judge", Status: "revision", Outcome: "revised"},
 		{Kind: "critique", Outcome: "retry"},
 		{Kind: "critique", Outcome: "evidence_retry"},
 		{Kind: "critique", Outcome: "unparseable_retry"},
@@ -1410,12 +1359,6 @@ func TestSummarizeBenchmarkTrace(t *testing.T) {
 	if got.contextCompactionApplied != 2 || got.contextOverBudget != 1 {
 		t.Fatalf("context summary = applied:%d over_budget:%d", got.contextCompactionApplied, got.contextOverBudget)
 	}
-	if got.semanticJudgeOutcome != "revised" {
-		t.Fatalf("semantic judge outcome = %q", got.semanticJudgeOutcome)
-	}
-	if !slices.Equal(got.semanticJudgeOutcomes, []string{"draft:objected", "revision:passed", "revision:revised"}) || !slices.Equal(got.semanticFindingClasses, []string{"specific_error_ignored"}) {
-		t.Fatalf("semantic judge telemetry = outcomes:%v findings:%v", got.semanticJudgeOutcomes, got.semanticFindingClasses)
-	}
 	if got.critiqueRetries != 1 || got.evidenceRetries != 1 || got.unparseableRetries != 1 || got.acceptedUncached != 1 {
 		t.Fatalf("critique summary = retries:%d evidence:%d unparseable:%d uncached:%d", got.critiqueRetries, got.evidenceRetries, got.unparseableRetries, got.acceptedUncached)
 	}
@@ -1428,13 +1371,13 @@ func TestBenchmarkTelemetryQualityFields(t *testing.T) {
 	analysis := &models.AIAnalysis{
 		ToolCalls: 1, GCSBytes: 99, ContextBytes: 250, EvidencePlanCovered: true,
 		CritiquePassed: true, CritiqueVersion: 7, SkillSetHash: strings.Repeat("a", 64),
-		BudgetExhausted: true, JudgeRan: true, JudgeObjected: true, JudgeRevised: true,
+		BudgetExhausted: true,
 	}
-	trace := benchmarkTraceSummary{contextCompactionApplied: 2, modelRequests: 4, providerAttempts: 5, modelFailures: 1, toolFailures: 2, inputTokens: 30, outputTokens: 12, semanticJudgeOutcome: "revised"}
+	trace := benchmarkTraceSummary{contextCompactionApplied: 2, modelRequests: 4, providerAttempts: 5, modelFailures: 1, toolFailures: 2, inputTokens: 30, outputTokens: 12}
 	got := strings.Join(benchmarkTelemetryLines(time.Second, analysis, 100, benchmarkToolUsage{}, trace), "\n")
 	for _, want := range []string{
 		"evidence_plan_covered=true", "gcs_floor_bypassed=true", "critique_passed=true", "critique_version=7",
-		"skill_set_hash=aaaaaaaaaaaa", "budget_exhausted=true", "judge_ran=true", "judge_objected=true", "judge_revised=true",
+		"skill_set_hash=aaaaaaaaaaaa", "budget_exhausted=true",
 		"context_truncations=2", "model_requests=4", "provider_attempts=5", "model_failures=1", "tool_failures=2", "input_tokens=30", "output_tokens=12",
 	} {
 		if !strings.Contains(got, want) {
@@ -1501,7 +1444,7 @@ func TestSelectedBenchmarkDraftAttemptUsesPublishedIdentity(t *testing.T) {
 			Severity: "High", RelevantFiles: []string{"accepted.go"},
 		}},
 		{DraftObservation: ai.DraftObservation{
-			Attempt: 2, Phase: "semantic_retry", Summary: "rejected summary", RootCause: "same cause", SuggestedFix: "same fix",
+			Attempt: 2, Phase: "critique_retry", Summary: "rejected summary", RootCause: "same cause", SuggestedFix: "same fix",
 			Severity: "High", RelevantFiles: []string{"rejected.go"},
 		}},
 	}
@@ -1572,7 +1515,7 @@ func TestFailedBenchmarkTelemetryIncludesTraceAndTools(t *testing.T) {
 	toolUsage := benchmarkToolUsage{names: []string{"grep_artifact", "read_artifact"}, counts: []string{"grep_artifact=1", "read_artifact=2"}}
 	trace := benchmarkTraceSummary{
 		floorNudges: 2, floorNudgeReasons: []string{"tool_calls", "gcs_bytes"}, contextCompactionApplied: 1,
-		contextOverBudget: 1, semanticJudgeOutcome: "error", modelRequests: 3, modelFailures: 1, toolFailures: 2,
+		contextOverBudget: 1, modelRequests: 3, modelFailures: 1, toolFailures: 2,
 	}
 	got := strings.Join(benchmarkTelemetryLines(2*time.Second, nil, 100, toolUsage, trace), "\n")
 	for _, want := range []string{
@@ -1590,7 +1533,6 @@ func TestBenchmarkTelemetryOmitsSensitiveContent(t *testing.T) {
 	const secret = "do not log this https://endpoint.example Bearer credential"
 	snapshot := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{
 		{Kind: "floor_nudge", Status: secret},
-		{Kind: "semantic_judge", Outcome: secret},
 		{Kind: "model_request", Outcome: "error", ResponseID: secret, ErrorCode: "analysis_error"},
 		{Kind: "tool_call", Outcome: "success", Tool: secret},
 	}}}}
@@ -2068,24 +2010,13 @@ func TestBenchBudgetsUsesFrozenContextWithoutProviderDetection(t *testing.T) {
 func defaultBenchAgentic() project.Agentic {
 	critiqueRetries := benchEnvInt("BENCH_CRITIQUE_RETRIES", 0)
 	a := project.Agentic{
-		MaxIters:      benchEnvInt("BENCH_MAX_ITERS", 15),
-		Timeout:       benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
-		MinToolCalls:  benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
-		MinGCSBytes:   benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
-		SemanticJudge: project.SemanticJudgeAdvisory,
-		Critique:      project.AgenticCritique{MaxRetries: &critiqueRetries},
+		MaxIters:     benchEnvInt("BENCH_MAX_ITERS", 15),
+		Timeout:      benchEnvDuration("BENCH_TIMEOUT", 20*time.Minute),
+		MinToolCalls: benchEnvInt("BENCH_MIN_TOOL_CALLS", 5),
+		MinGCSBytes:  benchEnvInt("BENCH_MIN_GCS_BYTES", 500_000),
+		Critique:     project.AgenticCritique{MaxRetries: &critiqueRetries},
 	}
 	return a
-}
-
-func TestDefaultBenchAgenticUsesAdvisorySemanticJudge(t *testing.T) {
-	agentic := defaultBenchAgentic()
-	if agentic.SemanticJudge != project.SemanticJudgeAdvisory {
-		t.Fatalf("SemanticJudge = %q, want %q", agentic.SemanticJudge, project.SemanticJudgeAdvisory)
-	}
-	if cap := deriveBenchmarkRequestCap(agentic, agentic.SemanticJudge != project.SemanticJudgeOff); cap.SemanticJudgeRequests != 1 {
-		t.Fatalf("semantic judge requests = %d, want 1", cap.SemanticJudgeRequests)
-	}
 }
 
 // benchEnvInt reads a non-negative integer env override, falling back to def.

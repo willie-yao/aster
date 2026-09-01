@@ -94,12 +94,7 @@ function analysisHasUsableDiagnosis(
   analysis: TestCase["ai_analysis"],
 ): analysis is NonNullable<TestCase["ai_analysis"]> {
   if (!analysis) return false;
-  if (analysis.disposition === "grounded") return true;
-  if (analysis.disposition !== "preliminary") return false;
-  if (analysis.disposition_warnings?.includes("semantic_review_unresolved")) {
-    return analysis.semantic_judge_mode === "advisory";
-  }
-  return true;
+  return analysis.disposition === "grounded" || analysis.disposition === "preliminary";
 }
 
 // fixInvestigationEligible applies the part of the server Fix gate that is

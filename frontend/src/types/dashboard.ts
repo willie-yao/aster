@@ -95,8 +95,6 @@ export interface AIAnalysis {
   evidence_citations?: EvidenceCitation[];
   disposition?: "preliminary" | "grounded";
   disposition_warnings?: string[];
-  semantic_judge_mode?: "advisory" | "blocking" | "off";
-  semantic_findings?: string[];
   // Verified GitHub links for cited source files keyed by cleaned path. When
   // present, this map is authoritative and absent files stay unlinked.
   file_links?: Record<string, string>;

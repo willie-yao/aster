@@ -149,7 +149,6 @@ const (
 	AnalysisWarningInvestigation     = "investigation_incomplete"
 	AnalysisWarningRemediation       = "remediation_incomplete"
 	AnalysisWarningClassification    = "classification_conflict"
-	AnalysisWarningSemanticReview    = "semantic_review_unresolved"
 )
 
 // AIAnalysis is a deep AI-generated root cause analysis.
@@ -224,18 +223,6 @@ type AIAnalysis struct {
 	CachePersistenceAttempted  bool     `json:"-"`
 	CachePersistenceAccepted   bool     `json:"-"`
 	CachePolicyRejectionReason string   `json:"-"`
-	JudgeRevisionRejected      bool     `json:"-"`
-	SemanticJudgeMode          string   `json:"semantic_judge_mode,omitempty"`
-
-	// JudgeRan / JudgeObjected / JudgeRevised are the semantic-judge telemetry:
-	// whether the second-line LLM judge ran, whether it raised objections, and
-	// whether its objections drove an accepted revision. Blocking policy remains
-	// private; public output exposes the finding state and disposition warning.
-	JudgeRan         bool     `json:"judge_ran,omitempty"`
-	JudgeObjected    bool     `json:"judge_objected,omitempty"`
-	JudgeRevised     bool     `json:"judge_revised,omitempty"`
-	SemanticFindings []string `json:"semantic_findings,omitempty"`
-
 	// CritiqueVersion records the critique contract this analysis passed.
 	// Cache gates require the current version.
 	CritiqueVersion int `json:"critique_version,omitempty"`

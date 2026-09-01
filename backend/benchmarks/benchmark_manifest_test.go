@@ -608,122 +608,114 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 }
 
 type benchmarkJSONLResult struct {
-	CaseID                    string                         `json:"case_id"`
-	StableID                  string                         `json:"stable_id"`
-	Repetition                int                            `json:"repetition"`
-	ModelLabel                string                         `json:"model_label"`
-	Arm                       string                         `json:"arm"`
-	EngineCommit              string                         `json:"engine_commit"`
-	BenchmarkManifestSHA256   string                         `json:"benchmark_manifest_sha256"`
-	FixtureSHA256             string                         `json:"fixture_sha256,omitempty"`
-	BaselineConsumerCommit    string                         `json:"baseline_consumer_commit,omitempty"`
-	BaselinePromptSHA256      string                         `json:"baseline_prompt_sha256,omitempty"`
-	ProjectSHA256             string                         `json:"project_sha256,omitempty"`
-	EffectivePromptSHA256     string                         `json:"effective_prompt_sha256"`
-	SkillSetHash              string                         `json:"skill_set_hash"`
-	EffectiveInputSHA256      string                         `json:"effective_input_sha256"`
-	ComparisonInputSHA256     string                         `json:"comparison_input_sha256"`
-	APIMode                   string                         `json:"api_mode"`
-	ReasoningEffort           string                         `json:"reasoning_effort,omitempty"`
-	ProviderPath              string                         `json:"provider_path,omitempty"`
-	ProviderConfigSHA256      string                         `json:"provider_config_sha256"`
-	TransportID               string                         `json:"transport_id,omitempty"`
-	ModelContextTokens        int                            `json:"model_context_tokens"`
-	ModelOutputTokens         int                            `json:"model_output_tokens"`
-	Pricing                   benchmarkPricingIdentity       `json:"pricing"`
-	EvidenceTelemetryVersion  int                            `json:"evidence_telemetry_version"`
-	EvidenceCondition         string                         `json:"evidence_condition"`
-	EvidenceMode              string                         `json:"evidence_mode"`
-	SourceExpectationSHA256   string                         `json:"source_expectation_sha256"`
-	ExpectedSourceRanges      []benchmarkSourceRange         `json:"expected_source_ranges"`
-	SourceReadCoverageHits    int                            `json:"source_read_coverage_hits"`
-	SourceReadCoverageTotal   int                            `json:"source_read_coverage_total"`
-	SourceReadCoveredLines    int                            `json:"source_read_covered_lines"`
-	SourceReadExpectedLines   int                            `json:"source_read_expected_lines"`
-	SourceReadPartialRatio    float64                        `json:"source_read_partial_coverage_ratio"`
-	SourceReadRangeCoverage   []benchmarkSourceRangeCoverage `json:"source_read_range_coverage"`
-	SourceSignalHits          int                            `json:"source_signal_hits"`
-	SourceSignalTotal         int                            `json:"source_signal_total"`
-	SourceEvidenceToolCalls   int                            `json:"source_evidence_tool_calls"`
-	SourceReadRanges          []benchmarkSourceRead          `json:"source_read_ranges"`
-	SourceReadCount           int                            `json:"source_read_count"`
-	SourceCitations           []benchmarkSourceCitation      `json:"source_citations"`
-	SourceCitationEmitted     int                            `json:"source_citation_emitted_count"`
-	SourceCitationVerified    int                            `json:"source_citation_verified_count"`
-	FrozenEvidenceSHA256      string                         `json:"frozen_evidence_sha256,omitempty"`
-	EvidenceStageSHA256       string                         `json:"evidence_stage_sha256"`
-	EvidenceStageIDs          []string                       `json:"evidence_stage_ids"`
-	ModelRequestMade          bool                           `json:"model_request_made"`
-	TrialStatus               string                         `json:"trial_status"`
-	ContractViolation         bool                           `json:"contract_violation"`
-	AnalysisDisposition       string                         `json:"analysis_disposition,omitempty"`
-	DispositionWarnings       []string                       `json:"disposition_warnings,omitempty"`
-	StructuredValid           bool                           `json:"structured_valid"`
-	Displayable               bool                           `json:"displayable"`
-	Grounded                  bool                           `json:"grounded"`
-	EvidenceStages            []benchmarkEvidenceStage       `json:"evidence_stages"`
-	EvidenceRevisions         []benchmarkEvidenceRevision    `json:"evidence_revisions"`
-	EvidenceGroupsSelected    []string                       `json:"evidence_groups_selected,omitempty"`
-	EvidenceGroupsHit         []string                       `json:"evidence_groups_hit,omitempty"`
-	EvidenceGroupsMissed      []string                       `json:"evidence_groups_missed,omitempty"`
-	EvidenceGroupSources      map[string][]string            `json:"evidence_group_sources,omitempty"`
-	JobName                   string                         `json:"job_name"`
-	BuildID                   string                         `json:"build_id"`
-	CheckoutCommit            string                         `json:"checkout_commit"`
-	SourceRevision            string                         `json:"source_revision,omitempty"`
-	SourceUnavailable         bool                           `json:"source_unavailable,omitempty"`
-	TestName                  string                         `json:"test_name"`
-	TestSource                string                         `json:"test_source,omitempty"`
-	ElapsedMS                 int64                          `json:"elapsed_ms"`
-	Outcome                   string                         `json:"outcome"`
-	Usable                    bool                           `json:"usable"`
-	IsTransient               *bool                          `json:"is_transient,omitempty"`
-	Summary                   string                         `json:"summary,omitempty"`
-	RootCause                 string                         `json:"root_cause,omitempty"`
-	SuggestedFix              string                         `json:"suggested_fix,omitempty"`
-	Severity                  string                         `json:"severity,omitempty"`
-	Evidence                  []models.EvidenceCitation      `json:"evidence_citations,omitempty"`
-	RelevantFiles             []string                       `json:"relevant_files,omitempty"`
-	FileLinks                 map[string]string              `json:"file_links,omitempty"`
-	SignalHits                int                            `json:"signal_hits"`
-	SignalTotal               int                            `json:"signal_total"`
-	DiagnosisSignalHits       int                            `json:"diagnosis_signal_hits"`
-	DiagnosisSignalTotal      int                            `json:"diagnosis_signal_total"`
-	TransientCorrect          *bool                          `json:"transient_classification_correct,omitempty"`
-	ForbiddenChecksPassed     int                            `json:"forbidden_checks_passed"`
-	ForbiddenChecksTotal      int                            `json:"forbidden_checks_total"`
-	MissingMust               []string                       `json:"missing_must,omitempty"`
-	SelectedAttempt           int                            `json:"selected_attempt,omitempty"`
-	Drafts                    []benchmarkJSONLDraft          `json:"drafts,omitempty"`
-	DraftDecisions            []ai.DraftDecisionTrace        `json:"draft_decisions,omitempty"`
-	SemanticJudgeOutcomes     []string                       `json:"semantic_judge_outcomes"`
-	SemanticFindingClasses    []string                       `json:"semantic_finding_classes"`
-	SemanticRevisionAttempted bool                           `json:"semantic_revision_attempted"`
-	SemanticRevisionSelected  bool                           `json:"semantic_revision_selected"`
-	SemanticRevisionRejected  bool                           `json:"semantic_revision_rejected"`
-	SupportedFactsRetained    int                            `json:"supported_facts_retained"`
-	SupportedFactsAdded       int                            `json:"supported_facts_added"`
-	SupportedFactsDropped     int                            `json:"supported_facts_dropped"`
-	ToolNames                 []string                       `json:"tool_names,omitempty"`
-	ToolCounts                []string                       `json:"tool_counts,omitempty"`
-	GCSBytes                  int                            `json:"gcs_bytes,omitempty"`
-	EvidencePlanCovered       bool                           `json:"evidence_plan_covered,omitempty"`
-	GCSFloorRetryExhausted    bool                           `json:"gcs_floor_retry_exhausted,omitempty"`
-	CritiquePassed            *bool                          `json:"critique_passed,omitempty"`
-	CritiqueCachePolicy       string                         `json:"critique_cache_policy,omitempty"`
-	CritiqueHardFailures      []string                       `json:"critique_hard_failures,omitempty"`
-	CritiqueSoftWarnings      []string                       `json:"critique_soft_warnings,omitempty"`
-	BudgetExhausted           bool                           `json:"budget_exhausted,omitempty"`
-	FloorNudges               int                            `json:"floor_nudges,omitempty"`
-	FloorNudgeReasons         []string                       `json:"floor_nudge_reasons,omitempty"`
-	ProviderRequestCap        int                            `json:"provider_request_cap"`
-	TraceTruncated            bool                           `json:"trace_truncated,omitempty"`
-	CacheGeneration           string                         `json:"cache_generation,omitempty"`
-	CacheVerification         benchmarkCacheVerification     `json:"cache_verification"`
-	Trace                     benchmarkJSONLTrace            `json:"trace"`
-	HumanScoreRubricVersion   int                            `json:"human_score_rubric_version"`
-	HumanScoreMax             int                            `json:"human_score_max"`
-	HumanScoreDimensions      []string                       `json:"human_score_dimensions"`
+	CaseID                   string                         `json:"case_id"`
+	StableID                 string                         `json:"stable_id"`
+	Repetition               int                            `json:"repetition"`
+	ModelLabel               string                         `json:"model_label"`
+	Arm                      string                         `json:"arm"`
+	EngineCommit             string                         `json:"engine_commit"`
+	BenchmarkManifestSHA256  string                         `json:"benchmark_manifest_sha256"`
+	FixtureSHA256            string                         `json:"fixture_sha256,omitempty"`
+	BaselineConsumerCommit   string                         `json:"baseline_consumer_commit,omitempty"`
+	BaselinePromptSHA256     string                         `json:"baseline_prompt_sha256,omitempty"`
+	ProjectSHA256            string                         `json:"project_sha256,omitempty"`
+	EffectivePromptSHA256    string                         `json:"effective_prompt_sha256"`
+	SkillSetHash             string                         `json:"skill_set_hash"`
+	EffectiveInputSHA256     string                         `json:"effective_input_sha256"`
+	ComparisonInputSHA256    string                         `json:"comparison_input_sha256"`
+	APIMode                  string                         `json:"api_mode"`
+	ReasoningEffort          string                         `json:"reasoning_effort,omitempty"`
+	ProviderPath             string                         `json:"provider_path,omitempty"`
+	ProviderConfigSHA256     string                         `json:"provider_config_sha256"`
+	TransportID              string                         `json:"transport_id,omitempty"`
+	ModelContextTokens       int                            `json:"model_context_tokens"`
+	ModelOutputTokens        int                            `json:"model_output_tokens"`
+	Pricing                  benchmarkPricingIdentity       `json:"pricing"`
+	EvidenceTelemetryVersion int                            `json:"evidence_telemetry_version"`
+	EvidenceCondition        string                         `json:"evidence_condition"`
+	EvidenceMode             string                         `json:"evidence_mode"`
+	SourceExpectationSHA256  string                         `json:"source_expectation_sha256"`
+	ExpectedSourceRanges     []benchmarkSourceRange         `json:"expected_source_ranges"`
+	SourceReadCoverageHits   int                            `json:"source_read_coverage_hits"`
+	SourceReadCoverageTotal  int                            `json:"source_read_coverage_total"`
+	SourceReadCoveredLines   int                            `json:"source_read_covered_lines"`
+	SourceReadExpectedLines  int                            `json:"source_read_expected_lines"`
+	SourceReadPartialRatio   float64                        `json:"source_read_partial_coverage_ratio"`
+	SourceReadRangeCoverage  []benchmarkSourceRangeCoverage `json:"source_read_range_coverage"`
+	SourceSignalHits         int                            `json:"source_signal_hits"`
+	SourceSignalTotal        int                            `json:"source_signal_total"`
+	SourceEvidenceToolCalls  int                            `json:"source_evidence_tool_calls"`
+	SourceReadRanges         []benchmarkSourceRead          `json:"source_read_ranges"`
+	SourceReadCount          int                            `json:"source_read_count"`
+	SourceCitations          []benchmarkSourceCitation      `json:"source_citations"`
+	SourceCitationEmitted    int                            `json:"source_citation_emitted_count"`
+	SourceCitationVerified   int                            `json:"source_citation_verified_count"`
+	FrozenEvidenceSHA256     string                         `json:"frozen_evidence_sha256,omitempty"`
+	EvidenceStageSHA256      string                         `json:"evidence_stage_sha256"`
+	EvidenceStageIDs         []string                       `json:"evidence_stage_ids"`
+	ModelRequestMade         bool                           `json:"model_request_made"`
+	TrialStatus              string                         `json:"trial_status"`
+	ContractViolation        bool                           `json:"contract_violation"`
+	AnalysisDisposition      string                         `json:"analysis_disposition,omitempty"`
+	DispositionWarnings      []string                       `json:"disposition_warnings,omitempty"`
+	StructuredValid          bool                           `json:"structured_valid"`
+	Displayable              bool                           `json:"displayable"`
+	Grounded                 bool                           `json:"grounded"`
+	EvidenceStages           []benchmarkEvidenceStage       `json:"evidence_stages"`
+	EvidenceRevisions        []benchmarkEvidenceRevision    `json:"evidence_revisions"`
+	EvidenceGroupsSelected   []string                       `json:"evidence_groups_selected,omitempty"`
+	EvidenceGroupsHit        []string                       `json:"evidence_groups_hit,omitempty"`
+	EvidenceGroupsMissed     []string                       `json:"evidence_groups_missed,omitempty"`
+	EvidenceGroupSources     map[string][]string            `json:"evidence_group_sources,omitempty"`
+	JobName                  string                         `json:"job_name"`
+	BuildID                  string                         `json:"build_id"`
+	CheckoutCommit           string                         `json:"checkout_commit"`
+	SourceRevision           string                         `json:"source_revision,omitempty"`
+	SourceUnavailable        bool                           `json:"source_unavailable,omitempty"`
+	TestName                 string                         `json:"test_name"`
+	TestSource               string                         `json:"test_source,omitempty"`
+	ElapsedMS                int64                          `json:"elapsed_ms"`
+	Outcome                  string                         `json:"outcome"`
+	Usable                   bool                           `json:"usable"`
+	IsTransient              *bool                          `json:"is_transient,omitempty"`
+	Summary                  string                         `json:"summary,omitempty"`
+	RootCause                string                         `json:"root_cause,omitempty"`
+	SuggestedFix             string                         `json:"suggested_fix,omitempty"`
+	Severity                 string                         `json:"severity,omitempty"`
+	Evidence                 []models.EvidenceCitation      `json:"evidence_citations,omitempty"`
+	RelevantFiles            []string                       `json:"relevant_files,omitempty"`
+	FileLinks                map[string]string              `json:"file_links,omitempty"`
+	SignalHits               int                            `json:"signal_hits"`
+	SignalTotal              int                            `json:"signal_total"`
+	DiagnosisSignalHits      int                            `json:"diagnosis_signal_hits"`
+	DiagnosisSignalTotal     int                            `json:"diagnosis_signal_total"`
+	TransientCorrect         *bool                          `json:"transient_classification_correct,omitempty"`
+	ForbiddenChecksPassed    int                            `json:"forbidden_checks_passed"`
+	ForbiddenChecksTotal     int                            `json:"forbidden_checks_total"`
+	MissingMust              []string                       `json:"missing_must,omitempty"`
+	SelectedAttempt          int                            `json:"selected_attempt,omitempty"`
+	Drafts                   []benchmarkJSONLDraft          `json:"drafts,omitempty"`
+	DraftDecisions           []ai.DraftDecisionTrace        `json:"draft_decisions,omitempty"`
+	ToolNames                []string                       `json:"tool_names,omitempty"`
+	ToolCounts               []string                       `json:"tool_counts,omitempty"`
+	GCSBytes                 int                            `json:"gcs_bytes,omitempty"`
+	EvidencePlanCovered      bool                           `json:"evidence_plan_covered,omitempty"`
+	GCSFloorRetryExhausted   bool                           `json:"gcs_floor_retry_exhausted,omitempty"`
+	CritiquePassed           *bool                          `json:"critique_passed,omitempty"`
+	CritiqueCachePolicy      string                         `json:"critique_cache_policy,omitempty"`
+	CritiqueHardFailures     []string                       `json:"critique_hard_failures,omitempty"`
+	CritiqueSoftWarnings     []string                       `json:"critique_soft_warnings,omitempty"`
+	BudgetExhausted          bool                           `json:"budget_exhausted,omitempty"`
+	FloorNudges              int                            `json:"floor_nudges,omitempty"`
+	FloorNudgeReasons        []string                       `json:"floor_nudge_reasons,omitempty"`
+	ProviderRequestCap       int                            `json:"provider_request_cap"`
+	TraceTruncated           bool                           `json:"trace_truncated,omitempty"`
+	CacheGeneration          string                         `json:"cache_generation,omitempty"`
+	CacheVerification        benchmarkCacheVerification     `json:"cache_verification"`
+	Trace                    benchmarkJSONLTrace            `json:"trace"`
+	HumanScoreRubricVersion  int                            `json:"human_score_rubric_version"`
+	HumanScoreMax            int                            `json:"human_score_max"`
+	HumanScoreDimensions     []string                       `json:"human_score_dimensions"`
 }
 
 const (
@@ -740,59 +732,30 @@ var benchmarkHumanScoreDimensions = []string{
 }
 
 type benchmarkJSONLDraft struct {
-	Attempt             int                            `json:"attempt"`
-	Phase               string                         `json:"phase"`
-	Selected            bool                           `json:"selected"`
-	SignalHits          int                            `json:"signal_hits"`
-	SignalTotal         int                            `json:"signal_total"`
-	RequiredSignalHits  int                            `json:"required_signal_hits"`
-	RequiredSignalTotal int                            `json:"required_signal_total"`
-	RuleIDs             []string                       `json:"rule_ids,omitempty"`
-	MatchedSkillIDs     []string                       `json:"matched_skill_ids,omitempty"`
-	MissingGroups       []ai.CritiqueEvidenceGroupRef  `json:"missing_groups,omitempty"`
-	UnavailableGroups   []ai.CritiqueEvidenceGroupRef  `json:"unavailable_groups,omitempty"`
-	PublishedRuleIDs    []string                       `json:"published_rule_ids,omitempty"`
-	PublishedHardRules  []string                       `json:"published_hard_rules,omitempty"`
-	PublishedSoftRules  []string                       `json:"published_soft_rules,omitempty"`
-	PublishedHardIssues int                            `json:"published_hard_issues,omitempty"`
-	PublishedPuntCount  int                            `json:"published_punt_count,omitempty"`
-	PublishedMissing    int                            `json:"published_missing_group_count,omitempty"`
-	PuntCount           int                            `json:"punt_count,omitempty"`
-	UnreadCitationCount int                            `json:"unread_citation_count,omitempty"`
-	CitationIssueCount  int                            `json:"citation_issue_count,omitempty"`
-	MissingGroupCount   int                            `json:"missing_group_count,omitempty"`
-	TransientConflict   bool                           `json:"transient_conflict,omitempty"`
-	ToolCalls           int                            `json:"tool_calls,omitempty"`
-	EvidenceReads       int                            `json:"evidence_reads,omitempty"`
-	SemanticReviews     []benchmarkJSONLSemanticReview `json:"semantic_reviews,omitempty"`
-}
-
-type benchmarkJSONLSemanticReview struct {
-	Stage    string                          `json:"stage"`
-	Outcome  string                          `json:"outcome"`
-	Findings []benchmarkJSONLSemanticFinding `json:"findings,omitempty"`
-}
-
-type benchmarkJSONLSemanticFinding struct {
-	Class  string `json:"class"`
-	Detail string `json:"detail"`
-}
-
-func benchmarkSemanticReviewsForAttempt(observations []ai.SemanticReviewObservation, attempt int) []benchmarkJSONLSemanticReview {
-	var reviews []benchmarkJSONLSemanticReview
-	for _, observation := range observations {
-		if observation.Attempt != attempt {
-			continue
-		}
-		findings := make([]benchmarkJSONLSemanticFinding, len(observation.Findings))
-		for i, finding := range observation.Findings {
-			findings[i] = benchmarkJSONLSemanticFinding{Class: finding.Class, Detail: finding.Detail}
-		}
-		reviews = append(reviews, benchmarkJSONLSemanticReview{
-			Stage: observation.Stage, Outcome: observation.Outcome, Findings: findings,
-		})
-	}
-	return reviews
+	Attempt             int                           `json:"attempt"`
+	Phase               string                        `json:"phase"`
+	Selected            bool                          `json:"selected"`
+	SignalHits          int                           `json:"signal_hits"`
+	SignalTotal         int                           `json:"signal_total"`
+	RequiredSignalHits  int                           `json:"required_signal_hits"`
+	RequiredSignalTotal int                           `json:"required_signal_total"`
+	RuleIDs             []string                      `json:"rule_ids,omitempty"`
+	MatchedSkillIDs     []string                      `json:"matched_skill_ids,omitempty"`
+	MissingGroups       []ai.CritiqueEvidenceGroupRef `json:"missing_groups,omitempty"`
+	UnavailableGroups   []ai.CritiqueEvidenceGroupRef `json:"unavailable_groups,omitempty"`
+	PublishedRuleIDs    []string                      `json:"published_rule_ids,omitempty"`
+	PublishedHardRules  []string                      `json:"published_hard_rules,omitempty"`
+	PublishedSoftRules  []string                      `json:"published_soft_rules,omitempty"`
+	PublishedHardIssues int                           `json:"published_hard_issues,omitempty"`
+	PublishedPuntCount  int                           `json:"published_punt_count,omitempty"`
+	PublishedMissing    int                           `json:"published_missing_group_count,omitempty"`
+	PuntCount           int                           `json:"punt_count,omitempty"`
+	UnreadCitationCount int                           `json:"unread_citation_count,omitempty"`
+	CitationIssueCount  int                           `json:"citation_issue_count,omitempty"`
+	MissingGroupCount   int                           `json:"missing_group_count,omitempty"`
+	TransientConflict   bool                          `json:"transient_conflict,omitempty"`
+	ToolCalls           int                           `json:"tool_calls,omitempty"`
+	EvidenceReads       int                           `json:"evidence_reads,omitempty"`
 }
 
 type benchmarkCacheVerification struct {
@@ -857,7 +820,7 @@ type benchmarkJSONLTrace struct {
 	GrepCalls             []tools.GrepCallObservation   `json:"grep_calls"`
 }
 
-func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, semanticReviews []ai.SemanticReviewObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
+func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, snapshot ai.AnalysisTraceFile, observations []benchmarkDraftObservation, selectedAttempt int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, providerRequestCap int, cacheGeneration string, critiquePolicy ai.CritiqueCachePolicy, cacheVerification benchmarkCacheVerification, identity benchmarkRunIdentity, evidenceCoverage benchmarkEvidenceCoverage, stageReport benchmarkEvidenceStageReport) {
 	t.Helper()
 	if path == "" {
 		return
@@ -907,9 +870,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 		FileLinks: map[string]string{}, SourceReadRanges: []benchmarkSourceRead{}, SourceCitations: []benchmarkSourceCitation{}, SelectedAttempt: selectedAttempt,
 		ToolNames: append([]string(nil), toolUsage.names...), ToolCounts: append([]string(nil), toolUsage.counts...),
 		FloorNudges: traceSummary.floorNudges, FloorNudgeReasons: append([]string(nil), traceSummary.floorNudgeReasons...),
-		SemanticJudgeOutcomes:  append([]string{}, traceSummary.semanticJudgeOutcomes...),
-		SemanticFindingClasses: append([]string{}, traceSummary.semanticFindingClasses...),
-		ProviderRequestCap:     providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
+		ProviderRequestCap: providerRequestCap, TraceTruncated: traceSummary.truncated, CacheGeneration: cacheGeneration, CacheVerification: cacheVerification,
 		CritiqueCachePolicy: string(critiquePolicy),
 		Trace: benchmarkJSONLTrace{
 			ProviderAttemptsKnown: true,
@@ -931,7 +892,6 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			PuntCount: observation.PuntCount, UnreadCitationCount: observation.UnreadCitationCount,
 			CitationIssueCount: observation.CitationIssueCount, MissingGroupCount: observation.MissingGroupCount,
 			TransientConflict: observation.TransientConflict, ToolCalls: observation.ToolCalls, EvidenceReads: observation.EvidenceReads,
-			SemanticReviews: benchmarkSemanticReviewsForAttempt(semanticReviews, observation.Attempt),
 		})
 	}
 	if source, ok := benchmarkPrimarySourceRef(bc); ok {
@@ -1050,14 +1010,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 			case "draft_selection":
 				if event.DraftDecision != nil {
 					result.DraftDecisions = append(result.DraftDecisions, *event.DraftDecision)
-					if event.DraftDecision.Target == "best" {
-						result.SupportedFactsRetained = event.DraftDecision.SupportedFactsRetained
-						result.SupportedFactsAdded = event.DraftDecision.SupportedFactsAdded
-						result.SupportedFactsDropped = event.DraftDecision.SupportedFactsDropped
-					}
 				}
-			case "semantic_judge":
-				recordBenchmarkSemanticRevision(&result, event)
 			}
 		}
 	}
@@ -1068,19 +1021,6 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 	defer file.Close()
 	if err := json.NewEncoder(file).Encode(result); err != nil {
 		t.Fatalf("write BENCH_RESULTS_JSONL: %v", err)
-	}
-}
-
-func recordBenchmarkSemanticRevision(result *benchmarkJSONLResult, event ai.TraceEvent) {
-	if result == nil || event.Status != "revision" {
-		return
-	}
-	result.SemanticRevisionAttempted = true
-	switch event.Outcome {
-	case "revised":
-		result.SemanticRevisionSelected = true
-	case "revision_denied", "revision_unparseable", "revision_rejected", "revision_not_selected":
-		result.SemanticRevisionRejected = true
 	}
 }
 
@@ -1246,14 +1186,10 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		{Kind: "finalize", Outcome: "empty", ErrorCode: "unexpected_tool_call"},
 		{Kind: "finalize_recovery", Outcome: "retained_draft"},
 		{Kind: "critique", Outcome: "objected", CritiquePunts: 1},
-		{Kind: "semantic_judge", Status: "draft", Outcome: "objected", SemanticFindings: []string{"specific_error_ignored"}},
-		{Kind: "semantic_judge", Status: "revision", Outcome: "passed"},
-		{Kind: "semantic_judge", Status: "revision", Outcome: "revised"},
 		{Kind: "draft_selection", Outcome: "accepted", Status: "best", DraftDecision: &ai.DraftDecisionTrace{
 			Target: "best", CurrentAttempt: 1, CandidateAttempt: 2,
 			CurrentPublishedSoftRules: []string{"remediation.punt"}, CandidatePublishedSoftRules: []string{"evidence.available_unread"},
 			CurrentEvidenceRevision: 3, CandidateEvidenceRevision: 7, RootCauseMateriallyChanged: true,
-			CurrentSupportedFacts: 1, CandidateSupportedFacts: 2, SupportedFactsRetained: 1, SupportedFactsAdded: 1,
 			PublishedStrictDominance: true, ReplacementAccepted: true, ReplacementReason: "candidate_published_dominates",
 		}},
 	}}}}
@@ -1266,13 +1202,9 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		Attempt: 1, Phase: "initial", RootCause: "PRIVATE_DRAFT_TEXT root cause", RuleIDs: []string{"remediation.punt"},
 		MatchedSkillIDs: []string{"skill-a"}, MissingGroups: []ai.CritiqueEvidenceGroupRef{{SkillID: "skill-a", GroupID: "group-a"}}, PuntCount: 1,
 	}}}
-	semanticReviews := []ai.SemanticReviewObservation{{
-		Attempt: 1, Stage: "draft", Outcome: "objected",
-		Findings: []ai.SemanticFindingObservation{{Class: "specific_error_ignored", Detail: "The draft ignores the specific request error."}},
-	}}
-	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, semanticReviews, 1,
+	writeBenchmarkJSONL(t, path, bc, 2, tc, benchmarkOutcomeUsable, 3*time.Second, snapshot, observations, 1,
 		benchmarkToolUsage{names: []string{"read_artifact", "read_repo_file"}, counts: []string{"read_artifact=1", "read_repo_file=1"}, sourceObservations: []ai.SourceEvidenceObservation{{SourceID: "primary", Tool: "read_repo_file", Path: "file.go", LineStart: 1, LineEnd: 2}}},
-		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}, semanticJudgeOutcomes: []string{"draft:objected", "revision:passed", "revision:revised"}, semanticFindingClasses: []string{"specific_error_ignored"}}, 18, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
+		benchmarkTraceSummary{floorNudges: 1, floorNudgeReasons: []string{"gcs_bytes"}}, 15, "generation", ai.CritiqueCachePolicyHard, cacheVerification,
 		benchmarkRunIdentity{Arm: "variant", EngineCommit: strings.Repeat("b", 40), FixtureSHA256: strings.Repeat("c", 64), BaselineConsumerCommit: strings.Repeat("d", 40), BaselinePromptSHA256: strings.Repeat("3", 64), ProjectSHA256: strings.Repeat("e", 64), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions, ProviderPath: "github-copilot/claude-sonnet-4.6", TransportID: "copilot-structural-proxy-v1"}, benchmarkEvidenceCoverage{selected: []string{"initiating-error"}, hit: []string{"initiating-error"}, missed: []string{"secondary-evidence"}, sources: map[string][]string{"initiating-error": {"model_tool"}}}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: true, TrialStatus: "contract_violation"})
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1293,12 +1225,9 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 		!slices.Equal(result.ToolNames, []string{"read_artifact", "read_repo_file"}) || !slices.Equal(result.ToolCounts, []string{"read_artifact=1", "read_repo_file=1"}) ||
 		result.SourceEvidenceToolCalls != 1 || result.SourceReadCoverageHits != 1 || result.SourceReadCoverageTotal != 1 || len(result.SourceReadRanges) != 1 || result.SourceReadRanges[0].Path != "file.go" || len(result.SourceCitations) != 0 || result.SourceSignalHits != 1 || result.SourceSignalTotal != 1 ||
 		!result.CacheVerification.LookupAccepted || !result.CacheVerification.LookupHit || result.CacheGeneration != "generation" ||
-		result.ProviderRequestCap != 18 || result.Trace.ModelRequests != 2 || result.Trace.ModelFailures != 1 || result.Trace.ProviderAttempts != 3 || result.Trace.RequestBytes != 200 || result.Trace.ReportedRequestBytes != 120 || result.Trace.MaxRequestBytes != 120 || result.Trace.WireRequestBytes != 84 || result.Trace.MaxWireRequestBytes != 84 || len(result.Trace.RequestUsageSamples) != 1 || result.Trace.RequestUsageSamples[0] != (benchmarkRequestUsageSample{RequestBytes: 120, WireRequestBytes: 84, InputTokens: 10, CachedInputTokens: 4}) || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
+		result.ProviderRequestCap != 15 || result.Trace.ModelRequests != 2 || result.Trace.ModelFailures != 1 || result.Trace.ProviderAttempts != 3 || result.Trace.RequestBytes != 200 || result.Trace.ReportedRequestBytes != 120 || result.Trace.MaxRequestBytes != 120 || result.Trace.WireRequestBytes != 84 || result.Trace.MaxWireRequestBytes != 84 || len(result.Trace.RequestUsageSamples) != 1 || result.Trace.RequestUsageSamples[0] != (benchmarkRequestUsageSample{RequestBytes: 120, WireRequestBytes: 84, InputTokens: 10, CachedInputTokens: 4}) || result.TraceTruncated || result.CritiqueCachePolicy != string(ai.CritiqueCachePolicyHard) ||
 		result.HumanScoreRubricVersion != benchmarkHumanScoreRubricVersion || result.HumanScoreMax != 10 || len(result.Drafts) != 1 ||
 		len(result.DraftDecisions) != 1 || result.DraftDecisions[0].ReplacementReason != "candidate_published_dominates" ||
-		!result.SemanticRevisionAttempted || !result.SemanticRevisionSelected || result.SemanticRevisionRejected ||
-		!slices.Equal(result.SemanticJudgeOutcomes, []string{"draft:objected", "revision:passed", "revision:revised"}) ||
-		!slices.Equal(result.SemanticFindingClasses, []string{"specific_error_ignored"}) || result.SupportedFactsRetained != 1 || result.SupportedFactsAdded != 1 || result.SupportedFactsDropped != 0 ||
 		result.EvidenceMode != benchmarkEvidenceModeArtifactAndSource || !slices.Equal(result.HumanScoreDimensions, benchmarkHumanScoreDimensions) ||
 		!slices.Equal(result.Drafts[0].RuleIDs, []string{"remediation.punt"}) || !result.Drafts[0].Selected ||
 		result.Drafts[0].SignalHits != 1 || result.Drafts[0].SignalTotal != 2 || result.Drafts[0].RequiredSignalHits != 1 || result.Drafts[0].RequiredSignalTotal != 1 {
@@ -1307,11 +1236,6 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
-	}
-	reviews := result.Drafts[0].SemanticReviews
-	if len(reviews) != 1 || reviews[0].Stage != "draft" || reviews[0].Outcome != "objected" || len(reviews[0].Findings) != 1 ||
-		reviews[0].Findings[0].Class != "specific_error_ignored" || reviews[0].Findings[0].Detail != "The draft ignores the specific request error." {
-		t.Fatalf("semantic reviews = %+v", reviews)
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("result mode=%o", info.Mode().Perm())
@@ -1328,7 +1252,7 @@ func TestWriteBenchmarkJSONLRecordsGroundedUnavailableOutcome(t *testing.T) {
 		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
 	}
 	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
-	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
+	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeGroundedPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions,
 	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
 	data, err := os.ReadFile(path)
@@ -1386,7 +1310,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 				Condition: benchmarkEvidenceConditionFixture, ModelRequestMade: tc.modelRequest,
 				Stages: []benchmarkEvidenceStage{stage}, TrialStatus: tc.status,
 			}
-			writeBenchmarkJSONL(t, path, bc, 1, tc.result, tc.outcome, time.Second, ai.AnalysisTraceFile{}, nil, nil, 0,
+			writeBenchmarkJSONL(t, path, bc, 1, tc.result, tc.outcome, time.Second, ai.AnalysisTraceFile{}, nil, 0,
 				benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard,
 				benchmarkCacheVerification{}, identity, benchmarkEvidenceCoverage{}, report)
 			data, err := os.ReadFile(path)
@@ -1398,18 +1322,6 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 				t.Fatal(err)
 			}
 			if result.TrialStatus != tc.status || result.Outcome != string(tc.wantOutcome) || result.Usable != tc.wantUsable || result.ModelRequestMade != tc.modelRequest {
-				t.Fatalf("result = %+v", result)
-			}
-		})
-	}
-}
-
-func TestRecordBenchmarkSemanticRevisionCountsUnparseableAndDeniedAsRejected(t *testing.T) {
-	for _, outcome := range []string{"revision_unparseable", "revision_denied"} {
-		t.Run(outcome, func(t *testing.T) {
-			result := benchmarkJSONLResult{}
-			recordBenchmarkSemanticRevision(&result, ai.TraceEvent{Kind: "semantic_judge", Status: "revision", Outcome: outcome})
-			if !result.SemanticRevisionAttempted || !result.SemanticRevisionRejected || result.SemanticRevisionSelected {
 				t.Fatalf("result = %+v", result)
 			}
 		})

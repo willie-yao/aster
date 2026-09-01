@@ -70,7 +70,6 @@ export function analysisTraceEventDetails(event: AnalysisTraceEvent): string[] {
     details.push(`${event.issue_count} issue${event.issue_count === 1 ? "" : "s"}`);
   }
   if (event.critique_rules?.length) details.push(`rules ${event.critique_rules.join(", ")}`);
-  if (event.semantic_findings?.length) details.push(`findings ${event.semantic_findings.join(", ")}`);
   if (event.cache_rejection_reason) details.push(`not cached: ${event.cache_rejection_reason}`);
   if (event.validation_code) details.push(event.validation_code);
   if (event.error_code) details.push(event.error_code);

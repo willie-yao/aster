@@ -243,7 +243,7 @@ func (p *CacheRejectionProgress) Add(reason string) {
 		p.ToolFloor++
 	case "evidence_floor":
 		p.EvidenceFloor++
-	case "critique", "critique_hard_failure", "critique_strict_warning", "critique_unclassified", "semantic_objection":
+	case "critique", "critique_hard_failure", "critique_strict_warning", "critique_unclassified":
 		p.Critique++
 	case "malformed":
 		p.Malformed++

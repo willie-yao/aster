@@ -19,7 +19,6 @@ export interface AnalysisTraceEvent {
   retry?: number;
   issue_count?: number;
   critique_rules?: string[];
-  semantic_findings?: string[];
   cache_rejection_reason?: string;
   structured_phase?: string;
   structured_attempt?: string;

@@ -112,28 +112,26 @@ Options:
   hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
 - The harness derives and enforces the maximum provider requests admitted by the
   exact agentic configuration. The cap includes the configured loop, the single
-  byte-floor extension, forced finalization, one bounded critique repair, and
-  semantic review. Transport retries count through each trace event's `attempts`
-  value, and a truncated trace fails closed because request usage would be
+  byte-floor extension, forced finalization, and one bounded critique repair.
+  Transport retries count through each trace event's `attempts` value, and a truncated trace fails closed because request usage would be
   incomplete. Private JSONL records `provider_request_cap`, logical
   `model_requests`, actual `provider_attempts`, logical request bytes, separate
   Responses wire-request bytes, and `trace_truncated`.
 
 For the Claude hard-policy production-readiness matrix, the fixed configuration
-uses `max_iters: 11`, a non-zero byte floor, one critique retry, and semantic
-review. Its exact maximum is:
+uses `max_iters: 11`, a non-zero byte floor, and one critique retry. Its exact
+maximum is:
 
 ```text
 11 configured iterations + 1 byte-floor extension = 12 main-loop requests
 + 1 forced finalization
 + 1 optional critique Tool turn + 1 critique finalization
-+ 1 semantic judge + 1 semantic refinalization
-= 17 provider requests per operation
+= 15 provider requests per operation
 
-2 compatibility requests + 4 x 17 = 70 total Claude requests
+2 compatibility requests + 4 x 15 = 62 total Claude requests
 ```
 
-The selected operation cap is 17. Transport retries consume that same cap rather
+The selected operation cap is 15. Transport retries consume that same cap rather
 than receiving extra headroom. A larger value would hide an unbounded or
 unexpected runtime path rather than provide legitimate headroom.
 
@@ -142,17 +140,16 @@ unexpected runtime path rather than provide legitimate headroom.
 Each completed analysis reports the configured quality-gate result and bounded
 usage counters. The output includes evidence-plan coverage, GCS-floor bypass,
 critique status and version, a short skill-set hash prefix, budget exhaustion,
-semantic-judge flags, context truncations, model and Tool failures, model
+context truncations, model and Tool failures, model
 requests, and provider-reported input and output tokens. Private JSONL output
 also records the derived provider-request cap, GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
 reasons, the hashed cache generation, zero-request cache reload results, and
 draft metadata that omits raw draft text. Draft metadata contains stable critique rule IDs,
 matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
 selected attempt. It also records each draft's manifest signal hits and totals,
-including the required-signal subset, without retaining the scored text. Semantic
-reviews are attached to the draft they evaluated with the review stage, outcome,
-and the judge's validated bounded findings. These details are written only to the
-private benchmark JSONL; production traces remain content-free. The JSONL records
+including the required-signal subset, without retaining the scored text. These
+details are written only to the private benchmark JSONL; production traces remain
+content-free. The JSONL records
 both raw critique findings and the findings that survive deterministic publication
 sanitization. It also records every best/fallback
 replacement decision with evidence revisions, strict-dominance state, and a
@@ -174,8 +171,7 @@ effective-input digest, so separate arms and evidence conditions cannot silently
 share an analysis cache.
 
 The trace summary reports the floor-nudge count and ordered reasons, context
-compaction and over-budget counts, the final semantic-judge event outcome,
-critique and evidence retries, and accepted-uncached events. Successful Tool
+compaction and over-budget counts, critique and evidence retries, and accepted-uncached events. Successful Tool
 names and per-Tool counts remain sorted. If an analysis fails before producing
 `AIAnalysis`, the benchmark prints the available trace and Tool summaries before
 failing the test.
@@ -193,9 +189,6 @@ was made. An untagged
 test-only read is `unknown` and does not count as model receipt. The private
 JSONL stores only content-free group states and never stores matching content.
 
-Draft telemetry records which supported causal facts a critique, evidence, or
-semantic retry retained, added, or dropped. It does not claim per-draft citation
-retention because the benchmark observer does not receive draft citations.
 `trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
 `contract_violation`, `timeout`, and `runtime_failure`. A parseable safe result
 remains `valid_result` when a bounded finalization repair or other contract

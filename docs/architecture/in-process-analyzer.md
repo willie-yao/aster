@@ -64,7 +64,7 @@ flowchart TD
     F --> G["Agentic provider loop"]
     G <--> H["Read-only artifact, Kubernetes, and pinned source tools"]
     G --> I["Structured draft parsing"]
-    I --> J["Deterministic critique, bounded repair, semantic review, and draft selection"]
+    I --> J["Deterministic critique, bounded repair, and draft selection"]
     J --> K
     K --> L["Private state: eligible cache entry, traces, and usage ledger"]
     L --> M["Separate recurring causal-group correlation"]
@@ -178,22 +178,16 @@ Model output is never accepted directly. The current lifecycle is:
 3. When permitted by retry, time, context, and evidence budgets, critique can
    inject bounded missing evidence, allow another tool turn, and request a
    revised structured draft.
-4. A focused semantic judge reviews a deterministically acceptable draft for a
-   fluent but unsupported causal conclusion. Findings can drive one bounded
-   refinalization, followed by a separate review of the proposed revision.
-5. Deterministic draft selection keeps the best parseable candidate. A
-   replacement cannot introduce a hard-rule regression. Semantic revisions
-   must also avoid dropping supported causal facts unless the judge established
-   a valid cause-replacement condition.
+4. Deterministic draft selection keeps the best parseable candidate. A
+   replacement cannot introduce a hard-rule regression, and a changed root cause
+   requires new evidence.
 
 Critique rules are classified as hard failures or soft warnings. Hard findings
 cover structural, citation, source-grounding, and contradiction failures. Soft
 findings cover evidence availability and remediation-quality warnings. The
 configured cache policy determines which classifications block reuse:
 `strict` accepts almost no warnings, `hard` blocks hard findings, and `advisory`
-records findings without making critique itself a cache barrier. Semantic review
-is separate: `advisory` records findings without blocking publication or cache
-reuse, `blocking` applies those gates, and `off` skips the review.
+records findings without making critique itself a cache barrier.
 
 If finalization fails, the loop prefers an earlier parseable draft, including a
 strict structured candidate attached to a tool-bearing turn. The selected draft
@@ -210,7 +204,7 @@ failure message. Build scope is required because analyses cite build-specific
 paths and lines.
 
 Cache data records the structured result plus investigation counters, critique
-and semantic state, and model, prompt, and skill fingerprints. The model hash is
+state, and model, prompt, and skill fingerprints. The model hash is
 a one-way fingerprint of provider API mode, endpoint, model, and reasoning
 effort. These fingerprints are provenance, not automatic invalidation selectors.
 A model, endpoint, prompt, skill, or failure-streak change affects new results
@@ -219,7 +213,7 @@ but does not by itself reject an otherwise current entry.
 Every attached or private entry is reconstructed and checked against the current
 contract. Reuse requires a valid, unexpired agentic result that meets current
 tool and evidence floors, the current critique version and configured critique
-policy, a resolved semantic-review state, and the current cache generation. A
+policy, and the current cache generation. A
 rejection is treated as a miss without deleting all cache state, so a later run
 can reuse entries under a compatible configuration.
 
@@ -234,8 +228,8 @@ full rebaseline that existing acceptance gates would otherwise allow.
 Public job JSON contains the failure summary, root cause, severity, suggested
 fix, grounded evidence citations, source links, and intentionally exposed
 per-analysis telemetry such as tool calls, context and artifact bytes, elapsed
-time, cache or same-failure reuse, budget state, critique and semantic-judge
-status, and provenance fingerprints. The provider model name is not serialized.
+time, cache or same-failure reuse, budget state, critique status, and provenance
+fingerprints. The provider model name is not serialized.
 The in-process path records provider-reported token and cost details in private
 traces and usage ledgers rather than copying those totals into the public
 analysis object.
@@ -279,8 +273,7 @@ output through separate authority and lifecycle gates:
 | Shared downstream tool and structured execution | `backend/internal/ai/toolloopcore.go`, `backend/internal/ai/structured.go` |
 | Prompt composition | `backend/internal/ai/compose.go`, `backend/internal/ai/baseprompt.go`, `backend/internal/ai/responseformat.go`, `backend/internal/ai/modules/universal/` |
 | Evidence planning, coverage, and repair | `backend/internal/ai/evidenceplan/`, `backend/internal/ai/skills/`, `backend/internal/ai/evidence_repair.go` |
-| Deterministic critique | `backend/internal/ai/critique.go`, `backend/internal/ai/critique_rules.go` |
-| Semantic review and draft selection | `backend/internal/ai/semantic.go`, `backend/internal/ai/draft_selection.go` |
+| Deterministic critique and draft selection | `backend/internal/ai/critique.go`, `backend/internal/ai/critique_rules.go`, `backend/internal/ai/draft_selection.go` |
 | Cache identity and acceptance | `backend/internal/ai/service.go`, `backend/internal/ai/cache.go`, `backend/internal/ai/cache_acceptance.go` |
 | Public and cache analysis projection | `backend/internal/ai/analysis_record.go`, `backend/internal/models/models.go`, `backend/internal/output/` |
 | Private trace and usage output | `backend/internal/ai/trace.go`, `backend/internal/ai/trace_store.go`, `backend/internal/aiusage/` |

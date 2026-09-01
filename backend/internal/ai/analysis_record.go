@@ -18,18 +18,12 @@ type analysisRecord struct {
 	skillSetHash    string
 	cacheGeneration string
 
-	critiquePassed        bool
-	critiqueHardFailures  []string
-	critiqueSoftWarnings  []string
-	critiqueVersion       int
-	judgeRan              bool
-	judgeObjected         bool
-	judgeRevised          bool
-	judgeRevisionRejected bool
-	semanticJudgeMode     SemanticJudgeMode
-	semanticFindings      []string
-	disposition           string
-	dispositionWarnings   []string
+	critiquePassed       bool
+	critiqueHardFailures []string
+	critiqueSoftWarnings []string
+	critiqueVersion      int
+	disposition          string
+	dispositionWarnings  []string
 
 	mode                   string
 	toolCalls              int
@@ -67,12 +61,6 @@ func analysisRecordFromState(parsed analysisResponse, client *Client, state *age
 	record.critiqueHardFailures = slices.Clone(state.critiqueHardFailures)
 	record.critiqueSoftWarnings = slices.Clone(state.critiqueSoftWarnings)
 	record.critiqueVersion = currentCritiqueVersion
-	record.judgeRan = state.judgeRan
-	record.judgeObjected = state.judgeObjected
-	record.judgeRevised = state.judgeRevised
-	record.judgeRevisionRejected = state.judgeRevisionRejected
-	record.semanticJudgeMode = state.opts.SemanticJudge
-	record.semanticFindings = slices.Clone(state.semanticFindings)
 	record.toolCalls = state.calls
 	record.contextBytes = state.modelBytes
 	record.gcsBytes = state.gcsBytes
@@ -94,12 +82,7 @@ func analysisRecordFromCache(cached agenticCacheData, generatedAt, cacheGenerati
 		critiqueHardFailures: slices.Clone(cached.CritiqueHardFailures),
 		critiqueSoftWarnings: slices.Clone(cached.CritiqueSoftWarnings),
 		critiqueVersion:      cached.CritiqueVersion,
-		judgeRan:             cached.JudgeRan, judgeObjected: cached.JudgeObjected,
-		judgeRevised:          cached.JudgeRevised,
-		judgeRevisionRejected: cached.JudgeRevisionRejected,
-		semanticJudgeMode:     SemanticJudgeMode(cached.SemanticJudgeMode),
-		semanticFindings:      slices.Clone(cached.SemanticFindings),
-		mode:                  AgenticMode, toolCalls: cached.ToolCalls, contextBytes: cached.ModelBytes,
+		mode:                 AgenticMode, toolCalls: cached.ToolCalls, contextBytes: cached.ModelBytes,
 		gcsBytes: cached.GCSBytes, evidencePlanCovered: cached.EvidencePlanCovered,
 		gcsFloorRetryExhausted: cached.GCSFloorRetryExhausted,
 		budgetExhausted:        cached.BudgetExhausted, cacheHit: true,
@@ -129,12 +112,7 @@ func analysisRecordFromResult(result FailureAnalysisResult, generatedAt string) 
 		critiqueHardFailures: slices.Clone(analysis.CritiqueHardFailures),
 		critiqueSoftWarnings: slices.Clone(analysis.CritiqueSoftWarnings),
 		critiqueVersion:      analysis.CritiqueVersion,
-		judgeRan:             analysis.JudgeRan, judgeObjected: analysis.JudgeObjected,
-		judgeRevised:          analysis.JudgeRevised,
-		judgeRevisionRejected: analysis.JudgeRevisionRejected,
-		semanticJudgeMode:     SemanticJudgeMode(analysis.SemanticJudgeMode),
-		semanticFindings:      slices.Clone(analysis.SemanticFindings),
-		disposition:           analysis.Disposition, dispositionWarnings: slices.Clone(analysis.DispositionWarnings),
+		disposition:          analysis.Disposition, dispositionWarnings: slices.Clone(analysis.DispositionWarnings),
 		mode: analysis.Mode, toolCalls: analysis.ToolCalls, contextBytes: analysis.ContextBytes,
 		gcsBytes: analysis.GCSBytes, evidencePlanCovered: analysis.EvidencePlanCovered,
 		gcsFloorRetryExhausted: analysis.GCSFloorRetryExhausted,
@@ -166,10 +144,8 @@ func projectFailureAnalysis(record analysisRecord) FailureAnalysisResult {
 			CritiqueHardFailures: slices.Clone(record.critiqueHardFailures), CritiqueSoftWarnings: slices.Clone(record.critiqueSoftWarnings),
 			CachePersistenceAttempted: record.cachePersistenceAttempted, CachePersistenceAccepted: record.cachePersistenceAccepted,
 			CachePolicyRejectionReason: string(record.cacheRejectionReason),
-			JudgeRan:                   record.judgeRan, JudgeObjected: record.judgeObjected, JudgeRevised: record.judgeRevised,
-			JudgeRevisionRejected: record.judgeRevisionRejected,
-			SemanticJudgeMode:     string(record.semanticJudgeMode), SemanticFindings: slices.Clone(record.semanticFindings), CritiqueVersion: record.critiqueVersion,
-			SkillSetHash: record.skillSetHash, ModelHash: record.modelHash, PromptHash: record.promptHash,
+			CritiqueVersion:            record.critiqueVersion,
+			SkillSetHash:               record.skillSetHash, ModelHash: record.modelHash, PromptHash: record.promptHash,
 			CacheGeneration: record.cacheGeneration,
 		},
 	}
@@ -186,9 +162,6 @@ func projectAgenticCacheData(record analysisRecord) agenticCacheData {
 		ToolCalls: record.toolCalls, ModelBytes: record.contextBytes, GCSBytes: record.gcsBytes,
 		EvidencePlanCovered: record.evidencePlanCovered, GCSFloorRetryExhausted: record.gcsFloorRetryExhausted,
 		BudgetExhausted: record.budgetExhausted, SameFailureReuse: record.sameFailureReuse,
-		JudgeRan: record.judgeRan, JudgeObjected: record.judgeObjected,
-		JudgeRevised: record.judgeRevised, JudgeRevisionRejected: record.judgeRevisionRejected,
-		SemanticJudgeMode: string(record.semanticJudgeMode), SemanticFindings: slices.Clone(record.semanticFindings),
 		CritiquePassed: record.critiquePassed, CritiqueHardFailures: slices.Clone(record.critiqueHardFailures),
 		CritiqueSoftWarnings: slices.Clone(record.critiqueSoftWarnings), CritiqueVersion: record.critiqueVersion,
 		SkillSetHash: record.skillSetHash, ModelHash: record.modelHash, PromptHash: record.promptHash,

@@ -93,14 +93,6 @@ export function AiAnalysisPanel({
     </Alert>
   ) : null;
 
-  const advisorySemanticPanel = analysis.semantic_judge_mode === "advisory" &&
-    (analysis.semantic_findings?.length ?? 0) > 0 ? (
-      <Alert severity="info" variant="outlined">
-        Semantic review noted unresolved concerns. The semantic finding itself is non-blocking,
-        but other unresolved checks may still block an action.
-      </Alert>
-    ) : null;
-
   const rootCause = detailAppearance ? (
     <BriefingSection label="Root cause">
       <RichText text={analysis.root_cause} steps fileCtx={fileCtx} />
@@ -233,7 +225,6 @@ export function AiAnalysisPanel({
     <Stack spacing={detailAppearance ? 2.25 : 2}>
       {statusRow}
       {dispositionPanel}
-      {advisorySemanticPanel}
       {rootCause}
       {suggestedFix}
       {upstream}

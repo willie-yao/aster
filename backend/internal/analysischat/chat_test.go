@@ -2368,12 +2368,3 @@ func TestServicePatternChatTurnsOnEvidenceNotRefreshState(t *testing.T) {
 		t.Fatalf("retained pattern with expired evidence err=%v", err)
 	}
 }
-
-func TestCloneTestCaseCopiesSemanticFindings(t *testing.T) {
-	original := models.TestCase{AIAnalysis: &models.AIAnalysis{SemanticFindings: []string{"causal_link_unsupported"}}}
-	cloned := cloneTestCase(original)
-	cloned.AIAnalysis.SemanticFindings[0] = "mutated"
-	if original.AIAnalysis.SemanticFindings[0] != "causal_link_unsupported" {
-		t.Fatalf("clone aliased semantic findings: %v", original.AIAnalysis.SemanticFindings)
-	}
-}

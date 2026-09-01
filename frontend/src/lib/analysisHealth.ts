@@ -42,7 +42,6 @@ export interface AnalysisHealthVerdict {
 
 const failedOutcomes = new Set(["error", "unavailable", "failed", "cancelled", "rejected"]);
 const finalizeProblems = new Set(["empty", "error", "headroom_denied"]);
-const semanticProblems = new Set(["revision_denied", "revision_rejected", "revision_unparseable"]);
 const cacheProblems = new Set(["rejected", "error", "policy_unavailable"]);
 const toolBudgetProblems = new Set(["model_budget_exhausted", "gcs_budget_exhausted", "disabled"]);
 const critiqueRetryProblems = new Set(["tool_turn_error", "unparseable"]);
@@ -157,17 +156,6 @@ export function analysisHealthVerdict(trace: AnalysisTrace): AnalysisHealthVerdi
         break;
       case "finalize_recovery":
         degradations.push(`Finalize recovered: ${phrase(event.outcome)}`);
-        break;
-      case "semantic_judge":
-        if (event.outcome === "error") {
-          degradations.push("Semantic judge failed to run");
-        } else if (event.outcome && semanticProblems.has(event.outcome)) {
-          degradations.push(`Semantic judge ${phrase(event.outcome)}`);
-        } else if (event.outcome === "revised") {
-          retries.push("Semantic judge revised the draft");
-        } else if (event.outcome === "objected") {
-          retries.push(`Semantic judge objected${issueSuffix(event.issue_count)}`);
-        }
         break;
       case "cache_persistence":
         if (event.outcome && cacheProblems.has(event.outcome)) {

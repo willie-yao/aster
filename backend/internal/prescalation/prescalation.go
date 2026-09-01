@@ -7,7 +7,7 @@
 // many admins clicked. It exists only for the residual set: failures the base
 // branch, other pull requests, and flakiness history all failed to account for.
 // The analysis it runs is the ordinary agentic failure analysis under a
-// separate module, so it is gated by the same critique and judge rules as every
+// separate module, so it is gated by the same deterministic critique rules as every
 // other analysis.
 package prescalation
 
