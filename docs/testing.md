@@ -13,8 +13,9 @@ cd backend && go vet ./... && go test ./... -count=1 && staticcheck ./...
 cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-CI runs backend build, test, and vet plus frontend type check, lint, and build.
-CI does not run `staticcheck`, so run it locally for backend changes.
+CI runs build, test, and vet for the main backend module plus frontend type
+check, lint, and build. It does not enter the separate benchmark module. CI does
+not run `staticcheck`, so run it locally for backend changes.
 
 Check Go formatting with:
 
@@ -72,18 +73,17 @@ additional fixture trees.
 
 ## AI quality benchmark
 
-The opt-in benchmarks live in `backend/benchmarks`, separate from the
-regression suite. They run real agentic analysis against labeled historical
-failures. Model output is nondeterministic, so they are not part of CI: every
-benchmark is gated behind its own `RUN_*` or `BENCH_*` environment variable and
-skips by default under `go test ./...`.
+The opt-in benchmarks live in a separate Go module at `backend/benchmarks`.
+The main module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do
+not compile it. Live cases remain gated behind their own `RUN_*` or `BENCH_*`
+environment variable. Provider-free harness tests can be run directly with
+`go -C backend/benchmarks test ./... -count=1`.
 
 ```bash
-cd backend
 RUN_AI_BENCHMARK=1 \
 AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
 AI_MODEL=<model-id> AI_TOKEN=<token-or-placeholder> \
-  go test ./benchmarks -run TestAIBenchmark -v -timeout 60m
+  go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
 Set `BENCH_PROJECT_DIR` to a consumer repository to load its prompt and AI
