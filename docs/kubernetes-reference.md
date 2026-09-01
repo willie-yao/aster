@@ -243,7 +243,6 @@ main operator controls.
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
 | `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
-| `agentSandbox.analysisShadow.*` | Disabled private WorkspaceSandboxRuntime comparison, immutable executor and stager images, namespace-local publisher and cleanup Jobs, exact provider and model limits, private input claim, and private ledger claim. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
@@ -280,118 +279,6 @@ backups to dashboard operators.
 Do not point multiple releases at the same claim. Do not delete a retained PVC
 until rollback and data-retention requirements are resolved.
 
-Agent analysis shadowing uses two private claims in different namespaces. The
-ledger claim is mounted only by the scheduled fetcher or worker and never by the
-server. The input claim exists in the dedicated analysis namespace. A tokenless
-publisher Job writes one leased content-addressed snapshot, is deleted, and only
-then may the Agent Sandbox mount the claim read-only. After Sandbox cleanup, a
-tokenless no-network cleanup Job deletes exactly that leased snapshot. The
-dashboard retains a separate verification copy in a dedicated size-limited
-`emptyDir` until result validation completes. Neither claim may be the public
-dashboard claim. The configured fetcher and Sandbox ephemeral-storage limits
-must match that volume bound.
-The publisher is public-source-only and receives no GitHub token or model
-credential. Before cloning, both publishers use the immutable GitHub tree API to
-enforce source file-count, per-file, and aggregate-byte bounds. Cilium policy
-must allow exactly `github.com`, `api.github.com`, plus the public
-artifact-storage FQDNs configured in `networkPolicy.stagingFQDNs`. The Agent
-Sandbox Pod does not receive those staging destinations; its egress remains
-limited to DNS and the configured model endpoint.
-
-## Secure server origin topologies
-
-Authenticated chat and actions should not use an unrestricted public origin.
-Prefer these topologies in order:
-
-1. ClusterIP behind an in-cluster ingress or SSO proxy.
-2. An internal LoadBalancer with provider-specific private annotations.
-3. A private-link origin configured outside the chart.
-4. A source-restricted public LoadBalancer as a last resort.
-
-For a public LoadBalancer, configure source ranges and NetworkPolicy. If the
-chart cannot establish an origin restriction, authenticated features require
-`server.service.publicOriginAcknowledged=true`. That acknowledgement is not
-proof of runtime isolation.
-
-Example restricted origin:
-
-```yaml
-server:
-  actions:
-    enabled: true
-  service:
-    type: LoadBalancer
-    loadBalancerSourceRanges:
-      - 10.0.0.0/8
-    externalTrafficPolicy: Local
-
-networkPolicy:
-  enabled: true
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-system
-      ports:
-        - protocol: TCP
-          port: 8080
-```
-
-Service annotations are passed through but are not accepted as proof of origin
-restriction. Verify that the expected proxy can reach the Service and that a
-path that should be denied cannot.
-
-The public read endpoints `/data/*`, `/api/capabilities`, and `/healthz` remain
-unauthenticated. Authentication protects chat, private traces, and write
-actions.
-
-The chart rejects `HSTS_ENABLED`, `COOKIE_INSECURE`, and
-`PULL_REQUEST_ESCALATION_ENABLED` in `server.extraEnv`.
-HSTS is enabled by default. Disabling it requires explicit local HTTP
-acknowledgement with `server.development.allowInsecureHTTP=true`; local OAuth
-may instead use `server.development.allowInsecureCookies=true`. Deployed
-dashboards should keep both development values false. After deployment, verify
-that the public reverse proxy preserves the header:
-
-```bash
-curl -fsSI https://dashboard.example.com/ | grep -i '^strict-transport-security:'
-```
-
-## Optional server and automation features
-
-[Pull request triage](pull-request-triage.md) owns deterministic attribution,
-shared failures, bot-comment safety, and on-demand escalation behavior.
-
-Enable optional features only after the baseline writer, server, storage, and
-public data path are healthy.
-
-- [Server mode](server.md) owns authentication, capabilities, analysis chat,
-  cause-scoped analysis chat and guarded action lifecycles.
-- [GitHub issues](github-issues.md) owns issue credentials and issue state.
-- [Notifications](notifications.md) owns SMTP credentials and routing.
-- [Fix PR generation](fix-prs.md) owns the code-writing workflow, GitHub identity,
-  warning, regeneration, and confirmation boundaries.
-- [Documentation index](README.md#optional-features) provides the short feature
-  map and recommended enablement order.
-
-Optional features retain private operational state. Model credentials, OAuth
-identity, `BOT_TOKEN`, `ISSUE_TOKEN`, SMTP credentials, and Agent Sandbox provider
-credentials have separate owners and must not be reused interchangeably.
-
-## Reusing external project configuration
-
-If an operator manages the project ConfigMap outside the chart, set
-`project.existingConfigMap`. The ConfigMap must include `project.yaml`,
-`system.md`, and every configured skill key.
-
-If an operator manages provider credentials outside the chart, set
-`ai.existingSecret` and `ai.tokenSecretKey`. Do not combine external Secret
-management with inline token values.
-
-The bundle wrapper intentionally clears `project.existingConfigMap` because it
-makes the local consumer bundle authoritative. Use manual Helm when external
-ConfigMap ownership is required.
-
 ## Private operational files
 
 The shared volume contains public dashboard data and private operational state.
@@ -399,10 +286,6 @@ The server blocks private files from `/data`, including AI cache and traces,
 notifications and action state, chat transcripts, private coverage catalogs,
 and usage ledgers. Pages publication strips them.
 Protect the PVC, backups, and server access.
-
-The optional Agent analysis-shadow ledger lives on a separate private PVC outside
-the server data directory. The chart rejects reuse of the dashboard data claim.
-The server does not mount or serve the shadow ledger.
 
 ## Agent Sandbox Fix runtime
 
@@ -432,14 +315,10 @@ Required platform properties:
 - a dedicated inference credential or authenticated tokenless gateway;
 - exact admission identity, resource, mount, environment, and command policy.
 
-The Fix client ServiceAccount is separate from the scheduled client
-ServiceAccount that the worker and fetcher use for shadow Sandboxes,
-so scheduled pods never hold Fix Sandbox authority. Both default names derive
+The Fix client ServiceAccount is used only by the server. Its default name derives
 from the first 32 characters of the release fullname, so two releases sharing a
-namespace must have fullnames that differ within that prefix. Override them with
-`agentSandbox.rbac.fixClientServiceAccountName` and
-`agentSandbox.rbac.scheduledClientServiceAccountName`; the chart rejects values
-that resolve to the same ServiceAccount.
+namespace must have fullnames that differ within that prefix. Override it with
+`agentSandbox.rbac.fixClientServiceAccountName` when necessary.
 
 Direct bearer mode references one existing Secret key. The chart and dashboard
 do not read or print the value. Gateway mode keeps the executor tokenless but
@@ -448,33 +327,6 @@ Fix-only ConfigMap, digest, RBAC, and mount contract. See
 [Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract) for
 the provider-neutral isolation boundary and [Fix PR generation](fix-prs.md) for
 the user workflow and configuration example.
-
-## Agent Sandbox analysis shadow
-
-`agentSandbox.analysisShadow` is an active maintainer evaluation surface that is
-disabled by default. After the authoritative in-process refresh publishes, the
-writer may sample a bounded number of failures, create Agent Sandbox analyzer
-workloads, compare their results privately, and append to a separate ledger.
-
-The shadow requires its own execution namespace, secure RuntimeClass, immutable
-executor and stager images, client and tokenless workload ServiceAccounts,
-Cilium FQDN policy, provider configuration, dedicated bounded local input
-storage, conservative limits, and separate private input and ledger PVCs. Start
-with `maxPerRun: 1`. The chart rejects sharing the public dashboard claim or
-enabling incompatible Agent Sandbox experiments in the same release.
-`ai.contextWindowTokens` and `ai.maxOutputTokens` must explicitly match the
-shadow model limits so enabling the shadow does not silently rewrite
-authoritative provider configuration.
-
-Shadow output, lifecycle failures, and cleanup state cannot change public JSON,
-normal cache acceptance, patterns, or actions. The server never
-mounts the shadow claim. See the
-[Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
-for workspace, evidence, evaluation, telemetry, and cleanup contracts.
-
-The lower-level `agentSandbox.analyzer` values retain the isolated stager and
-executor security boundary for explicit maintainer validation. They do not make
-the analyzer authoritative or expose a public result path.
 
 ## Related references
 

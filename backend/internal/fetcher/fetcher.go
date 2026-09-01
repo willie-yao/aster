@@ -26,7 +26,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/junit"
-	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
@@ -41,30 +40,12 @@ import (
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
-// ShadowAnalysisOptions configure the private experimental Agent comparison
-// path. It runs on Agent Sandbox after authoritative in-process publication and
-// never changes public output.
-type ShadowAnalysisOptions struct {
-	Enabled               bool
-	LedgerPath            string
-	InputRoot             string
-	MaxPerRun             int
-	MaxSteps              int
-	Timeout               time.Duration
-	OutputLimitBytes      int64
-	ModelContextTokens    int
-	ModelOutputTokens     int
-	RequireSourceEvidence bool
-	ModelProvider         modelprovider.Config
-}
-
 type Options struct {
-	ProjectDir     string
-	OutDir         string
-	BuildsPerJob   int
-	Workers        int
-	Timeout        time.Duration
-	ShadowAnalysis ShadowAnalysisOptions
+	ProjectDir   string
+	OutDir       string
+	BuildsPerJob int
+	Workers      int
+	Timeout      time.Duration
 	// IncludePresubmits fetches presubmit jobs in addition to periodics.
 	// The project discovery policy and this direct CLI override are combined.
 	IncludePresubmits    bool
@@ -97,15 +78,6 @@ type pipeline struct {
 	progress             *fetchprogress.Tracker
 	aiRefreshTransaction *aiRefreshStateTransaction
 	lastPatternOutcomes  map[string]patterns.JobOutcome
-	shadowRunner         shadowAnalysisRunner
-	shadowPublisher      shadowWorkspacePublisher
-	shadowPrepare        shadowWorkspacePreparer
-	shadowCleanup        shadowWorkspaceCleaner
-	shadowAppend         shadowLedgerAppender
-	shadowClaim          shadowLedgerClaimer
-	shadowNow            func() time.Time
-	shadowAgentNamespace string
-	shadowAgentRef       string
 }
 
 // refreshResult carries the outputs a pass needs for its side effects.
@@ -148,10 +120,6 @@ func Run(ctx context.Context, opts Options) error {
 
 // setupPipeline loads config and resolves storage and AI settings.
 func setupPipeline(opts Options) (*pipeline, error) {
-	normalizeShadowAnalysisOptions(&opts.ShadowAnalysis)
-	if err := validateShadowAnalysisOptions(opts); err != nil {
-		return nil, err
-	}
 	cfg, err := project.Load(filepath.Join(opts.ProjectDir, "project.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("loading project config: %w", err)
@@ -166,9 +134,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	enableAI := opts.EnableAI
 	aiToken := os.Getenv("AI_TOKEN")
 	if enableAI && aiToken == "" {
-		if opts.ShadowAnalysis.Enabled {
-			return nil, fmt.Errorf("agent analysis shadow requires AI_TOKEN for authoritative in-process analysis")
-		}
 		log.Println("Warning: -ai enabled but AI_TOKEN is not set, disabling AI analysis")
 		enableAI = false
 	}
@@ -181,14 +146,6 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
 		if err != nil {
 			return nil, err
-		}
-		if opts.ShadowAnalysis.Enabled {
-			if err := validateShadowProviderParity(aiProject.Provider, opts.ShadowAnalysis.ModelProvider); err != nil {
-				return nil, err
-			}
-			if err := validateShadowContextParity(opts.ShadowAnalysis.ModelContextTokens); err != nil {
-				return nil, err
-			}
 		}
 		log.Printf("Loaded AI skills (profiles=%s engine=%d consumer=%d consumer_bundle=%t hash=%s)",
 			aiProject.ProfileSelection.String(), aiProject.SkillSet.EngineCount(), aiProject.SkillSet.ConsumerCount(),
@@ -248,7 +205,6 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 		}
 		p.completeProgressPhase()
 	}
-	p.runShadowAnalysis(ctx, res)
 	prepareCtx, prepareCancel := context.WithTimeout(ctx, 10*time.Minute)
 	p.prepareCauseFindings(prepareCtx, res.details)
 	prepareCancel()

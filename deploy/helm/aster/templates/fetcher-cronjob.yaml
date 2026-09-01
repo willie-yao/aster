@@ -1,12 +1,9 @@
 {{- include "aster.validateAgentSandboxFixRuntime" . -}}
-{{- include "aster.validateAgentAnalysisShadow" . -}}
 {{- include "aster.validateAI" . -}}
 {{- if not (or (eq .Values.mode "cron") (eq .Values.mode "watch")) }}
 {{- fail (printf "mode must be \"cron\" or \"watch\", got %q" .Values.mode) }}
 {{- end }}
 {{- if eq .Values.mode "cron" }}
-{{- $shadow := .Values.agentSandbox.analysisShadow.enabled }}
-{{- $agentSandboxScheduled := eq (include "aster.agentSandboxScheduledEnabled" .) "true" }}
 {{- $restartPolicy := .Values.fetcher.restartPolicy | default "OnFailure" }}
 {{- if not (or (eq $restartPolicy "Never") (eq $restartPolicy "OnFailure")) }}
   {{- fail "fetcher.restartPolicy must be Never or OnFailure" }}
@@ -52,10 +49,7 @@ spec:
             app.kubernetes.io/component: fetcher
         spec:
           restartPolicy: {{ $restartPolicy }}
-          {{- if $agentSandboxScheduled }}
-          serviceAccountName: {{ include "aster.agentSandboxScheduledClientServiceAccountName" . }}
-          {{- end }}
-          automountServiceAccountToken: {{ ternary "true" "false" $agentSandboxScheduled }}
+          automountServiceAccountToken: false
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -64,13 +58,8 @@ spec:
             {{- toYaml .Values.podSecurityContext | nindent 12 }}
           containers:
             - name: fetcher
-              {{- if $shadow }}
-              image: {{ include "aster.agentAnalysisShadowDashboardImage" . }}
-              imagePullPolicy: {{ .Values.agentSandbox.analysisShadow.dashboardImage.pullPolicy }}
-              {{- else }}
               image: {{ include "aster.image" . }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              {{- end }}
               command:
                 - /usr/local/bin/fetcher
                 - -project-dir={{ .Values.project.mountPath }}
@@ -87,28 +76,7 @@ spec:
                 {{- if gt (int .Values.ai.maxOutputTokens) 0 }}
                 - -ai-max-output-tokens={{ .Values.ai.maxOutputTokens }}
                 {{- end }}
-                {{- if $shadow }}
-                - -agent-analysis-shadow
-                - -agent-analysis-shadow-ledger={{ include "aster.agentAnalysisShadowLedgerPath" . }}
-                - -agent-analysis-shadow-input-root={{ .Values.agentSandbox.analysisShadow.input.localRoot }}
-                - -agent-analysis-shadow-max-per-run={{ .Values.agentSandbox.analysisShadow.maxPerRun }}
-                - -agent-analysis-shadow-max-steps={{ .Values.agentSandbox.analysisShadow.maxSteps }}
-                - -agent-analysis-shadow-timeout={{ .Values.agentSandbox.analysisShadow.timeout }}
-                - -agent-analysis-shadow-output-limit-bytes={{ .Values.agentSandbox.analysisShadow.outputLimitBytes }}
-                - -agent-analysis-shadow-model-context-tokens={{ .Values.agentSandbox.analysisShadow.modelContextTokens }}
-                - -agent-analysis-shadow-model-output-tokens={{ .Values.agentSandbox.analysisShadow.modelOutputTokens }}
-                - -agent-analysis-shadow-require-source-evidence={{ .Values.agentSandbox.analysisShadow.requireSourceEvidence }}
-                - -agent-analysis-shadow-provider-endpoint={{ .Values.agentSandbox.analysisShadow.modelProvider.endpoint }}
-                - -agent-analysis-shadow-provider-model={{ .Values.agentSandbox.analysisShadow.modelProvider.model }}
-                - -agent-analysis-shadow-provider-api={{ .Values.agentSandbox.analysisShadow.modelProvider.api }}
-                - -agent-analysis-shadow-credential-mode={{ .Values.agentSandbox.analysisShadow.modelProvider.credentialMode }}
-                - -agent-analysis-shadow-provider-reasoning-effort={{ .Values.agentSandbox.analysisShadow.modelProvider.reasoningEffort }}
-                - -agent-analysis-shadow-provider-auth-type={{ .Values.agentSandbox.analysisShadow.modelProvider.auth.type }}
-                {{- end }}
               env:
-                {{- if $shadow }}
-                {{- include "aster.agentAnalysisShadowEnv" . | nindent 16 }}
-                {{- end }}
                 {{- if .Values.ai.enabled }}
                 - name: AI_TOKEN
                   valueFrom:
@@ -157,12 +125,6 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: {{ .Values.persistence.mountPath }}
-                {{- if $shadow }}
-                - name: agent-analysis-shadow-ledger
-                  mountPath: {{ .Values.agentSandbox.analysisShadow.ledger.mountPath }}
-                - name: agent-analysis-shadow-input
-                  mountPath: {{ .Values.agentSandbox.analysisShadow.input.localRoot }}
-                {{- end }}
                 - name: project
                   mountPath: {{ .Values.project.mountPath }}
                   readOnly: true
@@ -186,14 +148,6 @@ spec:
             - name: data
               persistentVolumeClaim:
                 claimName: {{ include "aster.pvcName" . }}
-            {{- if $shadow }}
-            - name: agent-analysis-shadow-ledger
-              persistentVolumeClaim:
-                claimName: {{ .Values.agentSandbox.analysisShadow.ledger.existingClaim }}
-            - name: agent-analysis-shadow-input
-              emptyDir:
-                sizeLimit: {{ .Values.agentSandbox.analysisShadow.input.localSizeLimit }}
-            {{- end }}
             - name: project
               configMap:
                 name: {{ include "aster.projectConfigMap" . }}

@@ -7,7 +7,6 @@ import (
 
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/agentsandbox"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -18,7 +17,6 @@ type appArmorCapability uint8
 const (
 	appArmorRuntimeDefault appArmorCapability = iota
 	appArmorUnavailableForKindTest
-	agentSandboxResultVolumeLimit = "4Mi"
 )
 
 func (c appArmorCapability) String() string {
@@ -33,8 +31,7 @@ func (c appArmorCapability) String() string {
 }
 
 func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map[string]any {
-	resultGrace := agentSandboxResultGraceForSpec(spec)
-	activeDeadline := int64(spec.Timeout.Round(time.Second)/time.Second) + int64(resultGrace/time.Second)
+	activeDeadline := int64(spec.Timeout.Round(time.Second)/time.Second) + int64(agentSandboxResultGrace/time.Second)
 	podSecurity := map[string]any{
 		"runAsNonRoot":   true,
 		"runAsUser":      int64(65532),
@@ -59,14 +56,10 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"requests": map[string]any{"cpu": r.opts.Resources.CPURequest, "memory": r.opts.Resources.MemoryRequest, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 		"limits":   map[string]any{"cpu": r.opts.Resources.CPULimit, "memory": r.opts.Resources.MemoryLimit, "ephemeral-storage": r.opts.Resources.EphemeralStorage},
 	}
-	fileBackedAnalysis := spec.Purpose == "analysis" && (spec.StagedWorkspace != nil || spec.PreparedWorkspace != nil)
-	env := []any{}
-	if !fileBackedAnalysis {
-		env = append(env, map[string]any{
-			"name":  spec.RequestEnv,
-			"value": base64.StdEncoding.EncodeToString(spec.Request),
-		})
-	}
+	env := []any{map[string]any{
+		"name":  spec.RequestEnv,
+		"value": base64.StdEncoding.EncodeToString(spec.Request),
+	}}
 	if r.opts.CABundle.Enabled() {
 		env = append(env,
 			map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": modelprovider.CABundleMountPath},
@@ -100,61 +93,9 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 		"securityContext":               podSecurity,
 		"containers":                    []any{container},
 	}
-	switch {
-	case spec.PreparedWorkspace != nil:
-		manifestHash := spec.PreparedWorkspace.ManifestHash
-		requestEnv := analysisExecutionRequestChunkEnvironment(spec.Request)
-		container["volumeMounts"] = []any{
-			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceSourcesPath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceSourcesDir, "readOnly": true},
-			map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceArtifactsPath, "subPath": manifestHash + "/" + agentanalysis.WorkspaceArtifactsDir, "readOnly": true},
-			map[string]any{"name": "request", "mountPath": agentanalysis.WorkspaceExecutionRequestRoot, "readOnly": true},
-			map[string]any{"name": "result", "mountPath": agentsandbox.StagedWorkspaceResultPath},
-			map[string]any{"name": "executor-tmp", "mountPath": "/tmp"},
-		}
-		podSpec["initContainers"] = []any{map[string]any{
-			"name":            agentSandboxStagerName,
-			"image":           r.opts.StagerImage,
-			"imagePullPolicy": "IfNotPresent",
-			"args":            []any{"request"},
-			"env":             requestEnv,
-			"securityContext": k8sruntime.DeepCopyJSONValue(containerSecurity),
-			"resources":       k8sruntime.DeepCopyJSONValue(resources),
-			"volumeMounts": []any{
-				map[string]any{"name": "request", "mountPath": agentanalysis.WorkspaceExecutionRequestRoot},
-				map[string]any{"name": "stager-tmp", "mountPath": "/tmp"},
-			},
-		}}
-		podSpec["volumes"] = preparedReadOnlyWorkspaceVolumes(r.opts.StagerInputClaim)
-	case spec.StagedWorkspace != nil:
-		stage := spec.StagedWorkspace
-		requestEnv := append([]any{map[string]any{
-			"name":  stage.RequestEnv,
-			"value": base64.StdEncoding.EncodeToString(stage.Request),
-		}}, analysisExecutionRequestChunkEnvironment(spec.Request)...)
-		container["volumeMounts"] = []any{
-			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot, "readOnly": true},
-			map[string]any{"name": "request", "mountPath": agentanalysis.WorkspaceExecutionRequestRoot, "readOnly": true},
-			map[string]any{"name": "result", "mountPath": agentsandbox.StagedWorkspaceResultPath},
-			map[string]any{"name": "executor-tmp", "mountPath": "/tmp"},
-		}
-		podSpec["initContainers"] = []any{map[string]any{
-			"name":            agentSandboxStagerName,
-			"image":           r.opts.StagerImage,
-			"imagePullPolicy": "IfNotPresent",
-			"env":             requestEnv,
-			"securityContext": k8sruntime.DeepCopyJSONValue(containerSecurity),
-			"resources":       k8sruntime.DeepCopyJSONValue(resources),
-			"volumeMounts": []any{
-				map[string]any{"name": "input", "mountPath": agentsandbox.StagedWorkspaceInputPath, "readOnly": true},
-				map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
-				map[string]any{"name": "request", "mountPath": agentanalysis.WorkspaceExecutionRequestRoot},
-				map[string]any{"name": "stager-tmp", "mountPath": "/tmp"},
-			},
-		}}
-		podSpec["volumes"] = stagedReadOnlyWorkspaceVolumes(r.opts.Resources.EphemeralStorage, r.opts.StagerInputClaim)
-	case spec.WritableWorkspace:
+	if spec.WritableWorkspace {
 		mounts := []any{
-			map[string]any{"name": "workspace", "mountPath": agentsandbox.StagedWorkspaceRoot},
+			map[string]any{"name": "workspace", "mountPath": agentsandbox.WorkspaceRoot},
 			map[string]any{"name": "tmp", "mountPath": "/tmp"},
 		}
 		volumes := writableWorkspaceVolumes(r.opts.Resources.EphemeralStorage)
@@ -179,40 +120,10 @@ func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map
 	return podSpec
 }
 
-func analysisExecutionRequestChunkEnvironment(request []byte) []any {
-	chunks, _ := agentanalysis.EncodeWorkspaceExecutionRequestChunks(request)
-	env := make([]any, 0, len(chunks))
-	for index, value := range chunks {
-		env = append(env, map[string]any{"name": agentanalysis.WorkspaceExecutionRequestChunkEnv(index), "value": value})
-	}
-	return env
-}
-
 func writableWorkspaceVolumes(sizeLimit string) []any {
 	return []any{
 		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
 		map[string]any{"name": "tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-	}
-}
-
-func preparedReadOnlyWorkspaceVolumes(inputClaim string) []any {
-	return []any{
-		map[string]any{"name": "input", "persistentVolumeClaim": map[string]any{"claimName": inputClaim, "readOnly": true}},
-		map[string]any{"name": "request", "emptyDir": map[string]any{"sizeLimit": "1Mi"}},
-		map[string]any{"name": "result", "emptyDir": map[string]any{"sizeLimit": agentSandboxResultVolumeLimit}},
-		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-		map[string]any{"name": "stager-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-	}
-}
-
-func stagedReadOnlyWorkspaceVolumes(sizeLimit, inputClaim string) []any {
-	return []any{
-		map[string]any{"name": "input", "persistentVolumeClaim": map[string]any{"claimName": inputClaim, "readOnly": true}},
-		map[string]any{"name": "workspace", "emptyDir": map[string]any{"sizeLimit": sizeLimit}},
-		map[string]any{"name": "request", "emptyDir": map[string]any{"sizeLimit": "1Mi"}},
-		map[string]any{"name": "result", "emptyDir": map[string]any{"sizeLimit": agentSandboxResultVolumeLimit}},
-		map[string]any{"name": "executor-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
-		map[string]any{"name": "stager-tmp", "emptyDir": map[string]any{"sizeLimit": "64Mi"}},
 	}
 }
 

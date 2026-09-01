@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/agentsandbox"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -253,12 +252,12 @@ func assertAppArmorMode(t *testing.T, podSpec map[string]any, required bool) {
 
 func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing.T) {
 	api := &fakeAgentSandboxAPI{
-		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-eval-request-1", Finished: true, FinishedReason: "PodSucceeded"},
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "review-request-1", Finished: true, FinishedReason: "PodSucceeded"},
 		logs:  `{"review":"pass"}`,
 	}
 	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis-eval", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_REQUEST_B64",
+		Purpose: "review", ExecutionID: "request-1", RequestEnv: "PROW_AI_REVIEW_REQUEST_B64",
 		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
 	})
 	if err != nil {
@@ -268,14 +267,14 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 		t.Fatalf("result = %+v", result)
 	}
 	metadata := api.object["metadata"].(map[string]any)
-	if name := metadata["name"].(string); !strings.HasPrefix(name, "analysis-eval-") {
+	if name := metadata["name"].(string); !strings.HasPrefix(name, "review-") {
 		t.Fatalf("name = %q", name)
 	}
-	if labels := metadata["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "analysis-eval" || len(labels) != 4 {
+	if labels := metadata["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "review" || len(labels) != 4 {
 		t.Fatalf("labels = %+v", labels)
 	}
 	podTemplate := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)
-	if labels := podTemplate["metadata"].(map[string]any)["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "analysis-eval" || len(labels) != 2 {
+	if labels := podTemplate["metadata"].(map[string]any)["labels"].(map[string]any); labels["prow-ai-dashboard/purpose"] != "review" || len(labels) != 2 {
 		t.Fatalf("pod labels = %+v", labels)
 	}
 	pod := podTemplate["spec"].(map[string]any)
@@ -283,139 +282,15 @@ func TestAgentSandboxRunUsesPurposeBoundResultChannelWithoutWorkspace(t *testing
 		t.Fatal("read-only workload received writable volumes")
 	}
 	if _, ok := pod["initContainers"]; ok {
-		t.Fatal("read-only workload received a stager")
+		t.Fatal("read-only workload received an init container")
 	}
 	container := pod["containers"].([]any)[0].(map[string]any)
 	if _, ok := container["volumeMounts"]; ok {
 		t.Fatal("read-only workload received writable volume mounts")
 	}
 	env := container["env"].([]any)[0].(map[string]any)
-	if env["name"] != "PROW_AI_ANALYSIS_REQUEST_B64" {
+	if env["name"] != "PROW_AI_REVIEW_REQUEST_B64" {
 		t.Fatalf("env = %+v", env)
-	}
-}
-
-func TestAgentSandboxRunUsesStagedReadOnlyWorkspace(t *testing.T) {
-	api := &fakeAgentSandboxAPI{
-		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodSucceeded"},
-		logs:  `{"terminal_state":"succeeded"}`,
-	}
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	runtime := newAgentSandboxRuntimeForTest(api, opts)
-	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
-		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Output != `{"terminal_state":"succeeded"}` || !result.Telemetry.CleanupCompleted {
-		t.Fatalf("result=%+v", result)
-	}
-	if !reflect.DeepEqual(api.logContainers, []string{agentSandboxContainerName}) {
-		t.Fatalf("log containers=%v", api.logContainers)
-	}
-	pod := api.object["spec"].(map[string]any)["podTemplate"].(map[string]any)["spec"].(map[string]any)
-	containers := pod["containers"].([]any)
-	if len(containers) != 1 {
-		t.Fatalf("containers=%+v", containers)
-	}
-	container := containers[0].(map[string]any)
-	mounts := container["volumeMounts"].([]any)
-	wantMounts := map[string]bool{
-		agentsandbox.StagedWorkspaceRoot:            true,
-		agentanalysis.WorkspaceExecutionRequestRoot: true,
-		agentsandbox.StagedWorkspaceResultPath:      false,
-		"/tmp":                                      false,
-	}
-	if len(mounts) != len(wantMounts) {
-		t.Fatalf("mounts=%+v", mounts)
-	}
-	for _, value := range mounts {
-		mount := value.(map[string]any)
-		path := mount["mountPath"].(string)
-		wantReadOnly, ok := wantMounts[path]
-		if !ok || (mount["readOnly"] == true) != wantReadOnly {
-			t.Fatalf("mount=%+v", mount)
-		}
-		if _, ok := mount["subPath"]; ok {
-			t.Fatalf("mount=%+v", mount)
-		}
-	}
-	initContainers := pod["initContainers"].([]any)
-	if len(initContainers) != 1 {
-		t.Fatalf("init containers=%+v", initContainers)
-	}
-	stager := initContainers[0].(map[string]any)
-	if stager["name"] != agentSandboxStagerName || stager["image"] != "stager:test" {
-		t.Fatalf("stager=%+v", stager)
-	}
-	stagerEnv := stager["env"].([]any)
-	stageEnv := stagerEnv[0].(map[string]any)
-	if stageEnv["name"] != "PROW_AI_ANALYSIS_STAGE_REQUEST_B64" || len(stagerEnv) != 1+agentanalysis.WorkspaceExecutionRequestChunkCount {
-		t.Fatalf("stager environment=%+v", stagerEnv)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(stageEnv["value"].(string))
-	if err != nil || string(decoded) != `{"manifest":"abc"}` {
-		t.Fatalf("stage request=%q err=%v", decoded, err)
-	}
-	chunkValues := map[string]string{}
-	for _, raw := range stagerEnv[1:] {
-		entry := raw.(map[string]any)
-		chunkValues[entry["name"].(string)] = entry["value"].(string)
-	}
-	reconstructed, err := agentanalysis.DecodeWorkspaceExecutionRequestChunks(func(name string) (string, bool) {
-		value, ok := chunkValues[name]
-		return value, ok
-	})
-	if err != nil || string(reconstructed) != `{"version":1}` {
-		t.Fatalf("execution request=%q err=%v", reconstructed, err)
-	}
-	if len(container["env"].([]any)) != 0 {
-		t.Fatalf("executor environment contains request data: %+v", container["env"])
-	}
-	if pod["automountServiceAccountToken"] != false || len(pod["volumes"].([]any)) != 6 {
-		t.Fatalf("pod=%+v", pod)
-	}
-	inputVolume := pod["volumes"].([]any)[0].(map[string]any)["persistentVolumeClaim"].(map[string]any)
-	if inputVolume["claimName"] != "analysis-input" || inputVolume["readOnly"] != true {
-		t.Fatalf("input volume=%+v", inputVolume)
-	}
-	stagerMounts := stager["volumeMounts"].([]any)
-	volumes := pod["volumes"].([]any)
-	if mounts[0].(map[string]any)["name"] != "workspace" || mounts[1].(map[string]any)["name"] != "request" || mounts[1].(map[string]any)["readOnly"] != true || mounts[2].(map[string]any)["name"] != "result" || mounts[3].(map[string]any)["name"] != "executor-tmp" || volumes[2].(map[string]any)["name"] != "request" || volumes[2].(map[string]any)["emptyDir"].(map[string]any)["sizeLimit"] != "1Mi" || volumes[3].(map[string]any)["name"] != "result" || volumes[3].(map[string]any)["emptyDir"].(map[string]any)["sizeLimit"] != agentSandboxResultVolumeLimit || stagerMounts[0].(map[string]any)["name"] != "input" || stagerMounts[0].(map[string]any)["readOnly"] != true || stagerMounts[2].(map[string]any)["name"] != "request" || stagerMounts[3].(map[string]any)["name"] != "stager-tmp" {
-		t.Fatalf("staged mounts are invalid: executor=%+v stager=%+v", mounts, stagerMounts)
-	}
-}
-
-func TestAgentSandboxStagedWorkspaceRequiresStagerImage(t *testing.T) {
-	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
-	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	})
-	if err == nil || !strings.Contains(err.Error(), "stager image") {
-		t.Fatalf("error=%v", err)
-	}
-}
-
-func TestAgentSandboxWorkloadIdentityIncludesStageRequest(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	left := agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	}
-	right := left
-	right.StagedWorkspace = &agentsandbox.StagedWorkspace{RequestEnv: left.StagedWorkspace.RequestEnv, Request: []byte(`{"stage":2}`), ManifestHash: left.StagedWorkspace.ManifestHash, IdentityHash: left.StagedWorkspace.IdentityHash}
-	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
-		t.Fatal("stage request did not affect workload identity")
 	}
 }
 
@@ -458,10 +333,6 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 			opts.ModelProvider = testResponsesProvider("https://api.openai.com/v1/responses", "fixture-model")
 			opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 		},
-		func(opts *AgentSandboxOptions) {
-			opts.StagerImage = "stager:test"
-			opts.StagerInputClaim = "analysis-input"
-		},
 		func(opts *AgentSandboxOptions) { opts.CABundle = testCABundleConfig() },
 		func(opts *AgentSandboxOptions) {
 			opts.CABundle = testCABundleConfig()
@@ -496,15 +367,13 @@ func legacyAgentSandboxRuntimeIdentity(opts AgentSandboxOptions) string {
 		PollEvery          string                `json:"poll_every"`
 		Resources          AgentSandboxResources `json:"resources"`
 		AppArmorCapability string                `json:"app_armor_capability"`
-		StagerImage        string                `json:"stager_image,omitempty"`
-		StagerInputClaim   string                `json:"stager_input_claim,omitempty"`
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
 		ModelProvider: opts.ModelProvider, ProviderSecretRef: opts.ProviderSecretRef,
 		PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
 		Timeout:            opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
-		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(),
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -555,11 +424,11 @@ func TestAgentSandboxCABundleIsValidatedAndMountedForFixOnly(t *testing.T) {
 	}
 
 	_, err = runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-2", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"version":3}`),
+		Purpose: "review", ExecutionID: "request-2", RequestEnv: "PROW_AI_REVIEW_REQUEST_B64", Request: []byte(`{"version":3}`),
 		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit, WritableWorkspace: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "Fix-runtime only") {
-		t.Fatalf("analysis error = %v", err)
+		t.Fatalf("review error = %v", err)
 	}
 }
 
@@ -594,31 +463,31 @@ func assertEnvValue(t *testing.T, env []any, name, want string) {
 	t.Fatalf("missing environment %s", name)
 }
 
-func TestAgentSandboxBenchmarkConfigUsesExplicitKubeContext(t *testing.T) {
+func TestAgentSandboxKubeconfigUsesExplicitContext(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kubeconfig")
 	data := []byte(`apiVersion: v1
 kind: Config
 clusters:
-- name: benchmark-cluster
+- name: explicit-cluster
   cluster:
-    server: https://benchmark.example.test
+    server: https://explicit.example.test
 - name: other-cluster
   cluster:
     server: https://other.example.test
 contexts:
-- name: benchmark
+- name: explicit
   context:
-    cluster: benchmark-cluster
-    user: benchmark
+    cluster: explicit-cluster
+    user: explicit
 - name: other
   context:
     cluster: other-cluster
     user: other
 current-context: other
 users:
-- name: benchmark
+- name: explicit
   user:
-    token: benchmark
+    token: explicit
 - name: other
   user:
     token: other
@@ -627,11 +496,11 @@ users:
 		t.Fatal(err)
 	}
 	t.Setenv("KUBECONFIG", path)
-	cfg, err := agentSandboxKubeconfigContextConfig("benchmark")
+	cfg, err := agentSandboxKubeconfigContextConfig("explicit")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Host != "https://benchmark.example.test" {
+	if cfg.Host != "https://explicit.example.test" {
 		t.Fatalf("host=%q", cfg.Host)
 	}
 }
@@ -956,14 +825,6 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 		want string
 	}{
 		{name: "mutable image", edit: func(o *AgentSandboxOptions) { o.Image = "registry.internal.example/fixer:latest" }, want: "immutable sha256"},
-		{name: "mutable stager image", edit: func(o *AgentSandboxOptions) { o.StagerImage = "registry.internal.example/stager:latest" }, want: "stager image"},
-		{name: "stager without claim", edit: func(o *AgentSandboxOptions) {
-			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
-		}, want: "requires an input claim"},
-		{name: "invalid stager claim", edit: func(o *AgentSandboxOptions) {
-			o.StagerImage = "registry.internal.example/stager@sha256:" + strings.Repeat("b", 64)
-			o.StagerInputClaim = "Invalid_Claim"
-		}, want: "input claim"},
 		{name: "runtime class", edit: func(o *AgentSandboxOptions) { o.RuntimeClassName = "" }, want: "runtime class"},
 		{name: "insecure gateway", edit: func(o *AgentSandboxOptions) {
 			o.ModelProvider.Endpoint = "http://gateway.fix-eval.svc/v1/chat/completions"
@@ -1028,12 +889,12 @@ func TestAgentSandboxCreateAmbiguityCleansAcceptedWork(t *testing.T) {
 func TestAgentSandboxCreateAmbiguityReturnsObservedWorkWhenCleanupIsPending(t *testing.T) {
 	api := &fakeAgentSandboxAPI{
 		createErr: errors.New("connection reset after create"), deleteErr: engineruntime.ErrCleanupPending,
-		state: sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-eval-request-1"},
+		state: sandboxState{Exists: true, UID: "uid-1", PodName: "review-request-1"},
 	}
 	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
 	var observed engineruntime.WorkRef
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis-eval", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_REQUEST_B64",
+		Purpose: "review", ExecutionID: "request-1", RequestEnv: "PROW_AI_REVIEW_REQUEST_B64",
 		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
 		WorkObserver: func(_ context.Context, work engineruntime.WorkRef) error {
 			if work.UID != "" {
@@ -1079,115 +940,10 @@ func TestAgentSandboxCleanupDetectsOrphanedPod(t *testing.T) {
 	}
 }
 
-func TestAgentSandboxRunTimeoutUsesPurposeSpecificGrace(t *testing.T) {
-	base := agentsandbox.Spec{Timeout: time.Minute}
-	analysis := base
-	analysis.Purpose = "analysis"
-	if got := agentSandboxRunTimeout(analysis); got != time.Minute+agentanalysis.WorkspacePostModelGrace+5*time.Second {
-		t.Fatalf("analysis run timeout = %s", got)
-	}
-	custom := analysis
-	custom.FinalizationGrace = 2 * time.Minute
-	if got := agentSandboxRunTimeout(custom); got != 3*time.Minute+5*time.Second {
-		t.Fatalf("custom analysis run timeout = %s", got)
-	}
-	fix := base
-	fix.Purpose = "fix"
-	if got := agentSandboxRunTimeout(fix); got != time.Minute+agentSandboxResultGrace+5*time.Second {
-		t.Fatalf("fix run timeout = %s", got)
-	}
-}
-
-func TestAgentSandboxPreparedWorkspaceUsesImmutableInputMounts(t *testing.T) {
-	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
-	runtime.opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
-	runtime.opts.StagerImage = "stager:test"
-	runtime.opts.StagerInputClaim = "analysis-input"
-	manifestHash := strings.Repeat("a", 64)
-	identityHash := strings.Repeat("b", 64)
-	pod := runtime.sandboxWorkloadPodSpec(agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash, IdentityHash: identityHash},
-	})
-	object := runtime.sandboxObjectForSpec("analysis-test", agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: manifestHash, IdentityHash: identityHash},
-	}, []byte(strings.Repeat("b", 32)), "execution-1")
-	annotations := object["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if annotations[agentSandboxPreparedAnnotation] != manifestHash || annotations[agentSandboxPreparedIdentityAnnotation] != identityHash || annotations[agentSandboxReasoningEffortAnnotation] != "high" {
-		t.Fatalf("annotations=%+v", annotations)
-	}
-	if got := pod["activeDeadlineSeconds"]; got != int64(time.Minute/time.Second)+int64(agentanalysis.WorkspacePostModelGrace/time.Second) {
-		t.Fatalf("analysis active deadline = %v", got)
-	}
-	initContainers := pod["initContainers"].([]any)
-	if len(initContainers) != 1 || initContainers[0].(map[string]any)["image"] != "stager:test" {
-		t.Fatalf("prepared request writer=%+v", initContainers)
-	}
-	mounts := pod["containers"].([]any)[0].(map[string]any)["volumeMounts"].([]any)
-	if len(mounts) != 5 {
-		t.Fatalf("mounts=%+v", mounts)
-	}
-	want := map[string]string{
-		agentsandbox.StagedWorkspaceSourcesPath:   manifestHash + "/sources",
-		agentsandbox.StagedWorkspaceArtifactsPath: manifestHash + "/artifacts",
-	}
-	for _, raw := range mounts {
-		mount := raw.(map[string]any)
-		if subPath, ok := want[mount["mountPath"].(string)]; ok {
-			if mount["name"] != "input" || mount["readOnly"] != true || mount["subPath"] != subPath {
-				t.Fatalf("input mount=%+v", mount)
-			}
-		}
-	}
-	volumes := pod["volumes"].([]any)
-	if len(volumes) != 5 || volumes[0].(map[string]any)["name"] != "input" || volumes[1].(map[string]any)["name"] != "request" {
-		t.Fatalf("volumes=%+v", volumes)
-	}
-}
-
-func TestAgentSandboxWorkloadIdentityIncludesPreparedManifest(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	left := agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
-	}
-	right := left
-	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("b", 64), IdentityHash: strings.Repeat("c", 64)}
-	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
-		t.Fatal("prepared manifest did not affect workload identity")
-	}
-}
-
-func TestAgentSandboxWorkloadIdentityIncludesFinalizationGrace(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	left := agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-	}
-	right := left
-	right.FinalizationGrace = 2 * time.Minute
-	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
-		t.Fatal("finalization grace did not affect workload identity")
-	}
-}
-
-func TestAgentSandboxWorkloadIdentityIncludesPreparedWorkspaceIdentity(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	left := agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	}
-	right := left
-	right.PreparedWorkspace = &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)}
-	if agentSandboxWorkloadHash(left, opts) == agentSandboxWorkloadHash(right, opts) {
-		t.Fatal("prepared workspace identity did not affect workload identity")
+func TestAgentSandboxRunTimeoutIncludesResultGrace(t *testing.T) {
+	spec := agentsandbox.Spec{Purpose: "fix", Timeout: time.Minute}
+	if got := agentSandboxRunTimeout(spec); got != time.Minute+agentSandboxResultGrace+5*time.Second {
+		t.Fatalf("run timeout = %v", got)
 	}
 }
 
@@ -1196,47 +952,13 @@ func TestEnrichSandboxStateWithPodTiming(t *testing.T) {
 	pod := map[string]any{
 		"metadata": map[string]any{"creationTimestamp": "2026-08-11T10:00:00Z"},
 		"status": map[string]any{
-			"conditions":            []any{map[string]any{"type": "PodScheduled", "status": "True", "lastTransitionTime": "2026-08-11T10:00:02Z"}},
-			"initContainerStatuses": []any{map[string]any{"name": agentSandboxStagerName, "state": map[string]any{"terminated": map[string]any{"startedAt": "2026-08-11T10:00:03Z", "finishedAt": "2026-08-11T10:00:08Z"}}}},
-			"containerStatuses":     []any{map[string]any{"name": agentSandboxContainerName, "state": map[string]any{"terminated": map[string]any{"startedAt": "2026-08-11T10:00:09Z", "finishedAt": "2026-08-11T10:00:19Z"}}}},
+			"conditions":        []any{map[string]any{"type": "PodScheduled", "status": "True", "lastTransitionTime": "2026-08-11T10:00:02Z"}},
+			"containerStatuses": []any{map[string]any{"name": agentSandboxContainerName, "state": map[string]any{"terminated": map[string]any{"startedAt": "2026-08-11T10:00:09Z", "finishedAt": "2026-08-11T10:00:19Z"}}}},
 		},
 	}
 	enrichSandboxStateWithPod(&state, pod)
-	if durationMilliseconds(state.PodCreatedAt, state.ScheduledAt) != 2000 || durationMilliseconds(state.StageStartedAt, state.StageFinishedAt) != 5000 || durationMilliseconds(state.ExecutionStartedAt, state.ExecutionFinishedAt) != 10000 {
+	if durationMilliseconds(state.PodCreatedAt, state.ScheduledAt) != 2000 || durationMilliseconds(state.ExecutionStartedAt, state.ExecutionFinishedAt) != 10000 {
 		t.Fatalf("state=%+v", state)
-	}
-}
-
-func TestAgentSandboxPreparedWorkspaceRequiresOnlyInputClaim(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	opts.testOnly = true
-	opts.StagerInputClaim = "analysis-input"
-	opts = normalizeAgentSandboxOptions(opts)
-	if err := validateAgentSandboxOptions(opts); err != nil {
-		t.Fatal(err)
-	}
-	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, opts)
-	runtime.api.(*fakeAgentSandboxAPI).state = sandboxState{Exists: true, UID: "uid-1", PodName: "analysis-1", Finished: true, FinishedReason: "PodSucceeded"}
-	runtime.api.(*fakeAgentSandboxAPI).logs = agentSandboxResult(t, engineruntime.TerminalSucceeded, "")
-	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAgentSandboxPreparedWorkspaceRejectsMissingInputClaim(t *testing.T) {
-	runtime := newAgentSandboxRuntimeForTest(&fakeAgentSandboxAPI{}, testAgentSandboxOptions())
-	_, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		PreparedWorkspace: &agentsandbox.PreparedWorkspace{ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("c", 64)},
-	})
-	if err == nil || !strings.Contains(err.Error(), "prepared workspace requires an input claim") {
-		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -1331,7 +1053,7 @@ func TestAgentSandboxDirectTelemetryIdentifiesCredentialMode(t *testing.T) {
 	opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 	runtime := newAgentSandboxRuntimeForTest(api, opts)
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Purpose: "review", ExecutionID: "request-1", RequestEnv: "PROW_AI_REVIEW_REQUEST_B64",
 		Request: []byte(`{"version":3}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
 	})
 	if err != nil {
@@ -1378,7 +1100,7 @@ func TestAgentSandboxResponsesTelemetryIdentifiesAPI(t *testing.T) {
 	opts.ProviderSecretRef = ProviderSecretRef{Name: "agent-sandbox-model", Key: "AI_TOKEN"}
 	runtime := newAgentSandboxRuntimeForTest(api, opts)
 	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
+		Purpose: "review", ExecutionID: "request-1", RequestEnv: "PROW_AI_REVIEW_REQUEST_B64",
 		Request: []byte(`{"version":3}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
 	})
 	if err != nil {
@@ -1414,130 +1136,5 @@ func TestAgentSandboxRuntimeRetainsReviewScopeClassification(t *testing.T) {
 	}
 	if len(result.CommandResults) != 1 || result.CommandResults[0].Argv[0] != "git" || !result.Telemetry.CleanupCompleted || !api.deleted {
 		t.Fatalf("result=%+v deleted=%v", result, api.deleted)
-	}
-}
-
-func TestAgentSandboxAnalysisRequestChunksBoundMaximumRequest(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	runtime := newAgentSandboxRuntimeForTest(nil, opts)
-	request := []byte(strings.Repeat("a", 768<<10))
-	spec := agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: request,
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	}
-	if err := agentsandbox.ValidateSpec(spec); err != nil {
-		t.Fatal(err)
-	}
-	pod := runtime.sandboxWorkloadPodSpec(spec)
-	container := pod["containers"].([]any)[0].(map[string]any)
-	if len(container["env"].([]any)) != 0 {
-		t.Fatalf("executor environment contains request data: %+v", container["env"])
-	}
-	stager := pod["initContainers"].([]any)[0].(map[string]any)
-	env := stager["env"].([]any)
-	if len(env) != 1+agentanalysis.WorkspaceExecutionRequestChunkCount {
-		t.Fatalf("stager environment entries=%d", len(env))
-	}
-	values := map[string]string{}
-	for _, raw := range env[1:] {
-		entry := raw.(map[string]any)
-		value := entry["value"].(string)
-		if len(value) > 64<<10 {
-			t.Fatalf("chunk %s bytes=%d", entry["name"], len(value))
-		}
-		values[entry["name"].(string)] = value
-	}
-	got, err := agentanalysis.DecodeWorkspaceExecutionRequestChunks(func(name string) (string, bool) {
-		value, ok := values[name]
-		return value, ok
-	})
-	if err != nil || string(got) != string(request) {
-		t.Fatalf("request bytes=%d err=%v", len(got), err)
-	}
-}
-
-func TestAgentSandboxAnalysisStagerCannotReceiveProviderToken(t *testing.T) {
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	opts.ModelProvider = testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "fixture")
-	opts.ProviderSecretRef = ProviderSecretRef{Name: "analysis-model", Key: "AI_TOKEN"}
-	runtime := newAgentSandboxRuntimeForTest(nil, opts)
-	pod := runtime.sandboxWorkloadPodSpec(agentsandbox.Spec{
-		Purpose: "analysis", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64", Request: []byte(`{"request":1}`),
-		Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"stage":1}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	})
-	executorEnv := pod["containers"].([]any)[0].(map[string]any)["env"].([]any)
-	if len(executorEnv) != 1 || executorEnv[0].(map[string]any)["name"] != modelprovider.TokenEnv {
-		t.Fatalf("executor environment=%+v", executorEnv)
-	}
-	for _, raw := range pod["initContainers"].([]any)[0].(map[string]any)["env"].([]any) {
-		entry := raw.(map[string]any)
-		if entry["name"] == modelprovider.TokenEnv || entry["valueFrom"] != nil {
-			t.Fatalf("stager environment contains credential reference: %+v", entry)
-		}
-	}
-}
-
-func TestAgentSandboxRunClassifiesStagerFailureBeforeExecutorLogs(t *testing.T) {
-	api := &fakeAgentSandboxAPI{
-		state: sandboxState{
-			Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodFailed",
-			StagerFailureCode: "stager_exit_nonzero", StagerExitCode: 1, StagerReason: "Error",
-		},
-		logsByContainer: map[string]string{
-			agentSandboxStagerName: "analysis staging failed: verify staged source: source_untracked_files Authorization: Bearer secret-token https://secret.example/request",
-		},
-		logsErrByContainer: map[string]error{agentSandboxContainerName: errors.New("executor logs must not be read")},
-	}
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	runtime := newAgentSandboxRuntimeForTest(api, opts)
-	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
-		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	})
-	if !errors.Is(err, engineruntime.ErrStaging) {
-		t.Fatalf("result=%+v error=%v", result, err)
-	}
-	if result.Output != "" || result.Telemetry.FailurePhase != "staging" || result.Telemetry.FailureCode != "stager_exit_nonzero" || result.Telemetry.ExecutorStarted {
-		t.Fatalf("result=%+v", result)
-	}
-	if !strings.Contains(err.Error(), "diagnostic=source_untracked_files") || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "secret.example") {
-		t.Fatalf("unsafe or incomplete error=%v", err)
-	}
-	if !reflect.DeepEqual(api.logContainers, []string{agentSandboxStagerName}) || !result.Telemetry.CleanupCompleted || !api.deleted {
-		t.Fatalf("log containers=%v telemetry=%+v deleted=%v", api.logContainers, result.Telemetry, api.deleted)
-	}
-}
-
-func TestAgentSandboxRunCleansUpWhenStagerDiagnosticIsUnavailable(t *testing.T) {
-	api := &fakeAgentSandboxAPI{
-		state: sandboxState{
-			Exists: true, UID: "uid-1", PodName: "analysis-request-1", Finished: true, FinishedReason: "PodFailed",
-			StagerFailureCode: "stager_image_pull", StagerExitCode: -1, StagerReason: "ImagePullBackOff",
-		},
-		logsErrByContainer: map[string]error{agentSandboxStagerName: errors.New("Authorization: Bearer secret-token https://secret.example/log")},
-	}
-	opts := testAgentSandboxOptions()
-	opts.StagerImage = "stager:test"
-	opts.StagerInputClaim = "analysis-input"
-	runtime := newAgentSandboxRuntimeForTest(api, opts)
-	result, err := runtime.Run(t.Context(), agentsandbox.Spec{
-		Purpose: "analysis", ExecutionID: "request-1", RequestEnv: "PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64",
-		Request: []byte(`{"version":1}`), Timeout: time.Minute, OutputLimitBytes: defaultSandboxOutputLimit,
-		StagedWorkspace: &agentsandbox.StagedWorkspace{RequestEnv: "PROW_AI_ANALYSIS_STAGE_REQUEST_B64", Request: []byte(`{"manifest":"abc"}`), ManifestHash: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64)},
-	})
-	if !errors.Is(err, engineruntime.ErrStaging) || !strings.Contains(err.Error(), "diagnostic=unavailable") {
-		t.Fatalf("result=%+v error=%v", result, err)
-	}
-	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "secret.example") || !result.Telemetry.CleanupCompleted || !api.deleted {
-		t.Fatalf("error=%v telemetry=%+v deleted=%v", err, result.Telemetry, api.deleted)
 	}
 }

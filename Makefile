@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image agent-sandbox-analysis-executor-image agent-sandbox-analysis-stager-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick snapshot-data \
        fe-install dev dev-mock mock-server fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-mock clean-all help
@@ -57,7 +57,6 @@ dev-actions: build-server fe-build
 #   make image IMAGE=ghcr.io/you/aster VERSION=v1.2.3
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
-# Build the sandboxed local OpenCode image for fix generation.
 # Build the minimal git-capable image for remote fix runtimes.
 remote-fixer-image:
 	docker build --target remote-fixer-runtime --build-arg VERSION=$(VERSION) -t $(IMAGE)/remote-fixer:$(VERSION) .
@@ -65,14 +64,6 @@ remote-fixer-image:
 # Build the Agent Sandbox OpenCode executor image.
 agent-sandbox-fix-executor-image:
 	docker build --target agent-sandbox-fix-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-fix-executor:$(VERSION) .
-
-# Build the file-backed OpenCode analyzer image for Agent Sandbox.
-agent-sandbox-analysis-executor-image:
-	docker build --target agent-sandbox-analysis-executor --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-analysis-executor:$(VERSION) .
-
-# Build the credential-free analyzer workspace stager image.
-agent-sandbox-analysis-stager-image:
-	docker build --target agent-sandbox-analysis-stager --build-arg VERSION=$(VERSION) -t $(IMAGE)/agent-sandbox-analysis-stager:$(VERSION) .
 
 # Run all Go tests
 test:
@@ -85,7 +76,8 @@ test-v:
 # Run the hermetic pipeline and email/fix-PR end-to-end tests.
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
-	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationAndFixPRE2E$$' -count=1 -v
+	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationE2E$$' -count=1 -v
+	cd backend && go test ./internal/fixpr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
 
 # Run Go linter (requires golangci-lint)
 lint:
@@ -271,8 +263,6 @@ help:
 	@echo "  dist-ai            Full pipeline with AI analysis"
 	@echo "  image              Build the container image (fetcher + server + SPA)"
 	@echo "  remote-fixer-image Build the minimal git-capable remote fix image"
-	@echo "  agent-sandbox-analysis-executor-image Build the file-backed analyzer executor image"
-	@echo "  agent-sandbox-analysis-stager-image  Build the credential-free analyzer stager image"
 	@echo "  agent-sandbox-fix-executor-image  Build the Agent Sandbox OpenCode executor"
 	@echo "  clean              Remove build artifacts and data"
 	@echo "  clean-cache        Clear AI analysis cache"

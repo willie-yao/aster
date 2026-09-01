@@ -21,10 +21,6 @@ both GitHub Pages and Kubernetes. The same Go implementation owns:
 - public analysis output;
 - private traces and usage accounting.
 
-Optional Agent Sandbox analysis shadows run only after authoritative in-process
-publication. Their results stay private, do not seed the normal cache, and
-cannot change public JSON or actions.
-
 ## Requirements and configuration
 
 Analysis requires a configured endpoint and model that support OpenAI-compatible
@@ -235,11 +231,6 @@ server mode can expose the sanitized trace snapshot to administrators.
 Usage ledgers retain provider-reported token categories and operator-priced cost
 coverage. Missing metadata stays unavailable. They never estimate hidden usage
 or store prompts, responses, endpoints, credentials, or repository content.
-
-The optional analysis-shadow ledger is separate again. It records private
-content-free comparison, identity, lifecycle, validation, and cleanup facts.
-Shadow failure or cleanup state cannot change authoritative analysis, normal
-cache acceptance, pattern state, or actions.
 
 ## Troubleshooting
 

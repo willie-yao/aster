@@ -537,21 +537,6 @@ func checkStorage(ctx context.Context, add func(string, KubernetesDoctorStatus, 
 		add("persistent storage", KubernetesDoctorPass, "storage class "+storageClass+" exists and the desired claim requests ReadWriteMany", "")
 		add("RWX semantics", KubernetesDoctorUnverified, "read-only inspection cannot prove the storage driver provides working multi-node RWX semantics", "Validate RWX behavior during target-cluster release acceptance.")
 	}
-	claims := []string{values.Persistence.ExistingClaim, values.AgentSandbox.Analyzer.Input.ExistingClaim}
-	seen := map[string]string{}
-	for index, candidate := range claims {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		label := []string{"application data", "analyzer input"}[index]
-		if prior, ok := seen[candidate]; ok {
-			add("separate claims", KubernetesDoctorFail, fmt.Sprintf("claim %s is reused for %s and %s", candidate, prior, label), "Use separate claims for public data and private runtime state.")
-			return
-		}
-		seen[candidate] = label
-	}
-	add("separate claims", KubernetesDoctorPass, "configured application and private runtime claims do not overlap", "")
 }
 
 func checkClaimConsumers(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, opts Options, claim string) {
@@ -2683,11 +2668,6 @@ type kubernetesDoctorValues struct {
 	} `yaml:"ai"`
 	AgentSandbox struct {
 		FixRuntime doctorFixRuntimeValues `yaml:"fixRuntime"`
-		Analyzer   struct {
-			Input struct {
-				ExistingClaim string `yaml:"existingClaim"`
-			} `yaml:"input"`
-		} `yaml:"analyzer"`
 	} `yaml:"agentSandbox"`
 	Server struct {
 		ExtraEnv []struct {

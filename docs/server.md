@@ -225,7 +225,6 @@ directories. Private state includes:
 - analysis traces and pattern diagnostics;
 - fetch status and pass history;
 - AI usage ledgers;
-- optional Agent Sandbox shadow ledgers.
 
 Authenticated APIs expose only sanitized, purpose-specific views. They never
 return provider credentials, OAuth tokens, bot tokens, prompts, raw model
@@ -234,9 +233,7 @@ paths.
 
 Usage reports preserve provider-reported versus unavailable token fields and use
 only operator-configured pricing. Trace and diagnostic views contain bounded
-control-flow codes, counts, durations, and safe identities. The server does not
-mount the private Agent Sandbox shadow ledger, and it never enters the public data
-path.
+control-flow codes, counts, durations, and safe identities.
 
 ## Run locally
 

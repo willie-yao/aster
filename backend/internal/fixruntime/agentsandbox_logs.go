@@ -13,9 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/redact"
-	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
@@ -70,9 +68,6 @@ func describePodLogLifecycle(pod map[string]any) string {
 	if pod == nil {
 		return "Pod status is unavailable"
 	}
-	if detail := describeStagerLifecycle(pod); detail != "" {
-		return detail
-	}
 	statuses, _, _ := unstructured.NestedSlice(pod, "status", "containerStatuses")
 	var status map[string]any
 	for _, raw := range statuses {
@@ -119,48 +114,6 @@ func describePodLogLifecycle(pod map[string]any) string {
 	return "executor container never started"
 }
 
-func describeStagerLifecycle(pod map[string]any) string {
-	statuses, _, _ := unstructured.NestedSlice(pod, "status", "initContainerStatuses")
-	for _, raw := range statuses {
-		status, ok := raw.(map[string]any)
-		if !ok || status["name"] != agentSandboxStagerName {
-			continue
-		}
-		state, _, _ := unstructured.NestedMap(status, "state")
-		if waiting, ok := state["waiting"].(map[string]any); ok {
-			reason, _ := waiting["reason"].(string)
-			message, _ := waiting["message"].(string)
-			detail := lifecycleDetail(reason, message)
-			switch reason {
-			case "ErrImagePull", "ImagePullBackOff", "ImageInspectError", "InvalidImageName", "RegistryUnavailable":
-				return "stager image pull failure" + detail
-			case "ContainerCreating", "CreateContainerConfigError", "RunContainerError", "StartError":
-				return "stager container never started" + detail
-			default:
-				return "stager container waiting" + detail
-			}
-		}
-		if terminated, ok := state["terminated"].(map[string]any); ok {
-			exitCode := int64Value(terminated["exitCode"])
-			if exitCode == 0 {
-				return ""
-			}
-			reason, _ := terminated["reason"].(string)
-			message, _ := terminated["message"].(string)
-			detail := lifecycleDetail(reason, message)
-			startedAt, _ := terminated["startedAt"].(string)
-			if strings.TrimSpace(startedAt) == "" {
-				return fmt.Sprintf("stager container never started and terminated with exit code %d%s", exitCode, detail)
-			}
-			return fmt.Sprintf("stager container failed with exit code %d%s", exitCode, detail)
-		}
-		if _, ok := state["running"].(map[string]any); ok {
-			return "stager container is running"
-		}
-	}
-	return ""
-}
-
 func podScheduled(pod map[string]any) bool {
 	conditions, _, _ := unstructured.NestedSlice(pod, "status", "conditions")
 	for _, raw := range conditions {
@@ -202,101 +155,4 @@ func lifecycleDetail(reason, message string) string {
 func safeKubernetesDiagnostic(value string) string {
 	value = strings.Join(strings.Fields(redact.Credentials(redact.URLs(value))), " ")
 	return textutil.Truncate(value, maxKubernetesErrorTextBytes)
-}
-
-func stagerFailureState(pod map[string]any) (string, int64, string) {
-	statuses, _, _ := unstructured.NestedSlice(pod, "status", "initContainerStatuses")
-	for _, raw := range statuses {
-		status, ok := raw.(map[string]any)
-		if !ok || status["name"] != agentSandboxStagerName {
-			continue
-		}
-		state, _, _ := unstructured.NestedMap(status, "state")
-		if waiting, ok := state["waiting"].(map[string]any); ok {
-			reason, _ := waiting["reason"].(string)
-			switch reason {
-			case "ErrImagePull", "ImagePullBackOff", "ImageInspectError", "InvalidImageName", "RegistryUnavailable":
-				return "stager_image_pull", -1, safeContainerReason(reason)
-			case "CreateContainerConfigError", "RunContainerError", "StartError", "ContainerCannotRun":
-				return "stager_start_failure", -1, safeContainerReason(reason)
-			default:
-				return "stager_waiting", -1, safeContainerReason(reason)
-			}
-		}
-		if terminated, ok := state["terminated"].(map[string]any); ok {
-			exitCode := int64Value(terminated["exitCode"])
-			if exitCode == 0 {
-				return "", 0, ""
-			}
-			reason, _ := terminated["reason"].(string)
-			return "stager_exit_nonzero", exitCode, safeContainerReason(reason)
-		}
-	}
-	return "", 0, ""
-}
-
-func safeContainerReason(reason string) string {
-	switch strings.TrimSpace(reason) {
-	case "Error", "OOMKilled", "DeadlineExceeded", "ContainerCannotRun", "StartError", "CreateContainerConfigError", "RunContainerError",
-		"ErrImagePull", "ImagePullBackOff", "ImageInspectError", "InvalidImageName", "RegistryUnavailable":
-		return strings.TrimSpace(reason)
-	default:
-		return ""
-	}
-}
-
-func stagerDiagnosticCategory(logs string) string {
-	message := strings.TrimSpace(logs)
-	const prefix = "analysis staging failed: "
-	if !strings.HasPrefix(message, prefix) {
-		return "unclassified"
-	}
-	message = strings.TrimPrefix(message, prefix)
-	for _, category := range []string{
-		agentanalysis.SourceStagedContentChanged,
-		agentanalysis.SourceWorktreeContentChanged,
-		agentanalysis.SourceWorktreeModeChanged,
-		agentanalysis.SourceIndexFlagsChanged,
-		agentanalysis.SourceIndexModeChanged,
-		agentanalysis.SourceModePolicyChanged,
-		agentanalysis.SourceUntrackedFiles,
-		agentanalysis.SourceGitDiffError,
-	} {
-		if strings.Contains(message, category) {
-			return category
-		}
-	}
-	for _, category := range []struct {
-		contains string
-		code     string
-	}{
-		{contains: "workspace execution", code: "execution_request_invalid"},
-		{contains: "workspace stage", code: "stage_request_invalid"},
-		{contains: "workspace root", code: "workspace_root_invalid"},
-		{contains: "artifact manifest", code: "artifact_manifest_invalid"},
-		{contains: "staged source", code: "source_snapshot_invalid"},
-		{contains: "copied source", code: "source_copy_invalid"},
-		{contains: "staged artifacts", code: "artifact_copy_failed"},
-		{contains: "analysis result directory", code: "result_directory_failed"},
-		{contains: "execution request", code: "execution_request_write_failed"},
-	} {
-		if strings.Contains(message, category.contains) {
-			return category.code
-		}
-	}
-	return "unclassified"
-}
-
-func agentSandboxStagingError(state sandboxState, diagnostic string) error {
-	if diagnostic == "" {
-		diagnostic = "unavailable"
-	}
-	detail := ""
-	if state.StagerExitCode >= 0 {
-		detail += fmt.Sprintf(" exit_code=%d", state.StagerExitCode)
-	}
-	if reason := safeContainerReason(state.StagerReason); reason != "" {
-		detail += " reason=" + reason
-	}
-	return fmt.Errorf("%w: code=%s%s diagnostic=%s", engineruntime.ErrStaging, state.StagerFailureCode, detail, diagnostic)
 }

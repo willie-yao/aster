@@ -84,10 +84,9 @@ controller image, endpoints, and readiness.
 
 Aster's core dashboard, in-process read-only analysis, and ordinary GitOps
 deployment do not inherently require Kata or any Agent Sandbox RuntimeClass. A
-secure runtime is required only when a configured feature creates Agent Sandbox
-workloads. Current examples are Fix execution, scheduled analysis shadowing, and the
-opt-in analyzer benchmark. When those features are disabled, Aster can run
-without Agent Sandbox or a sandbox RuntimeClass.
+secure runtime is required only when Fix generation creates Agent Sandbox
+workloads. When Fix generation is disabled, Aster can run without Agent Sandbox
+or a sandbox RuntimeClass.
 
 Aster accepts the configured `runtimeClassName`; it does not hardcode Kata. The
 platform administrator must install and review the RuntimeClass handler, provide

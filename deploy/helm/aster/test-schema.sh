@@ -70,84 +70,6 @@ fetcher:
 VALUES
 expect_pass cron "$tmp/cron.yaml"
 
-cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
-mode: cron
-fetcher:
-  resources:
-    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 3Gi}
-    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 3Gi}
-ai:
-  enabled: true
-  endpoint: https://api.githubcopilot.com/chat/completions
-  model: fixture-model
-  reasoningEffort: high
-  contextWindowTokens: 200000
-  maxOutputTokens: 8192
-  existingSecret: fixture-model-auth
-agentSandbox:
-  analysisShadow:
-    enabled: true
-    namespace: analysis-shadow-eval
-    runtimeClassName: kata-vm-isolation
-    image:
-      repository: local/shadow-executor
-      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/shadow-stager
-      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      pullPolicy: IfNotPresent
-    dashboardImage:
-      repository: local/remote-fixer
-      tag: sha-1234567
-      pullPolicy: IfNotPresent
-    input:
-      existingClaim: shadow-input
-      localRoot: /analysis-shadow-input
-      localSizeLimit: 3Gi
-    workloadServiceAccount:
-      create: true
-      name: shadow-workload
-    modelProvider:
-      credentialMode: direct
-      api: chat_completions
-      endpoint: https://api.githubcopilot.com/chat/completions
-      model: fixture-model
-      reasoningEffort: high
-      auth:
-        type: bearer
-        existingSecret: shadow-provider
-        tokenKey: AI_TOKEN
-      publicCAPrivateDNS: false
-    timeout: 10m
-    outputLimitBytes: 262144
-    maxPerRun: 1
-    maxSteps: 20
-    modelContextTokens: 200000
-    modelOutputTokens: 8192
-    requireSourceEvidence: true
-    pollInterval: 250ms
-    ledger:
-      existingClaim: shadow-ledger
-      mountPath: /private/analysis-shadow-ledger
-    networkPolicy:
-      mode: cilium
-      enabled: true
-      gatewayNamespaceSelector: {}
-      gatewayPodSelector: {}
-      gatewayPort: 443
-      gatewayTargetPort: null
-      stagingFQDNs: [github.com, api.github.com, storage.googleapis.com]
-      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
-      dnsPodSelector: {k8s-app: kube-dns}
-    quota:
-      enabled: true
-    resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
-VALUES
-expect_pass analysis-shadow "$tmp/analysis-shadow.yaml"
-
 cat > "$tmp/oauth.yaml" <<'VALUES'
 ai:
   enabled: true
@@ -268,27 +190,17 @@ ai:
 VALUES
 expect_fail invalid-api "$tmp/invalid-api.yaml" /ai/api
 
-cat > "$tmp/invalid-analysis-shadow-api.yaml" <<'VALUES'
+cat > "$tmp/removed-analysis-shadow.yaml" <<'VALUES'
 agentSandbox:
-  analysisShadow:
-    modelProvider:
-      api: completions
+  analysisShadow: {}
 VALUES
-expect_fail invalid-analysis-shadow-api "$tmp/invalid-analysis-shadow-api.yaml" /agentSandbox/analysisShadow/modelProvider/api
+expect_fail removed-analysis-shadow "$tmp/removed-analysis-shadow.yaml" "additional properties 'analysisShadow' not allowed"
 
-cat > "$tmp/invalid-analysis-shadow-bound.yaml" <<'VALUES'
+cat > "$tmp/removed-agent-sandbox-analyzer.yaml" <<'VALUES'
 agentSandbox:
-  analysisShadow:
-    maxPerRun: 0
+  analyzer: {}
 VALUES
-expect_fail invalid-analysis-shadow-bound "$tmp/invalid-analysis-shadow-bound.yaml" /agentSandbox/analysisShadow/maxPerRun
-
-cat > "$tmp/invalid-analysis-shadow-key.yaml" <<'VALUES'
-agentSandbox:
-  analysisShadow:
-    modelSecret: forbidden
-VALUES
-expect_fail invalid-analysis-shadow-key "$tmp/invalid-analysis-shadow-key.yaml" /agentSandbox/analysisShadow
+expect_fail removed-agent-sandbox-analyzer "$tmp/removed-agent-sandbox-analyzer.yaml" "additional properties 'analyzer' not allowed"
 
 cat > "$tmp/invalid-actions.yaml" <<'VALUES'
 server:
@@ -426,60 +338,8 @@ agentSandbox:
   rbac:
     create: true
     fixClientServiceAccountName: ""
-    scheduledClientServiceAccountName: ""
 VALUES
 expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
-
-cat > "$tmp/agent-sandbox-analyzer.yaml" <<'VALUES'
-agentSandbox:
-  analyzer:
-    enabled: true
-    namespace: analyzer-eval
-    runtimeClassName: kata-vm-isolation
-    executorImage:
-      repository: local/analyzer
-      digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/analyzer-stager
-      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      pullPolicy: IfNotPresent
-    input:
-      existingClaim: analyzer-input
-    clientServiceAccount:
-      create: true
-      name: ""
-    workloadServiceAccount:
-      create: true
-      name: analyzer-workload
-    modelProvider:
-      credentialMode: gateway
-      api: chat_completions
-      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1/chat/completions
-      model: fixture-model
-      auth:
-        type: none
-        existingSecret: ""
-        tokenKey: ""
-      publicCAPrivateDNS: false
-    timeout: 15m
-    outputLimitBytes: 262144
-    pollInterval: 250ms
-    networkPolicy:
-      mode: kubernetes
-      enabled: true
-      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
-      gatewayPodSelector: {app: model-gateway}
-      gatewayPort: 8443
-      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
-      dnsPodSelector: {k8s-app: kube-dns}
-    quota:
-      enabled: true
-    resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
-VALUES
-expect_pass agent-sandbox-analyzer "$tmp/agent-sandbox-analyzer.yaml"
 
 # Execution bounds now live only in project.yaml, so a stale copy in Helm values
 # must fail closed rather than be silently ignored.
@@ -533,14 +393,6 @@ agentSandbox:
 VALUES
 expect_pass agent-sandbox-ca "$tmp/agent-sandbox-ca.yaml"
 
-cat > "$tmp/invalid-agent-sandbox-analyzer-pull.yaml" <<'VALUES'
-agentSandbox:
-  analyzer:
-    executorImage:
-      pullPolicy: Always
-VALUES
-expect_fail invalid-agent-sandbox-analyzer-pull "$tmp/invalid-agent-sandbox-analyzer-pull.yaml" /agentSandbox/analyzer/executorImage/pullPolicy
-
 cat > "$tmp/invalid-agent-sandbox-apparmor.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:
@@ -559,9 +411,6 @@ expect_fail invalid-agent-sandbox-key "$tmp/invalid-agent-sandbox-key.yaml" /age
 cat > "$tmp/agent-sandbox-responses-api.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:
-    modelProvider:
-      api: responses
-  analyzer:
     modelProvider:
       api: responses
 VALUES
@@ -592,14 +441,5 @@ agentSandbox:
       reasoningEffort: max
 VALUES
 expect_fail invalid-agent-sandbox-max-effort "$tmp/invalid-agent-sandbox-max-effort.yaml" /agentSandbox/fixRuntime/modelProvider/reasoningEffort
-
-cat > "$tmp/invalid-agent-sandbox-auth-type.yaml" <<'VALUES'
-agentSandbox:
-  analyzer:
-    modelProvider:
-      auth:
-        type: ambient
-VALUES
-expect_fail invalid-agent-sandbox-auth-type "$tmp/invalid-agent-sandbox-auth-type.yaml" /agentSandbox/analyzer/modelProvider/auth/type
 
 echo 'Helm values schema checks passed.'

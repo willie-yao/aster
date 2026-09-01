@@ -203,6 +203,7 @@ removed_or_moved_docs = [
     Path("docs/agent-sandbox-fix-runtime-spike.md"),
     Path("docs/architecture/analysis-runtime-evaluation.md"),
     Path("docs/agent-sandbox-opencode-analyzer.md"),
+    Path("docs/maintainer/agent-sandbox-opencode-analyzer.md"),
     Path("docs/remediation-investigation.md"),
     Path("docs/maintainer/remediation-investigation.md"),
 ]

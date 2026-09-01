@@ -28,53 +28,34 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/agentsandbox"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )
 
 const (
-	agentSandboxBackend                    = agentsandbox.Backend
-	agentSandboxRequestEnv                 = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
-	agentSandboxExecutionLabel             = "prow-ai-dashboard/execution"
-	agentSandboxContractAnnotation         = "prow-ai-dashboard/execution-contract-sha256"
-	agentSandboxIDAnnotation               = "prow-ai-dashboard/execution-id"
-	agentSandboxReasoningEffortAnnotation  = "prow-ai-dashboard/model-provider-reasoning-effort"
-	agentSandboxCABundleAnnotation         = "prow-ai-dashboard/model-provider-ca-sha256"
-	agentSandboxPreparedAnnotation         = "prow-ai-dashboard/prepared-manifest-sha256"
-	agentSandboxPreparedIdentityAnnotation = "prow-ai-dashboard/prepared-workspace-sha256"
-	agentSandboxPodAnnotation              = "agents.x-k8s.io/pod-name"
-	agentSandboxContainerName              = "executor"
-	agentSandboxStagerName                 = "stager"
-	defaultSandboxPollEvery                = 250 * time.Millisecond
-	defaultSandboxCleanupTimeout           = 30 * time.Second
-	agentSandboxResultGrace                = 15 * time.Second
-	defaultSandboxOutputLimit              = int64(512 << 10)
-	defaultSandboxCPURequest               = "100m"
-	defaultSandboxCPULimit                 = "1"
-	defaultSandboxMemoryRequest            = "128Mi"
-	defaultSandboxMemoryLimit              = "512Mi"
-	defaultSandboxDiskLimit                = "256Mi"
-	agentSandboxStagerLogLimit             = int64(4 << 10)
+	agentSandboxBackend                   = agentsandbox.Backend
+	agentSandboxRequestEnv                = "PROW_AI_FIX_EXECUTION_REQUEST_B64"
+	agentSandboxExecutionLabel            = "prow-ai-dashboard/execution"
+	agentSandboxContractAnnotation        = "prow-ai-dashboard/execution-contract-sha256"
+	agentSandboxIDAnnotation              = "prow-ai-dashboard/execution-id"
+	agentSandboxReasoningEffortAnnotation = "prow-ai-dashboard/model-provider-reasoning-effort"
+	agentSandboxCABundleAnnotation        = "prow-ai-dashboard/model-provider-ca-sha256"
+	agentSandboxPodAnnotation             = "agents.x-k8s.io/pod-name"
+	agentSandboxContainerName             = "executor"
+	defaultSandboxPollEvery               = 250 * time.Millisecond
+	defaultSandboxCleanupTimeout          = 30 * time.Second
+	agentSandboxResultGrace               = 15 * time.Second
+	defaultSandboxOutputLimit             = int64(512 << 10)
+	defaultSandboxCPURequest              = "100m"
+	defaultSandboxCPULimit                = "1"
+	defaultSandboxMemoryRequest           = "128Mi"
+	defaultSandboxMemoryLimit             = "512Mi"
+	defaultSandboxDiskLimit               = "256Mi"
 )
 
-func agentSandboxResultGraceForPurpose(purpose string) time.Duration {
-	if purpose == "analysis" {
-		return agentanalysis.WorkspacePostModelGrace
-	}
-	return agentSandboxResultGrace
-}
-
-func agentSandboxResultGraceForSpec(spec agentsandbox.Spec) time.Duration {
-	if spec.FinalizationGrace > 0 {
-		return spec.FinalizationGrace
-	}
-	return agentSandboxResultGraceForPurpose(spec.Purpose)
-}
-
 func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
-	return spec.Timeout + agentSandboxResultGraceForSpec(spec) + 5*time.Second
+	return spec.Timeout + agentSandboxResultGrace + 5*time.Second
 }
 
 var (
@@ -99,14 +80,6 @@ func (r *AgentSandboxRuntime) ExecutorImage() string {
 		return ""
 	}
 	return normalizeAgentSandboxOptions(r.opts).Image
-}
-
-// StagerImage returns the immutable stager image configured for this runtime.
-func (r *AgentSandboxRuntime) StagerImage() string {
-	if r == nil {
-		return ""
-	}
-	return normalizeAgentSandboxOptions(r.opts).StagerImage
 }
 
 func (r *AgentSandboxRuntime) RuntimeIdentity() string {
@@ -135,8 +108,6 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		PollEvery          string                        `json:"poll_every"`
 		Resources          AgentSandboxResources         `json:"resources"`
 		AppArmorCapability string                        `json:"app_armor_capability"`
-		StagerImage        string                        `json:"stager_image,omitempty"`
-		StagerInputClaim   string                        `json:"stager_input_claim,omitempty"`
 	}{
 		Backend: agentSandboxBackend, Namespace: opts.Namespace, Image: opts.Image,
 		ServiceAccountName: opts.ServiceAccountName, RuntimeClassName: opts.RuntimeClassName,
@@ -144,7 +115,7 @@ func (r *AgentSandboxRuntime) RuntimeIdentity() string {
 		PublicCAPrivateDNS: opts.PublicCAPrivateDNS,
 		CABundle:           caBundle, CABundleContract: caBundleContract(opts.CABundle),
 		Timeout: opts.Timeout.String(), OutputLimitBytes: opts.OutputLimitBytes, PollEvery: opts.PollEvery.String(),
-		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(), StagerImage: opts.StagerImage, StagerInputClaim: opts.StagerInputClaim,
+		Resources: opts.Resources, AppArmorCapability: opts.appArmorCapability.String(),
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -168,8 +139,6 @@ type ProviderSecretRef struct {
 type AgentSandboxOptions struct {
 	Namespace          string
 	Image              string
-	StagerImage        string
-	StagerInputClaim   string
 	ServiceAccountName string
 	RuntimeClassName   string
 	ModelProvider      modelprovider.Config
@@ -197,14 +166,9 @@ type sandboxState struct {
 	FinishedReason      string
 	PodCreatedAt        time.Time
 	ScheduledAt         time.Time
-	StageStartedAt      time.Time
-	StageFinishedAt     time.Time
 	ExecutionStartedAt  time.Time
 	ExecutionFinishedAt time.Time
 	TimingStatus        string
-	StagerFailureCode   string
-	StagerExitCode      int64
-	StagerReason        string
 	ExecutorStarted     bool
 }
 
@@ -251,29 +215,11 @@ func newAgentSandboxRuntimeForTest(api agentSandboxAPI, opts AgentSandboxOptions
 
 // NewAgentSandboxRuntimeFromEnv constructs the Fix PR adapter from deployment environment and Kubernetes config.
 func NewAgentSandboxRuntimeFromEnv(expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return newAgentSandboxProviderRunnerFromEnv("AGENT_SANDBOX_", "", true, true, expectedProvider, expectedTimeout, expectedOutputLimit)
-}
-
-// NewAgentSandboxProviderRunnerFromEnv constructs an OpenCode lifecycle runner from one reserved environment prefix.
-func NewAgentSandboxProviderRunnerFromEnv(prefix string, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	return newAgentSandboxProviderRunnerFromEnv(prefix, "", true, false, expectedProvider, expectedTimeout, expectedOutputLimit)
-}
-
-// NewAgentSandboxProviderRunnerForBenchmarkFromEnv allows an explicit disposable kubeconfig context for opt-in analyzer benchmarks.
-func NewAgentSandboxProviderRunnerForBenchmarkFromEnv(prefix, kubeContext string, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	if strings.TrimSpace(kubeContext) == "" {
-		return nil, fmt.Errorf("agent sandbox benchmark kube context is required")
-	}
-	return newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext, false, false, expectedProvider, expectedTimeout, expectedOutputLimit)
-}
-
-func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterOnly, allowCABundle bool, expectedProvider modelprovider.Config, expectedTimeout time.Duration, expectedOutputLimit int64) (*AgentSandboxRuntime, error) {
-	opts, err := agentSandboxBaseOptionsFromEnv(prefix)
+	opts, err := agentSandboxBaseOptionsFromEnv("AGENT_SANDBOX_")
 	if err != nil {
 		return nil, err
 	}
-	prefix = strings.TrimSpace(prefix)
-	env := func(name string) string { return strings.TrimSpace(os.Getenv(prefix + name)) }
+	env := func(name string) string { return strings.TrimSpace(os.Getenv("AGENT_SANDBOX_" + name)) }
 	publicCAPrivateDNS := false
 	if value := env("MODEL_PROVIDER_PUBLIC_CA_PRIVATE_DNS"); value != "" {
 		publicCAPrivateDNS, err = strconv.ParseBool(value)
@@ -287,17 +233,26 @@ func newAgentSandboxProviderRunnerFromEnv(prefix, kubeContext string, inClusterO
 		Auth: modelprovider.Auth{Type: env("MODEL_PROVIDER_AUTH_TYPE")}, PublicCAPrivateDNS: publicCAPrivateDNS,
 	})
 	opts.ProviderSecretRef = ProviderSecretRef{Name: env("MODEL_PROVIDER_AUTH_SECRET_NAME"), Key: env("MODEL_PROVIDER_AUTH_SECRET_KEY")}
-	if allowCABundle {
-		opts.CABundle = modelprovider.CABundleConfig{
-			ExistingConfigMap: env("MODEL_PROVIDER_CA_CONFIG_MAP"),
-			Key:               env("MODEL_PROVIDER_CA_KEY"),
-			SHA256:            env("MODEL_PROVIDER_CA_SHA256"),
-		}
+	opts.CABundle = modelprovider.CABundleConfig{
+		ExistingConfigMap: env("MODEL_PROVIDER_CA_CONFIG_MAP"),
+		Key:               env("MODEL_PROVIDER_CA_KEY"),
+		SHA256:            env("MODEL_PROVIDER_CA_SHA256"),
 	}
 	if opts.ModelProvider != expectedProvider || opts.Timeout != expectedTimeout || opts.OutputLimitBytes != expectedOutputLimit {
 		return nil, fmt.Errorf("agent sandbox deployment values do not match runtime configuration")
 	}
-	return finishAgentSandboxRunner(opts, kubeContext, inClusterOnly)
+	if err := validateAgentSandboxOptions(opts); err != nil {
+		return nil, err
+	}
+	cfg, err := agentSandboxInClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("agent sandbox requires in-cluster Kubernetes configuration: %w", err)
+	}
+	api, err := newKubeAgentSandboxAPI(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("agent sandbox Kubernetes client: %w", err)
+	}
+	return NewAgentSandboxRuntime(api, opts)
 }
 
 func agentSandboxBaseOptionsFromEnv(prefix string) (AgentSandboxOptions, error) {
@@ -315,7 +270,7 @@ func agentSandboxBaseOptionsFromEnv(prefix string) (AgentSandboxOptions, error) 
 		return AgentSandboxOptions{}, fmt.Errorf("agent sandbox timeout: %w", err)
 	}
 	opts := AgentSandboxOptions{
-		Namespace: env("NAMESPACE"), Image: env("IMAGE"), StagerImage: env("STAGER_IMAGE"), StagerInputClaim: env("STAGER_INPUT_CLAIM"),
+		Namespace: env("NAMESPACE"), Image: env("IMAGE"),
 		ServiceAccountName: env("SERVICE_ACCOUNT"), RuntimeClassName: env("RUNTIME_CLASS"), Timeout: timeout, OutputLimitBytes: outputLimit,
 		Resources: AgentSandboxResources{
 			CPURequest: env("CPU_REQUEST"), CPULimit: env("CPU_LIMIT"), MemoryRequest: env("MEMORY_REQUEST"),
@@ -330,32 +285,6 @@ func agentSandboxBaseOptionsFromEnv(prefix string) (AgentSandboxOptions, error) 
 		opts.PollEvery = poll
 	}
 	return normalizeAgentSandboxOptions(opts), nil
-}
-
-func finishAgentSandboxRunner(opts AgentSandboxOptions, kubeContext string, inClusterOnly bool) (*AgentSandboxRuntime, error) {
-	if err := validateAgentSandboxOptions(opts); err != nil {
-		return nil, err
-	}
-	var (
-		cfg *rest.Config
-		err error
-	)
-	if inClusterOnly {
-		cfg, err = agentSandboxInClusterConfig()
-		if err != nil {
-			return nil, fmt.Errorf("agent sandbox requires in-cluster Kubernetes configuration: %w", err)
-		}
-	} else {
-		cfg, err = agentSandboxKubeconfigContextConfig(kubeContext)
-		if err != nil {
-			return nil, fmt.Errorf("agent sandbox benchmark Kubernetes configuration: %w", err)
-		}
-	}
-	api, err := newKubeAgentSandboxAPI(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("agent sandbox Kubernetes client: %w", err)
-	}
-	return NewAgentSandboxRuntime(api, opts)
 }
 
 func normalizeAgentSandboxOptions(opts AgentSandboxOptions) AgentSandboxOptions {
@@ -392,15 +321,6 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 	}
 	if !opts.testOnly && !immutableExecutorImage.MatchString(opts.Image) {
 		return fmt.Errorf("agent sandbox executor image must use an immutable sha256 digest")
-	}
-	if !opts.testOnly && opts.StagerImage != "" && !immutableExecutorImage.MatchString(opts.StagerImage) {
-		return fmt.Errorf("agent sandbox stager image must use an immutable sha256 digest")
-	}
-	if opts.StagerImage != "" && opts.StagerInputClaim == "" {
-		return fmt.Errorf("agent sandbox stager image requires an input claim")
-	}
-	if opts.StagerInputClaim != "" && len(k8svalidation.IsDNS1123Subdomain(opts.StagerInputClaim)) > 0 {
-		return fmt.Errorf("agent sandbox stager input claim is invalid")
 	}
 	if !opts.testOnly && strings.TrimSpace(opts.RuntimeClassName) == "" {
 		return fmt.Errorf("agent sandbox secure runtime class is required")
@@ -564,12 +484,6 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	if err := agentsandbox.ValidateSpec(spec); err != nil {
 		return result, err
 	}
-	if spec.StagedWorkspace != nil && (strings.TrimSpace(r.opts.StagerImage) == "" || strings.TrimSpace(r.opts.StagerInputClaim) == "") {
-		return result, fmt.Errorf("agent sandbox staged workspace requires a stager image and input claim")
-	}
-	if spec.PreparedWorkspace != nil && strings.TrimSpace(r.opts.StagerInputClaim) == "" {
-		return result, fmt.Errorf("agent sandbox prepared workspace requires an input claim")
-	}
 	if spec.Timeout != r.opts.Timeout || spec.OutputLimitBytes != r.opts.OutputLimitBytes {
 		return result, fmt.Errorf("agent sandbox workload does not match configured timeout or output limit")
 	}
@@ -673,23 +587,12 @@ func (r *AgentSandboxRuntime) Run(ctx context.Context, spec agentsandbox.Spec) (
 	result.Telemetry.TaskFinalizedMs = result.Duration.Milliseconds()
 	result.Telemetry.SchedulingAvailable = !terminal.PodCreatedAt.IsZero() && !terminal.ScheduledAt.IsZero()
 	result.Telemetry.SchedulingMs = durationMilliseconds(terminal.PodCreatedAt, terminal.ScheduledAt)
-	result.Telemetry.StagingAvailable = spec.PreparedWorkspace != nil || (!terminal.StageStartedAt.IsZero() && !terminal.StageFinishedAt.IsZero())
-	result.Telemetry.StagingMs = durationMilliseconds(terminal.StageStartedAt, terminal.StageFinishedAt)
 	result.Telemetry.ExecutionAvailable = !terminal.ExecutionStartedAt.IsZero() && !terminal.ExecutionFinishedAt.IsZero()
 	result.Telemetry.ExecutionMs = durationMilliseconds(terminal.ExecutionStartedAt, terminal.ExecutionFinishedAt)
 	result.Telemetry.ExecutorStarted = terminal.ExecutorStarted
 	result.Telemetry.PhaseTimingStatus = terminal.TimingStatus
 	if result.Telemetry.SchedulingAvailable && result.Telemetry.StagingAvailable && result.Telemetry.ExecutionAvailable {
 		result.Telemetry.PhaseTimingStatus = "available"
-	}
-	if terminal.StagerFailureCode != "" && !terminal.ExecutorStarted {
-		result.Telemetry.FailurePhase = "staging"
-		result.Telemetry.FailureCode = terminal.StagerFailureCode
-		diagnostic := "unavailable"
-		if logs, logErr := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, agentSandboxStagerName, agentSandboxStagerLogLimit); logErr == nil {
-			diagnostic = stagerDiagnosticCategory(logs)
-		}
-		return result, agentSandboxStagingError(terminal, diagnostic)
 	}
 
 	logs, err := r.api.PodLogs(runCtx, r.opts.Namespace, terminal.PodName, agentSandboxContainerName, spec.OutputLimitBytes)
@@ -841,7 +744,7 @@ func (r *AgentSandboxRuntime) waitTerminal(ctx context.Context, work enginerunti
 }
 
 func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbox.Spec, contractHash []byte, executionID string) map[string]any {
-	shutdown := r.now().Add(spec.Timeout + agentSandboxResultGraceForSpec(spec) + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+	shutdown := r.now().Add(spec.Timeout + agentSandboxResultGrace + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
 	labels := map[string]any{
 		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
 		"agents.x-k8s.io/created-by":   "prow-ai-dashboard",
@@ -861,13 +764,6 @@ func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbo
 	}
 	if r.opts.CABundle.Enabled() {
 		annotations[agentSandboxCABundleAnnotation] = r.opts.CABundle.SHA256
-	}
-	if spec.PreparedWorkspace != nil {
-		annotations[agentSandboxPreparedAnnotation] = spec.PreparedWorkspace.ManifestHash
-		annotations[agentSandboxPreparedIdentityAnnotation] = spec.PreparedWorkspace.IdentityHash
-	} else if spec.StagedWorkspace != nil {
-		annotations[agentSandboxPreparedAnnotation] = spec.StagedWorkspace.ManifestHash
-		annotations[agentSandboxPreparedIdentityAnnotation] = spec.StagedWorkspace.IdentityHash
 	}
 	return map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1",
@@ -1015,39 +911,14 @@ func boundedSummary(values ...string) string {
 }
 
 func agentSandboxWorkloadHash(spec agentsandbox.Spec, opts AgentSandboxOptions) [sha256.Size]byte {
-	stageEnv := ""
-	if spec.StagedWorkspace != nil {
-		stageEnv = spec.StagedWorkspace.RequestEnv
-	}
-	preparedHash := ""
-	preparedIdentity := ""
-	if spec.PreparedWorkspace != nil {
-		preparedHash = spec.PreparedWorkspace.ManifestHash
-		preparedIdentity = spec.PreparedWorkspace.IdentityHash
-	} else if spec.StagedWorkspace != nil {
-		preparedHash = spec.StagedWorkspace.ManifestHash
-		preparedIdentity = spec.StagedWorkspace.IdentityHash
-	}
-	finalizationGrace := ""
-	if spec.FinalizationGrace > 0 {
-		finalizationGrace = spec.FinalizationGrace.String()
-	}
 	metadata, _ := json.Marshal(struct {
-		Purpose              string `json:"purpose"`
-		RequestEnv           string `json:"request_env"`
-		Timeout              string `json:"timeout"`
-		FinalizationGrace    string `json:"finalization_grace,omitempty"`
-		OutputLimitBytes     int64  `json:"output_limit_bytes"`
-		WritableWorkspace    bool   `json:"writable_workspace"`
-		StageRequestEnv      string `json:"stage_request_env,omitempty"`
-		PreparedManifestHash string `json:"prepared_manifest_hash,omitempty"`
-		PreparedIdentityHash string `json:"prepared_identity_hash,omitempty"`
-	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), finalizationGrace, spec.OutputLimitBytes, spec.WritableWorkspace, stageEnv, preparedHash, preparedIdentity})
+		Purpose           string `json:"purpose"`
+		RequestEnv        string `json:"request_env"`
+		Timeout           string `json:"timeout"`
+		OutputLimitBytes  int64  `json:"output_limit_bytes"`
+		WritableWorkspace bool   `json:"writable_workspace"`
+	}{spec.Purpose, spec.RequestEnv, spec.Timeout.String(), spec.OutputLimitBytes, spec.WritableWorkspace})
 	request := append(append(append([]byte(nil), metadata...), 0), spec.Request...)
-	if spec.StagedWorkspace != nil {
-		request = append(request, 0)
-		request = append(request, spec.StagedWorkspace.Request...)
-	}
 	return agentSandboxContractHash(request, opts)
 }
 
@@ -1059,12 +930,6 @@ func agentSandboxContractHash(requestJSON []byte, opts AgentSandboxOptions) [sha
 		requestJSON, providerJSON, secretRefJSON, []byte(opts.Image), []byte(opts.ServiceAccountName), []byte(opts.RuntimeClassName),
 		[]byte(opts.Resources.CPURequest), []byte(opts.Resources.CPULimit), []byte(opts.Resources.MemoryRequest),
 		[]byte(opts.Resources.MemoryLimit), []byte(opts.Resources.EphemeralStorage), []byte(opts.appArmorCapability.String()), strconv.AppendBool(nil, opts.PublicCAPrivateDNS),
-	}
-	if opts.StagerImage != "" {
-		values = append(values, []byte(opts.StagerImage))
-	}
-	if opts.StagerInputClaim != "" {
-		values = append(values, []byte(opts.StagerInputClaim))
 	}
 	if opts.CABundle.Enabled() {
 		caBundleJSON, _ := json.Marshal(opts.CABundle)
@@ -1225,7 +1090,7 @@ func (k *kubeAgentSandboxAPI) Delete(ctx context.Context, namespace, name, uid s
 }
 
 func (k *kubeAgentSandboxAPI) PodLogs(ctx context.Context, namespace, podName, container string, limit int64) (string, error) {
-	if container != agentSandboxContainerName && container != agentSandboxStagerName {
+	if container != agentSandboxContainerName {
 		return "", fmt.Errorf("pod log container is invalid")
 	}
 	endpoint := k.host + "/api/v1/namespaces/" + url.PathEscape(namespace) + "/pods/" + url.PathEscape(podName) + "/log"
@@ -1301,9 +1166,7 @@ func enrichSandboxStateWithPod(state *sandboxState, pod map[string]any) {
 			state.ScheduledAt, _ = time.Parse(time.RFC3339, stringValue(condition["lastTransitionTime"]))
 		}
 	}
-	state.StageStartedAt, state.StageFinishedAt = containerTiming(pod, "initContainerStatuses", agentSandboxStagerName)
 	state.ExecutionStartedAt, state.ExecutionFinishedAt = containerTiming(pod, "containerStatuses", agentSandboxContainerName)
-	state.StagerFailureCode, state.StagerExitCode, state.StagerReason = stagerFailureState(pod)
 	state.ExecutorStarted = !state.ExecutionStartedAt.IsZero()
 	state.TimingStatus = "timestamps_incomplete"
 }

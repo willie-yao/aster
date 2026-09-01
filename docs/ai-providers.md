@@ -202,8 +202,7 @@ See [Agentic analysis](agentic.md#private-operational-data) and
 
 ## Agent Sandbox provider compatibility
 
-Agent Sandbox uses a separate version-pinned OpenCode transport, but the provider
-contract is shared by Fix generation and the analysis shadow.
+Agent Sandbox Fix generation uses a separate version-pinned OpenCode transport.
 
 | `model_provider.api` | OpenCode transport | Supported authentication |
 | --- | --- | --- |
@@ -225,19 +224,15 @@ Pinned OpenCode 1.18.2 supports empty provider-default effort plus `none`, `low`
 provider transport supports that value. The project and Helm reasoning-effort
 values must match.
 
-Every deployed endpoint must use HTTPS. The Fix-only
-`public_ca_private_dns` or Helm `publicCAPrivateDNS` field must remain false for
-direct providers and may be true only for a privately resolved public gateway
-FQDN whose certificate chains to a public CA. The analysis shadow has no
-equivalent field.
+Every deployed endpoint must use HTTPS. The `public_ca_private_dns` or Helm
+`publicCAPrivateDNS` field must remain false for direct providers and may be true
+only for a privately resolved public gateway FQDN whose certificate chains to a
+public CA.
 
 RuntimeClass, gateway authorization, egress, and Secret ownership remain
 platform-owned and are documented in
-[Kubernetes platform setup](kubernetes-platform.md). The optional ConfigMap CA
-bundle is a Fix-only contract documented in the
-[Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime);
-it does not extend the analysis shadow. Analysis-shadow private CA trust must be
-present in the immutable executor image.
+[Kubernetes platform setup](kubernetes-platform.md). The optional ConfigMap CA bundle is documented in the
+[Kubernetes operator reference](kubernetes-reference.md#agent-sandbox-fix-runtime).
 
 The named bearer Secret must already exist in the execution namespace. Aster and
 the chart reference only its exact name and key; they do not create, copy, read,
@@ -249,6 +244,5 @@ rejects exact credential leakage from outputs and results.
 Focused runtime guides:
 
 - Fix workflow and project example: [Fix PR generation](fix-prs.md#agent-sandbox-opencode-executor)
-- Analysis-shadow authority and evaluation: [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md)
 - Exact project fields: [Project configuration](project-configuration.md#experimental-agent-sandbox-fix-configuration)
 - RuntimeClass, Secret, CA, and egress ownership: [Kubernetes platform setup](kubernetes-platform.md)
