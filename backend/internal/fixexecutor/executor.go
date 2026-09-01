@@ -185,8 +185,9 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 		}
 		state := stateForContext(ctx)
-		if reason, rejected := providerCredentialRejection(stdout); rejected && state == engineruntime.TerminalFailed {
+		if reason, detail, rejected := providerCredentialRejection(stdout); rejected && state == engineruntime.TerminalFailed {
 			result.FailureCode = engineruntime.ExecutionFailureProviderCredential
+			result.ProviderError = detail
 			return finish(state, reason)
 		}
 		return finish(state, safeOpenCodeFailure(agentErr))
@@ -332,6 +333,14 @@ func compactFailureWithCommandResults(
 func validateCredentialFreeResult(credential modelprovider.CredentialGuard, result engineruntime.ExecutionResult) error {
 	if err := credential.CheckStrings(result.Diff, result.StdoutSummary, result.StderrSummary, result.FailureReason); err != nil {
 		return err
+	}
+	if result.ProviderError != nil {
+		if err := credential.CheckStrings(
+			result.ProviderError.Message, result.ProviderError.ProviderID,
+			result.ProviderError.Endpoint, result.ProviderError.Model,
+		); err != nil {
+			return err
+		}
 	}
 	for _, name := range result.ChangedFiles {
 		if err := credential.CheckStrings(name); err != nil {
