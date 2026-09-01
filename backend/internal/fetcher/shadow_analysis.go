@@ -185,7 +185,7 @@ func (p *pipeline) selectShadowCandidates(details []models.JobDetail) []shadowCa
 			}
 			for ti := range run.TestCases {
 				testCase := &run.TestCases[ti]
-				if testCase.Status != "failed" || testCase.AISummary == nil || testCase.AIAnalysis == nil || testCase.AIAnalysis.Mode != ai.AgenticMode || !ai.IsGroundedAnalysis(testCase.AIAnalysis) {
+				if testCase.Status != "failed" || testCase.AISummary == nil || testCase.AIAnalysis == nil || testCase.AIAnalysis.Mode != ai.AgenticMode || !ai.AnalysisCitationsVerified(testCase.AIAnalysis) {
 					continue
 				}
 				authoritative, authoritativeHash, err := agentanalysis.NewAuthoritativeSnapshot(testCase.AISummary, testCase.AIAnalysis)

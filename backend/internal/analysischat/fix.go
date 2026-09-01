@@ -395,8 +395,8 @@ func conversationEvidenceWarnings(messages []Message, requestID string) []string
 
 // conversationCitations returns the validated citations accumulated by the
 // conversation up to and including the promoted answer, most recent first.
-// Evidence validated in an earlier turn stays trustworthy, so a grounded
-// conversation does not have to re-read artifacts to keep a later answer
+// Evidence validated in an earlier turn stays trustworthy, so a conversation with verified
+// citations does not have to re-read artifacts to keep a later answer
 // fix-eligible. Turn history replays prior citations to the model, so recent
 // evidence is normally what the promoted answer reasoned over; history
 // compaction drops the oldest turns first, so truncation keeps the most recent.

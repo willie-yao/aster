@@ -2,13 +2,13 @@ package models
 
 import "testing"
 
-func TestAnalysisHasUsableDiagnosisAcceptsGroundedAndPreliminary(t *testing.T) {
+func TestAnalysisHasUsableDiagnosisAcceptsCitationsVerifiedAndPreliminary(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		disposition string
 		want        bool
 	}{
-		{name: "grounded", disposition: AnalysisDispositionGrounded, want: true},
+		{name: "citations verified", disposition: AnalysisDispositionCitationsVerified, want: true},
 		{name: "preliminary", disposition: AnalysisDispositionPreliminary, want: true},
 		{name: "unstamped"},
 		{name: "unknown", disposition: "unknown"},

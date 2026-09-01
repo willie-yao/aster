@@ -86,7 +86,7 @@ import { RichText } from "./RichText";
 import type { PatternAnalysis } from "../types/dashboard";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import { ChatFixDialog } from "./ChatFixDialog";
-import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
+import { chatFixVerifiedCitationRequestIDs, chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
   sessionID: string;
@@ -107,7 +107,7 @@ function analysisChatIntentStorage(): Storage | null {
 // Platform-dependent; this matches the thin scrollbar Chromium renders.
 const chatScrollbarGutter = 11;
 
-// The first prompt names an artifact source, because an artifact-grounded turn
+// The first prompt names an artifact source, because a turn with verified artifact citations
 // is what produces verified citations and makes an answer fix-eligible.
 const suggestedQuestions = [
   "What does the build log show at the failure?",
@@ -664,7 +664,7 @@ export function AnalysisChat({
   const chatTitle = causeScope ? "Investigate cause" : "Investigate and fix";
   const chatToggleLabel = `${expanded ? "Collapse" : "Expand"} ${chatTitle.toLowerCase()}`;
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
-  const groundedRequestIDs = useMemo(() => chatFixGroundedRequestIDs(session?.messages), [session]);
+  const verifiedCitationRequestIDs = useMemo(() => chatFixVerifiedCitationRequestIDs(session?.messages), [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
     setProgressPhase(progress.phase);
     if (progress.started_at) setProgressStartedAt(progress.started_at);
@@ -1575,7 +1575,7 @@ export function AnalysisChat({
                   return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
                 }
                 const hasArtifactEvidence = message.request_id
-                  ? groundedRequestIDs.has(message.request_id)
+                  ? verifiedCitationRequestIDs.has(message.request_id)
                   : Boolean(message.citations?.length);
                 const exactFixEligible = exactFixEnabled && hasArtifactEvidence &&
                   (causeFixEnabled || hasVerifiedSourcePaths);

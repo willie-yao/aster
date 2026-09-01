@@ -227,7 +227,7 @@ func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePol
 
 // MeetsCurrentCritiqueContract reports whether an analysis passed the current deterministic critique contract.
 func MeetsCurrentCritiqueContract(analysis *models.AIAnalysis) bool {
-	return analysis != nil && IsGroundedAnalysis(analysis) && analysis.Mode == AgenticMode && analysis.CritiquePassed && analysis.CritiqueVersion >= currentCritiqueVersion
+	return analysis != nil && AnalysisCitationsVerified(analysis) && analysis.Mode == AgenticMode && analysis.CritiquePassed && analysis.CritiqueVersion >= currentCritiqueVersion
 }
 
 // CurrentCritiqueVersion returns the active deterministic critique contract version.

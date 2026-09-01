@@ -21,7 +21,7 @@ func TestAnalysisDisposition(t *testing.T) {
 		disposition string
 		warnings    []string
 	}{
-		{name: "grounded", disposition: models.AnalysisDispositionGrounded},
+		{name: "citations verified", disposition: models.AnalysisDispositionCitationsVerified},
 		{name: "missing citation", mutate: func(value *models.AIAnalysis) {
 			value.EvidenceCitations = nil
 			value.CritiquePassed = false
@@ -30,7 +30,7 @@ func TestAnalysisDisposition(t *testing.T) {
 		{name: "unavailable evidence is advisory", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueSoftWarnings = []string{string(CritiqueRuleEvidenceUnavailable)}
-		}, disposition: models.AnalysisDispositionGrounded, warnings: []string{models.AnalysisWarningInvestigation}},
+		}, disposition: models.AnalysisDispositionCitationsVerified, warnings: []string{models.AnalysisWarningInvestigation}},
 		{name: "available evidence unread", mutate: func(value *models.AIAnalysis) {
 			value.CritiquePassed = false
 			value.CritiqueSoftWarnings = []string{string(CritiqueRuleEvidenceAvailableUnread)}
@@ -62,7 +62,7 @@ func TestAnalysisDisposition(t *testing.T) {
 	}
 }
 
-func TestMeetsCurrentCritiqueContractRequiresGroundedDisposition(t *testing.T) {
+func TestMeetsCurrentCritiqueContractRequiresCitationsVerifiedDisposition(t *testing.T) {
 	analysis := &models.AIAnalysis{
 		RootCause: "cause", Severity: "High", SuggestedFix: "fix", Mode: AgenticMode,
 		CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
@@ -72,8 +72,8 @@ func TestMeetsCurrentCritiqueContractRequiresGroundedDisposition(t *testing.T) {
 	if MeetsCurrentCritiqueContract(analysis) {
 		t.Fatal("preliminary analysis passed the action-facing critique contract")
 	}
-	analysis.Disposition = models.AnalysisDispositionGrounded
+	analysis.Disposition = models.AnalysisDispositionCitationsVerified
 	if !MeetsCurrentCritiqueContract(analysis) {
-		t.Fatal("grounded current analysis did not pass the critique contract")
+		t.Fatal("citation-verified current analysis did not pass the critique contract")
 	}
 }

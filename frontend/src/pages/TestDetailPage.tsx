@@ -488,7 +488,7 @@ export function TestDetailPage() {
       title="Analysis briefing"
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
       metadata={`${selectedTestCase.ai_analysis.severity} severity · ${matchingFailures} ${matchingFailures === 1 ? "matching failure" : "matching failures"}`}
-      mobileNotice={selectedTestCase.ai_analysis.disposition !== "grounded" ? (
+      mobileNotice={selectedTestCase.ai_analysis.disposition !== "citations_verified" ? (
         <Alert severity="warning" variant="outlined">
           Preliminary analysis. Evidence or quality checks remain unresolved. Review only.
         </Alert>

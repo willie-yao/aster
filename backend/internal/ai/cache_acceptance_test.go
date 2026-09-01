@@ -233,7 +233,7 @@ func TestNewAgenticCacheEntryRoundTripsAcceptedResult(t *testing.T) {
 }
 
 func TestMeetsCurrentCritiqueContract(t *testing.T) {
-	analysis := &models.AIAnalysis{Mode: AgenticMode, CritiquePassed: true, CritiqueVersion: CurrentCritiqueVersion(), Disposition: models.AnalysisDispositionGrounded}
+	analysis := &models.AIAnalysis{Mode: AgenticMode, CritiquePassed: true, CritiqueVersion: CurrentCritiqueVersion(), Disposition: models.AnalysisDispositionCitationsVerified}
 	if !MeetsCurrentCritiqueContract(analysis) {
 		t.Fatal("current critique contract was rejected")
 	}

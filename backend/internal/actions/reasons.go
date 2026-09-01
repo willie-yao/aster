@@ -92,9 +92,9 @@ func ReasonMessage(code ReasonCode) string {
 	case ReasonUnsafeRemediation:
 		return "The proposed remediation violates the deterministic safety policy and requires further investigation."
 	case ReasonAlreadyPresent:
-		return "The grounded source already contains the proposed remediation."
+		return "The verified source already contains the proposed remediation."
 	case ReasonSourceVerificationInconclusive:
-		return "Pinned-source verification was inconclusive; investigate the grounded source before starting an action."
+		return "Pinned-source verification was inconclusive; investigate the verified source before starting an action."
 	case ReasonSourceBranchUnknown:
 		return "The build does not report a resolvable source branch, so a generation base cannot be established."
 	case ReasonSourceRevisionDiverged:

@@ -112,7 +112,7 @@ func classifyAIWork(ctx context.Context, httpClient *http.Client, item aiWork, c
 }
 
 func analysisNeedsWork(tc *models.TestCase) bool {
-	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !ai.IsGroundedAnalysis(tc.AIAnalysis)
+	return tc.AISummary == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != ai.AgenticMode || !ai.AnalysisCitationsVerified(tc.AIAnalysis)
 }
 
 func (p *pipeline) cacheGenerationFingerprint() string {

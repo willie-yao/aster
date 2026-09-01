@@ -154,7 +154,7 @@ After the run succeeds, check:
 - `/data/provenance.json` reports matching reusable-workflow and engine commits,
   plus the effective test-infra revision for TestGrid discovery.
 - `/data/dashboard.json` contains the discovered jobs.
-- A failed test in `/data/jobs/*.json` contains grounded AI analysis.
+- A failed test in `/data/jobs/*.json` contains AI analysis with a `citations_verified` disposition.
 
 See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site
 is empty or analysis is unavailable.

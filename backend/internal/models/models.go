@@ -140,9 +140,11 @@ const (
 	// AnalysisDispositionPreliminary identifies a safe structured analysis that
 	// still has unresolved grounding or quality warnings.
 	AnalysisDispositionPreliminary = "preliminary"
-	// AnalysisDispositionGrounded identifies an analysis with verified artifact
-	// grounding and no unresolved grounding defect.
-	AnalysisDispositionGrounded = "grounded"
+	// AnalysisDispositionCitationsVerified identifies an analysis whose retained
+	// artifact citations passed the deterministic citation checks and whose
+	// publication state has no citation-degrading defect. It does not assert that
+	// the cited evidence entails the analysis's causal claims.
+	AnalysisDispositionCitationsVerified = "citations_verified"
 
 	AnalysisWarningArtifactGrounding = "artifact_grounding_incomplete"
 	AnalysisWarningSourceGrounding   = "source_grounding_incomplete"
@@ -170,7 +172,8 @@ type AIAnalysis struct {
 	// when the analysis did not establish ownership.
 	CauseLocation *AnalysisCauseLocation `json:"cause_location,omitempty"`
 
-	// Disposition separates safe displayability from grounding and action policy.
+	// Disposition separates safe displayability from citation verification and
+	// action policy.
 	// Action eligibility is derived separately and is never stored here.
 	Disposition string `json:"disposition,omitempty"`
 	// DispositionWarnings contains bounded, non-sensitive warning codes.

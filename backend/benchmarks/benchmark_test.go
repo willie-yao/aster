@@ -177,7 +177,7 @@ type benchmarkOutcome string
 
 const (
 	benchmarkOutcomeUsable                    benchmarkOutcome = "usable"
-	benchmarkOutcomeGroundedPolicyUnavailable benchmarkOutcome = "grounded_policy_unavailable"
+	benchmarkOutcomeCitationPolicyUnavailable benchmarkOutcome = "citation_policy_unavailable"
 	benchmarkOutcomeUnknown                   benchmarkOutcome = "unknown"
 )
 
@@ -922,7 +922,7 @@ func benchmarkOutcomeForAnalysisError(err error) (benchmarkOutcome, error) {
 		return benchmarkOutcomeUsable, nil
 	}
 	if errors.Is(err, ai.ErrMissingArtifactCitation) {
-		return benchmarkOutcomeGroundedPolicyUnavailable, nil
+		return benchmarkOutcomeCitationPolicyUnavailable, nil
 	}
 	return benchmarkOutcomeUnknown, err
 }
@@ -935,7 +935,7 @@ func TestBenchmarkOutcomeForAnalysisError(t *testing.T) {
 		ok      bool
 	}{
 		{name: "usable", outcome: benchmarkOutcomeUsable, ok: true},
-		{name: "grounded policy", err: fmt.Errorf("wrapped: %w", ai.ErrMissingArtifactCitation), outcome: benchmarkOutcomeGroundedPolicyUnavailable, ok: true},
+		{name: "citation policy", err: fmt.Errorf("wrapped: %w", ai.ErrMissingArtifactCitation), outcome: benchmarkOutcomeCitationPolicyUnavailable, ok: true},
 		{name: "provider", err: errors.New("provider 503"), outcome: benchmarkOutcomeUnknown},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: benchmarkOutcomeUnknown},
 		{name: "tools", err: ai.ErrToolsUnsupported, outcome: benchmarkOutcomeUnknown},
@@ -1579,7 +1579,7 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, outcome ben
 	}
 	if tc.AIAnalysis == nil {
 		if benchmarkAllowsUnavailable(bc, tc, outcome) {
-			t.Logf("ALLOWED: %s produced a grounded-policy unavailable result after %s", backend, elapsed)
+			t.Logf("ALLOWED: %s produced a citation-policy unavailable result after %s", backend, elapsed)
 			return
 		}
 		t.Fatalf("%s analysis produced no AIAnalysis after %s (ai_summary_present=%v)", backend, elapsed, tc.AISummary != nil)
@@ -1746,12 +1746,12 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 }
 
 func benchmarkAllowsUnavailable(bc benchCase, tc *models.TestCase, outcome benchmarkOutcome) bool {
-	return bc.allowUnavailable && outcome == benchmarkOutcomeGroundedPolicyUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil && !tc.AISummary.IsTransient
+	return bc.allowUnavailable && outcome == benchmarkOutcomeCitationPolicyUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil && !tc.AISummary.IsTransient
 }
 
 func TestBenchmarkAllowsUnavailable(t *testing.T) {
 	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: evidence remained inconclusive"}}
-	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid, benchmarkOutcomeGroundedPolicyUnavailable) {
+	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid, benchmarkOutcomeCitationPolicyUnavailable) {
 		t.Fatal("allowed unavailable result was rejected")
 	}
 	for _, tc := range []struct {
@@ -1760,10 +1760,10 @@ func TestBenchmarkAllowsUnavailable(t *testing.T) {
 		tc   *models.TestCase
 		out  benchmarkOutcome
 	}{
-		{name: "case disabled", tc: valid, out: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "case disabled", tc: valid, out: benchmarkOutcomeCitationPolicyUnavailable},
 		{name: "wrong outcome", bc: benchCase{allowUnavailable: true}, tc: valid, out: benchmarkOutcomeUnknown},
-		{name: "transient", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: x", IsTransient: true}}, out: benchmarkOutcomeGroundedPolicyUnavailable},
-		{name: "analysis attached", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: valid.AISummary, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}, out: benchmarkOutcomeGroundedPolicyUnavailable},
+		{name: "transient", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: x", IsTransient: true}}, out: benchmarkOutcomeCitationPolicyUnavailable},
+		{name: "analysis attached", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: valid.AISummary, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}, out: benchmarkOutcomeCitationPolicyUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if benchmarkAllowsUnavailable(tc.bc, tc.tc, tc.out) {

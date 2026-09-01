@@ -66,7 +66,7 @@ func TestCollectAIWorkPrioritizesMissingBuildAnalysis(t *testing.T) {
 	reusable := models.TestCase{
 		Name: "reusable", Status: "failed",
 		AISummary:  &models.AISummary{Summary: "cached"},
-		AIAnalysis: &models.AIAnalysis{Mode: ai.AgenticMode, CritiquePassed: true, Disposition: models.AnalysisDispositionGrounded},
+		AIAnalysis: &models.AIAnalysis{Mode: ai.AgenticMode, CritiquePassed: true, Disposition: models.AnalysisDispositionCitationsVerified},
 	}
 	details := []models.JobDetail{{
 		Name: "job", JobID: "job", JobType: models.JobTypePeriodic,

@@ -116,7 +116,7 @@ func analyzedTest(name, junit, generated string) models.TestCase {
 		AIAnalysis: &models.AIAnalysis{
 			GeneratedAt: generated, RootCause: "the controller stopped", Severity: "High",
 			SuggestedFix: "restart the controller", RelevantFiles: []string{"build-log.txt"},
-			Disposition: models.AnalysisDispositionGrounded,
+			Disposition: models.AnalysisDispositionCitationsVerified,
 		},
 	}
 }

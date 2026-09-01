@@ -330,8 +330,11 @@ validation remain mandatory.
 
 Publication disposition is separate from cache policy. A draft whose causal claim
 has no validated artifact citation is published as `preliminary` with an
-`artifact_grounding_incomplete` warning under every policy. Preliminary
-publication does not directly authorize an action. A diagnosis that passes the
+`artifact_grounding_incomplete` warning under every policy. A
+`citations_verified` disposition means retained citations were read and their
+quotes occur at the stated artifact ranges. It does not mean the cited text
+entails the cause or supports every causal link. Preliminary publication does not
+directly authorize an action. A diagnosis that passes the
 separate usable-diagnosis check may still feed correlation or chat-derived Fix
 flows that apply their own evidence gates. Cache policy can still change whether the selected draft is reusable, while
 deterministic draft selection decides which parseable candidate is published.

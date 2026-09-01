@@ -61,7 +61,7 @@ func preparedCauseDetail() models.JobDetail {
 				Name: "TestCluster", Status: "failed", JUnitFile: "junit.xml",
 				AIAnalysis: &models.AIAnalysis{
 					GeneratedAt: "2026-08-25T00:00:00Z", RootCause: "controller defect", Severity: "High",
-					Disposition: models.AnalysisDispositionGrounded,
+					Disposition: models.AnalysisDispositionCitationsVerified,
 					FileLinks:   map[string]string{"pkg/controller.go": "https://github.com/example/repo/blob/" + revision + "/pkg/controller.go"},
 				},
 			}},
@@ -89,7 +89,7 @@ func preparedCauseJob(jobID string, systemic bool, lifecycle models.PatternLifec
 				Name: "TestCluster", Status: "failed", JUnitFile: "junit.xml",
 				AIAnalysis: &models.AIAnalysis{
 					GeneratedAt: "2026-08-25T00:00:00Z", RootCause: rootCause, Severity: "High",
-					Disposition: models.AnalysisDispositionGrounded,
+					Disposition: models.AnalysisDispositionCitationsVerified,
 				},
 			}},
 		})

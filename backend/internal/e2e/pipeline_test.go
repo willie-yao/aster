@@ -166,7 +166,7 @@ func TestPipeline_NoAI(t *testing.T) {
 
 // TestPipeline_WithAI runs the full pipeline with AI enabled, driving the
 // agentic loop with a scripted model that reads the fixture build log and
-// returns a grounded analysis. It asserts the analysis is published and that
+// returns a citation-verified analysis. It asserts the analysis is published and that
 // the tool call actually exercised the local storage backend.
 func TestPipeline_WithAI(t *testing.T) {
 	script := aitest.NewScriptServer(t)

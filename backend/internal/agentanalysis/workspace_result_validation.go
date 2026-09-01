@@ -165,8 +165,8 @@ func WorkspaceAnalysisDisposition(analysis WorkspaceAnalysis, validation Workspa
 		return "", nil
 	}
 	warnings := map[string]bool{}
-	grounded := len(analysis.EvidenceCitations) > 0
-	if !grounded {
+	citationsVerified := len(analysis.EvidenceCitations) > 0
+	if !citationsVerified {
 		warnings[models.AnalysisWarningArtifactGrounding] = true
 	}
 	if requireSourceEvidence {
@@ -175,7 +175,7 @@ func WorkspaceAnalysisDisposition(analysis WorkspaceAnalysis, validation Workspa
 			verified = verified && citation.Verified
 		}
 		if !verified {
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningSourceGrounding] = true
 		}
 	}
@@ -183,18 +183,18 @@ func WorkspaceAnalysisDisposition(analysis WorkspaceAnalysis, validation Workspa
 		switch code {
 		case WorkspaceInvalidArtifactCount, WorkspaceInvalidArtifactPath,
 			WorkspaceInvalidArtifactLineRange, WorkspaceInvalidArtifactOverlap:
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningArtifactGrounding] = true
 		case WorkspaceInvalidSourceCount, WorkspaceInvalidSourcePath,
 			WorkspaceInvalidSourceLineRange, WorkspaceInvalidSourceOverlap,
 			WorkspaceInvalidRelevantFile:
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningSourceGrounding] = true
 		case WorkspaceInvalidClassification:
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningClassification] = true
 		case WorkspaceInvalidAnalysisText:
-			grounded = false
+			citationsVerified = false
 			warnings[models.AnalysisWarningInvestigation] = true
 		default:
 			return "", nil
@@ -208,8 +208,8 @@ func WorkspaceAnalysisDisposition(analysis WorkspaceAnalysis, validation Workspa
 		codes = append(codes, code)
 	}
 	sort.Strings(codes)
-	if grounded {
-		return models.AnalysisDispositionGrounded, codes
+	if citationsVerified {
+		return models.AnalysisDispositionCitationsVerified, codes
 	}
 	return models.AnalysisDispositionPreliminary, codes
 }

@@ -25,7 +25,7 @@ func TestRepresentativeAnalyzedFailureAcceptsUsablePreliminary(t *testing.T) {
 		testCase models.TestCase
 		want     bool
 	}{
-		{name: "grounded", testCase: failure("grounded", models.AnalysisDispositionGrounded), want: true},
+		{name: "citations verified", testCase: failure("citations verified", models.AnalysisDispositionCitationsVerified), want: true},
 		{
 			name:     "preliminary remediation warning",
 			testCase: failure("remediation", models.AnalysisDispositionPreliminary, models.AnalysisWarningRemediation),

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { chatFixGroundedRequestIDs, chatFixVerifiedSourcePaths } from "../src/lib/chatFixEligibility.js";
+import { chatFixVerifiedCitationRequestIDs, chatFixVerifiedSourcePaths } from "../src/lib/chatFixEligibility.js";
 import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
@@ -22,7 +22,7 @@ test("exact JUnit chat fix requires conversation evidence and verified source pa
   assert.match(chat, /features\.junit_chat_fix/);
   assert.match(chat, /analysisRef\.source !== "build"/);
   assert.match(chat, /analysisRef\.junit_file/);
-  assert.match(chat, /chatFixGroundedRequestIDs/);
+  assert.match(chat, /chatFixVerifiedCitationRequestIDs/);
   assert.match(chat, /chatFixVerifiedSourcePaths/);
   assert.doesNotMatch(chat, /hasExplicitSourceSymbol/);
   assert.doesNotMatch(chat, /citation from this turn/);
@@ -48,7 +48,7 @@ test("permanent source ineligibility is reported before the per-response citatio
   assert.match(chat, /\{fixSourceUnavailable && \(\s*<Alert/);
   assert.match(chat, /exactFixEnabled && \(causeFixEnabled \|\| hasVerifiedSourcePaths\) && !hasArtifactEvidence/);
   // Ineligibility is reported without gating a mode, and the one question set
-  // leads with an artifact-grounded prompt so answers can become fix-eligible.
+  // leads with an artifact-cited prompt so answers can become fix-eligible.
   assert.match(chat, /questions = causeScope \? causeSuggestedQuestions : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
   assert.match(chat, /"What does the build log show at the failure\?"/);
 });
@@ -77,7 +77,7 @@ test("prepared cause findings are labeled and remain immediately fix-eligible", 
   assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
 });
 
-test("chat fix grounding accumulates validated citations across the conversation", () => {
+test("chat fix citation verification accumulates across the conversation", () => {
   const answer = (requestID: string, cited: boolean): AnalysisChatMessage => ({
     role: "assistant", request_id: requestID, content: "answer", created_at: "2026-08-17T00:00:00Z",
     citations: cited ? [{ path: "build-log.txt", line_start: 4, line_end: 4, quote: "boom" }] : undefined,
@@ -86,18 +86,18 @@ test("chat fix grounding accumulates validated citations across the conversation
     role: "user", request_id: requestID, content: "question", created_at: "2026-08-17T00:00:00Z",
   });
 
-  const grounded = chatFixGroundedRequestIDs([
+  const verified = chatFixVerifiedCitationRequestIDs([
     question("one"), answer("one", true), question("two"), answer("two", false),
   ]);
-  assert.deepEqual([...grounded].sort(), ["one", "two"]);
+  assert.deepEqual([...verified].sort(), ["one", "two"]);
 
-  const later = chatFixGroundedRequestIDs([
+  const later = chatFixVerifiedCitationRequestIDs([
     question("one"), answer("one", false), question("two"), answer("two", true),
   ]);
   assert.deepEqual([...later], ["two"]);
 
-  assert.equal(chatFixGroundedRequestIDs([question("one"), answer("one", false)]).size, 0);
-  assert.equal(chatFixGroundedRequestIDs(undefined).size, 0);
+  assert.equal(chatFixVerifiedCitationRequestIDs([question("one"), answer("one", false)]).size, 0);
+  assert.equal(chatFixVerifiedCitationRequestIDs(undefined).size, 0);
 });
 
 test("exact JUnit source-path eligibility requires the bound repository and revision", () => {

@@ -596,7 +596,7 @@ func TestConversationCitationsBoundsTotalQuoteBytes(t *testing.T) {
 // TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis pins that a
 // preliminary original analysis no longer blocks a chat answer that carries its
 // own validated evidence. Chat exists to improve such an analysis, so requiring
-// the original to be grounded made the improvement unreachable. An analysis
+// the original to carry verified citations made the improvement unreachable. An analysis
 func TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.T) {
 	reply := Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",

@@ -50,7 +50,7 @@ const analysis = {
   root_cause: "cause",
   severity: "high",
   suggested_fix: "fix",
-  disposition: "grounded" as const,
+  disposition: "citations_verified" as const,
 };
 
 const groundedRun: BuildResult = {
