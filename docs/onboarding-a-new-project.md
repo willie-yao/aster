@@ -139,9 +139,8 @@ Use [Project configuration](project-configuration.md) for exact fields and
 | GitHub Pages | The dashboard may be public and read-only, artifacts are public, and the model endpoint is reachable from GitHub Actions. | [GitHub Actions and Pages](github-pages.md) |
 | Kubernetes | Artifacts or the provider are private to the cluster, state needs shared persistence, or authenticated server features are required. | [Kubernetes quickstart](kubernetes.md) |
 
-Standard onboarding configures authoritative in-process analysis. Fix PRs and
-Agent Sandbox shadows are separate opt-in features and are not required for a
-working dashboard.
+Standard onboarding configures authoritative in-process analysis. Fix PRs are a
+separate opt-in feature and are not required for a working dashboard.
 
 ## Manual setup
 

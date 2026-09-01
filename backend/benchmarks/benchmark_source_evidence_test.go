@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/aster/backend/internal/agentanalysis"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
@@ -38,18 +37,6 @@ type benchmarkSourceCitation struct {
 }
 
 func benchmarkSourceReadsFromInProcess(bc benchCase, values []ai.SourceEvidenceObservation) ([]benchmarkSourceRead, error) {
-	out := make([]benchmarkSourceRead, 0, len(values))
-	for _, value := range values {
-		repository, revision, err := benchmarkSourceIdentity(bc, value.SourceID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, benchmarkSourceRead{benchmarkSourceRange: benchmarkSourceRange{Repository: repository, Revision: revision, Path: value.Path, LineStart: value.LineStart, LineEnd: value.LineEnd}, Tool: value.Tool, Outcome: "succeeded"})
-	}
-	return canonicalBenchmarkSourceReads(out)
-}
-
-func benchmarkSourceReadsFromSandbox(bc benchCase, values []agentanalysis.WorkspaceSourceReadTelemetry) ([]benchmarkSourceRead, error) {
 	out := make([]benchmarkSourceRead, 0, len(values))
 	for _, value := range values {
 		repository, revision, err := benchmarkSourceIdentity(bc, value.SourceID)
@@ -392,22 +379,16 @@ func TestBenchmarkSourceObservationsNormalizeBySourceID(t *testing.T) {
 			{ID: "server", Repository: "kubernetes/kubernetes", Revision: serverRevision},
 		},
 	}
-	inProcess, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "server", Tool: "read_repo_file", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
+	reads, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "server", Tool: "read_repo_file", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandbox, err := benchmarkSourceReadsFromSandbox(bc, []agentanalysis.WorkspaceSourceReadTelemetry{{SourceID: "server", Tool: "read", Path: "pkg/file.go", LineStart: 10, LineEnd: 20}})
-	if err != nil {
-		t.Fatal(err)
+	if len(reads) != 1 || reads[0].Repository != "kubernetes/kubernetes" || reads[0].Revision != serverRevision {
+		t.Fatalf("reads = %+v", reads)
 	}
-	for name, reads := range map[string][]benchmarkSourceRead{"in-process": inProcess, "sandbox": sandbox} {
-		if len(reads) != 1 || reads[0].Repository != "kubernetes/kubernetes" || reads[0].Revision != serverRevision {
-			t.Fatalf("%s reads = %+v", name, reads)
-		}
-		coverage := benchmarkExpectedSourceReadCoverage([]benchmarkSourceRange{{Repository: "kubernetes/kubernetes", Revision: serverRevision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}, reads)
-		if coverage.Hits != 1 || coverage.Total != 1 {
-			t.Fatalf("%s coverage = %d/%d", name, coverage.Hits, coverage.Total)
-		}
+	coverage := benchmarkExpectedSourceReadCoverage([]benchmarkSourceRange{{Repository: "kubernetes/kubernetes", Revision: serverRevision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}, reads)
+	if coverage.Hits != 1 || coverage.Total != 1 {
+		t.Fatalf("coverage = %d/%d", coverage.Hits, coverage.Total)
 	}
 	if _, err := benchmarkSourceReadsFromInProcess(bc, []ai.SourceEvidenceObservation{{SourceID: "unknown", Tool: "read_repo_file", Path: "x", LineStart: 1, LineEnd: 1}}); err == nil {
 		t.Fatal("unknown source id was accepted")

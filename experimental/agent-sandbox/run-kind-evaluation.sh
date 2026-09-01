@@ -278,6 +278,10 @@ agentSandbox:
       repository: $EXECUTOR_REPOSITORY
       digest: $EXECUTOR_DIGEST
       pullPolicy: IfNotPresent
+    dashboardImage:
+      repository: local/remote-fixer
+      tag: sha-0000000
+      pullPolicy: IfNotPresent
     workloadServiceAccount:
       create: true
       name: fix-workload
@@ -291,13 +295,6 @@ agentSandbox:
         existingSecret: ""
         tokenKey: ""
       publicCAPrivateDNS: false
-    maxSteps: 5
-    maxFiles: 1
-    timeout: 5m
-    outputLimitBytes: 262144
-    allowedCommands:
-      - argv: [git, diff, --cached, --check]
-        timeout: 30s
     pollInterval: 200ms
     resources:
       requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
@@ -305,7 +302,14 @@ agentSandbox:
   rbac:
     create: true
     fixClientServiceAccountName: ""
-    scheduledClientServiceAccountName: ""
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [fixture]
+    proxy:
+      header: X-Authenticated-User
+      botToken: test-token
 VALUES
 helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-rbac.yaml >"$TMP_DIR/rbac.yaml"
 helm template production-eval deploy/helm/aster -n "$DASHBOARD_NAMESPACE" -f "$TMP_DIR/chart-values.yaml" --show-only templates/agent-sandbox-fix-runtime-admission.yaml >"$TMP_DIR/admission-production.yaml"

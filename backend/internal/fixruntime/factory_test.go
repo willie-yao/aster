@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -59,36 +58,6 @@ func TestNewAgentSandboxSelectionRequiresIsolatedConfiguration(t *testing.T) {
 	}
 	if runtime.opts.appArmorCapability != appArmorRuntimeDefault || runtime.opts.ProviderSecretRef != secret || runtime.opts.CABundle != caBundle {
 		t.Fatalf("production options = %+v", runtime.opts)
-	}
-}
-
-func TestAgentSandboxProviderRunnerFromEnvIncludesStagerConfiguration(t *testing.T) {
-	originalInClusterConfig := agentSandboxInClusterConfig
-	t.Cleanup(func() { agentSandboxInClusterConfig = originalInClusterConfig })
-	agentSandboxInClusterConfig = func() (*rest.Config, error) {
-		return &rest.Config{Host: "https://127.0.0.1:65535"}, nil
-	}
-	prefix := "AGENT_SANDBOX_ANALYSIS_"
-	provider := testGatewayProvider("https://fixture-gateway.fixture.svc.cluster.local/v1/chat/completions", "fixture-model")
-	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
-	setAgentSandboxProviderEnv(t, prefix, provider, ProviderSecretRef{}, "1m")
-	t.Setenv(prefix+"NAMESPACE", "analysis-eval")
-	t.Setenv(prefix+"IMAGE", "registry.example.test/analyzer@sha256:"+strings.Repeat("a", 64))
-	t.Setenv(prefix+"STAGER_IMAGE", "registry.example.test/stager@sha256:"+strings.Repeat("b", 64))
-	t.Setenv(prefix+"STAGER_INPUT_CLAIM", "analysis-input")
-	t.Setenv(prefix+"SERVICE_ACCOUNT", "analysis-workload")
-	t.Setenv(prefix+"MODEL_PROVIDER_CA_CONFIG_MAP", "must-be-ignored")
-	t.Setenv(prefix+"MODEL_PROVIDER_CA_KEY", "ca.pem")
-	t.Setenv(prefix+"MODEL_PROVIDER_CA_SHA256", strings.Repeat("a", 64))
-	runtime, err := NewAgentSandboxProviderRunnerFromEnv(prefix, provider, time.Minute, 131072)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.opts.StagerImage != "registry.example.test/stager@sha256:"+strings.Repeat("b", 64) || runtime.opts.StagerInputClaim != "analysis-input" || runtime.opts.ModelProvider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
-		t.Fatalf("stager options = %q %q", runtime.opts.StagerImage, runtime.opts.StagerInputClaim)
-	}
-	if runtime.opts.CABundle != (modelprovider.CABundleConfig{}) {
-		t.Fatalf("analyzer unexpectedly inherited Fix CA bundle = %+v", runtime.opts.CABundle)
 	}
 }
 

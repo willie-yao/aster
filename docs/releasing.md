@@ -76,8 +76,7 @@ Links to repository files resolve from `changelog/`, so a doc link is
 
    In parallel, `.github/workflows/image.yml` publishes only the exact release
    tag for the application, remote fixer, and Agent Sandbox Fix executor. The
-   analysis executor and stager are manual-only. The Fix
-   executor is published for `linux/amd64` at
+   Fix executor is published for `linux/amd64` at
    `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`; deployed Agent Sandbox
    configuration still requires the resolved OCI digest.
    The git-only remote fixer is published at
@@ -137,9 +136,6 @@ workflow) against it:
 ```bash
 gh workflow run image.yml --ref my-branch
 ```
-
-A manual run also builds the analysis executor and stager, which pushes to
-`main` skip.
 
 Use the resulting `sha-<short>` tag to pin a deployment for testing. The Agent
 Sandbox Fix executor is still pinned by digest, so resolve it after the run:

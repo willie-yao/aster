@@ -3,8 +3,7 @@ name: Image
 # Release tags publish the exact immutable application, remote-fixer, and Agent
 # Sandbox Fix executor identities. A push to main or a manual run publishes those
 # same three targets under a commit-addressed sha-<short> tag, so any main commit
-# is deployable without cutting a release. The analysis executor and stager stay
-# manual-only.
+# is deployable without cutting a release.
 on:
   push:
     branches:
@@ -222,87 +221,3 @@ jobs:
             IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }}
           cache-from: type=gha,scope=agent-sandbox-fix-executor
           cache-to: type=gha,mode=max,scope=agent-sandbox-fix-executor
-
-  agent-sandbox-analysis-executor-image:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-executor
-          labels: |
-            org.opencontainers.image.title=Aster Agent Sandbox Analysis Executor
-          tags: |
-            type=sha,prefix=sha-
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: agent-sandbox-analysis-executor
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            COMMIT=${{ github.sha }}
-            IMAGE_TAG=${{ steps.meta.outputs.version }}
-          cache-from: type=gha,scope=agent-sandbox-analysis-executor
-          cache-to: type=gha,mode=max,scope=agent-sandbox-analysis-executor
-
-  agent-sandbox-analysis-stager-image:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}/agent-sandbox-analysis-stager
-          labels: |
-            org.opencontainers.image.title=Aster Agent Sandbox Analysis Stager
-          tags: |
-            type=sha,prefix=sha-
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: agent-sandbox-analysis-stager
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            COMMIT=${{ github.sha }}
-            IMAGE_TAG=${{ steps.meta.outputs.version }}
-          cache-from: type=gha,scope=agent-sandbox-analysis-stager
-          cache-to: type=gha,mode=max,scope=agent-sandbox-analysis-stager

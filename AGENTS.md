@@ -54,8 +54,6 @@ backend/                         Go 1.25
     aster/                      Public CLI and one-shot pipeline; Pages and the k8s CronJob
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
-    analysisexecutor/            Runs one file-backed OpenCode analysis workload
-    analysisstager/              Copies one sealed analyzer snapshot into the workspace
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
@@ -91,10 +89,6 @@ backend/                         Go 1.25
       modules/pullrequest/       Seed prompt plus pull request change context
       modules/sharedfailure/     Seed prompt plus the cross-pull-request correlation
     aiusage/                     Private token usage and cost accounting
-    agentanalysis/               Private experimental Agent failure-analysis adapter
-    analysispublisher/           Namespace-local analyzer input Job lifecycle
-    analysisexecutor/            File-backed OpenCode analysis executor
-    analysisstager/              Credential-free analyzer workspace stager
     agentsandbox/                Business-neutral Agent Sandbox lifecycle contract
     modelprovider/               Shared non-secret provider and credential-mode contract
     analysisruntime/             Wires the in-process failure-analysis runtime
@@ -203,7 +197,8 @@ make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
 make serve           # serve frontend/public/data over HTTP
 make dev-actions     # serve SPA + API with admin actions enabled (local auth)
 make image           # docker build fetcher + server + SPA into one image
-make fixer-image     # drop-in image with git for fix generation
+make remote-fixer-image              # git-only image for dashboard-side patch reconstruction
+make agent-sandbox-fix-executor-image # OpenCode executor for Agent Sandbox Fix
 ```
 
 ## Local development workflow

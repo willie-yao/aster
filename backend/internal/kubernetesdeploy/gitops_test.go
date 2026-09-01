@@ -207,8 +207,8 @@ func TestGitOpsAllowsSnapshotInPinnedRepositoryName(t *testing.T) {
   repository: registry.example.test/snapshot-service
   tag: v1.2.3
 agentSandbox:
-  analyzer:
-    executorImage:
+  fixRuntime:
+    image:
       repository: registry.example.test/snapshot-worker
       digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 `

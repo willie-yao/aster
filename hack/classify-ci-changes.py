@@ -18,7 +18,6 @@ CLASSES = (
     "platform_kind",
     "remote_fixer",
     "fix_executor",
-    "analysis_images",
     "documentation",
     "release_shared",
 )
@@ -99,7 +98,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/actiondraft",
     "backend/internal/actions",
     "backend/internal/actionverify",
-    "backend/internal/agentanalysis",
     "backend/internal/agentsandbox",
     "backend/internal/aggregator",
     "backend/internal/ai",
@@ -142,32 +140,6 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/textutil",
 )
 
-ANALYSIS_BACKEND_PREFIXES = (
-    "backend/cmd/analysisexecutor",
-    "backend/cmd/analysisstager",
-    "backend/internal/actionverify",
-    "backend/internal/agentanalysis",
-    "backend/internal/agentsandbox",
-    "backend/internal/ai",
-    "backend/internal/aiusage",
-    "backend/internal/analysischat",
-    "backend/internal/analysisexecutor",
-    "backend/internal/analysisruntime",
-    "backend/internal/analysisstager",
-    "backend/internal/artifacts",
-    "backend/internal/buildsource",
-    "backend/internal/modelprovider",
-    "backend/internal/models",
-    "backend/internal/output",
-    "backend/internal/project",
-    "backend/internal/prowbuild",
-    "backend/internal/redact",
-    "backend/internal/remediationpolicy",
-    "backend/internal/runtime",
-    "backend/internal/statefile",
-    "backend/internal/storage",
-    "backend/internal/textutil",
-)
 
 FIX_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
@@ -179,13 +151,9 @@ FIX_BACKEND_PREFIXES = (
 HELM_BACKEND_PREFIXES = (
     "backend/cmd/aster",
     "backend/cmd/fixexecutor",
-    "backend/cmd/analysisexecutor",
-    "backend/cmd/analysisstager",
     "backend/internal/ai/skills",
     "backend/internal/ai/tools",
     "backend/internal/agentsandbox",
-    "backend/internal/analysisexecutor",
-    "backend/internal/analysisstager",
     "backend/internal/artifacts",
     "backend/internal/fixexecutor",
     "backend/internal/kubernetesdeploy",
@@ -261,8 +229,7 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
             for name in (
                 "remote_fixer",
                 "fix_executor",
-                "analysis_images",
-            ):
+                        ):
                 result[name] = True
             matched = True
 
@@ -273,16 +240,13 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                 for name in (
                     "remote_fixer",
                     "fix_executor",
-                    "analysis_images",
-                ):
+                                ):
                     result[name] = True
             else:
                 if under_any(path, REMOTE_BACKEND_PREFIXES):
                     result["remote_fixer"] = True
                 if under_any(path, FIX_BACKEND_PREFIXES):
                     result["fix_executor"] = True
-                if under_any(path, ANALYSIS_BACKEND_PREFIXES):
-                    result["analysis_images"] = True
 
             if under_any(path, HELM_BACKEND_PREFIXES):
                 result["helm_static"] = True
@@ -316,7 +280,6 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
         image_test_paths = {
             "hack/test-remote-fixer-image.sh": "remote_fixer",
             "hack/test-agent-sandbox-fix-image.sh": "fix_executor",
-            "hack/test-agent-sandbox-analysis-images.sh": "analysis_images",
         }
         if path in image_test_paths:
             result[image_test_paths[path]] = True
@@ -393,11 +356,6 @@ def self_test() -> None:
             {"frontend", "remote_fixer"},
         ),
         (
-            "embedded analysis skill",
-            ["backend/internal/agentanalysis/skill/failure-analysis.md"],
-            {"backend", "remote_fixer", "analysis_images"},
-        ),
-        (
             "embedded prompt-author skill",
             ["backend/internal/onboard/promptauthor/skill/system-prompt-generation.md"],
             {"backend", "helm_static", "remote_fixer"},
@@ -424,13 +382,7 @@ def self_test() -> None:
                 "backend",
                 "remote_fixer",
                 "fix_executor",
-                "analysis_images",
-            },
-        ),
-        (
-            "analysis executor",
-            ["backend/internal/analysisexecutor/executor.go"],
-            {"backend", "helm_static", "analysis_images"},
+                        },
         ),
         (
             "remote runtime",
@@ -449,8 +401,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "skills clean-room dependency",
@@ -459,8 +410,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "tools clean-room dependency",
@@ -469,8 +419,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "artifacts clean-room dependency",
@@ -479,8 +428,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "models clean-room dependency",
@@ -489,8 +437,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "prowbuild clean-room dependency",
@@ -499,8 +446,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "runtime clean-room dependency",
@@ -510,8 +456,7 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                 "fix_executor",
-                "analysis_images",
-            },
+                        },
         ),
         (
             "storage clean-room dependency",
@@ -520,8 +465,7 @@ def self_test() -> None:
                 "backend",
                 "helm_static",
                 "remote_fixer",
-                "analysis_images",
-            },
+                        },
         ),
         ("release", [".github/workflows/release.yml"], set(CLASSES)),
     )

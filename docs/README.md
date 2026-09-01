@@ -53,7 +53,6 @@ basic dashboard is healthy.
 | File Issue and Mark Resolved | [Server mode](server.md#admin-gated-actions) and [GitHub issues](github-issues.md) | Authenticated preview or lifecycle action. GitHub writes use a server-held `BOT_TOKEN`. |
 | Email notifications | [Notifications](notifications.md) | SMTP credentials and routing stay deployment-owned. |
 | Fix PR generation | [Fix PR generation](fix-prs.md) | Experimental, confirmation-gated code writing through Agent Sandbox. |
-| Agent analysis shadow | [Agent Sandbox OpenCode analyzer](maintainer/agent-sandbox-opencode-analyzer.md) | Maintainer-only, private, and non-authoritative. |
 
 Recommended order:
 
@@ -64,8 +63,6 @@ Recommended order:
 4. Add notifications, issue drafting, or resolution controls as separate needs.
 5. Evaluate Fix PR generation only after the Agent Sandbox platform contract is
    installed and reviewed.
-6. Run analysis shadows only as an isolated maintainer evaluation. Shadow output
-   never replaces the in-process result.
 
 ## Contribute and operate
 

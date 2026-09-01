@@ -19,10 +19,6 @@ The Kubernetes API server serves published data and optional interactive
 features. It does not replace the fetcher or worker as the owner of scheduled
 failure analysis.
 
-Optional Agent Sandbox analysis shadows run after an authoritative refresh and
-write private comparison ledgers. They do not replace the published result or
-participate in normal analysis cache acceptance.
-
 Safe structured output has a separate publication disposition:
 
 - `preliminary` is displayable with bounded warnings and remains eligible for
@@ -37,13 +33,6 @@ Direct action eligibility is never stored as analysis state. It is derived later
 from a `citations_verified` result plus the existing critique version, source
 verification, authentication, confirmation, deduplication, and Sandbox controls. Cache
 acceptance remains independent from safe publication.
-
-The disabled-by-default Agent Sandbox OpenCode analyzer is the implementation
-used by scheduled shadowing and explicit evaluation tests. The benchmark uses a
-pre-populated private input claim; scheduled shadowing uses a tokenless
-namespace-local publisher Job. Both paths share the same staged workspace,
-executor, result validation, and cleanup contract. Neither has public output or
-normal cache authority.
 
 ## End-to-end flow
 
@@ -244,8 +233,7 @@ published in job details and aggregated into `flakiness.json`.
 
 Raw provider exchanges are transient and are not included in traces or public
 output. Private persisted state includes `ai_cache.json`, `ai_traces.json`,
-fetcher and server usage ledgers, fetch status, side-effect state, Agent Sandbox
-comparison ledgers. Pages strips private
+fetcher and server usage ledgers, fetch status, and side-effect state. Pages strips private
 files before deployment, and the Kubernetes server rejects them from the
 data-serving path.
 
@@ -261,7 +249,6 @@ output through separate authority and lifecycle gates:
 | Resolution and actions | `backend/internal/actions` and `backend/internal/resolve` operate on current published subjects. Issue and Fix writes use preview and confirmation. Pattern and cause resolution update private lifecycle state. | [Server mode](../server.md#admin-gated-actions) |
 | Fix PR generation | `backend/internal/fixpr` and `backend/internal/fixruntime` bind an eligible subject, immutable source, a canonical patch, validation, review, and confirmation. | [Fix PR generation](../fix-prs.md) |
 | Pull request triage | `backend/internal/prtriage`, `prattribution`, `prescalation`, and `prcomment` own deterministic attribution, shared failures, optional escalation, and the separately gated GitHub App comment. | [Pull request triage](../pull-request-triage.md) |
-| Agent Sandbox analysis shadow | `backend/internal/fetcher`, `agentanalysis`, `analysispublisher`, `analysisstager`, and `analysisexecutor` compare a private sampled result after authoritative publication. Shadow output and cleanup state cannot change public output or normal cache acceptance. | [Agent Sandbox OpenCode analyzer](../maintainer/agent-sandbox-opencode-analyzer.md) |
 
 ## Contributor map
 
@@ -283,5 +270,3 @@ output through separate authority and lifecycle gates:
 | Analysis chat and published-analysis resolution | `backend/internal/analysischat/chat.go`, `backend/internal/analysischat/resolution.go` |
 | Confirmed action requests | `backend/internal/actions/requests.go`, `backend/internal/actions/request_generation.go`, `backend/internal/actions/request_state.go`, `backend/internal/actions/request_cleanup.go` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
-| Scheduled analysis shadows | `backend/internal/fetcher/shadow_analysis.go`, `backend/internal/agentanalysis/workspace*.go`, `backend/internal/analysispublisher/`, `backend/internal/analysisstager/`, `backend/internal/analysisexecutor/` |
-| Agent Sandbox analyzer benchmark | `backend/benchmarks/agent_sandbox_analyzer_benchmark_test.go`, `hack/compare-agent-sandbox-analyzer-benchmark.py` |

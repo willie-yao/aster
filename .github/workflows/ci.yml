@@ -32,7 +32,6 @@ jobs:
       platform_kind: ${{ steps.classify.outputs.platform_kind }}
       remote_fixer: ${{ steps.classify.outputs.remote_fixer }}
       fix_executor: ${{ steps.classify.outputs.fix_executor }}
-      analysis_images: ${{ steps.classify.outputs.analysis_images }}
       documentation: ${{ steps.classify.outputs.documentation }}
       release_shared: ${{ steps.classify.outputs.release_shared }}
     steps:
@@ -99,7 +98,6 @@ jobs:
           PLATFORM_KIND: ${{ steps.classify.outputs.platform_kind }}
           REMOTE_FIXER: ${{ steps.classify.outputs.remote_fixer }}
           FIX_EXECUTOR: ${{ steps.classify.outputs.fix_executor }}
-          ANALYSIS_IMAGES: ${{ steps.classify.outputs.analysis_images }}
           DOCUMENTATION: ${{ steps.classify.outputs.documentation }}
           RELEASE_SHARED: ${{ steps.classify.outputs.release_shared }}
         run: |
@@ -114,7 +112,6 @@ jobs:
             echo "| Platform kind lifecycle | $PLATFORM_KIND |"
             echo "| Remote fixer image | $REMOTE_FIXER |"
             echo "| Agent Sandbox Fix executor | $FIX_EXECUTOR |"
-            echo "| Agent Sandbox analysis images | $ANALYSIS_IMAGES |"
             echo "| Documentation/repository metadata | $DOCUMENTATION |"
             echo "| Release/shared | $RELEASE_SHARED |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -228,32 +225,3 @@ jobs:
           hack/test-agent-sandbox-fix-image.sh \
             aster/agent-sandbox-fix-executor:ci \
             ci "$SOURCE_REVISION" "$image_tag"
-
-  agent-sandbox-analysis-images:
-    needs: changes
-    if: needs.changes.outputs.analysis_images == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-      - name: Build executor
-        env:
-          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          image_tag="sha-${SOURCE_REVISION::7}"
-          docker build --target agent-sandbox-analysis-executor --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="$image_tag" -t aster/agent-sandbox-analysis-executor:ci .
-      - name: Build stager
-        env:
-          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          image_tag="sha-${SOURCE_REVISION::7}"
-          docker build --target agent-sandbox-analysis-stager --build-arg VERSION=ci --build-arg COMMIT="$SOURCE_REVISION" --build-arg IMAGE_TAG="$image_tag" -t aster/agent-sandbox-analysis-stager:ci .
-      - name: Test credential-free runtimes
-        env:
-          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          image_tag="sha-${SOURCE_REVISION::7}"
-          hack/test-agent-sandbox-analysis-images.sh aster/agent-sandbox-analysis-executor:ci aster/agent-sandbox-analysis-stager:ci "$SOURCE_REVISION" "$image_tag"

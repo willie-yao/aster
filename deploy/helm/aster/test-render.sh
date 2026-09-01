@@ -62,10 +62,6 @@ if grep -Fq 'AI_REASONING_EFFORT' "$tmp/default.yaml"; then
   echo 'default render included an unset reasoning effort' >&2
   exit 1
 fi
-if grep -Fq -- '-agent-analysis-shadow' "$tmp/default.yaml" || grep -Fq 'agent-sandbox-analysis-shadow' "$tmp/default.yaml"; then
-  echo 'default render enabled analysis shadow resources' >&2
-  exit 1
-fi
 if grep -Fq 'kind: CustomResourceDefinition' "$tmp/default.yaml" || grep -Fq 'agent-sandbox-controller' "$tmp/default.yaml"; then
   echo 'dashboard chart attempted to install Agent Sandbox itself' >&2
   exit 1
@@ -319,7 +315,6 @@ agentSandbox:
   rbac:
     create: true
     fixClientServiceAccountName: ""
-    scheduledClientServiceAccountName: ""
 server:
   actions:
     enabled: true
@@ -336,14 +331,8 @@ grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
 fix_client=test-prow-ai-dashboard-agent-sandbox-fix-client
-scheduled_client=test-prow-ai-dashboard-agent-sandbox-scheduled-client
-# Fix authority lives on a client identity the scheduled pods never use, so the
-# scheduled identity cannot appear anywhere in a Fix-only release.
+# Fix authority stays on the dedicated server client identity.
 grep -Fq "serviceAccountName: $fix_client" "$tmp/agent-sandbox-render.yaml"
-if grep -Fq "$scheduled_client" "$tmp/agent-sandbox-render.yaml"; then
-  echo 'Fix release referenced the scheduled Agent Sandbox client ServiceAccount' >&2
-  exit 1
-fi
 grep -Fq "system:serviceaccount:dashboard-test:$fix_client" "$tmp/agent-sandbox-render.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
   -s templates/agent-sandbox-fix-runtime-rbac.yaml > "$tmp/agent-sandbox-fix-rbac.yaml"
@@ -355,21 +344,12 @@ if grep -Fq 'serviceAccountName:' "$tmp/agent-sandbox-worker.yaml"; then
   echo 'Fix release gave the worker an Agent Sandbox client ServiceAccount' >&2
   exit 1
 fi
-# A long release name must not truncate away the suffix that separates the two
-# identities, which would collapse them back into one ServiceAccount.
+# A long release name must retain the Fix client suffix.
 long_release=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 helm template "$long_release" "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
   > "$tmp/agent-sandbox-long-name.yaml"
 long_base=$(printf '%s' "$long_release-prow-ai-dashboard" | cut -c1-32)
 grep -Fq "serviceAccountName: $long_base-agent-sandbox-fix-client" "$tmp/agent-sandbox-long-name.yaml"
-if grep -Fq "$long_base-agent-sandbox-scheduled-client" "$tmp/agent-sandbox-long-name.yaml"; then
-  echo 'Long release name leaked the scheduled identity into a Fix release' >&2
-  exit 1
-fi
-expect_fail agent-sandbox-shared-client 'must resolve to different ServiceAccounts' \
-  -f "$tmp/agent-sandbox.yaml" \
-  --set agentSandbox.rbac.fixClientServiceAccountName=shared-client \
-  --set agentSandbox.rbac.scheduledClientServiceAccountName=shared-client
 grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_REASONING_EFFORT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "high"'
 grep -Fq "variables.container.env[1].name == 'PROW_AI_MODEL_PROVIDER_TOKEN'" "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'local/agent-sandbox-fix-executor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$tmp/agent-sandbox-render.yaml"
@@ -430,191 +410,6 @@ PROJECT
 
 expect_fail agent-sandbox-command-agent 'must not invoke a coding agent or executor' \
   -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-command.yaml"
-
-cat > "$tmp/analysis-shadow.yaml" <<'VALUES'
-mode: cron
-fetcher:
-  resources:
-    requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 3Gi}
-    limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 3Gi}
-ai:
-  enabled: true
-  endpoint: https://api.githubcopilot.com/chat/completions
-  model: fixture-model
-  reasoningEffort: high
-  contextWindowTokens: 200000
-  maxOutputTokens: 8192
-  token: test-token
-agentSandbox:
-  analysisShadow:
-    enabled: true
-    namespace: analysis-shadow-eval
-    runtimeClassName: kata-vm-isolation
-    image:
-      repository: local/shadow-executor
-      digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-      pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/shadow-stager
-      digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-      pullPolicy: IfNotPresent
-    dashboardImage:
-      repository: local/remote-fixer
-      tag: sha-1234567
-      pullPolicy: IfNotPresent
-    input:
-      existingClaim: shadow-input
-      localRoot: /analysis-shadow-input
-      localSizeLimit: 3Gi
-    workloadServiceAccount:
-      create: true
-      name: shadow-workload
-    modelProvider:
-      credentialMode: direct
-      api: chat_completions
-      endpoint: https://api.githubcopilot.com/chat/completions
-      model: fixture-model
-      reasoningEffort: high
-      auth:
-        type: bearer
-        existingSecret: shadow-provider
-        tokenKey: AI_TOKEN
-      publicCAPrivateDNS: false
-    timeout: 10m
-    outputLimitBytes: 262144
-    maxPerRun: 2
-    maxSteps: 20
-    modelContextTokens: 200000
-    modelOutputTokens: 8192
-    requireSourceEvidence: true
-    pollInterval: 250ms
-    ledger:
-      existingClaim: shadow-ledger
-      mountPath: /private/analysis-shadow-ledger
-    networkPolicy:
-      mode: cilium
-      enabled: true
-      gatewayNamespaceSelector: {}
-      gatewayPodSelector: {}
-      gatewayPort: 443
-      gatewayTargetPort: null
-      stagingFQDNs: [github.com, api.github.com, storage.googleapis.com]
-      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
-      dnsPodSelector: {k8s-app: kube-dns}
-    quota:
-      enabled: true
-    resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
-VALUES
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" > "$tmp/analysis-shadow-render.yaml"
-for expected in \
-  '-agent-analysis-shadow' \
-  '-ai-max-output-tokens=8192' \
-  '-agent-analysis-shadow-ledger=/private/analysis-shadow-ledger/analysis_shadow.json' \
-  '-agent-analysis-shadow-input-root=/analysis-shadow-input' \
-  '-agent-analysis-shadow-max-steps=20' \
-  '-agent-analysis-shadow-model-context-tokens=200000' \
-  '-agent-analysis-shadow-provider-endpoint=https://api.githubcopilot.com/chat/completions' \
-  'name: AGENT_SANDBOX_ANALYSIS_SHADOW_STAGER_IMAGE' \
-  'name: agent-analysis-shadow-ledger' \
-  'claimName: shadow-ledger' \
-  'kind: ValidatingAdmissionPolicy' \
-  'kind: ResourceQuota' \
-  'agent-sandbox-analysis-shadow'; do
-  grep -Fq -- "$expected" "$tmp/analysis-shadow-render.yaml"
-done
-grep -Fq 'image: local/remote-fixer:sha-1234567' "$tmp/analysis-shadow-render.yaml"
-grep -Fq "serviceAccountName: $scheduled_client" "$tmp/analysis-shadow-render.yaml"
-grep -Fq 'automountServiceAccountToken: true' "$tmp/analysis-shadow-render.yaml"
-
-if grep -Fq "$fix_client" "$tmp/analysis-shadow-render.yaml"; then
-  echo 'Analysis shadow release referenced the Fix Agent Sandbox client ServiceAccount' >&2
-  exit 1
-fi
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
-  -s templates/agent-sandbox-analysis-shadow-rbac.yaml > "$tmp/analysis-shadow-rbac.yaml"
-grep -A3 -F 'subjects:' "$tmp/analysis-shadow-rbac.yaml" | grep -Fq "name: $scheduled_client"
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analysis-shadow.yaml" \
-  --set agentSandbox.rbac.create=false \
-  --set agentSandbox.rbac.scheduledClientServiceAccountName=external-scheduled \
-  > "$tmp/analysis-shadow-external-rbac.yaml"
-grep -Fq 'serviceAccountName: external-scheduled' "$tmp/analysis-shadow-external-rbac.yaml"
-
-grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analysis-shadow-render.yaml"
-grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_15' "$tmp/analysis-shadow-render.yaml"
-grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analysis-shadow-render.yaml"
-grep -Fq "variables.pod.activeDeadlineSeconds >= 660 && variables.pod.activeDeadlineSeconds <= 1080 && (variables.pod.activeDeadlineSeconds - 600) % 60 == 0" "$tmp/analysis-shadow-render.yaml"
-if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analysis-shadow-render.yaml"; then
-  echo 'analysis shadow admission still allows the legacy executor request environment' >&2
-  exit 1
-fi
-
-expect_fail analysis-shadow-reserved-env 'reserved analysis shadow variable' \
-  -f "$tmp/analysis-shadow.yaml" --set fetcher.extraEnv[0].name=AGENT_SANDBOX_ANALYSIS_SHADOW_IMAGE --set fetcher.extraEnv[0].value=attacker
-
-cat > "$tmp/analyzer.yaml" <<'VALUES'
-agentSandbox:
-  analyzer:
-    enabled: true
-    namespace: analyzer-eval
-    runtimeClassName: kata-vm-isolation
-    executorImage:
-      repository: local/analyzer
-      digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-      pullPolicy: IfNotPresent
-    stagerImage:
-      repository: local/analyzer-stager
-      digest: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-      pullPolicy: IfNotPresent
-    input:
-      existingClaim: analyzer-input
-    clientServiceAccount:
-      create: true
-      name: ""
-    workloadServiceAccount:
-      create: true
-      name: analyzer-workload
-    modelProvider:
-      credentialMode: gateway
-      api: chat_completions
-      endpoint: https://model-gateway.platform.svc.cluster.local:8443/v1/chat/completions
-      model: fixture-model
-      auth:
-        type: none
-        existingSecret: ""
-        tokenKey: ""
-      publicCAPrivateDNS: false
-    timeout: 15m
-    outputLimitBytes: 262144
-    pollInterval: 250ms
-    networkPolicy:
-      mode: kubernetes
-      enabled: true
-      gatewayNamespaceSelector: {kubernetes.io/metadata.name: platform}
-      gatewayPodSelector: {app: model-gateway}
-      gatewayPort: 8443
-      dnsNamespaceSelector: {kubernetes.io/metadata.name: kube-system}
-      dnsPodSelector: {k8s-app: kube-dns}
-    quota:
-      enabled: true
-    resources:
-      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 3Gi}
-      limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 3Gi}
-VALUES
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" -f "$tmp/analyzer.yaml" > "$tmp/analyzer-render.yaml"
-grep -Fq 'agent-sandbox-analyzer' "$tmp/analyzer-render.yaml"
-grep -Fq 'kind: ResourceQuota' "$tmp/analyzer-render.yaml"
-grep -Fq 'analyzer-input' "$tmp/analyzer-render.yaml"
-grep -Fq 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64_CHUNK_00' "$tmp/analyzer-render.yaml"
-grep -Fq "v.name == 'request' && v.mountPath == '/analysis-request' && v.readOnly == true" "$tmp/analyzer-render.yaml"
-grep -Fq "variables.pod.activeDeadlineSeconds >= 960 && variables.pod.activeDeadlineSeconds <= 1380 && (variables.pod.activeDeadlineSeconds - 900) % 60 == 0" "$tmp/analyzer-render.yaml"
-if grep -Fq "variables.container.env[0].name == 'PROW_AI_ANALYSIS_EXECUTION_REQUEST_B64'" "$tmp/analyzer-render.yaml"; then
-  echo 'analyzer admission still allows the legacy executor request environment' >&2
-  exit 1
-fi
-expect_fail analyzer-with-shadow 'agentSandbox.analysisShadow cannot run with agentSandbox.analyzer' \
-  -f "$tmp/analyzer.yaml" -f "$tmp/analysis-shadow.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \

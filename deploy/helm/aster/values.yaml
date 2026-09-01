@@ -4,7 +4,7 @@
 # and serves the SPA, /data/*.json, and /api/capabilities.
 
 global:
-  # Shared snapshot tag for engine, analyzer, and fixer images. Each
+  # Shared snapshot tag for engine and fixer images. Each
   # image-specific tag takes precedence; empty falls back to Chart.appVersion.
   imageTag: ""
 
@@ -99,167 +99,11 @@ agentSandbox:
         cpu: "1"
         memory: 512Mi
         ephemeral-storage: 256Mi
-  analyzer:
-    enabled: false
-    # Existing dedicated namespace for private analyzer Sandboxes. Enabling this
-    # section does not wire the fetcher or worker to create analyzer workloads.
-    namespace: ""
-    runtimeClassName: ""
-    executorImage:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
-    stagerImage:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
-    input:
-      # Existing read-only PVC populated outside the Sandbox. The chart never
-      # creates, writes, or mounts it into dashboard workloads.
-      existingClaim: ""
-    clientServiceAccount:
-      # Kept separate from Fix clients so scheduled workloads never
-      # inherit analyzer RBAC.
-      create: true
-      name: ""
-    workloadServiceAccount:
-      create: false
-      name: ""
-    modelProvider:
-      credentialMode: direct
-      # chat_completions or responses. Responses requires direct bearer auth.
-      api: chat_completions
-      endpoint: ""
-      model: ""
-      # Optional OpenCode reasoning effort. Empty uses the provider default.
-      reasoningEffort: ""
-      auth:
-        type: none
-        existingSecret: ""
-        tokenKey: ""
-      publicCAPrivateDNS: false
-    timeout: 15m
-    outputLimitBytes: 262144
-    pollInterval: 250ms
-    networkPolicy:
-      # Example: use cilium on AKS Cilium/Kata when Kubernetes NetworkPolicy does not
-      # admit cross-node VM-isolated traffic to the gateway.
-      mode: kubernetes
-      enabled: true
-      gatewayNamespaceSelector: {}
-      gatewayPodSelector: {}
-      # HTTPS port exposed by the gateway Service and used by modelProvider.endpoint.
-      gatewayPort: 443
-      # Backend Pod port enforced after Service translation. This may differ
-      # from gatewayPort, for example Service port 443 targeting Pod port 8443.
-      gatewayTargetPort: null
-      dnsNamespaceSelector:
-        kubernetes.io/metadata.name: kube-system
-      dnsPodSelector:
-        k8s-app: kube-dns
-    quota:
-      # The analyzer namespace must be dedicated. The quota permits one Sandbox
-      # and one Pod at a time. Admission pins container resources separately.
-      enabled: true
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-        ephemeral-storage: 3Gi
-      limits:
-        cpu: "2"
-        memory: 2Gi
-        ephemeral-storage: 3Gi
-  analysisShadow:
-    enabled: false
-    # Existing dedicated namespace containing private shadow Sandboxes.
-    namespace: ""
-    runtimeClassName: ""
-    # Exact file-backed analyzer executor image.
-    image:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
-    # Exact init-container image that verifies and copies the private snapshot.
-    stagerImage:
-      repository: ""
-      digest: ""
-      pullPolicy: IfNotPresent
-    # Git-capable fetcher/worker image used only to prepare public source snapshots.
-    dashboardImage:
-      repository: ghcr.io/willie-yao/aster/remote-fixer
-      tag: ""
-      pullPolicy: IfNotPresent
-    input:
-      # Existing private PVC in the analysis namespace. A tokenless publisher
-      # Job writes one leased snapshot; Sandboxes mount it read-only.
-      existingClaim: ""
-      # Ephemeral dashboard-side copy retained through independent validation.
-      localRoot: /analysis-shadow-input
-      # Dedicated size-limited emptyDir for the frozen local verification copy.
-      localSizeLimit: 3Gi
-    workloadServiceAccount:
-      create: false
-      name: ""
-    modelProvider:
-      credentialMode: direct
-      api: chat_completions
-      endpoint: ""
-      model: ""
-      reasoningEffort: ""
-      auth:
-        type: none
-        existingSecret: ""
-        tokenKey: ""
-      publicCAPrivateDNS: false
-    timeout: 15m
-    outputLimitBytes: 262144
-    maxPerRun: 1
-    maxSteps: 20
-    # Required when enabled. Keep equal to ai.contextWindowTokens.
-    modelContextTokens: 0
-    modelOutputTokens: 0
-    requireSourceEvidence: true
-    pollInterval: 250ms
-    ledger:
-      # Existing private PVC, distinct from public data and the input PVC.
-      existingClaim: ""
-      mountPath: /private/analysis-shadow-ledger
-    networkPolicy:
-      # Scheduled shadowing requires Cilium FQDN egress for public snapshot staging.
-      mode: cilium
-      enabled: false
-      gatewayNamespaceSelector: {}
-      gatewayPodSelector: {}
-      gatewayPort: 443
-      gatewayTargetPort: null
-      # Exact public FQDNs used only by the snapshot publisher Job.
-      stagingFQDNs:
-        - github.com
-        - api.github.com
-        - storage.googleapis.com
-      dnsNamespaceSelector:
-        kubernetes.io/metadata.name: kube-system
-      dnsPodSelector:
-        k8s-app: kube-dns
-    quota:
-      enabled: true
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-        ephemeral-storage: 3Gi
-      limits:
-        cpu: "2"
-        memory: 2Gi
-        ephemeral-storage: 3Gi
   rbac:
-    # Creates the namespace-scoped Role/RoleBinding and optionally the client SAs.
+    # Creates the namespace-scoped Role/RoleBinding and optional client SA.
     create: true
     # Server identity for Fix Sandboxes.
     fixClientServiceAccountName: ""
-    # Worker and fetcher identity for scheduled shadow Sandboxes.
-    scheduledClientServiceAccountName: ""
 
 # Shared volume holding fetcher output and the AI cache. It must be
 # ReadWriteMany so the CronJob (writer) and the server (reader) can mount it at
@@ -320,7 +164,6 @@ ai:
   # Copilot GPT-5 mini deployment, set 128000.
   contextWindowTokens: 0
   # Optional authoritative output-token cap. Zero preserves the provider default.
-  # Scheduled analysis shadowing requires this to equal its modelOutputTokens.
   maxOutputTokens: 0
   token: ""
   existingSecret: ""
