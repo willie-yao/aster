@@ -1,7 +1,6 @@
 # Troubleshooting
 
-Start with the fetcher or workflow logs. Most first-deploy failures fall into the
-cases below.
+Start with the fetcher or workflow logs. Most first-deploy failures fall into the cases below.
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
@@ -45,38 +44,26 @@ curl -fsS http://localhost:8080/healthz
 curl -fsS http://localhost:8080/api/capabilities
 ```
 
-For deeper AI-loop behavior, see the troubleshooting section in
-[Agentic analysis](agentic.md#troubleshooting).
+For deeper AI-loop behavior, see the troubleshooting section in [Agentic analysis](agentic.md#troubleshooting).
 
 ## Login fails with "oauth token exchange failed"
 
-The server could not trade the authorization code for a token. The reason is
-logged verbatim from GitHub:
+The server could not trade the authorization code for a token. The reason is logged verbatim from GitHub:
 
 ```bash
 kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange"
 ```
 
-`incorrect_client_credentials` usually means the stored credential carries a
-stray newline. A Secret written with `echo` instead of `echo -n` keeps the
-trailing byte, so a 40-character client secret arrives as 41 and GitHub rejects
-it. Every binary inspects credential variables at startup and names each one
-that carries surrounding whitespace:
+`incorrect_client_credentials` usually means the stored credential carries a stray newline. A Secret written with `echo` instead of `echo -n` keeps the trailing byte, so a 40-character client secret arrives as 41 and GitHub rejects it. Every binary inspects credential variables at startup and names each one that carries surrounding whitespace:
 
 ```
 ⚠️  OAUTH_CLIENT_SECRET had leading or trailing whitespace; using the trimmed value.
 ⚠️  SESSION_KEY has leading or trailing whitespace and is used as written, ...
 ```
 
-Fixed-format credentials (OAuth client credentials and bearer tokens) are
-trimmed, because whitespace is never valid in them. Free-form secrets
-(`SESSION_KEY`, `EMAIL_SMTP_PASSWORD`, `AUTH_PROXY_SECRET`) are reported but
-used exactly as configured: trimming them could change a working value, and an
-emptied `AUTH_PROXY_SECRET` would disable the shared-secret check outright.
+Fixed-format credentials (OAuth client credentials and bearer tokens) are trimmed, because whitespace is never valid in them. Free-form secrets (`SESSION_KEY`, `EMAIL_SMTP_PASSWORD`, `AUTH_PROXY_SECRET`) are reported but used exactly as configured: trimming them could change a working value, and an emptied `AUTH_PROXY_SECRET` would disable the shared-secret check outright.
 
-A warning on any one variable means the whole Secret was probably written with
-`echo`, so check every key. `BOT_TOKEN` is worth checking even when login works,
-because it breaks the write actions rather than sign-in:
+A warning on any one variable means the whole Secret was probably written with `echo`, so check every key. `BOT_TOKEN` is worth checking even when login works, because it breaks the write actions rather than sign-in:
 
 ```bash
 kubectl -n <namespace> get secret <auth-secret> \
@@ -85,19 +72,13 @@ kubectl -n <namespace> get secret <auth-secret> \
 
 Recreate the Secret with `printf %s` (not `echo`) to write the value cleanly.
 
-A `403` with "oauth authorization did not grant the configured access" is a
-different problem: the exchange succeeded but the grant was not exactly
-`read:user`. See the section above.
+A `403` with "oauth authorization did not grant the configured access" is a different problem: the exchange succeeded but the grant was not exactly `read:user`. See the section above.
 
 ## No jobs were published
 
-A dashboard that loads with zero jobs has a valid frontend and manifest, but the
-latest fetch published no job summaries. This has two common causes: discovery
-found no matching jobs, or every discovered job failed while loading build data.
+A dashboard that loads with zero jobs has a valid frontend and manifest, but the latest fetch published no job summaries. This has two common causes: discovery found no matching jobs, or every discovered job failed while loading build data.
 
-1. Check the fetcher logs first. `Warning: N jobs had fetch errors` and per-job
-   errors point to storage connectivity, credentials, bucket routing, or malformed
-   build data. Fix those errors before changing a valid discovery selector.
+1. Check the fetcher logs first. `Warning: N jobs had fetch errors` and per-job errors point to storage connectivity, credentials, bucket routing, or malformed build data. Fix those errors before changing a valid discovery selector.
 2. Run a one-build check without AI:
 
    ```bash
@@ -110,34 +91,24 @@ found no matching jobs, or every discovered job failed while loading build data.
    python3 -c "import json; print(len(json.load(open('data/dashboard.json'))['jobs']))"
    ```
 
-4. If the logs contain no job fetch errors, confirm `discovery.testgrid_dashboard` exactly
-   matches the jobs' `testgrid-dashboards` annotation.
-5. For broad bucket discovery, remove `discovery.job_filters` temporarily and
-   confirm the storage provider, bucket, and gcsweb base. For
-   `discovery.exact_jobs`, verify the exact case-sensitive job name and its
-   direct `logs/<job>/` or `pr-logs/directory/<job>/` index.
-6. Add `discovery.include_presubmits: true` to `project.yaml` only when the
-   expected jobs are presubmits rather than periodics. Fetch commands do not
-   provide a runtime override.
+4. If the logs contain no job fetch errors, confirm `discovery.testgrid_dashboard` exactly matches the jobs' `testgrid-dashboards` annotation.
+5. For broad bucket discovery, remove `discovery.job_filters` temporarily and confirm the storage provider, bucket, and gcsweb base. For `discovery.exact_jobs`, verify the exact case-sensitive job name and its direct `logs/<job>/` or `pr-logs/directory/<job>/` index.
+6. Add `discovery.include_presubmits: true` to `project.yaml` only when the expected jobs are presubmits rather than periodics. Fetch commands do not provide a runtime override.
 
-The `onboard` command validates discovery before generating a scaffold. A later
-fetch can still publish zero jobs when artifact loading fails for every match.
+The `onboard` command validates discovery before generating a scaffold. A later fetch can still publish zero jobs when artifact loading fails for every match.
 
 
 ## Email notifications are not sent
 
-Check the fetcher logs for the email notification summary or configuration
-warning. Confirm:
+Check the fetcher logs for the email notification summary or configuration warning. Confirm:
 
 - `notifications.email.enabled` is true.
 - `from`, at least one `to` recipient, and `smtp.host` are configured.
 - `EMAIL_SMTP_PASSWORD` is present when `smtp.username` is set.
 - The SMTP relay is reachable from the GitHub Actions runner or Kubernetes pod.
-- `smtp.tls` matches the relay. STARTTLS is required by default and never falls
-  back to plaintext.
+- `smtp.tls` matches the relay. STARTTLS is required by default and never falls back to plaintext.
 
-A failed delivery does not fail the fetch. Its state is left unchanged so the
-next full pass retries it.
+A failed delivery does not fail the fetch. Its state is left unchanged so the next full pass retries it.
 
 
 ## Email action link does not show issue or fix controls
@@ -150,37 +121,27 @@ Email action links require all of the following:
 - The signed-in identity is present in `server.actions.admins`.
 - The recurring pattern still exists in the current job data.
 
-Opening the link only displays an intent prompt. Click **Generate draft** before
-the dashboard calls the preview API. Fix proposals require an enabled Agent
-Sandbox Fix runtime.
+Opening the link only displays an intent prompt. Click **Generate draft** before the dashboard calls the preview API. Fix proposals require an enabled Agent Sandbox Fix runtime.
 
 
 ## Asynchronous draft stays pending or no ready email arrives
 
 - Check the server logs and `GET /api/action-requests/<id>` status.
-- A server restart marks an unfinished pending request failed because user tokens
-  are intentionally never persisted. Start a new request from the pattern.
-- Generic ready drafts persist for 24 hours in non-public
-  `action_request_state.json`. Exact JUnit chat-to-fix previews use the
-  confirmation token's 15-minute lifetime.
-- Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only
-  `fetcher.extraEnv`.
+- A server restart marks an unfinished pending request failed because user tokens are intentionally never persisted. Start a new request from the pattern.
+- Generic ready drafts persist for 24 hours in non-public `action_request_state.json`. Exact JUnit chat-to-fix previews use the confirmation token's 15-minute lifetime.
+- Draft-ready email requires `EMAIL_SMTP_PASSWORD` in `server.extraEnv`, not only `fetcher.extraEnv`.
 - The review link is bound to the authenticated login that created the request.
 
 
 ## Pull request triage stops updating
 
-Symptom: `pull-requests.json` keeps an old `generated_at` while the rest of the
-dashboard refreshes normally. The fetcher logs:
+Symptom: `pull-requests.json` keeps an old `generated_at` while the rest of the dashboard refreshes normally. The fetcher logs:
 
 ```
 ⚠ Pull request triage failed, keeping the previous view: ... 403 ...
 ```
 
-The usual cause is anonymous GitHub reads. Triage calls the GitHub API on every
-pass, and without a token GitHub caps the deployment at 60 requests per hour,
-which one pass over a busy repository can spend on its own. A refresh failure
-never aborts the pass, so the dashboard still publishes the previous view.
+The usual cause is anonymous GitHub reads. Triage calls the GitHub API on every pass, and without a token GitHub caps the deployment at 60 requests per hour, which one pass over a busy repository can spend on its own. A refresh failure never aborts the pass, so the dashboard still publishes the previous view.
 
 Look for this line in the startup logs, which is emitted once per process:
 
@@ -188,9 +149,4 @@ Look for this line in the startup logs, which is emitted once per process:
 ⚠ Pull request triage is enabled but neither GITHUB_READ_TOKEN nor GITHUB_TOKEN is set.
 ```
 
-Fix it by setting `ai.githubReadToken` or `ai.githubReadTokenSecretName`, which
-apply whether or not `ai.enabled` is true. For a public `branding.source_repo`
-the token needs no repository privileges. `aster onboard doctor` reports the
-same gap as `pull request triage credential`. The Pages path already receives
-the Actions `GITHUB_TOKEN` from the reusable workflow, so this does not apply
-there. See [Pull request triage](pull-request-triage.md).
+Fix it by setting `ai.githubReadToken` or `ai.githubReadTokenSecretName`, which apply whether or not `ai.enabled` is true. For a public `branding.source_repo` the token needs no repository privileges. `aster onboard doctor` reports the same gap as `pull request triage credential`. The Pages path already receives the Actions `GITHUB_TOKEN` from the reusable workflow, so this does not apply there. See [Pull request triage](pull-request-triage.md).

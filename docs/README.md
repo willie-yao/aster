@@ -1,7 +1,6 @@
 # Documentation
 
-Choose the page for your task. First-time users should start with onboarding,
-then follow one deployment guide.
+Choose the page for your task. First-time users should start with onboarding, then follow one deployment guide.
 
 ## Start here
 
@@ -14,18 +13,14 @@ then follow one deployment guide.
 | Aster contributor | [Development](development.md) | [Testing](testing.md) and [architecture](architecture/in-process-analyzer.md) |
 | Aster maintainer | [Maintainer references](maintainer/README.md) | [Releasing](releasing.md) |
 
-Use [Troubleshooting](troubleshooting.md) when an existing deployment is not
-producing expected data.
+Use [Troubleshooting](troubleshooting.md) when an existing deployment is not producing expected data.
 
 ## Configure analysis
 
 - [Project configuration](project-configuration.md) is the schema reference.
-- [Writing the project prompt](writing-prompts.md) owns prompt structure and
-  cache-generation guidance.
-- [AI providers](ai-providers.md) owns endpoint, model, credential, and protocol
-  compatibility.
-- [Agentic analysis](agentic.md) explains the authoritative tool and evidence
-  loop, quality gates, cache behavior, and operations.
+- [Writing the project prompt](writing-prompts.md) owns prompt structure and cache-generation guidance.
+- [AI providers](ai-providers.md) owns endpoint, model, credential, and protocol compatibility.
+- [Agentic analysis](agentic.md) explains the authoritative tool and evidence loop, quality gates, cache behavior, and operations.
 - [Diagnostic skills](skills.md) documents consumer-owned evidence recipes.
 
 ## Deploy
@@ -33,17 +28,13 @@ producing expected data.
 - [GitHub Actions and Pages](github-pages.md) is the public, read-only path.
 - [Kubernetes quickstart](kubernetes.md) is the common in-cluster path.
 - [Flux GitOps deployment](kubernetes-gitops.md) covers generated Flux bundles.
-- [Kubernetes platform setup](kubernetes-platform.md) defines platform ownership,
-  secure runtimes, networking, storage, and Secret boundaries.
-- [Kubernetes operator reference](kubernetes-reference.md) contains detailed
-  chart and lifecycle behavior.
-- [Server mode](server.md) covers endpoints, authentication, chat, and guarded
-  actions.
+- [Kubernetes platform setup](kubernetes-platform.md) defines platform ownership, secure runtimes, networking, storage, and Secret boundaries.
+- [Kubernetes operator reference](kubernetes-reference.md) contains detailed chart and lifecycle behavior.
+- [Server mode](server.md) covers endpoints, authentication, chat, and guarded actions.
 
 ## Optional features
 
-Core onboarding enables failure analysis only. Add optional features after the
-basic dashboard is healthy.
+Core onboarding enables failure analysis only. Add optional features after the basic dashboard is healthy.
 
 | Feature | Canonical guide | Boundary |
 | --- | --- | --- |
@@ -57,12 +48,10 @@ basic dashboard is healthy.
 Recommended order:
 
 1. Deploy the read-only dashboard and verify current jobs and analysis.
-2. Enable pull request triage when maintainers need a repository-wide
-   presubmit view.
+2. Enable pull request triage when maintainers need a repository-wide presubmit view.
 3. Add authentication and analysis chat if maintainers need interactive review.
 4. Add notifications, issue drafting, or resolution controls as separate needs.
-5. Evaluate Fix PR generation only after the Agent Sandbox platform contract is
-   installed and reviewed.
+5. Evaluate Fix PR generation only after the Agent Sandbox platform contract is installed and reviewed.
 
 ## Contribute and operate
 
