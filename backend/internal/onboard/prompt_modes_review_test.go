@@ -72,30 +72,15 @@ func TestRunAppliesHandoffFiles(t *testing.T) {
 	}
 }
 
-func TestValidateOptionsRejectsNoPromptConflict(t *testing.T) {
-	opts := testPromptModeOptions(promptModeHandoff)
-	opts.NoPrompt = true
-	if err := validateOptions(&opts); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestWizardPromptAuthoringKeepsSelectedMode(t *testing.T) {
-	tests := []struct {
-		mode         string
-		wantNoPrompt bool
-	}{
-		{mode: promptModeHandoff},
-		{mode: promptModeTemplate, wantNoPrompt: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.mode, func(t *testing.T) {
+	for _, mode := range []string{promptModeHandoff, promptModeTemplate} {
+		t.Run(mode, func(t *testing.T) {
 			opts := Options{}
-			ui := &queuedWizardUI{selects: []string{tt.mode}}
+			ui := &queuedWizardUI{selects: []string{mode}}
 			if err := wizardPromptAuthoring(context.Background(), ui, &opts); err != nil {
 				t.Fatal(err)
 			}
-			if opts.PromptMode != tt.mode || opts.NoPrompt != tt.wantNoPrompt {
+			if opts.PromptMode != mode {
 				t.Fatalf("opts = %+v", opts)
 			}
 			if len(ui.confirmPrompts) != 0 {

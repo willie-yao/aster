@@ -92,14 +92,17 @@ func eligibleJob(jobID string) models.JobDetail {
 	return detail
 }
 
-func TestAssignIDsBindsPatternContent(t *testing.T) {
+func TestMergeLastGoodBindsPatternContent(t *testing.T) {
 	details := []models.JobDetail{{
-		JobID: "periodic-x",
+		JobID: "periodic-x", Runs: eligibleJob("periodic-x").Runs,
 		PatternAnalyses: []models.PatternAnalysis{{
 			JobID: "periodic-x", SharedRootCause: "retry failure", SuggestedFix: "bound retries",
 		}},
 	}}
-	AssignIDs(details)
+	result := AnalyzeResult{Outcomes: map[string]JobOutcome{"periodic-x": {JobID: "periodic-x", Succeeded: true}}}
+	if _, err := MergeLastGood(details, nil, result); err != nil {
+		t.Fatal(err)
+	}
 	pattern := details[0].PatternAnalyses[0]
 	if pattern.ID != models.PatternID(pattern) || pattern.ContentHash != models.PatternHash(pattern) {
 		t.Fatalf("assigned pattern identity = %+v", pattern)

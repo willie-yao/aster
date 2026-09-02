@@ -48,7 +48,7 @@ func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixReque
 			Instruction       string `json:"instruction"`
 			ReplacesRequestID string `json:"replaces_request_id"`
 		}
-		if err := decodeAnalysisChatBody(w, r, &body, maxChatFixBodyBytes); err != nil {
+		if err := decodeWriteBody(w, r, &body, maxChatFixBodyBytes, false); err != nil {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
@@ -100,7 +100,7 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 			PatternHash string `json:"pattern_hash"`
 			Instruction string `json:"instruction"`
 		}
-		if err := decodeAnalysisChatBody(w, r, &body, maxChatFixBodyBytes); err != nil {
+		if err := decodeWriteBody(w, r, &body, maxChatFixBodyBytes, false); err != nil {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}

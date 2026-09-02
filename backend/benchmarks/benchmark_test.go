@@ -921,9 +921,6 @@ func benchmarkOutcomeForAnalysisError(err error) (benchmarkOutcome, error) {
 	if err == nil {
 		return benchmarkOutcomeUsable, nil
 	}
-	if errors.Is(err, ai.ErrMissingArtifactCitation) {
-		return benchmarkOutcomeCitationPolicyUnavailable, nil
-	}
 	return benchmarkOutcomeUnknown, err
 }
 
@@ -935,7 +932,6 @@ func TestBenchmarkOutcomeForAnalysisError(t *testing.T) {
 		ok      bool
 	}{
 		{name: "usable", outcome: benchmarkOutcomeUsable, ok: true},
-		{name: "citation policy", err: fmt.Errorf("wrapped: %w", ai.ErrMissingArtifactCitation), outcome: benchmarkOutcomeCitationPolicyUnavailable, ok: true},
 		{name: "provider", err: errors.New("provider 503"), outcome: benchmarkOutcomeUnknown},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: benchmarkOutcomeUnknown},
 		{name: "tools", err: ai.ErrToolsUnsupported, outcome: benchmarkOutcomeUnknown},
@@ -956,9 +952,9 @@ func benchmarkMinGCSBytes(bc benchCase, configured int) int {
 	return configured
 }
 
-func benchmarkCacheGenerationFingerprint(configValue string) (string, error) {
-	value, err := project.ResolveAICacheGeneration(configValue, os.Getenv(project.AICacheGenerationEnv))
-	if err != nil {
+func benchmarkCacheGenerationFingerprint() (string, error) {
+	value := os.Getenv(project.AICacheGenerationEnv)
+	if err := project.ValidateAICacheGeneration(value); err != nil {
 		return "", err
 	}
 	return project.AICacheGenerationFingerprint(value), nil
@@ -2050,17 +2046,17 @@ func ComposeBenchPrompt() string {
 
 func TestBenchmarkCacheGenerationFingerprint(t *testing.T) {
 	t.Setenv(project.AICacheGenerationEnv, "operation-one")
-	got, err := benchmarkCacheGenerationFingerprint("project-default")
+	got, err := benchmarkCacheGenerationFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := project.AICacheGenerationFingerprint("operation-one")
-	if got != want || got == project.AICacheGenerationFingerprint("project-default") {
+	if got != want {
 		t.Fatalf("fingerprint = %q, want %q", got, want)
 	}
 
 	t.Setenv(project.AICacheGenerationEnv, "invalid value")
-	if _, err := benchmarkCacheGenerationFingerprint(""); err == nil {
+	if _, err := benchmarkCacheGenerationFingerprint(); err == nil {
 		t.Fatal("invalid cache generation was accepted")
 	}
 }

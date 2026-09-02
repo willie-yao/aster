@@ -1,13 +1,16 @@
 package onboard
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/project"
+	"gopkg.in/yaml.v3"
 )
 
 func TestInferCategories_GroupsAndOrders(t *testing.T) {
@@ -143,6 +146,18 @@ func testOpts() Options {
 		DashboardRepo: "my-org/my-proj-aster",
 		SourceRepo:    "upstream/my-proj",
 		EngineRef:     "main",
+	}
+}
+
+func TestDerivedIDStripsOnlyAsterSuffix(t *testing.T) {
+	for repo, want := range map[string]string{
+		"example/project-aster":             "project",
+		"example/project-prow-ai-dashboard": "project-prow-ai-dashboard",
+		"example/project-prow-dashboard":    "project-prow-dashboard",
+	} {
+		if got := derivedID(Options{DashboardRepo: repo}); got != want {
+			t.Errorf("derivedID(%q) = %q, want %q", repo, got, want)
+		}
 	}
 }
 
@@ -467,9 +482,6 @@ func TestScaffold_K8sMode(t *testing.T) {
 	if !strings.Contains(values, opts.AIEndpoint) || !strings.Contains(values, opts.AIModel) {
 		t.Errorf("values.yaml did not seed AI endpoint/model from env:\n%s", values)
 	}
-	if !strings.Contains(values, "type: ClusterIP") || !strings.Contains(values, "networkPolicy:\n  enabled: false") {
-		t.Errorf("values.yaml did not preserve safe network defaults:\n%s", values)
-	}
 	readme, err := render(k8sDeployReadmeTmpl, data)
 	if err != nil {
 		t.Fatalf("render deploy README: %v", err)
@@ -532,6 +544,108 @@ func TestScaffoldPRBodyUsesModeGuide(t *testing.T) {
 	}
 }
 
+func TestK8sValuesRenderEquivalentToChartDefaults(t *testing.T) {
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	chart, err := filepath.Abs(filepath.Join("..", "..", "..", "deploy", "helm", "aster"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chartValues := parseYAMLMap(t, string(mustReadFile(t, filepath.Join(chart, "values.yaml"))))
+	post := parseYAMLMap(t, renderK8sValuesForTest(t, k8sValuesFixtureData(false)))
+	preData, err := yaml.Marshal(post)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := parseYAMLMap(t, string(preData))
+	for _, path := range chartEqualGeneratedPaths {
+		parts := strings.Split(path, ".")
+		value, ok := lookupYAMLPath(chartValues, parts...)
+		if !ok {
+			t.Fatalf("chart default missing %s", path)
+		}
+		setYAMLPath(pre, value, parts...)
+	}
+
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.yaml")
+	prePath := filepath.Join(dir, "pre.yaml")
+	postPath := filepath.Join(dir, "post.yaml")
+	base := `project:
+  config: |
+    id: equivalence
+    name: Equivalence
+    discovery:
+      source: bucket
+    storage:
+      provider: local
+      base: /tmp/aster-equivalence
+    branding:
+      title: Equivalence
+      base_path: /
+      site_url: https://example.invalid
+      source_repo:
+        owner: example
+        name: equivalence
+  systemPrompt: equivalence
+`
+	writeTestFile(t, basePath, base)
+	writeYAMLFile(t, prePath, pre)
+	writeYAMLFile(t, postPath, post)
+	render := func(valuesPath string) []byte {
+		t.Helper()
+		cmd := exec.Command(helm, "template", "equivalence", chart, "--namespace", "equivalence", "-f", basePath, "-f", valuesPath)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("helm template %s: %v\n%s", filepath.Base(valuesPath), err, output)
+		}
+		return output
+	}
+	preRender := render(prePath)
+	postRender := render(postPath)
+	if !bytes.Equal(preRender, postRender) {
+		preOutput := filepath.Join(dir, "pre-render.yaml")
+		postOutput := filepath.Join(dir, "post-render.yaml")
+		if err := os.WriteFile(preOutput, preRender, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(postOutput, postRender, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		diff, _ := exec.Command("diff", "-u", preOutput, postOutput).CombinedOutput()
+		t.Fatalf("pre-trim and post-trim manifests differ:\n%s", diff)
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func writeTestFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeYAMLFile(t *testing.T, path string, value any) {
+	t.Helper()
+	data, err := yaml.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScaffold_K8sStaysFocused(t *testing.T) {
 	data := buildScaffoldData(testOpts(), nil)
 	data.Mode = modeK8s
@@ -545,9 +659,9 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"mode: watch", "imageTag: \"\"", "existingSecret: \"<existing-ai-secret>\"",
-		"# schedule:", "chat:\n    enabled: false", "actions:\n    enabled: false",
-		"Active values below are settings a new consumer commonly owns", "No engine source checkout",
+		"existingSecret: \"<existing-ai-secret>\"",
+		"githubReadTokenSecretName: \"<existing-github-read-secret>\"",
+		"This file records consumer-specific decisions", "No engine source checkout",
 		"verified-aster-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
 	} {
 		if !strings.Contains(values+readme, want) {
@@ -923,7 +1037,7 @@ func TestChecklist_UsesSelectedAPIAndExplainsDeferredAI(t *testing.T) {
 
 func TestValidateOptions_CredentialCheckPrecedesAPIValidation(t *testing.T) {
 	opts := testOpts()
-	opts.NoPrompt = true
+	opts.PromptMode = promptModeTemplate
 	opts.GitHubToken = "fixture-github-token"
 	opts.AIAPI = opts.GitHubToken
 	err := validateOptions(&opts)

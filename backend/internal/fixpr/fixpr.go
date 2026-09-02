@@ -75,10 +75,6 @@ type Options struct {
 	// PRFiller, when set, reformats the PR description to follow the repo's PR
 	// template. A nil filler (or one that finds no template) is a pass-through.
 	PRFiller PRBodyFiller
-	// Verify, when set, builds and vets the proposed change in a Runtime before
-	// the PR is opened, recording the verdict in the PR body and preview. nil
-	// skips verification (the verdict is "skipped").
-	Verify *VerifyConfig
 	// Agent generates the fix with a coding-agent CLI in a real workspace clone.
 	// Runtime-specific validators may run only after generation completes.
 	Agent *AgentConfig
@@ -128,20 +124,6 @@ type AgentConfig struct {
 	WorkObserver runtime.WorkObserver
 }
 
-// VerifyConfig configures pre-PR verification of a proposed fix.
-type VerifyConfig struct {
-	// Runtime executes the verification commands against the patched repo.
-	Runtime runtime.Runtime
-	// Commands each run in the checked-out, patched repo; all must pass for a
-	// "passed" verdict. Defaults to `go build ./...` then `go vet ./...`.
-	Commands [][]string
-	// Timeout bounds each command. Zero uses the Runtime default.
-	Timeout time.Duration
-	// Token authenticates the clone of a private source repo. Empty clones
-	// anonymously, which is enough for a public repo.
-	Token string
-}
-
 // VerifyStatus is the outcome of pre-PR verification.
 type VerifyStatus string
 
@@ -151,12 +133,11 @@ const (
 	// VerifyFailed means a command failed or timed out; the change likely does
 	// not build. The draft is still produced (annotate, do not block).
 	VerifyFailed VerifyStatus = "failed"
-	// VerifySkipped means verification did not run (not configured, or the
-	// toolchain was unavailable, or an infra error prevented it).
+	// VerifySkipped means command verification was not configured.
 	VerifySkipped VerifyStatus = "skipped"
 )
 
-// VerifyResult records a verification verdict for the PR body and preview.
+// VerifyResult records a validator verdict for the PR body and preview.
 type VerifyResult struct {
 	Status VerifyStatus `json:"status"`
 	// Summary is a one-line description of what ran and its verdict.
@@ -262,54 +243,11 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 	}, p)
 }
 
-// verify builds and vets the proposed change against the pinned base in the
-// configured Runtime. It never blocks: a build failure yields a "failed"
-// verdict (annotated on the draft), and an unavailable toolchain or infra error
-// yields "skipped". Verification runs once, at generation time.
-func (m *Manager) verify(ctx context.Context, base ghpr.Base, files map[string]string, execution *ExecutionVerification) VerifyResult {
-	if execution != nil {
-		if err := execution.validate(base.HeadSHA); err != nil {
-			return VerifyResult{Status: VerifyFailed, Summary: oneLine(err.Error())}
-		}
-		return execution.verifyResult()
+func executionVerifyResult(baseSHA string, execution *ExecutionVerification) VerifyResult {
+	if err := execution.validate(baseSHA); err != nil {
+		return VerifyResult{Status: VerifyFailed, Summary: oneLine(err.Error())}
 	}
-	if m.opts.Verify == nil || m.opts.Verify.Runtime == nil {
-		return VerifyResult{Status: VerifySkipped, Summary: "verification not configured"}
-	}
-	cmds := m.opts.Verify.Commands
-	if len(cmds) == 0 {
-		cmds = defaultVerifyCommands
-	}
-	repo := runtime.RepoRef{Owner: m.opts.SourceOwner, Name: m.opts.SourceName, Ref: base.HeadSHA, Token: m.opts.Verify.Token}
-	var ran []string
-	for _, cmd := range cmds {
-		label := strings.Join(cmd, " ")
-		res, err := m.opts.Verify.Runtime.Run(ctx, runtime.Spec{
-			Repo: repo, Overlay: files, Command: cmd, Timeout: m.opts.Verify.Timeout,
-		})
-		if errors.Is(err, runtime.ErrUnavailable) {
-			return VerifyResult{Status: VerifySkipped, Summary: "verification skipped: toolchain unavailable"}
-		}
-		if err != nil {
-			return VerifyResult{Status: VerifySkipped, Summary: "verification skipped: " + oneLine(err.Error())}
-		}
-		if res.TimedOut {
-			return VerifyResult{Status: VerifyFailed, Summary: label + " timed out", Output: res.Output}
-		}
-		if !res.Passed() {
-			return VerifyResult{Status: VerifyFailed, Summary: label + " failed", Output: res.Output}
-		}
-		ran = append(ran, label)
-	}
-	return VerifyResult{Status: VerifyPassed, Summary: strings.Join(ran, " and ") + " passed"}
-}
-
-// defaultVerifyCommands compile-check and vet a Go repo, catching the common
-// failure modes of a model-generated diff: it does not build, uses a
-// hallucinated API, or breaks a signature.
-var defaultVerifyCommands = [][]string{
-	{"go", "build", "./..."},
-	{"go", "vet", "./..."},
+	return execution.verifyResult()
 }
 
 // renderBody builds the final PR description (reformatted to follow the repo PR
@@ -450,7 +388,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		return nil, err
 	}
 	key := KeyFor(p)
-	v := m.verify(ctx, base, fix.files, fix.executionVerification)
+	v := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description, body := m.renderBody(ctx, p, fix, v, key)
 	return &GeneratedFix{
 		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},

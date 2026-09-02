@@ -208,15 +208,15 @@ func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 	}
 
 	// A different admin's token must not resolve the draft.
-	if _, err := s.take("someone-else", tok); !errors.Is(err, ErrPreviewNotFound) {
+	if _, err := s.previewStore.take("someone-else", tok); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("cross-admin take: want ErrPreviewNotFound, got %v", err)
 	}
 	// The owning admin resolves it once...
-	if _, err := s.take("owner-token", tok); err != nil {
+	if _, err := s.previewStore.take("owner-token", tok); err != nil {
 		t.Fatalf("owner take: %v", err)
 	}
 	// ...and the token is single-use.
-	if _, err := s.take("owner-token", tok); !errors.Is(err, ErrPreviewNotFound) {
+	if _, err := s.previewStore.take("owner-token", tok); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("reuse take: want ErrPreviewNotFound, got %v", err)
 	}
 }
@@ -233,7 +233,7 @@ func TestPreviewCache_Expiry(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.take("owner-token", tok); !errors.Is(err, ErrPreviewNotFound) {
+	if _, err := s.previewStore.take("owner-token", tok); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("expired take: want ErrPreviewNotFound, got %v", err)
 	}
 }
@@ -577,7 +577,7 @@ func TestPreviewStoreRejectsOversizedWriteWithoutReplacingState(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("oversized write replaced the last valid preview state")
 	}
-	if _, err := NewService(&project.Config{}, dataDir, AIConfig{}).take("owner-token", firstToken); err != nil {
+	if _, err := NewService(&project.Config{}, dataDir, AIConfig{}).previewStore.take("owner-token", firstToken); err != nil {
 		t.Fatalf("valid preview was not recoverable: %v", err)
 	}
 }
@@ -602,10 +602,10 @@ func TestPreviewStoreEvictsOldestNonRunningPreviewToFit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.take("owner-token", firstToken); !errors.Is(err, ErrPreviewNotFound) {
+	if _, err := service.previewStore.take("owner-token", firstToken); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("oldest preview was not evicted: %v", err)
 	}
-	if _, err := service.take("owner-token", secondToken); err != nil {
+	if _, err := service.previewStore.take("owner-token", secondToken); err != nil {
 		t.Fatalf("newest preview was not retained: %v", err)
 	}
 }
@@ -855,34 +855,36 @@ func TestPatternWithoutEvidenceIsNotActionable(t *testing.T) {
 	}
 }
 
-func TestLegacyPreviewOwnerBindingsAreInvalidated(t *testing.T) {
-	dataDir := t.TempDir()
-	store := newPreviewStore(dataDir)
-	state := &previewState{Version: 4, Previews: map[string]*persistedPreview{
-		tokenHash("preview-token"): {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::ready"}},
-		"unknown":                  {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::unknown"}},
-		"done":                     {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusDone, ResultURL: "https://github.com/o/r/issues/1", Issue: &issues.IssueSpec{Key: "pattern::done"}},
-	}}
-	if err := statefile.WriteJSONDurable(store.path, state); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, _, err := store.begin("alice", "preview-token", time.Hour); !errors.Is(err, ErrPreviewNotFound) {
-		t.Fatalf("legacy preview confirmation error = %v", err)
-	}
-	data, err := os.ReadFile(store.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var migrated previewState
-	if err := json.Unmarshal(data, &migrated); err != nil {
-		t.Fatal(err)
-	}
-	if migrated.Version != previewStateVersion || len(migrated.Previews) != 0 {
-		t.Fatalf("migrated state = %+v", migrated)
+func TestNoncurrentPreviewStateResetsFresh(t *testing.T) {
+	for _, version := range []int{4, previewStateVersion + 1} {
+		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
+			store := newPreviewStore(t.TempDir())
+			state := &previewState{Version: version, Previews: map[string]*persistedPreview{
+				tokenHash("preview-token"): {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::ready"}},
+				"unknown":                  {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::unknown"}},
+				"done":                     {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusDone, ResultURL: "https://github.com/o/r/issues/1", Issue: &issues.IssueSpec{Key: "pattern::done"}},
+			}}
+			if err := statefile.WriteJSONDurable(store.path, state); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, _, _, err := store.begin("alice", "preview-token", time.Hour); !errors.Is(err, ErrPreviewNotFound) {
+				t.Fatalf("preview confirmation error = %v", err)
+			}
+			data, err := os.ReadFile(store.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reset previewState
+			if err := json.Unmarshal(data, &reset); err != nil {
+				t.Fatal(err)
+			}
+			if reset.Version != previewStateVersion || len(reset.Previews) != 0 {
+				t.Fatalf("reset state = %+v", reset)
+			}
+		})
 	}
 }
-
-func TestPreviewStateV5FailsClosedForLegacyRollback(t *testing.T) {
+func TestPreviewStateWritesCurrentVersion(t *testing.T) {
 	store := newPreviewStore(t.TempDir())
 	if _, err := store.stash("alice", &previewEntry{kind: "issue", targetRepo: "o/r", spec: issues.IssueSpec{Key: "pattern::current"}}); err != nil {
 		t.Fatal(err)
@@ -897,9 +899,8 @@ func TestPreviewStateV5FailsClosedForLegacyRollback(t *testing.T) {
 	if err := json.Unmarshal(data, &header); err != nil {
 		t.Fatal(err)
 	}
-	legacyAccepts := func(version int) bool { return version >= 1 && version <= 4 }
-	if header.Version != previewStateVersion || legacyAccepts(header.Version) {
-		t.Fatalf("preview state version = %d, want v5 rejected by legacy v4 readers", header.Version)
+	if header.Version != previewStateVersion {
+		t.Fatalf("preview state version = %d, want %d", header.Version, previewStateVersion)
 	}
 }
 

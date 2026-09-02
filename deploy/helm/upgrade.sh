@@ -223,52 +223,11 @@ except json.JSONDecodeError as err:
 if not isinstance(values, dict):
     raise SystemExit("merged Helm values must be an object")
 
-removed = []
-if "analysisRuntime" in values:
-    del values["analysisRuntime"]
-    removed.append("analysisRuntime")
-
-server = values.get("server")
-if isinstance(server, dict):
-    actions = server.get("actions")
-    if isinstance(actions, dict):
-        oauth = actions.get("oauth")
-        if isinstance(oauth, dict):
-            for key in ("scope", "chatScope", "privateRepositories"):
-                if key in oauth:
-                    del oauth[key]
-                    removed.append(f"server.actions.oauth.{key}")
-    extra_env = server.get("extraEnv")
-    if isinstance(extra_env, list):
-        kept = []
-        for entry in extra_env:
-            if isinstance(entry, dict) and entry.get("name") in {"OAUTH_SCOPE", "OAUTH_PRIVATE_REPOSITORIES"}:
-                removed.append(f"server.extraEnv[{entry['name']}]")
-                continue
-            kept.append(entry)
-        server["extraEnv"] = kept
-
-agent_sandbox = values.get("agentSandbox")
-if isinstance(agent_sandbox, dict):
-    fix_runtime = agent_sandbox.get("fixRuntime")
-    if isinstance(fix_runtime, dict):
-        # These execution bounds now come from project.yaml under
-        # ai.fix_prs.agent_runtime, so the chart no longer accepts copies here.
-        for key in ("maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands"):
-            if key in fix_runtime:
-                del fix_runtime[key]
-                removed.append(f"agentSandbox.fixRuntime.{key}")
 
 with open(candidate_path, "w", encoding="utf-8") as candidate_file:
     json.dump(values, candidate_file, indent=2, sort_keys=True)
     candidate_file.write("\n")
 
-if removed:
-    print("Removed deprecated controls from the candidate values:")
-    for path in removed:
-        print(f"  - {path}")
-else:
-    print("No deprecated controls were present in the candidate values.")
 PY
 chmod 600 "$candidate_values"
 

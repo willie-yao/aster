@@ -436,12 +436,7 @@ func (s *previewStore) load() (*previewState, bool, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, false, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Previews == nil || state.Version < 1 || state.Version > previewStateVersion {
-		return nil, false, fmt.Errorf("unsupported preview state version %d", state.Version)
-	}
-	if state.Version < previewStateVersion {
-		// Versions through v4 bound previews to a GitHub credential hash. V5
-		// binds them to the initiating login, so every legacy preview is invalid.
+	if state.Version != previewStateVersion || state.Previews == nil {
 		return freshPreviewState(), true, nil
 	}
 	changed := false

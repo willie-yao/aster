@@ -224,50 +224,8 @@ func (s *Service) loadActionRequests() {
 		}
 	}
 	migrated := state.Version != actionRequestStateVersion
-	if state.Version == 1 {
-		for _, request := range state.Requests {
-			if request != nil && request.Status == RequestReady && request.PatternHash == "" {
-				request.Status = RequestFailed
-				request.Error = "pattern changed before confirmation"
-				request.ReasonCode = ReasonEvidenceUnavailable
-			}
-		}
-		state.Version = 2
-	}
-	if state.Version == 2 {
-		state.Version = 3
-	}
-	if state.Version == 3 {
-		for _, request := range state.Requests {
-			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
-				request.Status = RequestFailed
-				request.Error = "saved preview requires regeneration after source verification upgrade"
-				request.ReasonCode = ReasonContractGenerationFailed
-				request.Preview = nil
-				request.Issue = nil
-				request.Fix = nil
-			}
-		}
-		state.Version = 4
-	}
-	if state.Version == 4 {
-		for _, request := range state.Requests {
-			if request != nil && request.Status == RequestReady && request.VerificationVersion != sourceVerificationVersion {
-				request.Status = RequestFailed
-				request.Error = "saved preview requires regeneration after source verification upgrade"
-				request.ReasonCode = ReasonContractGenerationFailed
-				request.Preview = nil
-				request.Issue = nil
-				request.Fix = nil
-			}
-		}
-		state.Version = 5
-	}
-	if state.Version == 5 {
-		state.Version = 6
-	}
-	if state.Version == 6 {
-		state.Version = actionRequestStateVersion
+	if migrated {
+		state = &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
 	}
 	if state.Requests == nil {
 		state.Requests = map[string]*actionRequest{}

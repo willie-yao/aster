@@ -143,8 +143,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, mod
 		if err != nil {
 			t.Fatalf("load benchmark pricing identity: %v", err)
 		}
-		configuredCacheGeneration := cfg.AI.CacheGeneration
-		out.cacheGeneration, err = benchmarkCacheGenerationFingerprint(configuredCacheGeneration)
+		out.cacheGeneration, err = benchmarkCacheGenerationFingerprint()
 		if err != nil {
 			t.Fatalf("benchmark cache generation: %v", err)
 		}
@@ -166,7 +165,7 @@ func loadBenchmarkInputs(t *testing.T, cases []benchCase, apiMode, endpoint, mod
 	}
 
 	if out.cacheGeneration == "" {
-		out.cacheGeneration, err = benchmarkCacheGenerationFingerprint("")
+		out.cacheGeneration, err = benchmarkCacheGenerationFingerprint()
 		if err != nil {
 			t.Fatalf("benchmark cache generation: %v", err)
 		}
@@ -579,8 +578,6 @@ branding:
     owner: example
     name: project
 ai:
-  endpoint: https://example.invalid/v1/chat/completions
-  model: benchmark-model
   tools: [filesystem]
   min_tool_calls: 2
   critique:

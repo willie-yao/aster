@@ -211,7 +211,7 @@ can reuse entries under a compatible configuration.
 Normal floor changes and critique-version changes do not need a generation
 change because current-floor revalidation handles them. Prompt, model, endpoint,
 and skill changes also do not require one, but they do not force reanalysis. Set
-`ai.cache_generation` only when an operator intentionally wants a reversible
+`AI_CACHE_GENERATION` only when an operator intentionally wants a reversible
 full rebaseline that existing acceptance gates would otherwise allow.
 
 ## Publication and private state

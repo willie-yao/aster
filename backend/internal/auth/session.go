@@ -17,11 +17,9 @@ import (
 // sessionCookieName is the cookie holding the encrypted admin session.
 const sessionCookieName = "pad_session"
 
-// session is the authenticated state sealed into the cookie. Token is retained
-// for session-format compatibility; current OAuth sessions leave it empty.
+// session is the authenticated state sealed into the cookie.
 type session struct {
 	Login  string `json:"login"`
-	Token  string `json:"token"`
 	Policy string `json:"policy,omitempty"`
 	Exp    int64  `json:"exp"`
 }
@@ -107,9 +105,9 @@ func (c *sessionCodec) open(v string) (*session, error) {
 }
 
 // write sets the session cookie with the sealed value.
-func (c *sessionCodec) write(w http.ResponseWriter, login, token string) error {
+func (c *sessionCodec) write(w http.ResponseWriter, login string) error {
 	exp := time.Now().Add(c.ttl)
-	value, err := c.seal(session{Login: login, Token: token, Policy: c.policy, Exp: exp.Unix()})
+	value, err := c.seal(session{Login: login, Policy: c.policy, Exp: exp.Unix()})
 	if err != nil {
 		return err
 	}

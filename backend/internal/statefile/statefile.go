@@ -183,7 +183,7 @@ func Load[T any](path, repo, label string) *State[T] {
 		log.Printf("Warning: failed to parse %s state: %v", label, err)
 		return fresh
 	}
-	if s.Repo != "" && s.Repo != repo {
+	if s.Repo != repo {
 		log.Printf("%s: target repo changed (%s -> %s); starting state fresh", label, s.Repo, repo)
 		return fresh
 	}

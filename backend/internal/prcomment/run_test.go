@@ -636,6 +636,25 @@ func TestLoadStateDiscardsAnotherRepositorysState(t *testing.T) {
 	}
 }
 
+func TestLoadStateDiscardsUnscopedState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StateFilename)
+	original := &State{
+		ActivatedAt: start, ActivatedAbove: 5,
+		Tracked: map[int]Commented{7: {Number: 7}}, Failures: map[int]attemptFailure{},
+	}
+	if err := original.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	logs := captureLog(t)
+	reloaded := LoadState(path, "o/r")
+	if reloaded.Activated() || reloaded.Recorded(7) || reloaded.Repo != "o/r" {
+		t.Fatalf("unscoped state was adopted: %+v", reloaded)
+	}
+	if !strings.Contains(logs.String(), "target repo changed ( -> o/r); starting state fresh") {
+		t.Fatalf("repo-change log = %q", logs.String())
+	}
+}
+
 func TestLoadStateSurvivesUnparsableFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), StateFilename)
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {

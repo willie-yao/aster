@@ -84,9 +84,6 @@ func validateOptions(opts *Options) error {
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
-	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
-		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
-	}
 	if err := validateCredentialSeparation(*opts); err != nil {
 		return err
 	}
@@ -453,10 +450,8 @@ func derivedID(opts Options) string {
 		return opts.ID
 	}
 	_, name := splitRepo(opts.DashboardRepo)
-	// Strip a trailing dashboard suffix so the id reads like the project.
+	// Strip a trailing -aster suffix so the id reads like the project.
 	id := strings.TrimSuffix(name, "-aster")
-	id = strings.TrimSuffix(id, "-prow-ai-dashboard")
-	id = strings.TrimSuffix(id, "-prow-dashboard")
 	if id == "" {
 		id = name
 	}

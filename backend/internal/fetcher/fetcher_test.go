@@ -1,9 +1,11 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,40 @@ import (
 	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
+
+func TestSetupPipelineUsesProjectPresubmitPolicy(t *testing.T) {
+	for _, include := range []bool{false, true} {
+		t.Run(fmt.Sprintf("include=%t", include), func(t *testing.T) {
+			projectDir := t.TempDir()
+			config := fmt.Sprintf(`id: test
+name: Test
+discovery:
+  source: bucket
+  include_presubmits: %t
+storage:
+  provider: local
+  base: %s
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.invalid
+  source_repo:
+    owner: example
+    name: repo
+`, include, t.TempDir())
+			if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			pipeline, err := setupPipeline(Options{ProjectDir: projectDir, OutDir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pipeline.includePresubmits != include {
+				t.Fatalf("includePresubmits = %t, want project policy %t", pipeline.includePresubmits, include)
+			}
+		})
+	}
+}
 
 func TestLoadAnalysisTraceStoreRestoresRetainedLedger(t *testing.T) {
 	dir := t.TempDir()
@@ -36,6 +72,20 @@ func TestLoadAnalysisTraceStoreRestoresRetainedLedger(t *testing.T) {
 	if got := len(loadAnalysisTraceStore(filepath.Join(dir, "missing.json")).Snapshot().Traces); got != 0 {
 		t.Fatalf("missing snapshot restored %d traces, want 0", got)
 	}
+	if err := statefile.WriteJSON(path, ai.AnalysisTraceFile{Version: 2, Traces: []ai.AnalysisTrace{retained}}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	if got := len(loadAnalysisTraceStore(path).Snapshot().Traces); got != 0 {
+		t.Fatalf("unsupported snapshot restored %d traces, want 0", got)
+	}
+	if !strings.Contains(logs.String(), "failed to load retained AI traces: trace version 2 is unsupported") {
+		t.Fatalf("unsupported snapshot log = %q", logs.String())
+	}
+	logs.Reset()
 	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}

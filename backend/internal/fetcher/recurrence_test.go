@@ -1,6 +1,11 @@
 package fetcher
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +30,15 @@ func observe(dir string, now time.Time, details ...models.JobDetail) {
 	observeRecurrence(dir, details, now)
 }
 
+func loadRecurrenceLedger(t *testing.T, dir string) *recurrenceledger.Ledger {
+	t.Helper()
+	ledger, err := recurrenceledger.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger
+}
+
 // Recurring failures previously had no memory: a cause whose builds aged out and
 // later returned looked brand new. The ledger has to carry that history across
 // passes even though the pattern object is rebuilt from the current window.
@@ -33,7 +47,7 @@ func TestRecordRecurrenceSurvivesTheWindowRolling(t *testing.T) {
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	observe(dir, start, signedDetail("job-1", "sig-a", "10", "11"))
-	first := recurrenceledger.Load(dir).Entries["sig-a"]
+	first := loadRecurrenceLedger(t, dir).Entries["sig-a"]
 	if first.Occurrences != 2 || first.JobID != "job-1" {
 		t.Fatalf("first pass entry=%+v", first)
 	}
@@ -44,7 +58,7 @@ func TestRecordRecurrenceSurvivesTheWindowRolling(t *testing.T) {
 	// It returns months later in builds the original pass never saw.
 	observe(dir, start.AddDate(0, 3, 0), signedDetail("job-1", "sig-a", "90", "91"))
 
-	entry := recurrenceledger.Load(dir).Entries["sig-a"]
+	entry := loadRecurrenceLedger(t, dir).Entries["sig-a"]
 	if entry.Occurrences != 4 {
 		t.Fatalf("occurrences=%d, want 4 accumulated across the gap", entry.Occurrences)
 	}
@@ -64,7 +78,7 @@ func TestRecordRecurrenceDoesNotInflateRetainedPatterns(t *testing.T) {
 	for pass := range 5 {
 		observe(dir, now.Add(time.Duration(pass)*time.Hour), signedDetail("job-1", "sig-a", "10", "11"))
 	}
-	if got := recurrenceledger.Load(dir).Entries["sig-a"].Occurrences; got != 2 {
+	if got := loadRecurrenceLedger(t, dir).Entries["sig-a"].Occurrences; got != 2 {
 		t.Fatalf("occurrences=%d, want the two failing builds counted once", got)
 	}
 }
@@ -79,7 +93,7 @@ func TestRecordRecurrenceRetiresMemoryOlderThanTheRetentionWindow(t *testing.T) 
 	returned := start.Add(recurrenceledger.RetentionWindow + 24*time.Hour)
 	observe(dir, returned, signedDetail("job-1", "sig-a", "90"))
 
-	entry := recurrenceledger.Load(dir).Entries["sig-a"]
+	entry := loadRecurrenceLedger(t, dir).Entries["sig-a"]
 	if entry.FirstSeen != returned.Format(time.RFC3339) || entry.Occurrences != 1 {
 		t.Fatalf("entry=%+v, want the returning cause to start fresh", entry)
 	}
@@ -93,8 +107,35 @@ func TestRecordRecurrencePrunesEvenWithNoSightings(t *testing.T) {
 	observe(dir, start, signedDetail("job-1", "sig-a", "10"))
 
 	recordRecurrence(dir, nil, start.Add(recurrenceledger.RetentionWindow+24*time.Hour))
-	if len(recurrenceledger.Load(dir).Entries) != 0 {
+	if len(loadRecurrenceLedger(t, dir).Entries) != 0 {
 		t.Fatal("an expired cause survived a pass with no sightings")
+	}
+}
+
+func TestRecordRecurrencePreservesInvalidLedgerAndContinuesWithoutHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, recurrenceledger.FileName)
+	const content = "{not json"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	if got := recordRecurrence(dir, []recurrenceledger.Sighting{{Signature: "sig-a", Builds: []string{"1"}}}, time.Now()); got != nil {
+		t.Fatalf("ledger = %+v, want nil after load failure", got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != content {
+		t.Fatalf("invalid ledger was replaced: %q", data)
+	}
+	if !strings.Contains(logs.String(), "failed to record recurrence history") {
+		t.Fatalf("load failure was not logged: %q", logs.String())
 	}
 }
 
@@ -127,7 +168,7 @@ func TestCausalGroupSightingsCoversOnlySignedSystemicCauses(t *testing.T) {
 func TestRecordRecurrenceWritesNothingWithoutSignedCauses(t *testing.T) {
 	dir := t.TempDir()
 	observe(dir, time.Now(), models.JobDetail{JobID: "job-1"})
-	if len(recurrenceledger.Load(dir).Entries) != 0 {
+	if len(loadRecurrenceLedger(t, dir).Entries) != 0 {
 		t.Fatal("a pass with no signed causes wrote ledger entries")
 	}
 }
@@ -176,7 +217,7 @@ func TestRecordRecurrenceAccumulatesFailuresTooSparseToCorrelate(t *testing.T) {
 		observe(dir, start.AddDate(0, pass, 0), detail)
 	}
 
-	entries := recurrenceledger.Load(dir).Entries
+	entries := loadRecurrenceLedger(t, dir).Entries
 	if len(entries) != 1 {
 		t.Fatalf("entries=%+v, want one durable cause", entries)
 	}
@@ -204,7 +245,7 @@ func TestRecordRecurrenceCarriesSparseHistoryIntoTheCausalGroup(t *testing.T) {
 	if signature == "" {
 		t.Fatal("the isolated failure produced no recurrence signature")
 	}
-	if got := recurrenceledger.Load(dir).Entries[signature].Occurrences; got != 1 {
+	if got := loadRecurrenceLedger(t, dir).Entries[signature].Occurrences; got != 1 {
 		t.Fatalf("occurrences=%d, want the isolated failure recorded", got)
 	}
 
@@ -215,7 +256,7 @@ func TestRecordRecurrenceCarriesSparseHistoryIntoTheCausalGroup(t *testing.T) {
 	}, "20", "21", "22")
 	observe(dir, start.AddDate(0, 1, 0), correlated)
 
-	if got := recurrenceledger.Load(dir).Entries[signature].Occurrences; got != 4 {
+	if got := loadRecurrenceLedger(t, dir).Entries[signature].Occurrences; got != 4 {
 		t.Fatalf("occurrences=%d, want one isolated plus three correlated failures", got)
 	}
 }
@@ -240,7 +281,7 @@ func TestObserveRecurrenceCountsGroupedBuildsUnderBothIdentities(t *testing.T) {
 
 	observeRecurrence(dir, []models.JobDetail{detail}, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
 
-	entries := recurrenceledger.Load(dir).Entries
+	entries := loadRecurrenceLedger(t, dir).Entries
 	if got := entries[groupSignature].Occurrences; got != 3 {
 		t.Fatalf("group occurrences=%d, want the verdict identity still counted", got)
 	}

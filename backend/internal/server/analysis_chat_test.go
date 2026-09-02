@@ -388,6 +388,7 @@ func TestHandlerAnalysisChatRejectsMalformedAndCrossOriginRequests(t *testing.T)
 		want   int
 	}{
 		{name: "unknown field", body: `{"job_id":"job","build_id":"1","test_name":"Test","extra":true}`, want: http.StatusBadRequest},
+		{name: "malformed json", body: `{"job_id":`, want: http.StatusBadRequest},
 		{name: "trailing json", body: `{"job_id":"job","build_id":"1","test_name":"Test"}{}`, want: http.StatusBadRequest},
 		{name: "cross origin", body: `{"job_id":"job","build_id":"1","test_name":"Test"}`, origin: "https://evil.example", want: http.StatusForbidden},
 	}

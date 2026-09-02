@@ -318,8 +318,8 @@ func (p *pipeline) persistIndividualAnalysisCheckpoint(runtime *analysisruntime.
 }
 
 // loadAnalysisTraceStore restores the retained trace ledger so the bounded
-// rolling window spans fetch runs. A corrupt snapshot starts an empty ledger
-// rather than failing the pass.
+// rolling window spans fetch runs. An unreadable snapshot starts an empty
+// ledger rather than failing the pass.
 func loadAnalysisTraceStore(path string) *ai.TraceStore {
 	store, err := ai.LoadTraceStore(path)
 	if err != nil {

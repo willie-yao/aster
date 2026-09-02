@@ -44,7 +44,6 @@ const anonymous: AuthState = {
 
 const analysis: AIAnalysis = {
   generated_at: "2026-08-19T00:00:00Z",
-  model: "test",
   root_cause: "The controller overwrote its ownership annotation before the delete was confirmed.",
   severity: "High",
   suggested_fix: "Write the annotation only after the delete is confirmed.",

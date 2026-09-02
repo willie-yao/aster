@@ -339,31 +339,20 @@ func TestExactJUnitChatFixEnabledRequiresOptInAgentSandbox(t *testing.T) {
 	}
 }
 
-func TestFixActionsEnabledDoesNotAdvertiseLocalRuntimeByDefault(t *testing.T) {
+func TestFixActionsEnabledRequiresAgentSandbox(t *testing.T) {
 	for _, testCase := range []struct {
-		name     string
-		cfg      project.FixPRs
-		authMode string
-		trusted  string
-		want     bool
-		wantErr  string
+		name string
+		cfg  project.FixPRs
+		want bool
 	}{
-		{name: "agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth", want: true},
-		{name: "default runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{}}, authMode: "proxy", want: true},
-		{name: "unsupported runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}, authMode: "oauth"},
-		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, authMode: "oauth"},
+		{name: "agent sandbox", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}, want: true},
+		{name: "default runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{}}, want: true},
+		{name: "unsupported runtime", cfg: project.FixPRs{Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "opencode"}}},
+		{name: "disabled", cfg: project.FixPRs{AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"}}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Setenv("TRUSTED_LOCAL_FIX_RUNTIME", testCase.trusted)
-			got, err := fixActionsEnabled(testCase.cfg, testCase.authMode)
-			if testCase.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
-					t.Fatalf("error=%v want=%q", err, testCase.wantErr)
-				}
-				return
-			}
-			if err != nil || got != testCase.want {
-				t.Fatalf("enabled=%t err=%v want=%t", got, err, testCase.want)
+			if got := fixActionsEnabled(testCase.cfg); got != testCase.want {
+				t.Fatalf("enabled=%t want=%t", got, testCase.want)
 			}
 		})
 	}

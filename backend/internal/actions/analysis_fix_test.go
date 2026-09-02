@@ -351,7 +351,7 @@ func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	entry, err := second.take("alice", token)
+	entry, err := second.previewStore.take("alice", token)
 	if err != nil {
 		t.Fatal(err)
 	}

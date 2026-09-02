@@ -262,7 +262,7 @@ function FeatureBreakdown({ day, currency }: { day: AIUsageDaily; currency?: str
             "&:last-child": { borderBottom: 0 },
           }}
         >
-          <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 700 }}>{featureLabels[row.feature]}</Typography>
+          <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 700 }}>{featureLabels[row.feature] ?? row.feature}</Typography>
           <Typography sx={overviewTypography.data}>{formatExactTokens(row.totals.operations)} operations</Typography>
           <Typography sx={overviewTypography.data}>{formatExactTokens(row.totals.model_requests)} requests</Typography>
           <Typography sx={overviewTypography.data}>{formatExactTokens(totalTokens(row.totals))} tokens</Typography>
@@ -497,7 +497,7 @@ function FeatureMix({ data }: { data: AIUsageReport }) {
         const percentageLabel = percentage > 0 && percentage < 0.1 ? "<0.1%" : `${percentage.toFixed(percentage % 1 === 0 ? 0 : 1)}%`;
         return (
           <Box key={row.feature} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr) auto", md: "minmax(190px, 1fr) 150px 80px" }, gap: 1, alignItems: "center", px: 1.5, py: 1.1, borderTop: "1px solid", borderColor: "divider" }}>
-            <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 700 }}>{featureLabels[row.feature]}</Typography>
+            <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 700 }}>{featureLabels[row.feature] ?? row.feature}</Typography>
             <Typography sx={{ ...overviewTypography.data, textAlign: { xs: "left", md: "right" } }}>{formatExactTokens(tokens)} tokens</Typography>
             <Typography sx={{ ...overviewTypography.data, textAlign: "right" }}>{percentageLabel}</Typography>
             <Box sx={{ gridColumn: "1 / -1", height: 5, borderRadius: "2px", bgcolor: "surface.containerHighest", overflow: "hidden" }}>

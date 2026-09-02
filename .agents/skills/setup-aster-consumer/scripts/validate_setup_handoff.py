@@ -68,11 +68,8 @@ def validate(data: Any) -> list[str]:
     errors: list[str] = []
     root = require_dict(data, "$", errors)
     raw_schema_version = root.get("schema_version")
-    if not is_json_integer(raw_schema_version) or raw_schema_version not in {1, 2}:
-        add(errors, "$.schema_version", "must equal numeric integer 1 or 2")
-        schema_version = None
-    else:
-        schema_version = int(raw_schema_version)
+    if not is_json_integer(raw_schema_version) or raw_schema_version != 2:
+        add(errors, "$.schema_version", "must equal numeric integer 2")
     plan_digest = require_sha(root, "plan_digest", "$", errors)
 
     engine = require_dict(root.get("engine"), "$.engine", errors)
@@ -183,10 +180,7 @@ def validate(data: Any) -> list[str]:
     for key, value in storage.items():
         if not isinstance(value, str) or value != value.strip() or len(value) > 253 or not K8S_NAME_RE.fullmatch(value):
             add(errors, f"$.deployment.{key}", "must be a valid Kubernetes DNS-1123 subdomain")
-    if schema_version == 1:
-        if storage:
-            add(errors, "$.deployment", "schema version 1 does not allow Kubernetes storage coordinates")
-    elif deployment.get("mode") == "k8s":
+    if deployment.get("mode") == "k8s":
         if len(storage) != 1:
             add(errors, "$.deployment", "k8s mode requires exactly one storage class or existing claim")
     elif storage:
@@ -335,14 +329,17 @@ def self_test() -> None:
     broken["deployment"]["mode"] = "k8s"
     if not any("requires exactly one" in item for item in validate(broken)):
         raise AssertionError("Kubernetes handoff without storage was accepted")
-    for numeric_version in (1.0, 2.0):
-        numeric = copy.deepcopy(fixture)
-        numeric["schema_version"] = numeric_version
-        if validate(numeric):
-            raise AssertionError(f"integral numeric schema version {numeric_version} was rejected")
+    numeric = copy.deepcopy(fixture)
+    numeric["schema_version"] = 2.0
+    if validate(numeric):
+        raise AssertionError("integral numeric schema version 2.0 was rejected")
+    old_numeric = copy.deepcopy(fixture)
+    old_numeric["schema_version"] = 1.0
+    if not any("numeric integer 2" in item for item in validate(old_numeric)):
+        raise AssertionError("schema version 1.0 was accepted")
     broken = copy.deepcopy(fixture)
     broken["schema_version"] = True
-    if not any("numeric integer 1 or 2" in item for item in validate(broken)):
+    if not any("numeric integer 2" in item for item in validate(broken)):
         raise AssertionError("boolean schema version was accepted")
     nested_numeric = copy.deepcopy(fixture)
     nested_numeric["apply_result"]["schema_version"] = 1.0
@@ -368,12 +365,8 @@ def self_test() -> None:
         raise AssertionError("non-boolean AI enabled value was accepted")
     legacy = copy.deepcopy(fixture)
     legacy["schema_version"] = 1
-    legacy["deployment"]["mode"] = "k8s"
-    if validate(legacy):
-        raise AssertionError("valid schema version 1 Kubernetes handoff was rejected")
-    legacy["deployment"]["k8s_storage_class"] = "shared-rwx"
-    if not any("version 1" in item for item in validate(legacy)):
-        raise AssertionError("schema version 1 storage extension was accepted")
+    if not any("numeric integer 2" in item for item in validate(legacy)):
+        raise AssertionError("schema version 1 was accepted")
     kubernetes = copy.deepcopy(fixture)
     kubernetes["deployment"]["mode"] = "k8s"
     kubernetes["deployment"]["k8s_storage_class"] = "shared-rwx"

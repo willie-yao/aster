@@ -5,7 +5,7 @@ cases below.
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| `AI is enabled but no provider is configured` | `AI_ENDPOINT` or `AI_MODEL` is missing. | Set both repository variables, commit `ai.endpoint` and `ai.model`, or disable AI. |
+| `AI is enabled but no provider is configured` | `AI_ENDPOINT` or `AI_MODEL` is missing. | Set both deployment values or disable AI. |
 | `AI_TOKEN is not set, disabling AI analysis` | No bearer token was supplied. | Set `AI_TOKEN`. Use any non-empty placeholder for an unauthenticated endpoint. |
 | Missing or empty `prompts/system.md` | AI was enabled without a project prompt. | Add a non-empty prompt under `<project_dir>/prompts/system.md`. |
 | Prompt authoring times out | Source revision resolution exceeded the onboarding-specific budget. | Retry with `--prompt-timeout 30m` or use `--prompt-mode=todo-template`. The fetcher timeout and project `ai.timeout` do not change onboarding prompt authoring. |
@@ -116,8 +116,9 @@ found no matching jobs, or every discovered job failed while loading build data.
    confirm the storage provider, bucket, and gcsweb base. For
    `discovery.exact_jobs`, verify the exact case-sensitive job name and its
    direct `logs/<job>/` or `pr-logs/directory/<job>/` index.
-6. Add `discovery.include_presubmits: true` only when the expected jobs are
-   presubmits rather than periodics.
+6. Add `discovery.include_presubmits: true` to `project.yaml` only when the
+   expected jobs are presubmits rather than periodics. Fetch commands do not
+   provide a runtime override.
 
 The `onboard` command validates discovery before generating a scaffold. A later
 fetch can still publish zero jobs when artifact loading fails for every match.

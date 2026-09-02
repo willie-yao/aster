@@ -147,9 +147,6 @@ type ExecutionResult struct {
 	Telemetry GenerateTelemetry `json:"-"`
 }
 
-// GenerateResult is retained as the Fix PR runtime result name.
-type GenerateResult = ExecutionResult
-
 // Validate checks the non-secret execution request contract.
 func (r ExecutionRequest) Validate() error {
 	if r.Version != ExecutionContractVersion {

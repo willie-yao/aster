@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGitOpsCLI(t *testing.T) {
@@ -67,7 +71,7 @@ func TestGitOpsCLIHelper(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		t.Fatal(err)
 	}
-	runKubernetes(args)
+	runKubernetes(t.Context(), args)
 }
 
 func runCLIHelper(t *testing.T, args ...string) (string, int) {
@@ -96,5 +100,85 @@ func writeCLITestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAsterRejectsRemovedPresubmitOverride(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAsterCommandHelper$")
+	cmd.Env = append(os.Environ(), "ASTER_COMMAND_TEST=removed-presubmit")
+	output, err := cmd.CombinedOutput()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 2 || !strings.Contains(string(output), "flag provided but not defined: -include-presubmits") {
+		t.Fatalf("exit=%v output=%q", err, output)
+	}
+}
+
+func TestAsterRejectsRemovedNoPromptAlias(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAsterCommandHelper$")
+	cmd.Env = append(os.Environ(), "ASTER_COMMAND_TEST=removed-no-prompt")
+	output, err := cmd.CombinedOutput()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 2 || !strings.Contains(string(output), "flag provided but not defined: -no-prompt") {
+		t.Fatalf("exit=%v output=%q", err, output)
+	}
+}
+
+func TestSignalRootContextCancelsThenRestoresDefault(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAsterCommandHelper$")
+	cmd.Env = append(os.Environ(), "ASTER_COMMAND_TEST=signals")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() || scanner.Text() != "ready" {
+		t.Fatalf("ready output = %q, err=%v", scanner.Text(), scanner.Err())
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	if !scanner.Scan() || scanner.Text() != "cancelled" {
+		t.Fatalf("cancel output = %q, err=%v", scanner.Text(), scanner.Err())
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if _, ok := err.(*exec.ExitError); !ok {
+			t.Fatalf("second signal did not terminate process: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second signal did not restore immediate process termination")
+	}
+}
+
+func TestAsterCommandHelper(t *testing.T) {
+	switch os.Getenv("ASTER_COMMAND_TEST") {
+	case "removed-presubmit":
+		flag.CommandLine = flag.NewFlagSet("aster", flag.ExitOnError)
+		os.Args = []string{"aster", "-include-presubmits"}
+		main()
+	case "removed-no-prompt":
+		flag.CommandLine = flag.NewFlagSet("aster", flag.ExitOnError)
+		os.Args = []string{"aster", "onboard", "-no-prompt"}
+		main()
+	case "signals":
+		ctx, stop := signalRootContext()
+		defer stop()
+		fmt.Println("ready")
+		<-ctx.Done()
+		fmt.Println("cancelled")
+		time.Sleep(30 * time.Second)
 	}
 }

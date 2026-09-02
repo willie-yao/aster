@@ -42,7 +42,7 @@ case \$command in
   get)
     resource=\${1:-}
     if [[ \$resource == values ]]; then
-      printf '{"analysisCache":{"generation":"%s"},"analysisRuntime":{"type":"inprocess"},"image":{"tag":""},"agentSandbox":{"fixRuntime":{"enabled":true,"maxSteps":30,"maxFiles":3,"timeout":"10m","outputLimitBytes":524288,"allowedCommands":[{"argv":["git","diff","--cached","--check"],"timeout":"1m"}]}},"server":{"actions":{"enabled":true,"mode":"oauth","oauth":{"clientId":"client","clientSecret":"secret","redirectUrl":"https://dashboard.test/api/auth/callback","sessionKey":"session-key","botToken":"bot-token","privateRepositories":true,"scope":"repo","chatScope":"read:user"}},"extraEnv":[{"name":"OAUTH_SCOPE","value":"repo"},{"name":"KEEP_ME","value":"kept"}]}}\n' "\${FAKE_CACHE_GENERATION:-cache-7}"
+      printf '{"analysisCache":{"generation":"%s"},"image":{"tag":""},"agentSandbox":{"fixRuntime":{"enabled":true}},"server":{"actions":{"enabled":true,"mode":"oauth","oauth":{"clientId":"client","clientSecret":"secret","redirectUrl":"https://dashboard.test/api/auth/callback","sessionKey":"session-key","botToken":"bot-token"}},"extraEnv":[{"name":"KEEP_ME","value":"kept"}]}}\n' "\${FAKE_CACHE_GENERATION:-cache-7}"
     elif [[ \$resource == manifest ]]; then
       if [[ -f "$state" ]]; then
         tag=\$(cat "$state")
@@ -211,32 +211,23 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as candidate_file:
     values = json.load(candidate_file)
-if "analysisRuntime" in values:
-    raise SystemExit("removed analysis runtime selector survived")
 oauth = values["server"]["actions"]["oauth"]
-for key in ("scope", "chatScope", "privateRepositories"):
-    if key in oauth:
-        raise SystemExit(f"deprecated OAuth key survived: {key}")
-if oauth.get("botToken") != "bot-token":
-    raise SystemExit("BOT_TOKEN value was not preserved")
+expected_oauth = {
+    "clientId": "client",
+    "clientSecret": "secret",
+    "redirectUrl": "https://dashboard.test/api/auth/callback",
+    "sessionKey": "session-key",
+    "botToken": "bot-token",
+}
+if oauth != expected_oauth:
+    raise SystemExit(f"OAuth values changed: {oauth!r}")
 env = values["server"].get("extraEnv", [])
 if env != [{"name": "KEEP_ME", "value": "kept"}]:
-    raise SystemExit(f"unexpected sanitized extraEnv: {env!r}")
+    raise SystemExit(f"extraEnv changed: {env!r}")
 fix_runtime = values.get("agentSandbox", {}).get("fixRuntime", {})
-for key in ("maxSteps", "maxFiles", "timeout", "outputLimitBytes", "allowedCommands"):
-    if key in fix_runtime:
-        raise SystemExit(f"stale fix runtime bound survived: {key}")
-if fix_runtime.get("enabled") is not True:
-    raise SystemExit("fix runtime enablement was not preserved")
+if fix_runtime != {"enabled": True}:
+    raise SystemExit(f"fix runtime values changed: {fix_runtime!r}")
 PY
-grep -Fq 'Removed deprecated controls from the candidate values:' "$tmp/upgrade-output"
-grep -Fq 'analysisRuntime' "$tmp/upgrade-output"
-grep -Fq 'server.actions.oauth.privateRepositories' "$tmp/upgrade-output"
-grep -Fq 'server.actions.oauth.scope' "$tmp/upgrade-output"
-grep -Fq 'server.actions.oauth.chatScope' "$tmp/upgrade-output"
-grep -Fq 'server.extraEnv[OAUTH_SCOPE]' "$tmp/upgrade-output"
-grep -Fq 'agentSandbox.fixRuntime.maxSteps' "$tmp/upgrade-output"
-grep -Fq 'agentSandbox.fixRuntime.allowedCommands' "$tmp/upgrade-output"
 grep -Fxq 'busybox:1.36.1' "$inspections"
 grep -Fxq 'ghcr.io/willie-yao/aster:sha-deadbeef' "$inspections"
 grep -Fxq 'ghcr.io/willie-yao/aster/remote-fixer:sha-deadbeef' "$inspections"

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,8 +184,11 @@ func TestWriteJobDetailBackfillsPatternIdentity(t *testing.T) {
 func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 	dir := t.TempDir()
 	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{{
-		JobID: "job", Subject: "job", BuildsAnalyzed: 3, Systemic: true,
+		ID: "stable-pattern", ContentHash: "stale", JobID: "job", Subject: "job", BuildsAnalyzed: 3, Systemic: true,
 		Confidence: "high", SharedRootCause: "shared cause", Summary: "summary",
+		CausalGroups: []models.PatternCausalGroup{{
+			ID: "stale-group", ContentHash: "stale", Builds: []string{"1", "2"}, RootCause: "shared cause", Confidence: "high",
+		}},
 	}}}
 	if err := WriteFlakinessReport(dir, report); err != nil {
 		t.Fatal(err)
@@ -200,7 +202,9 @@ func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	pattern := written.RecurringPatterns[0]
-	if pattern.ID == "" || pattern.ContentHash != models.PatternHash(pattern) {
+	group := pattern.CausalGroups[0]
+	if pattern.ID != "stable-pattern" || pattern.ContentHash != models.PatternHash(pattern) ||
+		group.ID != models.PatternCausalGroupID(pattern.ID, group) || group.ContentHash != models.PatternCausalGroupHash(group) {
 		t.Fatalf("written pattern = %+v", pattern)
 	}
 }
@@ -397,6 +401,28 @@ func TestWriteAll(t *testing.T) {
 	}
 }
 
+func TestWriteAllAggregatesIndependentProjectionFailures(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(dir, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{
+		sampleJobDetail("job-alpha"), sampleJobDetail("job-beta"),
+	}, models.FlakinessReport{}, models.SearchIndex{})
+	if err == nil {
+		t.Fatal("WriteAll returned nil error")
+	}
+	for _, want := range []string{
+		"write manifest", "write dashboard", "write job detail job-alpha", "write job detail job-beta",
+		"prune job details", "write flakiness report", "write search index",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("aggregated error missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	dir := t.TempDir()
 	stale := filepath.Join(dir, "jobs", "stale.json")
@@ -415,44 +441,12 @@ func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	}
 }
 
-func TestWriteAllRemovesRetiredPublicProjections(t *testing.T) {
-	dir := t.TempDir()
-	stale := []string{
-		filepath.Join(dir, "analysis_corrections.json"),
-		filepath.Join(dir, "remediations.json"),
-	}
-	for _, path := range stale {
-		if err := os.WriteFile(path, []byte(`{"stale":true}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	retained := filepath.Join(dir, "remediation_state.json")
-	if err := os.WriteFile(retained, []byte(`{"version":1}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), nil, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range stale {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("retired public projection %s still exists: %v", path, err)
-		}
-	}
-	if _, err := os.Stat(retained); err != nil {
-		t.Fatalf("retained private state was deleted: %v", err)
-	}
-	if !slices.Contains(NonPublishedFiles, "remediation_state.json") ||
-		!slices.Contains(NonPublishedFiles, "remediation_prow_catalog.json") {
-		t.Fatalf("legacy private files left the denylist: %v", NonPublishedFiles)
-	}
-}
-
-func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
+func TestWriteManifestOmitsPrivateProjectConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	cfg := sampleConfig()
 	cfg.AI = &project.AI{
-		Endpoint: "https://internal.example/v1/chat/completions",
-		Model:    "internal-only-model-name",
+		ServiceTier: "flex",
+		Headers:     map[string]string{"X-Private-Routing": "private-route"},
 	}
 	cfg.Notifications = &project.Notifications{Email: &project.EmailNotifications{
 		Enabled: true,
@@ -473,15 +467,7 @@ func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
 		t.Fatalf("read manifest.json: %v", err)
 	}
 
-	// Raw-string assertions: the published JSON must not leak the model
-	// identifier or endpoint URL, even when set on the in-memory config.
-	if strings.Contains(string(data), "internal-only-model-name") {
-		t.Errorf("manifest.json leaks AI model identifier: %s", string(data))
-	}
-	if strings.Contains(string(data), "internal.example") {
-		t.Errorf("manifest.json leaks AI endpoint URL: %s", string(data))
-	}
-	for _, secret := range []string{"private-sender@example.com", "private-team@example.com", "smtp.internal.example", "private-user"} {
+	for _, secret := range []string{"private-route", "X-Private-Routing", "private-sender@example.com", "private-team@example.com", "smtp.internal.example", "private-user"} {
 		if strings.Contains(string(data), secret) {
 			t.Errorf("manifest.json leaks email notification config %q: %s", secret, string(data))
 		}
@@ -546,7 +532,7 @@ func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 func TestPublicPatternOutputBackfillsCausalGroupIdentity(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{
-		JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
+		ID: "stable-pattern", ContentHash: "stale", JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
 		Recurrence: models.PatternRecurrenceMixedCauses, Systemic: true, Confidence: "medium",
 		CausalGroups: []models.PatternCausalGroup{
 			{Builds: []string{"2", "1"}, RootCause: "missing call", Confidence: "high"},

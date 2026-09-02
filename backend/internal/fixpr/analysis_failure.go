@@ -71,7 +71,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		return nil, err
 	}
 	key := "fix-analysis::" + failure.ID + "::" + failure.AnalysisHash + "::" + failure.ChatResponseHash + "::" + failure.PreviewRequestHash + "::" + failure.FailureRevision + "::" + failure.GenerationBaseRevision + "::" + failure.SourceVerification + "::" + failure.FindingVerification
-	verified := m.verify(ctx, base, fix.files, fix.executionVerification)
+	verified := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description := analysisFailureDescription(failure, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)

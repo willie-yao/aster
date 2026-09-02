@@ -71,21 +71,25 @@ func TestBackfillPatternIdentityPreservesStableID(t *testing.T) {
 		t.Fatalf("content hash = %q", pattern.ContentHash)
 	}
 
-	missing := pattern
-	missing.ID = ""
-	missing.ContentHash = ""
-	if !BackfillPatternIdentity(&missing) || missing.ID != PatternID(missing) || missing.ContentHash != PatternHash(missing) {
-		t.Fatalf("missing identity = %+v", missing)
+}
+
+func TestBackfillPatternIdentityLeavesMissingIDInvalid(t *testing.T) {
+	pattern := PatternAnalysis{JobID: "job", Summary: "summary"}
+	if !BackfillPatternIdentity(&pattern) {
+		t.Fatal("content hash was not refreshed")
+	}
+	if pattern.ID != "" || pattern.ContentHash != PatternHash(pattern) {
+		t.Fatalf("identity = %+v", pattern)
 	}
 }
 
 func TestBackfillPatternIdentitiesReturnsCopy(t *testing.T) {
-	input := []PatternAnalysis{{JobID: "job", Summary: "summary", ContentHash: "stale"}}
+	input := []PatternAnalysis{{ID: "stable-id", JobID: "job", Summary: "summary", ContentHash: "stale"}}
 	output, changed := BackfillPatternIdentities(input)
-	if !changed || output[0].ID == "" || output[0].ContentHash != PatternHash(output[0]) {
+	if !changed || output[0].ID != "stable-id" || output[0].ContentHash != PatternHash(output[0]) {
 		t.Fatalf("output = %+v changed=%v", output, changed)
 	}
-	if input[0].ID != "" || input[0].ContentHash != "stale" {
+	if input[0].ID != "stable-id" || input[0].ContentHash != "stale" {
 		t.Fatalf("input was mutated: %+v", input)
 	}
 }

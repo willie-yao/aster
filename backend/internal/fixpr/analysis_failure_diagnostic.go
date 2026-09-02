@@ -66,7 +66,7 @@ func AnalysisFailureDiagnosticOf(err error) (AnalysisFailureDiagnostic, bool) {
 	return cloneAnalysisFailureDiagnostic(generationErr.diagnostic), true
 }
 
-func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentConfig, result runtime.GenerateResult, cause error) error {
+func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentConfig, result runtime.ExecutionResult, cause error) error {
 	detail := analysisFailureDetail(category, result, cause)
 	diagnostic := AnalysisFailureDiagnostic{
 		Category: category, Detail: detail, TerminalState: result.TerminalState,
@@ -83,7 +83,7 @@ func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentCo
 	return &analysisGenerationError{diagnostic: diagnostic, cause: cause}
 }
 
-func analysisFailureDetail(category AnalysisFailureCategory, result runtime.GenerateResult, cause error) AnalysisFailureDetail {
+func analysisFailureDetail(category AnalysisFailureCategory, result runtime.ExecutionResult, cause error) AnalysisFailureDetail {
 	if category == AnalysisFailureProviderCredential && result.ProviderError != nil {
 		switch result.ProviderError.StatusCode {
 		case 401:
@@ -216,7 +216,7 @@ func providerEndpointReference(endpoint string) (string, string) {
 	return parsed.Scheme, parsed.Host + parsed.EscapedPath()
 }
 
-func classifyAnalysisRuntimeFailure(result runtime.GenerateResult, err error) AnalysisFailureCategory {
+func classifyAnalysisRuntimeFailure(result runtime.ExecutionResult, err error) AnalysisFailureCategory {
 	switch {
 	case errors.Is(err, runtime.ErrResultScope), result.FailureCode == runtime.ExecutionFailureReviewScope:
 		return AnalysisFailureNoReviewablePatch

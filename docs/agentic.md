@@ -41,7 +41,7 @@ are:
 | `ai.tools` | Selects registered read-only tool groups. |
 | `ai.concurrency` | Runs independent analyses in parallel. Keep it low for rate-limited providers. |
 | `ai.critique.*` | Selects bounded repair and cache acceptance policy. |
-| `ai.cache_generation` | Creates an intentional reversible reanalysis namespace. |
+| `AI_CACHE_GENERATION` | Creates an intentional reversible reanalysis namespace. |
 
 Start with defaults. Raise investigation floors only when observed analyses
 finalize without enough evidence. Enable `single_tool_call` only when the model
@@ -188,8 +188,8 @@ model, and loaded skills. Those fingerprints describe how an entry was produced;
 changing them affects new analyses but does not automatically invalidate an
 otherwise reusable entry.
 
-Set `ai.cache_generation`, `AI_CACHE_GENERATION`, the Pages
-`ai-cache-generation` input, or Helm `analysisCache.generation` to a new
+Set `AI_CACHE_GENERATION`, the Pages `ai-cache-generation` input, or Helm
+`analysisCache.generation` to a new
 non-empty value for an intentional full rebaseline. Returning to a previous
 value reuses its still-valid entries. Destructive cache clearing is an emergency
 operation, not the normal response to prompt or provider changes.

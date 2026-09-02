@@ -106,6 +106,11 @@ func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
+	for _, check := range report.Checks {
+		if check.Name == "Pages AI" && (!strings.Contains(check.Detail, "ai-endpoint") || !strings.Contains(check.Detail, "ai-model") || strings.Contains(check.Detail, "ai-api")) {
+			t.Fatalf("Pages AI detail = %q", check.Detail)
+		}
+	}
 }
 
 func TestDoctor_KubernetesPlaceholdersAreActionable(t *testing.T) {
@@ -159,6 +164,7 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "cluster ip with deny all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "cluster ip with removed from-only policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  from:\n    - namespaceSelector:\n        matchLabels:\n          name: ingress\n", want: DoctorWarn},
 		{name: "cluster ip with catch all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - {}\n", want: DoctorWarn},
 		{name: "cluster ip with empty pod selector", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - podSelector: {}\n", want: DoctorWarn},
 		{name: "cluster ip with empty namespace labels", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchLabels: {}\n", want: DoctorWarn},
@@ -212,7 +218,7 @@ func TestDoctor_KubernetesPullRequestEscalation(t *testing.T) {
 		{name: "enabled without pull request triage", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, want: DoctorFail},
 		{name: "enabled without a read token", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, pullEnabled: true, want: DoctorWarn},
 		{
-			name:        "optional read token from an existing ai secret",
+			name:        "existing ai secret does not supply a read token",
 			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n",
 			aiYAML:      aiValues + "  existingSecret: shared-ai\n",
 			pullEnabled: true,
@@ -342,7 +348,7 @@ func TestDoctor_PullRequestTriageCredential(t *testing.T) {
 		{name: "empty fallback does not shadow the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: \"\"\n", want: DoctorPass},
 		{name: "last duplicate wins", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      value: ghp-test\n    - name: GITHUB_READ_TOKEN\n      value: \"\"\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
 		{name: "optional override cannot take away the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      valueFrom:\n        secretKeyRef:\n          name: gh\n          key: token\n          optional: true\n", want: DoctorPass},
-		{name: "fallback rescues an optional preferred token", values: storage + "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n  existingSecret: shared-ai\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n", want: DoctorPass},
+		{name: "github fallback supplies a token alongside an ai secret", values: storage + "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n  existingSecret: shared-ai\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n", want: DoctorPass},
 		{name: "unrelated extraEnv", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: HTTPS_PROXY\n      value: http://proxy\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
 	}
 	for _, tc := range cases {
@@ -372,9 +378,8 @@ func TestDoctor_PullRequestTriageCredential(t *testing.T) {
 	}
 }
 
-// ai.existingSecret is mounted with optional: true, so doctor cannot prove the
-// key is present and must say so rather than passing the deployment.
-func TestDoctor_PullRequestTriageExistingSecretIsUnverifiable(t *testing.T) {
+// The provider Secret does not configure GitHub reads.
+func TestDoctor_PullRequestTriageExistingSecretStillReadsAnonymously(t *testing.T) {
 	const triageProjectYAML = doctorProjectYAML + `pull_requests:
   enabled: true
 `
@@ -397,6 +402,12 @@ ai:
 	if !hasDoctorCheck(report, "pull request triage credential", DoctorWarn) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
+	for _, check := range report.Checks {
+		if check.Name == "pull request triage credential" && strings.Contains(check.Detail, "reads GitHub anonymously") {
+			return
+		}
+	}
+	t.Fatalf("anonymous-read warning missing: %+v", report.Checks)
 }
 
 // The reusable workflow always passes the Actions token to the fetch step, so
@@ -576,7 +587,7 @@ func TestK8sYourPrefixStoragePlanApplyAndDoctor(t *testing.T) {
 			opts := Options{
 				TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 				SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
-				OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true, AIEnabled: &disabled,
+				OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate, AIEnabled: &disabled,
 				K8sStorageClass: test.storageClass, K8sExistingClaim: test.existingClaim,
 			}
 			plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
@@ -665,29 +676,6 @@ func TestDoctor_PagesWorkflowCanLiveAboveProjectDir(t *testing.T) {
 	}
 }
 
-func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
-	workflow := `jobs:
-  deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
-    secrets:
-      AI_TOKEN: ${{ secrets.AI_TOKEN }}
-`
-	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
-	files["/consumer/project.yaml"] = projectYAML
-	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
-		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
-	})
-	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
-		t.Fatalf("checks = %+v", report.Checks)
-	}
-}
-
 func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 	workflow := `jobs:
   deploy:
@@ -719,25 +707,18 @@ func TestDoctor_PagesProjectDirMismatchFails(t *testing.T) {
 	}
 }
 
-func TestDoctor_KubernetesUsesProjectProviderCoordinates(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
+func TestDoctor_KubernetesRequiresValuesProviderCoordinates(t *testing.T) {
 	values := `persistence:
   storageClass: fast
   accessMode: ReadWriteMany
 ai:
   enabled: true
 `
-	files := doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values})
-	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
+		files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
-	if !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
+	if !hasDoctorCheck(report, "Kubernetes AI", DoctorFail) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
@@ -789,7 +770,6 @@ func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
 func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
 	for _, valid := range []string{
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml@main",
-		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main",
 	} {
 		if !reusableDeployReference(valid) {
 			t.Errorf("valid reference rejected: %s", valid)
@@ -797,6 +777,7 @@ func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
 	}
 	for _, invalid := range []string{
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml@",
+		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main",
 		"willie-yao/prow-ai-dashboard/.github/workflows/other.yml@main",
 		"./.github/workflows/reusable-deploy.yml@main",
 	} {
@@ -841,25 +822,19 @@ func TestDoctor_PagesDynamicAIBranchWarns(t *testing.T) {
 	}
 }
 
-func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
+func TestDoctor_PagesOmittedAPIDefaultsToChatCompletions(t *testing.T) {
 	workflow := `jobs:
   deploy:
     uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
-      ai-api: stale-literal
+      ai-endpoint: ${{ vars.AI_ENDPOINT }}
+      ai-model: ${{ vars.AI_MODEL }}
       ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
-	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
-	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {

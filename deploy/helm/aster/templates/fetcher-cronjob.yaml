@@ -107,15 +107,12 @@ spec:
                 {{- end }}
                 {{- end }}
                 {{- /* Read-only GitHub token, independent of ai.enabled: pull request triage reads GitHub with no model calls. */}}
-                {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName (and .Values.ai.enabled .Values.ai.existingSecret) }}
+                {{- if or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName }}
                 - name: GITHUB_READ_TOKEN
                   valueFrom:
                     secretKeyRef:
                       name: {{ include "aster.githubReadSecret" . }}
                       key: {{ .Values.ai.githubReadTokenSecretKey }}
-                      {{- if and (not .Values.ai.githubReadToken) (not .Values.ai.githubReadTokenSecretName) }}
-                      optional: true
-                      {{- end }}
                 {{- end }}
                 {{- with .Values.fetcher.extraEnv }}
                 {{- toYaml . | nindent 16 }}

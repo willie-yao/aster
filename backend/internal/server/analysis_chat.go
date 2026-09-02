@@ -54,7 +54,7 @@ func lookupPreparedFindingsHandler(run AnalysisChatRunner) http.Handler {
 			return
 		}
 		var request preparedLookupRequest
-		if err := decodeAnalysisChatBody(w, r, &request, maxAnalysisChatReferenceBodyBytes); err != nil {
+		if err := decodeWriteBody(w, r, &request, maxAnalysisChatReferenceBodyBytes, false); err != nil {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
@@ -78,7 +78,7 @@ func findAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			return
 		}
 		var ref analysischat.AnalysisRef
-		if err := decodeAnalysisChatBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes); err != nil {
+		if err := decodeWriteBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes, false); err != nil {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
@@ -113,7 +113,7 @@ func createAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
 			return
 		}
 		var ref analysischat.AnalysisRef
-		if err := decodeAnalysisChatBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes); err != nil {
+		if err := decodeWriteBody(w, r, &ref, maxAnalysisChatReferenceBodyBytes, false); err != nil {
 			http.Error(w, "invalid analysis reference", http.StatusBadRequest)
 			return
 		}
@@ -184,7 +184,7 @@ func sendAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRunne
 		var body struct {
 			Message string `json:"message"`
 		}
-		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
+		if err := decodeWriteBody(w, r, &body, maxAnalysisChatMessageBodyBytes, false); err != nil || strings.TrimSpace(body.Message) == "" {
 			http.Error(w, "invalid message", http.StatusBadRequest)
 			return
 		}
@@ -214,7 +214,7 @@ func streamAnalysisChatMessageHandler(timeout time.Duration, run AnalysisChatRun
 		var body struct {
 			Message string `json:"message"`
 		}
-		if err := decodeAnalysisChatBody(w, r, &body, maxAnalysisChatMessageBodyBytes); err != nil || strings.TrimSpace(body.Message) == "" {
+		if err := decodeWriteBody(w, r, &body, maxAnalysisChatMessageBodyBytes, false); err != nil || strings.TrimSpace(body.Message) == "" {
 			http.Error(w, "invalid message", http.StatusBadRequest)
 			return
 		}
@@ -287,10 +287,13 @@ func writeAnalysisChatSSE(w io.Writer, flusher http.Flusher, event string, value
 	return nil
 }
 
-func decodeAnalysisChatBody(w http.ResponseWriter, r *http.Request, target any, maxBytes int64) error {
+func decodeWriteBody(w http.ResponseWriter, r *http.Request, target any, maxBytes int64, allowEmpty bool) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		if allowEmpty && errors.Is(err, io.EOF) {
+			return nil
+		}
 		return err
 	}
 	var extra any

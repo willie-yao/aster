@@ -1,9 +1,8 @@
 import type { AIUsageDaily, AIUsageFeature, AIUsageTotals } from "../types/usage";
-// source_investigation is retained for historical records only.
 export const featureLabels: Record<AIUsageFeature, string> = {
   failure_analysis: "Failure analysis", pattern_analysis: "Pattern analysis",
   analysis_chat: "Analysis chat", issue_draft: "Issue drafts", fix_preview: "Fix PR preview",
-  fix_critique: "Fix critique", pr_template: "PR templates", source_investigation: "Source investigation",
+  fix_critique: "Fix critique", pr_template: "PR templates",
 };
 export function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US", { notation: value >= 100000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
@@ -109,13 +108,13 @@ export function pricedRequestCoverageNote(
   pricingCoverage: "complete" | "partial" | "unavailable" | "unknown",
 ): string {
   if (pricedRequests === undefined) {
-    return "Priced-request coverage is unavailable for legacy records";
+    return "Priced-request coverage is unavailable";
   }
   if (pricingCoverage === "unavailable") {
     return "Pricing coverage is unavailable";
   }
   if (pricingCoverage === "unknown") {
-    return "Pricing coverage is unavailable for some legacy records";
+    return "Pricing coverage is unavailable for some records";
   }
   return `${formatCoverage(pricedRequests, reportedRequests)} reported requests priced`;
 }
@@ -201,7 +200,6 @@ export function coverageStateLabel(value: string): string {
     model_gateway_excluded: "Model gateway excluded operations",
     pricing_added_after_operation: "Pricing added after operation",
     pricing_unavailable: "Pricing unavailable",
-    legacy_coverage_unknown: "Legacy coverage unknown",
     aggregate_overflow: "Aggregate overflow blocked",
     no_provider_usage: "No provider usage",
     no_usage_records: "No usage records",
@@ -220,7 +218,7 @@ export function normalizeAIUsageDay(day: AIUsageDaily): AIUsageDaily {
     features: day.features ?? [],
     coverage: day.coverage ?? {
       status: "unavailable",
-      states: ["legacy_coverage_unknown"],
+      states: [],
       model_requests: day.totals.model_requests,
       reported_requests: day.totals.reported_requests,
       unreported_requests: day.totals.unreported_requests,

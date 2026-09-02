@@ -1791,10 +1791,10 @@ func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
 	}
 }
 
-func TestVersionTwoDuplicateSessionsCannotRunParallelAfterMigration(t *testing.T) {
+func TestVersionTwoDuplicateSessionsAreRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	stateDir := filepath.Join(dir, ".shared-migration-chat")
+	stateDir := filepath.Join(dir, ".shared-chat")
 	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	if err != nil {
 		t.Fatal(err)
@@ -1806,95 +1806,71 @@ func TestVersionTwoDuplicateSessionsCannotRunParallelAfterMigration(t *testing.T
 	}
 	now := time.Now().UTC()
 	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
-	legacy := &persistedState{
+	state := &persistedState{
 		Version: 2,
 		Sessions: map[string]*persistedSession{
-			"alice-session": {
-				Owner: "alice", Resolved: persisted, ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "alice-session", Analysis: resolved.ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
-			},
-			"bob-session": {
-				Owner: "bob", Resolved: persisted, Turns: 1, ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "bob-session", Analysis: resolved.ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Minute).Format(time.RFC3339)},
-				Requests: map[string]persistedRequest{
-					"active": {QuestionHash: hashText("question"), Question: "question", Status: requestPending, Turn: 1},
-				},
-				Active: &persistedActiveTurn{RequestID: "active", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now},
-			},
+			"alice-session": {Owner: "alice", Resolved: persisted, ExpiresAt: now.Add(time.Hour), View: SessionView{ID: "alice-session", Analysis: resolved.ref}},
+			"bob-session":   {Owner: "bob", Resolved: persisted, ExpiresAt: now.Add(time.Hour), View: SessionView{ID: "bob-session", Analysis: resolved.ref}},
 		},
-		OwnerRequests: map[string][]time.Time{},
 	}
-	if err := writePrivateJSON(service.store.statePath, legacy); err != nil {
+	if err := writePrivateJSON(service.store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := restarted.Get("alice-session", "alice"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("retired duplicate Get error = %v", err)
-	}
-	if _, err := restarted.Send(t.Context(), "alice-session", "alice", "old-tab-turn", "parallel question"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("retired duplicate Send error = %v", err)
-	}
-	shared, err := restarted.Find(ref, "alice")
-	if err != nil || shared.ID != "bob-session" || shared.Active == nil || shared.Active.Actor != "bob" {
-		t.Fatalf("canonical shared session = %+v err=%v", shared, err)
+	if _, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir}); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
+		t.Fatalf("NewService error = %v", err)
 	}
 }
-
-func TestVersionOneCreateIdempotencyMigratesOnRetry(t *testing.T) {
+func TestCreateIdempotencyRejectsLegacyHash(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	stateDir := filepath.Join(dir, ".migration-chat")
+	stateDir := filepath.Join(dir, ".idempotency-chat")
 	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyRef := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	resolved, err := service.resolve(legacyRef)
+	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
+	resolved, err := service.resolve(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyHash, err := hashAnalysisRef(legacyRef)
+	legacyHash, err := hashAnalysisRef(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	persisted := persistResolved(resolved, sourceinvestigation.Repository{})
-	persisted.Ref.Scope = ""
+	normalizedRef, err := normalizeAnalysisRef(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentHash, err := hashAnalysisRef(normalizedRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyHash == currentHash {
+		t.Fatal("legacy and current hashes unexpectedly match")
+	}
 	expires := time.Now().UTC().Add(time.Hour)
-	legacy := &persistedState{
-		Version: 1,
+	state := &persistedState{
+		Version: stateVersion,
 		Sessions: map[string]*persistedSession{
-			"legacy-session": {
-				Owner: "alice", Resolved: persisted, ExpiresAt: expires,
-				CreateRequestID: "legacy-create", CreateRequestHash: legacyHash,
-				View: SessionView{ID: "legacy-session", Analysis: legacyRef, ExpiresAt: expires.Format(time.RFC3339)},
+			"existing-session": {
+				Owner: "alice", Resolved: persistResolved(resolved, sourceinvestigation.Repository{}), ExpiresAt: expires,
+				CreateRequestID: "existing-create", CreateRequestHash: legacyHash,
+				View: SessionView{ID: "existing-session", Analysis: normalizedRef, ExpiresAt: expires.Format(time.RFC3339)},
 			},
 		},
 		OwnerRequests: map[string][]time.Time{},
 	}
-	if err := writePrivateJSON(service.store.statePath, legacy); err != nil {
+	if err := writePrivateJSON(service.store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
 	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := restarted.Create(legacyRef, "Alice", "legacy-create")
-	if err != nil || got.ID != "legacy-session" {
-		t.Fatalf("retry session=%+v err=%v", got, err)
-	}
-	state, _, err := restarted.store.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrated := state.Sessions["legacy-session"]
-	if migrated.CreateRequestVersion != createVersion || migrated.CreateRequestHash == legacyHash {
-		t.Fatalf("create migration = %+v", migrated)
+	if _, err := restarted.Create(ref, "Alice", "existing-create"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("Create error = %v", err)
 	}
 }
-
 func TestRetainedPatternChatRequiresCompleteEvidence(t *testing.T) {
 	dir := t.TempDir()
 	detail := patternDetail()

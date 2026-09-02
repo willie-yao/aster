@@ -45,6 +45,8 @@ var preparedCauseRuntimeFingerprint = func(ctx context.Context, p *pipeline) (st
 	return runtime.AnalysisChatContractFingerprint(), nil
 }
 
+var savePreparedCauseFindings = analysischat.SavePreparedCauseFindings
+
 func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.JobDetail) {
 	if p == nil || !p.enableAI || !p.opts.PrepareCauseFindings || p.aiProject == nil || ctx.Err() != nil {
 		return
@@ -114,7 +116,7 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 		}
 	}
 	state.Generation = generation
-	if err := analysischat.SavePreparedCauseFindings(path, state); err != nil {
+	if err := savePreparedCauseFindings(path, state); err != nil {
 		log.Printf("Warning: prepared cause findings cache save failed: %v", err)
 		return
 	}
@@ -147,21 +149,27 @@ func (p *pipeline) prepareCauseFindings(ctx context.Context, details []models.Jo
 		operation.Finish(outcome)
 		if runErr != nil {
 			state.Failures[candidate.key] = analysischat.PreparedCauseFailure{AttemptedAt: time.Now().UTC().Format(time.RFC3339)}
-			_ = analysischat.SavePreparedCauseFindings(path, state)
 			log.Printf("Warning: prepared cause finding %s failed: %v", candidate.ref.CausalGroupID, runErr)
+			if err := savePreparedCauseFindings(path, state); err != nil {
+				log.Printf("Warning: prepared cause finding %s failure was not saved: %v", candidate.ref.CausalGroupID, err)
+				return
+			}
 			continue
 		}
 		if reply.Unverified || len(reply.Citations) == 0 {
 			state.Failures[candidate.key] = analysischat.PreparedCauseFailure{AttemptedAt: time.Now().UTC().Format(time.RFC3339)}
-			_ = analysischat.SavePreparedCauseFindings(path, state)
 			log.Printf("Warning: prepared cause finding %s had no verified evidence", candidate.ref.CausalGroupID)
+			if err := savePreparedCauseFindings(path, state); err != nil {
+				log.Printf("Warning: prepared cause finding %s failure was not saved: %v", candidate.ref.CausalGroupID, err)
+				return
+			}
 			continue
 		}
 		delete(state.Failures, candidate.key)
 		state.Findings[candidate.key] = analysischat.PreparedCauseFinding{
 			Ref: candidate.ref, Reply: reply, PreparedAt: time.Now().UTC().Format(time.RFC3339),
 		}
-		if err := analysischat.SavePreparedCauseFindings(path, state); err != nil {
+		if err := savePreparedCauseFindings(path, state); err != nil {
 			log.Printf("Warning: prepared cause finding %s was not saved: %v", candidate.ref.CausalGroupID, err)
 			continue
 		}

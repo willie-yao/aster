@@ -9,9 +9,6 @@ const (
 // for the bare TODO template. Prompt generation itself is delegated to the
 // operator's own coding agent.
 func effectivePromptMode(opts Options) string {
-	if opts.NoPrompt {
-		return promptModeTemplate
-	}
 	if opts.PromptMode != "" {
 		return opts.PromptMode
 	}

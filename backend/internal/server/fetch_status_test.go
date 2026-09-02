@@ -236,6 +236,15 @@ func TestFetchStatusHandlerMissingCorruptStaleAndInterrupted(t *testing.T) {
 	}
 
 	status := serverFetchStatus(now.Add(-2 * time.Minute))
+	status.SchemaVersion = fetchprogress.SchemaVersion - 1
+	if err := fetchprogress.Write(fetchprogress.Path(dataDir), status); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got.Available || got.State != "unavailable" {
+		t.Fatalf("stale schema response = %+v", got)
+	}
+
+	status.SchemaVersion = fetchprogress.SchemaVersion
 	if err := fetchprogress.Write(fetchprogress.Path(dataDir), status); err != nil {
 		t.Fatal(err)
 	}

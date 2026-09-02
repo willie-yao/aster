@@ -56,8 +56,9 @@ jobs:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 ```
 
-If `project.yaml` already sets `ai.model` and `ai.endpoint`, those values take
-precedence and the two repository variables may be omitted.
+When AI is enabled and fetch is not skipped, `AI_ENDPOINT` and `AI_MODEL` are
+required deployment variables. `AI_API` is optional and defaults to
+`chat_completions`.
 
 Set `project_dir` to a subdirectory such as `dashboard` when the consumer files
 are not at the repository root.
@@ -68,7 +69,7 @@ are not at the repository root.
 # Enable Pages with the GitHub Actions build source.
 gh api repos/my-org/my-dashboard/pages -X POST -F build_type=workflow
 
-# Required unless project.yaml contains ai.endpoint and ai.model.
+# API is optional; endpoint and model are required when AI is enabled.
 gh variable set AI_API --body chat_completions --repo my-org/my-dashboard
 gh variable set AI_ENDPOINT --repo my-org/my-dashboard
 # Optional. Empty or unset uses the provider default.

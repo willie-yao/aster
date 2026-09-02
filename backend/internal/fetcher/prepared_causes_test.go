@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -34,6 +35,21 @@ func installPreparedCauseRunner(t *testing.T, runner preparedCauseRunner) {
 	newPreparedCauseRunner = func(context.Context, *pipeline) (preparedCauseRunner, error) { return runner, nil }
 	preparedCauseRuntimeFingerprint = func(context.Context, *pipeline) (string, error) { return "runtime", nil }
 	t.Cleanup(func() { newPreparedCauseRunner = previous; preparedCauseRuntimeFingerprint = previousFingerprint })
+}
+
+func failPreparedCauseSave(t *testing.T, failureCall int) *int {
+	t.Helper()
+	previous := savePreparedCauseFindings
+	calls := 0
+	savePreparedCauseFindings = func(path string, state analysischat.PreparedCauseFindings) error {
+		calls++
+		if calls == failureCall {
+			return errors.New("save failed")
+		}
+		return previous(path, state)
+	}
+	t.Cleanup(func() { savePreparedCauseFindings = previous })
+	return &calls
 }
 
 func preparedCausePipeline(dir string) *pipeline {
@@ -202,6 +218,33 @@ func TestPrepareCauseFindingsSkipsInactivePatterns(t *testing.T) {
 	})
 	if prepared := preparedJobIDs(runner); !slices.Equal(prepared, []string{"active"}) {
 		t.Fatalf("prepared jobs = %v", prepared)
+	}
+}
+
+func TestPrepareCauseFindingsStopsWhenFailureStateCannotPersist(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		reply  analysischat.Reply
+		runErr error
+	}{
+		{name: "provider failure", runErr: errors.New("provider failed")},
+		{name: "unverified reply", reply: analysischat.Reply{Answer: "unsupported"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &recordingPreparedCauseRunner{reply: testCase.reply, err: testCase.runErr}
+			installPreparedCauseRunner(t, runner)
+			saves := failPreparedCauseSave(t, 2)
+			p := preparedCausePipeline(t.TempDir())
+			p.prepareCauseFindings(t.Context(), []models.JobDetail{
+				preparedCauseJob("published", true, models.PatternLifecycleActive, "cause one", "cause two"),
+			})
+			if runner.calls != 1 {
+				t.Fatalf("provider calls = %d, want remaining work stopped", runner.calls)
+			}
+			if *saves != 2 {
+				t.Fatalf("save calls = %d, want initial state plus failed retry state", *saves)
+			}
+		})
 	}
 }
 

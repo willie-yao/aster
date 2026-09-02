@@ -64,7 +64,6 @@ type usageReportCoverage struct {
 	ExternalUnmeteredOperations    int      `json:"external_unmetered_operations"`
 	ModelGatewayExcludedOperations int      `json:"model_gateway_excluded_operations"`
 	PricingAddedAfterRequests      int      `json:"pricing_added_after_requests"`
-	LegacyCoverageUnknown          bool     `json:"legacy_coverage_unknown"`
 	AggregateOverflow              bool     `json:"aggregate_overflow"`
 }
 
@@ -217,7 +216,7 @@ func readUsageLedger(path string) (aiusage.UsageLedger, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return aiusage.UsageLedger{}, fmt.Errorf("decode usage file: %w", err)
 	}
-	if ledger.Version < 1 || ledger.Version > aiusage.LedgerVersion {
+	if ledger.Version != aiusage.LedgerVersion {
 		return aiusage.UsageLedger{}, fmt.Errorf("usage version %d is unsupported; current version is %d", ledger.Version, aiusage.LedgerVersion)
 	}
 	return ledger, nil
@@ -500,14 +499,14 @@ func currentRateEstimate(pricing aiusage.PriceTable, totals aiusage.UsageTotals,
 	return status, pricing.Currency(), strconv.FormatInt(cost, 10)
 }
 
-func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, aggregateOverflow, pricingConfigured bool) usageReportCoverage {
+func reportCoverage(totals aiusage.UsageTotals, coverageUnknown, aggregateOverflow, pricingConfigured bool) usageReportCoverage {
 	coverage := usageReportCoverage{
 		Status: "complete", States: []string{}, ModelRequests: totals.ModelRequests, ReportedRequests: totals.ReportedRequests,
 		PricedReportedRequests: totals.PricedReportedRequests, CacheWriteReportedRequests: totals.CacheWriteReportedRequests,
 		CacheWritePricedRequests: totals.CacheWritePricedRequests, CacheWriteUnreportedRequests: totals.CacheWriteUnreportedRequests,
 		InvalidUsageRequests: totals.InvalidUsageRequests, UnreportedRequests: totals.UnreportedRequests,
 		ExternalUnmeteredOperations: totals.ExternalUnmeteredOperations, ModelGatewayExcludedOperations: totals.ModelGatewayExcludedOperations,
-		LegacyCoverageUnknown: legacyUnknown, AggregateOverflow: aggregateOverflow,
+		AggregateOverflow: aggregateOverflow,
 	}
 	addState := func(state string) { coverage.States = append(coverage.States, state) }
 	if totals.Operations == 0 {
@@ -540,9 +539,8 @@ func reportCoverage(totals aiusage.UsageTotals, legacyUnknown, aggregateOverflow
 		partial = true
 		addState("model_gateway_excluded")
 	}
-	if legacyUnknown {
+	if coverageUnknown {
 		partial = true
-		addState("legacy_coverage_unknown")
 	}
 	if aggregateOverflow {
 		partial = true

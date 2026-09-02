@@ -12,7 +12,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
-	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 type responsesTransport struct {
@@ -183,14 +182,14 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, newModelHTTPError("responses", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, newModelHTTPError("responses", resp.StatusCode, string(raw), resp.Header)
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w", err)
 	}
 	if wire.Status != "completed" {
-		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, ServiceTier: wire.ServiceTier, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q: %s", wire.Status, textutil.Truncate(string(raw), 500))
+		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, ServiceTier: wire.ServiceTier, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q", wire.Status)
 	}
 	out := decodeResponsesResponse(wire)
 	out.Attempts = attempts

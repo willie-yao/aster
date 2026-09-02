@@ -105,20 +105,23 @@ func TestBuildApplyResultAndSetupHandoffValidate(t *testing.T) {
 	if err := writePrivateJSON(legacyPath, legacy); err != nil {
 		t.Fatal(err)
 	}
-	validateSchema(legacyPath)
-	output, err = exec.Command("python3", script, legacyPath).CombinedOutput()
-	if err != nil {
-		t.Fatalf("validate release-compatible Pages handoff: %v\n%s", err, output)
+	if err := schemaError(legacyPath); err == nil {
+		t.Fatal("JSON Schema accepted a version 1 handoff")
 	}
-	for _, variant := range []string{
-		writeSchemaVersionVariant(legacyPath, `"schema_version": 1`, `"schema_version": 1.0`, "setup-handoff-v1-float.json"),
-		writeSchemaVersionVariant(path, `"schema_version": 2`, `"schema_version": 2.0`, "setup-handoff-v2-float.json"),
-	} {
-		validateSchema(variant)
-		output, err = exec.Command("python3", script, variant).CombinedOutput()
-		if err != nil {
-			t.Fatalf("validate integral numeric schema version: %v\n%s", err, output)
-		}
+	if output, err = exec.Command("python3", script, legacyPath).CombinedOutput(); err == nil {
+		t.Fatalf("Python validator accepted a version 1 handoff: %s", output)
+	}
+	legacyFloat := writeSchemaVersionVariant(legacyPath, `"schema_version": 1`, `"schema_version": 1.0`, "setup-handoff-v1-float.json")
+	if err := schemaError(legacyFloat); err == nil {
+		t.Fatal("JSON Schema accepted a numeric version 1 handoff")
+	}
+	if output, err = exec.Command("python3", script, legacyFloat).CombinedOutput(); err == nil {
+		t.Fatalf("Python validator accepted a numeric version 1 handoff: %s", output)
+	}
+	currentFloat := writeSchemaVersionVariant(path, `"schema_version": 2`, `"schema_version": 2.0`, "setup-handoff-v2-float.json")
+	validateSchema(currentFloat)
+	if output, err = exec.Command("python3", script, currentFloat).CombinedOutput(); err != nil {
+		t.Fatalf("validate integral numeric schema version: %v\n%s", err, output)
 	}
 	booleanVersion := writeSchemaVersionVariant(path, `"schema_version": 2`, `"schema_version": true`, "setup-handoff-boolean-version.json")
 	assertBothReject := func(variant, label string) {

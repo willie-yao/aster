@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/ai"
@@ -890,6 +891,87 @@ var writeEndpoints = []string{
 	"/api/failures/abc/unresolve",
 	"/api/causes/cni409/resolve",
 	"/api/causes/cni409/unresolve",
+}
+
+func TestWriteHandlersUseStrictBoundedJSON(t *testing.T) {
+	type endpoint struct {
+		name       string
+		allowEmpty bool
+		validBody  string
+		unknown    string
+		wantStatus int
+		build      func(*int) http.Handler
+	}
+	endpoints := []endpoint{
+		{
+			name: "preview", allowEmpty: true, validBody: `{"instruction":"tighten it"}`, unknown: `{"instruction":"x","extra":true}`, wantStatus: http.StatusOK,
+			build: func(calls *int) http.Handler {
+				return previewHandler(time.Second, func(context.Context, string, string, string, string) (actions.PreviewResult, error) {
+					*calls++
+					return actions.PreviewResult{}, nil
+				})
+			},
+		},
+		{
+			name: "confirm", validBody: `{"token":"preview-token"}`, unknown: `{"token":"preview-token","extra":true}`, wantStatus: http.StatusOK,
+			build: func(calls *int) http.Handler {
+				return confirmHandler(time.Second, func(context.Context, string, string, string) (string, error) {
+					*calls++
+					return "https://example.test/result", nil
+				})
+			},
+		},
+		{
+			name: "action request", allowEmpty: true, validBody: `{"instruction":"tighten it"}`, unknown: `{"instruction":"x","extra":true}`, wantStatus: http.StatusAccepted,
+			build: func(calls *int) http.Handler {
+				return createActionRequestHandler(func(string, string, string, string, string, string) (actions.ActionRequestView, error) {
+					*calls++
+					return actions.ActionRequestView{}, nil
+				}, true)
+			},
+		},
+		{
+			name: "resolve", allowEmpty: true, validBody: `{"note":"fixed"}`, unknown: `{"note":"fixed","extra":true}`, wantStatus: http.StatusNoContent,
+			build: func(calls *int) http.Handler {
+				return resolveHandler(func(string, string, string) error {
+					*calls++
+					return nil
+				})
+			},
+		},
+	}
+	for _, endpoint := range endpoints {
+		for _, testCase := range []struct {
+			name string
+			body string
+			bad  bool
+		}{
+			{name: "valid", body: endpoint.validBody},
+			{name: "empty", bad: !endpoint.allowEmpty},
+			{name: "malformed", body: `{"broken":`, bad: true},
+			{name: "unknown field", body: endpoint.unknown, bad: true},
+			{name: "trailing value", body: endpoint.validBody + `{}`, bad: true},
+		} {
+			t.Run(endpoint.name+"/"+testCase.name, func(t *testing.T) {
+				calls := 0
+				handler := auth.Middleware(fakeAuth{}, endpoint.build(&calls))
+				request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(testCase.body))
+				request.Header.Set("Authorization", "ok")
+				request.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				if testCase.bad {
+					if recorder.Code != http.StatusBadRequest || calls != 0 {
+						t.Fatalf("status=%d calls=%d body=%q", recorder.Code, calls, recorder.Body.String())
+					}
+					return
+				}
+				if recorder.Code != endpoint.wantStatus || calls != 1 {
+					t.Fatalf("status=%d calls=%d body=%q", recorder.Code, calls, recorder.Body.String())
+				}
+			})
+		}
+	}
 }
 
 // TestHandler_WriteEndpointsRejectUnauthorized verifies every write endpoint

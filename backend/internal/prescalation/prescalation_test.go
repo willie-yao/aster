@@ -207,10 +207,7 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 	// Every caller must reach a decision before the gate opens, or an early
 	// release would let a rejected peer back in and understate the fan-out.
 	deadline := time.After(3 * time.Second)
-	for {
-		if resolver.calls()+int(atomic.LoadInt32(&busy)) >= callers {
-			break
-		}
+	for resolver.calls()+int(atomic.LoadInt32(&busy)) < callers {
 		select {
 		case <-deadline:
 			t.Fatalf("only %d of %d callers decided", resolver.calls()+int(atomic.LoadInt32(&busy)), callers)

@@ -94,22 +94,27 @@ test("daily cost chart descriptions match visible series", () => {
   assert.doesNotMatch(chartSeriesDescription(true, true), /table below/);
 });
 
-test("legacy AI usage reports tolerate omitted priced request counts", () => {
-  const legacyTotals: AIUsageTotals = {
+test("AI usage reports tolerate omitted priced request counts", () => {
+  const totals: AIUsageTotals = {
     operations: 1, cache_hits: 0, failures: 0, external_unmetered_operations: 0,
     model_requests: 7, reported_requests: 7, unreported_requests: 0,
     input_tokens: 100, cached_input_tokens: 0, output_tokens: 20, reasoning_tokens: 0,
     estimated_cost_nanos: "1000",
   };
-  const legacyCoverage: AIUsageReport["coverage"] = {
+  const coverage: AIUsageReport["coverage"] = {
     status: "partial", model_requests: 7, reported_requests: 7,
     unreported_requests: 0, external_unmetered_operations: 0,
   };
-  assert.equal(legacyTotals.priced_reported_requests, undefined);
-  assert.equal(legacyCoverage.priced_reported_requests, undefined);
-  assert.equal(pricedRequestCoverageNote(legacyTotals.priced_reported_requests ?? legacyCoverage.priced_reported_requests, legacyTotals.reported_requests, "partial"), "Priced-request coverage is unavailable for legacy records");
+  assert.equal(totals.priced_reported_requests, undefined);
+  assert.equal(coverage.priced_reported_requests, undefined);
+  assert.equal(pricedRequestCoverageNote(totals.priced_reported_requests ?? coverage.priced_reported_requests, totals.reported_requests, "partial"), "Priced-request coverage is unavailable");
   assert.equal(pricedRequestCoverageNote(4, 7, "partial"), "4 of 7 (57%) reported requests priced");
   assert.equal(pricedRequestCoverageNote(0, 0, "unavailable"), "Pricing coverage is unavailable");
+});
+
+test("retained unknown feature keys render as raw text", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/components/AIUsageDaily.tsx"), "utf8");
+  assert.equal(source.match(/featureLabels\[row\.feature\] \?\? row\.feature/g)?.length, 2);
 });
 
 test("historical usage fixture covers required cost and coverage scenarios", () => {

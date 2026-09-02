@@ -815,9 +815,10 @@ func InvalidTargetReason(target models.RemediationTarget) string {
 			return "configuration remediation metadata is invalid"
 		}
 	case models.RemediationIntentSetJobEnvironment:
+		isYAML := strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")
 		if target.Symbol != "" || target.RequiredCall != "" || target.Repository != "kubernetes/test-infra" ||
 			!regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(target.Revision) || !validPath(target.Path) ||
-			!strings.HasPrefix(target.Path, "config/jobs/") || !(strings.HasSuffix(target.Path, ".yaml") || strings.HasSuffix(target.Path, ".yml")) ||
+			!strings.HasPrefix(target.Path, "config/jobs/") || !isYAML ||
 			strings.TrimSpace(target.Job) == "" || strings.TrimSpace(target.Container) == "" ||
 			!regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(target.Name) || strings.TrimSpace(target.Value) == "" ||
 			len(target.Value) > 512 || strings.ContainsAny(target.Value, "\r\n\x00") {

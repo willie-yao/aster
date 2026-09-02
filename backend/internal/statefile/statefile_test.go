@@ -1,7 +1,9 @@
 package statefile
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,6 +315,25 @@ func TestLoad_DiscardsDifferentRepo(t *testing.T) {
 	}
 	if got.Repo != "new/repo" {
 		t.Errorf("Repo = %q, want new/repo", got.Repo)
+	}
+}
+
+func TestLoad_DiscardsUnscopedRepo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	old := &State[tracked]{Tracked: map[string]tracked{"k": {N: 1}}}
+	if err := old.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	got := Load[tracked](path, "new/repo", "test")
+	if len(got.Tracked) != 0 || got.Repo != "new/repo" {
+		t.Fatalf("unscoped state was adopted: %+v", got)
+	}
+	if !strings.Contains(logs.String(), "target repo changed ( -> new/repo); starting state fresh") {
+		t.Fatalf("repo-change log = %q", logs.String())
 	}
 }
 

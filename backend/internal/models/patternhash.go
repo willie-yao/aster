@@ -86,20 +86,17 @@ func AssignPatternIdentity(pattern *PatternAnalysis) {
 	pattern.ContentHash = PatternHash(*pattern)
 }
 
-// BackfillPatternIdentity preserves an existing stable ID and refreshes the
-// canonical content hash for published compatibility.
+// BackfillPatternIdentity preserves the stable ID and refreshes the canonical
+// content hash and causal-group identities.
 func BackfillPatternIdentity(pattern *PatternAnalysis) bool {
 	if pattern == nil {
 		return false
 	}
-	beforeID, beforeHash := pattern.ID, pattern.ContentHash
+	beforeHash := pattern.ContentHash
 	changed := false
-	if pattern.ID == "" {
-		pattern.ID = PatternID(*pattern)
-	}
 	changed = assignPatternCausalGroupIdentities(pattern) || changed
 	pattern.ContentHash = PatternHash(*pattern)
-	return changed || pattern.ID != beforeID || pattern.ContentHash != beforeHash
+	return changed || pattern.ContentHash != beforeHash
 }
 
 // BackfillPatternIdentities returns a normalized copy of the pattern list.

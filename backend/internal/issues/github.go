@@ -68,7 +68,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 		return nil, nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	rb, _ := io.ReadAll(resp.Body)
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	return resp, rb, nil
 }
 

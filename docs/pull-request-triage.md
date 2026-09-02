@@ -28,7 +28,8 @@ pull_requests:
 
 `discovery.include_presubmits` is not required. Triage resolves presubmits from
 the job catalog independently. Enable presubmit discovery only when those jobs
-should also appear in the main job dashboard.
+should also appear in the main job dashboard. Fetch commands do not override
+this project setting.
 
 Draft pull requests are excluded. Each successful pass writes:
 

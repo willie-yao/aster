@@ -246,7 +246,7 @@ func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffol
 func TestWizard_DefaultsAccepted(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -281,7 +281,7 @@ func TestWizard_ConfigureLaterProducesDisabledScaffold(t *testing.T) {
 		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -316,7 +316,7 @@ func TestWizard_InferredValuesCanBeChanged(t *testing.T) {
 		"y",                   // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "https://github.com/example/project.git", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "https://github.com/example/project.git", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -349,7 +349,7 @@ func TestWizard_CancellationAtEachPromptLeavesNoFiles(t *testing.T) {
 	for name, answers := range stages {
 		t.Run(name, func(t *testing.T) {
 			deps, out, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
-			opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+			opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 			if err := run(context.Background(), opts, deps); err != nil {
 				t.Fatalf("run: %v\n%s", err, out.String())
 			}
@@ -365,7 +365,7 @@ func TestWizard_CancellationAtEachPromptLeavesNoFiles(t *testing.T) {
 
 func TestWizard_EOFCancelsCleanly(t *testing.T) {
 	deps, out, writer, _ := wizardDependencies("")
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestWizard_EOFCancelsCleanly(t *testing.T) {
 func TestWizard_FinalConfirmationDefaultsToNo(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", ""}, "\n") + "\n"
 	deps, _, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestWizard_FinalConfirmationDefaultsToNo(t *testing.T) {
 func TestWizard_K8sSavedPlanRequiresStorageBeforeRendering(t *testing.T) {
 	deps, out, writer, _ := wizardDependencies("\n2\n")
 	opts := Options{
-		SourceRepo: "example/project", EngineRef: "main", NoPrompt: true,
+		SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate,
 		DryRun: true, PlanOut: filepath.Join(t.TempDir(), "plan.json"),
 	}
 	err := run(context.Background(), opts, deps)
@@ -405,7 +405,7 @@ func TestWizard_K8sOpenPRRequiresStorageBeforeRendering(t *testing.T) {
 	deps, out, writer, _ := wizardDependencies("\n2\n")
 	pullRequests := deps.pullRequests.(*fakePullRequestWriter)
 	opts := Options{
-		SourceRepo: "example/project", EngineRef: "main", NoPrompt: true, OpenPR: true,
+		SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate, OpenPR: true,
 	}
 	err := run(context.Background(), opts, deps)
 	if err == nil || !strings.Contains(err.Error(), "saved or open-PR Kubernetes onboarding requires") {
@@ -420,7 +420,7 @@ func TestWizard_K8sLocalScaffoldAllowsReviewedPlaceholder(t *testing.T) {
 	wizardInput := strings.Join([]string{"", "2", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(wizardInput)
 	pullRequests := deps.pullRequests.(*fakePullRequestWriter)
-	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 		t.Fatalf("wizard run: %v\n%s", err, out.String())
 	}
 	if writer.writes != 1 || pullRequests.calls != 0 {
@@ -434,7 +434,7 @@ func TestWizard_K8sLocalScaffoldAllowsReviewedPlaceholder(t *testing.T) {
 func TestWizard_DryRunPerformsNoWrites(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", ""}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true, DryRun: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate, DryRun: true}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -450,7 +450,7 @@ func TestWizard_ExistingOutputIsPreserved(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", ""}, "\n") + "\n"
 	deps, _, writer, _ := wizardDependencies(input)
 	writer.validateErr = errors.New("refusing to overwrite existing project.yaml")
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	err := run(context.Background(), opts, deps)
 	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
 		t.Fatalf("error = %v", err)
@@ -492,7 +492,7 @@ func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "git@github.com:example/project.git", Mode: modePages,
-		EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v", err)
@@ -505,7 +505,7 @@ func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	wizardInput := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "y"}, "\n") + "\n"
 	wizardDeps, _, wizardWriter, _ := wizardDependencies(wizardInput)
-	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, wizardDeps); err != nil {
+	if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, wizardDeps); err != nil {
 		t.Fatalf("wizard run: %v", err)
 	}
 
@@ -515,7 +515,7 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	flagged := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, ID: "project", Name: "Project",
-		EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
+		EngineRef: "main", OutDir: "project-aster", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 	}
 	if err := run(context.Background(), flagged, flaggedDeps); err != nil {
 		t.Fatalf("flagged run: %v", err)
@@ -543,7 +543,7 @@ func TestRun_K8sFlaggedInputsRequireStorage(t *testing.T) {
 			opts := Options{
 				TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 				SourceRepo: "example/project", Mode: modeK8s, ID: "project", Name: "Project",
-				EngineRef: "main", OutDir: "project-aster", NoPrompt: true, AIEnabled: &disabled,
+				EngineRef: "main", OutDir: "project-aster", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 				DryRun: test.dryRun, OpenPR: test.openPR,
 			}
 			err := run(context.Background(), opts, deps)
@@ -562,7 +562,7 @@ func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, GitHubToken: "fixture-github-token",
+		PromptMode: promptModeTemplate, GitHubToken: "fixture-github-token",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -594,7 +594,7 @@ func TestWizard_CategoryTokensCanBeEdited(t *testing.T) {
 		{Name: "periodic-project-conformance-one", JobType: models.JobTypePeriodic},
 		{Name: "periodic-project-conformance-two", JobType: models.JobTypePeriodic},
 	}
-	opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -607,7 +607,7 @@ func TestWizard_CategoryTokensCanBeEdited(t *testing.T) {
 func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	t.Run("source input", func(t *testing.T) {
 		deps, out, writer, _ := wizardDependencies("q\n")
-		if err := run(context.Background(), Options{EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 || !strings.Contains(out.String(), "No files were written") {
@@ -618,7 +618,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	t.Run("detected source confirmation", func(t *testing.T) {
 		deps, _, writer, _ := wizardDependencies("q\n")
 		deps.remotes = fakeRemoteDetector{remote: "git@github.com:example/project.git"}
-		if err := run(context.Background(), Options{EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 {
@@ -633,7 +633,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 			Name: "pull-project", JobType: models.JobTypePresubmit, Repo: "example/project",
 			Annotations: map[string]string{"testgrid-dashboards": "dashboard-a"},
 		}
-		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 {
@@ -649,7 +649,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	for name, answers := range stages {
 		t.Run(name, func(t *testing.T) {
 			deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
-			opts := Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}
+			opts := Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}
 			if err := run(context.Background(), opts, deps); err != nil {
 				t.Fatalf("run: %v", err)
 			}
@@ -662,7 +662,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	t.Run("AI model", func(t *testing.T) {
 		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "8", "", "https://provider.example/v1/chat/completions", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
-		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 {
@@ -673,7 +673,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 	t.Run("Pages endpoint warning", func(t *testing.T) {
 		answers := []string{"", "", defaultTestDashboardRepo, "", "", "", "", "8", "", "http://localhost:8000/v1/chat/completions", "model", "q"}
 		deps, _, writer, _ := wizardDependencies(strings.Join(answers, "\n") + "\n")
-		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 {
@@ -689,7 +689,7 @@ func TestWizard_AdditionalCancellationStages(t *testing.T) {
 			{Name: "periodic-project-aks-two", JobType: models.JobTypePeriodic},
 			{Name: "periodic-project-other-one", JobType: models.JobTypePeriodic},
 		}
-		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", NoPrompt: true}, deps); err != nil {
+		if err := run(context.Background(), Options{SourceRepo: "example/project", EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 			t.Fatalf("run: %v", err)
 		}
 		if writer.writes != 0 {
@@ -726,7 +726,7 @@ func TestWizard_DetectedForkUsesUpstreamSourceAndForkDashboardOwner(t *testing.T
 		definition.Refs = []jobconfig.RepoRef{{Org: "upstream-owner", Repo: "project", BaseRef: "main"}}
 		catalog.Jobs[key] = definition
 	}
-	if err := run(context.Background(), Options{EngineRef: "main", NoPrompt: true}, deps); err != nil {
+	if err := run(context.Background(), Options{EngineRef: "main", PromptMode: promptModeTemplate}, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "Detected GitHub fork upstream: upstream-owner/project") {
@@ -753,7 +753,7 @@ func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", PromptMode: promptModeTemplate,
 		AIEnabled: &disabled, OpenPR: true, DryRun: true,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -766,7 +766,7 @@ func TestRun_OpenPRDryRunDoesNotCallGitHub(t *testing.T) {
 
 func TestValidateOptions_RejectsCredentialsInPlanFieldsWithoutLeaking(t *testing.T) {
 	opts := testOpts()
-	opts.NoPrompt = true
+	opts.PromptMode = promptModeTemplate
 	opts.GitHubToken = "fixture-github-token"
 	opts.Name = "fixture-github-token"
 	err := validateOptions(&opts)
@@ -784,7 +784,7 @@ func TestBuildPlan_RejectsCredentialInRenderedFilesWithoutLeaking(t *testing.T) 
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, GitHubToken: "fixture-github-token",
+		PromptMode: promptModeTemplate, GitHubToken: "fixture-github-token",
 	}
 	_, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err == nil || !strings.Contains(err.Error(), "contained a credential") {
@@ -816,7 +816,7 @@ func TestWizard_ExplicitTestGridPromptsForRequiredPresubmits(t *testing.T) {
 		},
 	}
 	opts := Options{
-		SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", NoPrompt: true,
+		SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", PromptMode: promptModeTemplate,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
@@ -831,7 +831,7 @@ func TestSetPlanCategoryTokens_RejectsCredentialBeforeMutation(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		NoPrompt: true, GitHubToken: "fixture-github-token",
+		PromptMode: promptModeTemplate, GitHubToken: "fixture-github-token",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -879,7 +879,7 @@ func TestWizard_DeploymentModeValueIsExplicitWithoutBookkeeping(t *testing.T) {
 		"y",                      // confirm
 	}, "\n") + "\n"
 	deps, out, writer, _ := wizardDependencies(input)
-	opts := Options{SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -910,7 +910,7 @@ func TestWizard_ClearSentinelsRemoveOptionalSuggestions(t *testing.T) {
 		{Name: "periodic-project-aks-two", JobType: models.JobTypePeriodic},
 		{Name: "periodic-project-other-one", JobType: models.JobTypePeriodic},
 	}
-	opts := Options{SourceRepo: "example/my-project", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/my-project", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -922,7 +922,7 @@ func TestWizard_ClearSentinelsRemoveOptionalSuggestions(t *testing.T) {
 
 func TestCredentialSeparationCoversShortTokens(t *testing.T) {
 	opts := testOpts()
-	opts.NoPrompt = true
+	opts.PromptMode = promptModeTemplate
 	opts.GitHubToken = "short"
 	opts.Name = "short"
 	err := validateOptions(&opts)
@@ -934,7 +934,7 @@ func TestCredentialSeparationCoversShortTokens(t *testing.T) {
 func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing.T) {
 	t.Run("source", func(t *testing.T) {
 		deps, _, writer, _ := wizardDependencies("fixture-github-token\n")
-		opts := Options{GitHubToken: "fixture-github-token", EngineRef: "main", NoPrompt: true}
+		opts := Options{GitHubToken: "fixture-github-token", EngineRef: "main", PromptMode: promptModeTemplate}
 		err := run(context.Background(), opts, deps)
 		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 			t.Fatalf("error = %v", err)
@@ -950,7 +950,7 @@ func TestWizard_RejectsCredentialsEnteredAsRepositoriesWithoutLeaking(t *testing
 	t.Run("dashboard", func(t *testing.T) {
 		input := strings.Join([]string{"", "", "fixture-github-token"}, "\n") + "\n"
 		deps, _, writer, _ := wizardDependencies(input)
-		opts := Options{SourceRepo: "example/project", GitHubToken: "fixture-github-token", EngineRef: "main", NoPrompt: true}
+		opts := Options{SourceRepo: "example/project", GitHubToken: "fixture-github-token", EngineRef: "main", PromptMode: promptModeTemplate}
 		err := run(context.Background(), opts, deps)
 		if err == nil || !strings.Contains(err.Error(), "credential was supplied") {
 			t.Fatalf("error = %v", err)
@@ -975,7 +975,7 @@ func TestWizard_UsesCanonicalRepositoryFromGitHub(t *testing.T) {
 		definition.Refs = []jobconfig.RepoRef{{Org: "canonical", Repo: "project", BaseRef: "main"}}
 		catalog.Jobs[key] = definition
 	}
-	opts := Options{SourceRepo: "old-owner/old-name", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "old-owner/old-name", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -1013,7 +1013,7 @@ func TestWizard_DashboardWidePresubmitsControlPrompt(t *testing.T) {
 			Annotations: map[string]string{"testgrid-dashboards": "dashboard-a"},
 		},
 	}
-	opts := Options{SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", NoPrompt: true}
+	opts := Options{SourceRepo: "example/project", TestGrid: "dashboard-a", EngineRef: "main", PromptMode: promptModeTemplate}
 	if err := run(context.Background(), opts, deps); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
@@ -1040,7 +1040,7 @@ func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "upstream-org/project", TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true, DryRun: true, GitHubToken: "fixture-token",
+		AIEnabled: &disabled, PromptMode: promptModeTemplate, DryRun: true, GitHubToken: "fixture-token",
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1067,7 +1067,7 @@ func TestWizard_NoSafeDashboardOwnerRequiresInput(t *testing.T) {
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+		AIEnabled: &disabled, PromptMode: promptModeTemplate, DryRun: true,
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1093,7 +1093,7 @@ func TestWizard_ExplicitDashboardRepositorySkipsOwnerLookup(t *testing.T) {
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: "explicit-owner/dashboard", TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true, DryRun: true, GitHubToken: "fixture-token",
+		AIEnabled: &disabled, PromptMode: promptModeTemplate, DryRun: true, GitHubToken: "fixture-token",
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1111,7 +1111,7 @@ func TestWizard_ShortNameDefaultsEmpty(t *testing.T) {
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+		AIEnabled: &disabled, PromptMode: promptModeTemplate, DryRun: true,
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1132,7 +1132,7 @@ func TestWizard_ExplicitShortNameIsPreserved(t *testing.T) {
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", ShortName: "CAPZ", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true, DryRun: true,
+		AIEnabled: &disabled, PromptMode: promptModeTemplate, DryRun: true,
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1165,7 +1165,7 @@ func TestRun_NonInteractiveConflictsRequireUpdateExisting(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
-		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 	}
 	err := run(context.Background(), opts, deps)
 	var conflict *destinationConflictError
@@ -1183,7 +1183,7 @@ func TestRun_UpdateExistingWritesOnlyReviewedFiles(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
-		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 		UpdateExisting: true,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -1238,7 +1238,7 @@ func TestWizard_InteractiveUpdateRequiresFinalConfirmation(t *testing.T) {
 	plan, opts, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
 		ID: "project", Name: "Project", ShortName: "P", OutDir: "out", EngineRef: "main",
-		AIEnabled: &disabled, NoPrompt: true,
+		AIEnabled: &disabled, PromptMode: promptModeTemplate,
 	}, deps)
 	if err != nil {
 		t.Fatalf("runWizard: %v\n%s", err, out.String())
@@ -1258,7 +1258,7 @@ func TestRun_DryRunShowsCreateReplaceAndStaleFiles(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo, SourceRepo: "example/project",
-		Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true, AIEnabled: &disabled,
+		Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 		UpdateExisting: true, DryRun: true,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {

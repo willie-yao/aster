@@ -10,6 +10,13 @@ frontend/dist/
 frontend/.vite/
 frontend/public/data/
 
+# Generated tooling
+.playwright-mcp/
+__pycache__/
+*.pyc
+.bin/
+.cache/golangci-lint/
+
 # Editor
 .vscode/
 .idea/

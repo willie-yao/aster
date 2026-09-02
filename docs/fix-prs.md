@@ -35,7 +35,7 @@ identity and verified remediation scope. The flow is:
 8. Open the draft pull request only after explicit confirmation of that preview.
 
 A preview is a review artifact, not proof that the patch fixes the failure.
-Configured validators, source verification, Prow CI, and human review are
+Agent Sandbox validators, source verification, Prow CI, and human review are
 separate gates. The engine never approves or merges the pull request.
 
 ## Exact JUnit analysis handoff

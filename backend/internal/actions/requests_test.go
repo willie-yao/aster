@@ -253,35 +253,38 @@ func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing
 	}
 }
 
-func TestActionRequestStateV6MigratesToV7(t *testing.T) {
-	service, _ := requestTestService(t)
-	now := time.Now().UTC()
-	state := actionRequestState{Version: 6, Requests: map[string]*actionRequest{
-		"existing": {ActionRequestView: ActionRequestView{
-			ID: "existing", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestFailed,
-			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
-		}},
-	}}
-	if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
-		t.Fatal(err)
-	}
-	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
-	if view, err := reloaded.GetRequest("existing", "alice"); err != nil || view.Status != RequestFailed {
-		t.Fatalf("migrated view=%+v err=%v", view, err)
-	}
-	data, err := os.ReadFile(reloaded.requestStatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var migrated actionRequestState
-	if err := json.Unmarshal(data, &migrated); err != nil {
-		t.Fatal(err)
-	}
-	if migrated.Version != actionRequestStateVersion {
-		t.Fatalf("migrated version=%d", migrated.Version)
+func TestActionRequestStateNoncurrentVersionsResetToV7(t *testing.T) {
+	for _, version := range []int{6, actionRequestStateVersion + 1} {
+		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
+			service, _ := requestTestService(t)
+			now := time.Now().UTC()
+			state := actionRequestState{Version: version, Requests: map[string]*actionRequest{
+				"existing": {ActionRequestView: ActionRequestView{
+					ID: "existing", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestFailed,
+					CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+				}},
+			}}
+			if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
+				t.Fatal(err)
+			}
+			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+			if _, err := reloaded.GetRequest("existing", "alice"); !errors.Is(err, ErrRequestNotFound) {
+				t.Fatalf("GetRequest error = %v", err)
+			}
+			data, err := os.ReadFile(reloaded.requestStatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reset actionRequestState
+			if err := json.Unmarshal(data, &reset); err != nil {
+				t.Fatal(err)
+			}
+			if reset.Version != actionRequestStateVersion || len(reset.Requests) != 0 {
+				t.Fatalf("reset state = %+v", reset)
+			}
+		})
 	}
 }
-
 func TestReadyAnalysisFixRequestReloads(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
@@ -964,7 +967,7 @@ func TestCreateRequestRejectsDifferentFailureSupersede(t *testing.T) {
 func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-1": {ActionRequestView: ActionRequestView{
 			ID: "request-1", Owner: "alice", Status: RequestPending,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
@@ -986,7 +989,7 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
 	base := &issues.IssueSpec{Key: "pattern::periodic-x", Title: "Reviewed title", Body: "## What happened\nReviewed body"}
-	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-refine": {
 			ActionRequestView: ActionRequestView{
 				ID: "request-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
@@ -1026,7 +1029,7 @@ func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
 		Key: "pattern::periodic-x", Title: "Unsafe fallback",
 		Body: "The user wants me to expose this.\nI need to show the plan.\nLet me draft it.\n\n## What happened\nunsafe",
 	}
-	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-unsafe-refine": {
 			ActionRequestView: ActionRequestView{
 				ID: "request-unsafe-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
@@ -1055,7 +1058,7 @@ func TestLoadRejectsUnsafeLegacyReadyIssue(t *testing.T) {
 	now := time.Now().UTC()
 	key := issues.KeyPrefixPattern + pattern.JobID
 	unsafeBody := "The user wants me to revise this.\nI need to expose the planning.\nLet me draft it.\n\n## What happened\nunsafe\n\n" + issues.MarkerFor(key)
-	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"unsafe-ready": {
 			ActionRequestView: ActionRequestView{
 				ID: "unsafe-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
@@ -1094,7 +1097,7 @@ func TestLoadHidesUnsafeUnknownDraftWithoutChangingOutcome(t *testing.T) {
 	now := time.Now().UTC()
 	key := issues.KeyPrefixPattern + pattern.JobID
 	unsafeBody := "The user wants me to revise this. I need to expose the plan. Let me draft it.\n\n" + issues.MarkerFor(key)
-	state := actionRequestState{Version: 2, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"unsafe-unknown": {
 			ActionRequestView: ActionRequestView{
 				ID: "unsafe-unknown", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestUnknown,
@@ -1156,7 +1159,7 @@ func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
 	now := time.Now().UTC()
 	key := issues.KeyPrefixPattern + pattern.JobID
 	spec := &issues.IssueSpec{Key: key, Title: "Ready", Body: "## Summary\nBody\n\n" + issues.MarkerFor(key)}
-	state := actionRequestState{Version: 4, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-ready": {
 			ActionRequestView: ActionRequestView{
 				ID: "request-ready", FailureID: pattern.ID, PatternHash: pattern.ContentHash, Owner: "alice", Kind: "create-issue", Status: RequestReady,
@@ -1199,7 +1202,7 @@ func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
 func TestConfigureAsyncRequestsSkipsExpiredReadyEmail(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 1, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-expired": {ActionRequestView: ActionRequestView{
 			ID: "request-expired", Owner: "alice", Kind: "create-issue", Status: RequestReady,
 			CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
@@ -1275,7 +1278,7 @@ func TestCancelRequestRejectsConfirmationInProgress(t *testing.T) {
 func TestConfirmedRequestExpiresAndClearsDraft(t *testing.T) {
 	service, _ := requestTestService(t)
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 1, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-confirmed": {
 			ActionRequestView: ActionRequestView{
 				ID: "request-confirmed", Owner: "alice", Kind: "propose-fix", Status: RequestConfirmed,
@@ -1332,8 +1335,8 @@ type fakeManagedAgentRuntime struct {
 	once    sync.Once
 }
 
-func (f *fakeManagedAgentRuntime) Generate(context.Context, runtime.GenerateSpec) (runtime.GenerateResult, error) {
-	return runtime.GenerateResult{}, nil
+func (f *fakeManagedAgentRuntime) Generate(context.Context, runtime.GenerateSpec) (runtime.ExecutionResult, error) {
+	return runtime.ExecutionResult{}, nil
 }
 
 func (f *fakeManagedAgentRuntime) Cleanup(ctx context.Context, ref runtime.WorkRef) error {
@@ -1468,7 +1471,7 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 func TestRestartResumesRuntimeCleanup(t *testing.T) {
 	service, pattern := requestTestService(t)
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 4, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"restart-runtime": {
 			ActionRequestView: ActionRequestView{ID: "restart-runtime", FailureID: pattern.ID, Kind: "propose-fix", Owner: "alice", Status: RequestPending,
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
@@ -2069,10 +2072,10 @@ func TestCreateRequestRejectsDeterministicBlockedReasonBeforePersistence(t *test
 	}
 }
 
-func TestLegacyFailedRequestReasonCodesAreBackfilled(t *testing.T) {
+func TestCurrentFailedRequestReasonCodesAreRepaired(t *testing.T) {
 	dataDir := t.TempDir()
 	now := time.Now().UTC()
-	state := actionRequestState{Version: 5, Requests: map[string]*actionRequest{
+	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"unsafe":  {ActionRequestView: ActionRequestView{ID: "unsafe", FailureID: "pattern", Kind: "propose-fix", Owner: "alice", Status: RequestFailed, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Error: "saved draft did not pass current safety validation"}},
 		"present": {ActionRequestView: ActionRequestView{ID: "present", FailureID: "pattern", Kind: "propose-fix", Owner: "alice", Status: RequestFailed, CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339), Verification: &ActionVerificationView{State: actionverify.StateAlreadyPresent, Reason: "present"}}},
 	}}

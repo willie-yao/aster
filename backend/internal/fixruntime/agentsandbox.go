@@ -195,7 +195,6 @@ type AgentSandboxRuntime struct {
 var (
 	_ engineruntime.AgentRuntime        = (*AgentSandboxRuntime)(nil)
 	_ engineruntime.ManagedAgentRuntime = (*AgentSandboxRuntime)(nil)
-	_ agentsandbox.Runner               = (*AgentSandboxRuntime)(nil)
 )
 
 // NewAgentSandboxRuntime constructs the production adapter.
@@ -383,7 +382,7 @@ func parseInt64Value(name, value string) (int64, error) {
 }
 
 // Generate adapts the shared Sandbox lifecycle to the Fix PR contract.
-func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.GenerateSpec) (result engineruntime.GenerateResult, retErr error) {
+func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.GenerateSpec) (result engineruntime.ExecutionResult, retErr error) {
 	if r == nil || r.api == nil {
 		return result, fmt.Errorf("%w: agent sandbox runtime is not configured", engineruntime.ErrUnavailable)
 	}

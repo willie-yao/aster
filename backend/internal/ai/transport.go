@@ -29,18 +29,27 @@ type modelTransport interface {
 	Complete(context.Context, modelRequest) (*modelResponse, error)
 }
 
-// modelHTTPError preserves provider response details for existing transport
-// callers while allowing domain-specific callers to classify the status code.
+// modelHTTPError retains only bounded provider metadata safe to surface.
 type modelHTTPError struct {
 	API        string
 	StatusCode int
-	Body       string
+	Category   string
 	RetryAfter string
 	RequestID  string
 }
 
 func (e *modelHTTPError) Error() string {
-	return fmt.Sprintf("%s returned %d: %s", e.API, e.StatusCode, e.Body)
+	message := fmt.Sprintf("%s returned %d", e.API, e.StatusCode)
+	if e.Category == "tools_unsupported" {
+		message += ": function calling unsupported"
+	}
+	if e.RequestID != "" {
+		message += " request_id=" + e.RequestID
+	}
+	if e.RetryAfter != "" {
+		message += " retry_after=" + e.RetryAfter
+	}
+	return message
 }
 
 // ProviderErrorMetadata contains only provider fields safe for diagnostic logs.
@@ -98,9 +107,13 @@ func safeProviderErrorMetadataFromCause(err error) (ProviderErrorMetadata, bool)
 }
 
 func newModelHTTPError(api string, statusCode int, body string, header http.Header) *modelHTTPError {
+	category := "http_error"
+	if (statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity) && toolsUnsupportedRe.MatchString(body) {
+		category = "tools_unsupported"
+	}
 	return &modelHTTPError{
-		API: api, StatusCode: statusCode, Body: body,
-		RetryAfter: header.Get("Retry-After"), RequestID: providerRequestID(header),
+		API: api, StatusCode: statusCode, Category: category,
+		RetryAfter: safeProviderRetryAfter(header.Get("Retry-After")), RequestID: safeProviderRequestID(providerRequestID(header)),
 	}
 }
 

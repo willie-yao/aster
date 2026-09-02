@@ -41,7 +41,6 @@ function failedTest(name: string): TestCase {
     junit_file: "artifacts/junit_01.xml",
     ai_analysis: {
       generated_at: "2026-08-18T00:00:00Z",
-      model: "test",
       root_cause: "cause",
       severity: "high",
       suggested_fix: "fix",

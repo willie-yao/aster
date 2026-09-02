@@ -97,170 +97,70 @@ func TestWritePrivateJSONReportsDirectorySyncFailure(t *testing.T) {
 	}
 }
 
-func TestSessionStoreMigratesVersionOneTestSessions(t *testing.T) {
+func TestSessionStoreRejectsVersionOne(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := &persistedState{
-		Version: 1,
-		Sessions: map[string]*persistedSession{
-			"session": {
-				View:     SessionView{ID: "session", Analysis: AnalysisRef{JobID: "job", BuildID: "1", TestName: "test"}},
-				Resolved: persistedResolvedAnalysis{Ref: AnalysisRef{JobID: "job", BuildID: "1", TestName: "test"}},
-			},
-		},
-	}
-	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+	if err := writePrivateJSON(store.statePath, &persistedState{Version: 1, Sessions: map[string]*persistedSession{}}); err != nil {
 		t.Fatal(err)
 	}
 	state, migrated, err := store.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := state.Sessions["session"]
-	if !migrated || state.Version != stateVersion || session.View.Analysis.Scope != ScopeTest || session.Resolved.Ref.Scope != ScopeTest {
-		t.Fatalf("migrated state = %+v", state)
+	if err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 1") || state != nil || migrated {
+		t.Fatalf("load state=%+v migrated=%t err=%v", state, migrated, err)
 	}
 }
 
-func TestSessionStoreVersionTwoActorsAreRollingSafe(t *testing.T) {
+func TestSessionStoreRejectsVersionTwoActorState(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	legacy := &persistedState{
-		Version: 2,
-		Sessions: map[string]*persistedSession{
-			"session": {
-				Owner: "Bob", ExpiresAt: now.Add(time.Hour),
-				View: SessionView{
-					ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"},
-					Messages: []Message{{Role: "user", RequestID: "request", Content: "question", CreatedAt: now.Format(time.RFC3339)}},
-				},
-				Requests: map[string]persistedRequest{
-					"request": {QuestionHash: hashText("question"), Question: "question", Status: requestPending},
-				},
-				Active: &persistedActiveTurn{
-					RequestID: "request", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute),
-					Phase: PhaseInvestigating, UpdatedAt: now,
-				},
-			},
-		},
-	}
-	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
+		"session": {Owner: "Bob", View: SessionView{ID: "session"}},
+	}}
+	if err := writePrivateJSON(store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := store.context()
-	defer cancel()
-	if err := store.update(ctx, func(state *persistedState) (bool, error) {
-		session := state.Sessions["session"]
-		request := session.Requests["request"]
-		if state.Version != stateVersion || session.Owner != "bob" || session.View.CreatedBy != "bob" ||
-			session.View.Messages[0].Actor != "bob" || request.Actor != "bob" || session.Active.Actor != "bob" {
-			t.Fatalf("migrated shared state = %+v", state)
-		}
-		return false, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(store.statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var persisted persistedState
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		t.Fatal(err)
-	}
-	if persisted.Version != stateVersion || persisted.Version == 2 || persisted.Sessions["session"].Active.Actor != "bob" {
-		t.Fatalf("persisted rolling state = %+v", persisted)
+	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
+		t.Fatalf("load error = %v", err)
 	}
 }
-
-func TestSessionStoreVersionTwoCanonicalizesDuplicateOwnerSessions(t *testing.T) {
+func TestSessionStoreRejectsVersionTwoDuplicateSessions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	ref := AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}
-	legacy := &persistedState{
-		Version: 2,
-		Sessions: map[string]*persistedSession{
-			"alice-session": {
-				Owner: "alice", ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "alice-session", Analysis: ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
-			},
-			"bob-session": {
-				Owner: "bob", ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "bob-session", Analysis: ref, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Minute).Format(time.RFC3339)},
-				Requests: map[string]persistedRequest{
-					"active": {QuestionHash: hashText("question"), Question: "question", Status: requestPending},
-				},
-				Active: &persistedActiveTurn{RequestID: "active", Question: "question", LeaseID: "lease", ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now},
-			},
-		},
-	}
-	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
+		"first":  {Owner: "alice", View: SessionView{ID: "first"}},
+		"second": {Owner: "bob", View: SessionView{ID: "second"}},
+	}}
+	if err := writePrivateJSON(store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := store.context()
-	defer cancel()
-	if err := store.update(ctx, func(state *persistedState) (bool, error) {
-		if len(state.Sessions) != 1 || state.Sessions["bob-session"] == nil || state.Sessions["alice-session"] != nil {
-			t.Fatalf("canonical shared sessions = %+v", state.Sessions)
-		}
-		if state.Sessions["bob-session"].Active.Actor != "bob" {
-			t.Fatalf("canonical active actor = %+v", state.Sessions["bob-session"].Active)
-		}
-		return false, nil
-	}); err != nil {
-		t.Fatal(err)
+	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
+		t.Fatalf("load error = %v", err)
 	}
 }
-
-func TestSessionStoreVersionTwoRetainsFixBoundDuplicateAsRetired(t *testing.T) {
+func TestSessionStoreRejectsVersionTwoFixBoundSessions(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
-	ref := AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}
-	legacy := &persistedState{
-		Version: 2,
-		Sessions: map[string]*persistedSession{
-			"fix-session": {
-				Owner: "alice", ExpiresAt: now.Add(time.Hour),
-				View:       SessionView{ID: "fix-session", Analysis: ref, UpdatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
-				FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}},
-			},
-			"current-session": {
-				Owner: "bob", ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "current-session", Analysis: ref, UpdatedAt: now.Format(time.RFC3339)},
-			},
-		},
-	}
-	if err := writePrivateJSON(store.statePath, legacy); err != nil {
+	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
+		"session": {Owner: "alice", FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}}},
+	}}
+	if err := writePrivateJSON(store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := store.context()
-	defer cancel()
-	if err := store.update(ctx, func(state *persistedState) (bool, error) {
-		retired := state.Sessions["fix-session"]
-		if len(state.Sessions) != 2 || retired == nil || !retired.Retired || state.Sessions["current-session"] == nil {
-			t.Fatalf("retained Fix sessions = %+v", state.Sessions)
-		}
-		return false, nil
-	}); err != nil {
-		t.Fatal(err)
+	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
+		t.Fatalf("load error = %v", err)
 	}
 }
-
 func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
@@ -319,53 +219,19 @@ func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
 	}
 }
 
-func TestSessionStoreBridgesVersionThreeToCurrent(t *testing.T) {
+func TestSessionStoreRejectsVersionThree(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	versionThree := &persistedState{
-		Version: 3,
-		Sessions: map[string]*persistedSession{
-			"session": {
-				Owner: "alice", ExpiresAt: now.Add(time.Hour),
-				View: SessionView{ID: "session", Analysis: AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "1", TestName: "test"}},
-				Active: &persistedActiveTurn{
-					RequestID: "request", Question: "question", LeaseID: "lease",
-					ExpiresAt: now.Add(time.Minute), Phase: PhaseInvestigating, UpdatedAt: now,
-				},
-			},
-		},
-	}
-	if err := writePrivateJSON(store.statePath, versionThree); err != nil {
+	if err := writePrivateJSON(store.statePath, &persistedState{Version: 3, Sessions: map[string]*persistedSession{}}); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := store.context()
-	defer cancel()
-	if err := store.update(ctx, func(state *persistedState) (bool, error) {
-		active := state.Sessions["session"].Active
-		if state.Version != stateVersion || active == nil || active.Question != "question" || active.Actor != "alice" {
-			t.Fatalf("bridged state = %+v", state)
-		}
-		return false, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(store.statePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var persisted persistedState
-	if err := json.Unmarshal(data, &persisted); err != nil {
-		t.Fatal(err)
-	}
-	if persisted.Version != stateVersion || persisted.Sessions["session"].Active.Question != "question" || persisted.Sessions["session"].Active.Actor != "alice" {
-		t.Fatalf("persisted bridge state = %+v", persisted)
+	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 3") {
+		t.Fatalf("load error = %v", err)
 	}
 }
-
 func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
 	pattern := recurringPattern()
 	pattern.Subject = strings.Repeat("s", 8<<10)

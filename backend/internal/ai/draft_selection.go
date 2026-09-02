@@ -258,7 +258,7 @@ func (s *agentState) evaluateDraftReplacement(current, candidate *critiqueDraftC
 		// Preserve the earlier draft's historical quality when new evidence drove a
 		// different diagnosis. Re-evaluating it with evidence fetched for the new
 		// diagnosis can give the earlier text credit for evidence it never used.
-		if current.evidenceRevision < candidate.evidenceRevision && !(rootChanged && newEvidence) {
+		if newEvidence && !rootChanged {
 			s.refreshPublishedDraftQuality(current)
 			current.evidenceRevision = candidate.evidenceRevision
 			refreshed = true

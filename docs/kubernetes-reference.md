@@ -156,8 +156,9 @@ Image tags resolve in this order:
 2. `global.imageTag`.
 3. Chart `appVersion`.
 
-The generated values reset image tags to empty so an earlier snapshot does not
-remain pinned through reused values.
+New generated values omit image tags so the first install follows the chart
+`appVersion`. Keep any image tags already present in reused values empty unless
+the deployment intentionally pins a snapshot or split version.
 
 ### Guarded snapshot upgrade
 
@@ -175,13 +176,11 @@ The engine repository includes a helper for a published `sha-<commit>` snapshot:
 The helper requires an existing release, preserves
 `analysisCache.generation`, validates the chart, shows image changes, and uses
 Helm rollback support. It asks Helm to merge the installed values with every
-explicit `--values` overlay into one private temporary candidate, removes only
-the known deprecated OAuth controls, and then uses that same candidate for
-lint, render, and `helm upgrade --reset-values`. This prevents stale
-`scope`, `chatScope`, `privateRepositories`, `OAUTH_SCOPE`, or
-`OAUTH_PRIVATE_REPOSITORIES` settings from blocking a guarded upgrade while
-preserving all other installed and consumer-owned values. When an image
-inspection tool is available, it also checks the rendered image manifests.
+explicit `--values` overlay into one private temporary candidate, then uses that
+same candidate for lint, render, and `helm upgrade --reset-values`. Installed
+values that the current chart no longer accepts must be removed before running
+the helper. When an image inspection tool is available, it also checks the
+rendered image manifests.
 
 Do not use the snapshot helper for a stable release upgrade. Prefer the bundle
 wrapper and a published chart version.
@@ -222,8 +221,10 @@ and Helm release state.
 ## Configuration reference
 
 The complete commented defaults live in
-`deploy/helm/aster/values.yaml`. The table below highlights the
-main operator controls.
+`deploy/helm/aster/values.yaml`. Generated consumer values contain only reviewed
+storage and provider decisions plus the intentional `fetcher.timeout: 120m` and
+`fetcher.suspend: true` divergences. All other settings inherit chart defaults.
+The table below highlights the main operator controls.
 
 | Value | Purpose |
 | --- | --- |
@@ -242,7 +243,7 @@ main operator controls.
 | `ai.reasoningEffort` | Optional provider reasoning effort. Empty uses the provider default. |
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
-| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
+| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. `ai.existingSecret` is not used for GitHub reads. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |

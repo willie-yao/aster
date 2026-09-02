@@ -61,10 +61,6 @@ export function selectActionEligibility(
   return fetched?.failureID === failureID ? fetched.value : null;
 }
 
-export function normalizeActionEligibility(value: ActionEligibility): ActionEligibility {
-  return value.code ? value : { ...value, code: stateCode[value.state] };
-}
-
 export function patternLifecycleActive(lifecycle: PatternLifecycle | undefined): boolean {
   return !lifecycle || lifecycle.state === "active";
 }
@@ -238,8 +234,7 @@ export function buildActionEligibilityHint(
 }
 
 export function actionEligibilityTitle(eligibilityValue: ActionEligibility): string {
-  const eligibility = normalizeActionEligibility(eligibilityValue);
-  switch (eligibility.code) {
+  switch (eligibilityValue.code) {
     case "actionable":
       return "Actions available";
     case "already_present":

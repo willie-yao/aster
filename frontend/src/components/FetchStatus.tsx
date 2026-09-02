@@ -306,7 +306,6 @@ function followUpDetail(status: FetchProgressStatus): string | null {
   if (!followUp) return null;
   const details = [
     followUpComponentDetail("Notifications", followUp.notifications),
-    followUpComponentDetail("Remediation", followUp.remediation),
     followUpComponentDetail("Issue recovery", followUp.automatic_issues),
   ].filter((value): value is string => Boolean(value));
   return details.length > 0 ? details.join(" · ") : null;
@@ -315,7 +314,7 @@ function followUpDetail(status: FetchProgressStatus): string | null {
 function followUpFailureCodes(status: FetchProgressStatus): string[] {
   const followUp = status.follow_up;
   if (!followUp) return [];
-  return [followUp.notifications, followUp.remediation, followUp.automatic_issues]
+  return [followUp.notifications, followUp.automatic_issues]
     .flatMap((component) => component?.code ? [component.code] : []);
 }
 

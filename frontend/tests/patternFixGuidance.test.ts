@@ -46,7 +46,6 @@ const junitRun: BuildResult = {
 
 const analysis = {
   generated_at: "2026-08-14T00:02:00Z",
-  model: "model",
   root_cause: "cause",
   severity: "high",
   suggested_fix: "fix",

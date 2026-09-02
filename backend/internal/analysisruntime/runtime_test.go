@@ -91,7 +91,6 @@ branding:
     owner: example
     name: project
 ai:
-  cache_generation: "1"
   tools: [filesystem]
 `)
 	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
@@ -102,13 +101,13 @@ triggers: ["boom"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
-		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: string(ai.ReasoningEffortHigh), CacheGeneration: "2",
+	loaded, err := LoadProject(dir, cfg, DeploymentConfig{
+		Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: string(ai.ReasoningEffortHigh), CacheGeneration: "2",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.CacheGeneration != "2" || loaded.CacheGenerationFingerprint != project.AICacheGenerationFingerprint("2") || loaded.Provider.ReasoningEffort != ai.ReasoningEffortHigh {
+	if loaded.CacheGeneration != "2" || loaded.CacheGenerationFingerprint != project.AICacheGenerationFingerprint("2") || loaded.Provider.API != ai.APIChatCompletions || loaded.Provider.ReasoningEffort != ai.ReasoningEffortHigh {
 		t.Fatalf("cache generation = %q fingerprint=%q", loaded.CacheGeneration, loaded.CacheGenerationFingerprint)
 	}
 	if loaded.ProfileSelection.Kubernetes {
@@ -124,10 +123,34 @@ triggers: ["boom"]
 	if ids["engine.kubernetes.machine-node-providerid"] {
 		t.Fatal("filesystem-only project loaded Kubernetes skills")
 	}
-	if _, err := LoadProject(dir, cfg, ProviderFallbacks{
+	if _, err := LoadProject(dir, cfg, DeploymentConfig{
 		Endpoint: "https://model.invalid/v1/chat/completions", Model: "model", ReasoningEffort: "ultra",
 	}); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
 		t.Fatalf("invalid reasoning effort error = %v", err)
+	}
+}
+
+func TestLoadProjectRequiresDeploymentProviderCoordinates(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "system.md"), []byte("Investigate artifacts.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &project.Config{AI: &project.AI{}}
+	for _, testCase := range []struct {
+		name       string
+		deployment DeploymentConfig
+	}{
+		{name: "missing endpoint", deployment: DeploymentConfig{Model: "model"}},
+		{name: "missing model", deployment: DeploymentConfig{Endpoint: "https://model.invalid/v1/chat/completions"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := LoadProject(dir, cfg, testCase.deployment); err == nil || !strings.Contains(err.Error(), "AI_ENDPOINT and AI_MODEL") {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 
@@ -179,12 +202,12 @@ ai:
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	_, err = LoadProject(dir, cfg, DeploymentConfig{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
 	if err == nil || !strings.Contains(err.Error(), "count 1") || !strings.Contains(err.Error(), "minimum 2") {
 		t.Fatalf("consumer skill requirement error = %v", err)
 	}
 	write(filepath.Join(dir, "skills", "two.yaml"), "id: consumer.two\ntriggers: [bang]\n")
-	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	loaded, err := LoadProject(dir, cfg, DeploymentConfig{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +251,7 @@ ai:
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = LoadProject(dir, cfg, ProviderFallbacks{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
+	_, err = LoadProject(dir, cfg, DeploymentConfig{Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"})
 	if err == nil || !strings.Contains(err.Error(), "bundle is required") {
 		t.Fatalf("missing bundle error = %v", err)
 	}
@@ -311,7 +334,7 @@ ai:
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := LoadProject(dir, cfg, ProviderFallbacks{
+	loaded, err := LoadProject(dir, cfg, DeploymentConfig{
 		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
 	})
 	if err != nil {

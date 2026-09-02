@@ -1,22 +1,11 @@
-// Package runtime is the swappable execution abstraction for the engine.
-// A Runtime materializes a disposable workspace and runs a command in it.
+// Package runtime defines execution contracts for coding-agent runtimes.
 // Backends define their own process isolation and cleanup guarantees.
-//
-// The first consumer is fix-PR verification: build and vet a proposed change
-// against the real repository before the PR is opened. The batch fetcher stays
-// plain first-party code and does not use a Runtime.
 package runtime
 
-import (
-	"context"
-	"errors"
-	"time"
-)
+import "errors"
 
-// ErrUnavailable reports that the runtime cannot execute in this environment,
-// for example the required toolchain (git or the command binary) is not on
-// PATH. Callers treat it as "verification skipped", never as a failure, so a
-// distroless deployment without a toolchain degrades gracefully.
+// ErrUnavailable reports that the configured runtime cannot execute in this
+// environment.
 var ErrUnavailable = errors.New("runtime unavailable")
 
 // ErrSandboxUnavailable reports that a required process sandbox cannot enforce
@@ -65,35 +54,4 @@ type RepoRef struct {
 	// CloneURL overrides the derived https://github.com/<owner>/<name>.git URL,
 	// for a mirror, an enterprise host, or a local path in tests. Optional.
 	CloneURL string
-}
-
-// Spec is a single one-shot execution: materialize Repo at its ref, overlay the
-// changed files, and run Command in the workspace root.
-type Spec struct {
-	Repo RepoRef
-	// Overlay maps repo-relative path to full new file content, written over the
-	// checkout before Command runs. This is the proposed fix's changed files.
-	Overlay map[string]string
-	// Command is the argv to run (Command[0] must resolve on PATH). Empty is an
-	// error.
-	Command []string
-	// Timeout bounds the whole run (clone plus command). Zero uses a default.
-	Timeout time.Duration
-}
-
-// Result is the outcome of a run. Passed reports a zero exit code.
-type Result struct {
-	ExitCode int
-	// Output is the combined stdout and stderr, tail-truncated to a bound.
-	Output   string
-	TimedOut bool
-}
-
-// Passed reports whether the command exited zero and did not time out.
-func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut }
-
-// Runtime materializes a disposable workspace, runs one command in it, and
-// tears the workspace down before returning.
-type Runtime interface {
-	Run(ctx context.Context, spec Spec) (Result, error)
 }

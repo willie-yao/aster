@@ -58,7 +58,7 @@ func (m *MockAuthenticator) Register(mux *http.ServeMux) {
 // handleLogin signs in and returns to the page the request came from.
 func (m *MockAuthenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 	SetPrivateResponseHeaders(w.Header())
-	if err := m.codec.write(w, m.login, ""); err != nil {
+	if err := m.codec.write(w, m.login); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

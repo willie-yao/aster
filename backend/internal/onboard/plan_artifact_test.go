@@ -21,7 +21,7 @@ func testReviewedPlan(t *testing.T) (*Plan, dependencies, *fakeScaffoldWriter) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
-		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+		OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate,
 		AIEnabled: &disabled, GitHubToken: "fixture-github-token", DryRun: true,
 		PlanOut: filepath.Join(t.TempDir(), "reviewed-plan.json"),
 	}
@@ -78,7 +78,7 @@ func TestRunDryRunWritesReviewedPlanArtifact(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
-		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+		OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate,
 		AIEnabled: &disabled, DryRun: true, PlanOut: planPath,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -108,7 +108,7 @@ func TestRunDryRunBindsRelativeDestinationToReviewedDirectory(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
-		OutDir: ".", NoPrompt: true, AIEnabled: &disabled,
+		OutDir: ".", PromptMode: promptModeTemplate, AIEnabled: &disabled,
 		DryRun: true, PlanOut: planPath,
 	}
 	if err := run(context.Background(), opts, deps); err != nil {
@@ -402,7 +402,7 @@ func TestPlanArtifactRejectsK8sStorageMetadataMismatch(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
-		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+		OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate,
 		AIEnabled: &disabled, K8sStorageClass: "shared-rwx", DryRun: true,
 		PlanOut: filepath.Join(t.TempDir(), "reviewed-plan.json"),
 	}
@@ -429,7 +429,7 @@ func TestPlanArtifactRejectsInvalidStorageMetadata(t *testing.T) {
 		opts := Options{
 			TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 			SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
-			OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true,
+			OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate,
 			AIEnabled: &disabled, K8sStorageClass: "shared-rwx",
 		}
 		plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)

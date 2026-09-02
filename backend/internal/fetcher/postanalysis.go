@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -37,7 +38,17 @@ func RunFinalizedSideEffects(ctx context.Context, opts FinalizedSideEffectsOptio
 	if err != nil {
 		return fmt.Errorf("configuring storage: %w", err)
 	}
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	normalized := modelprovider.Normalize(modelprovider.Config{
+		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		ReasoningEffort: modelprovider.ReasoningEffort(os.Getenv(project.AIReasoningEffortEnv)),
+	})
+	provider := project.AIProvider{
+		API: normalized.API, Endpoint: normalized.Endpoint, Model: normalized.Model, ReasoningEffort: normalized.ReasoningEffort,
+	}
+	if cfg.AI != nil {
+		provider.ServiceTier = strings.ToLower(strings.TrimSpace(cfg.AI.ServiceTier))
+		provider.Headers = cfg.AI.Headers
+	}
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return err
 	}

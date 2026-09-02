@@ -10,12 +10,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
-type panicVerifyRuntime struct{}
-
-func (panicVerifyRuntime) Run(context.Context, runtime.Spec) (runtime.Result, error) {
-	panic("LocalRuntime verification must not run")
-}
-
 func sandboxVerificationCommands() []runtime.ExecutionCommand {
 	return []runtime.ExecutionCommand{
 		{Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 60},
@@ -36,7 +30,7 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	failure := validAnalysisFailure()
 	files := map[string]string{"controllers/cluster_controller.go": "package controllers\n"}
 	diff := "diff --git a/controllers/cluster_controller.go b/controllers/cluster_controller.go\n"
-	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
+	agent := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: failure.GenerationBaseRevision, Files: files, Diff: diff,
 		CommandResults: sandboxCommandResults(),
 	}}
@@ -45,7 +39,6 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	manager := NewManager(pr, t.TempDir()+"/state.json", Options{
 		SourceOwner: "up", SourceName: "stream", AuthorName: "Jane", AuthorEmail: "jane@example.com",
 		MaxFiles: 3,
-		Verify:   &VerifyConfig{Runtime: panicVerifyRuntime{}, Commands: [][]string{{"go", "test", "./..."}}},
 		Agent: &AgentConfig{
 			Runtime: agent, MaxFiles: 3, MaxTurns: 10, Timeout: time.Minute,
 			CommandPolicy: runtime.CommandPolicy{Commands: sandboxVerificationCommands()}, RequireCommandResults: true,
@@ -113,7 +106,7 @@ func TestAgentSandboxCommandResultsFailClosed(t *testing.T) {
 			gotResults := cloneCommandResults(valid)
 			testCase.edit(&gotCommands, &gotResults)
 			agent := &AgentConfig{RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: gotCommands}}
-			_, err := executionVerificationForAgent(agent, runtime.GenerateResult{BaseSHA: strings.Repeat("a", 40), CommandResults: gotResults}, strings.Repeat("a", 40))
+			_, err := executionVerificationForAgent(agent, runtime.ExecutionResult{BaseSHA: strings.Repeat("a", 40), CommandResults: gotResults}, strings.Repeat("a", 40))
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("error=%v want=%q", err, testCase.want)
 			}
