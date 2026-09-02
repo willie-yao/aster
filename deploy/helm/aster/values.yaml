@@ -178,8 +178,6 @@ ai:
   # For a public repository the token needs no repository privileges; it only
   # lifts the rate limit. Prefer githubReadTokenSecretName in production. When
   # the inline value is used, the chart creates a dedicated read-token Secret.
-  # For compatibility, an empty secret name with ai.existingSecret reads the key
-  # from the AI Secret, which is mounted optional so a missing key is ignored.
   githubReadToken: ""
   githubReadTokenSecretName: ""
   githubReadTokenSecretKey: GITHUB_READ_TOKEN

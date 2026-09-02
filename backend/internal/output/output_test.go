@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,8 +184,11 @@ func TestWriteJobDetailBackfillsPatternIdentity(t *testing.T) {
 func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 	dir := t.TempDir()
 	report := models.FlakinessReport{RecurringPatterns: []models.PatternAnalysis{{
-		JobID: "job", Subject: "job", BuildsAnalyzed: 3, Systemic: true,
+		ID: "stable-pattern", ContentHash: "stale", JobID: "job", Subject: "job", BuildsAnalyzed: 3, Systemic: true,
 		Confidence: "high", SharedRootCause: "shared cause", Summary: "summary",
+		CausalGroups: []models.PatternCausalGroup{{
+			ID: "stale-group", ContentHash: "stale", Builds: []string{"1", "2"}, RootCause: "shared cause", Confidence: "high",
+		}},
 	}}}
 	if err := WriteFlakinessReport(dir, report); err != nil {
 		t.Fatal(err)
@@ -200,7 +202,9 @@ func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	pattern := written.RecurringPatterns[0]
-	if pattern.ID == "" || pattern.ContentHash != models.PatternHash(pattern) {
+	group := pattern.CausalGroups[0]
+	if pattern.ID != "stable-pattern" || pattern.ContentHash != models.PatternHash(pattern) ||
+		group.ID != models.PatternCausalGroupID(pattern.ID, group) || group.ContentHash != models.PatternCausalGroupHash(group) {
 		t.Fatalf("written pattern = %+v", pattern)
 	}
 }
@@ -411,7 +415,7 @@ func TestWriteAllAggregatesIndependentProjectionFailures(t *testing.T) {
 	}
 	for _, want := range []string{
 		"write manifest", "write dashboard", "write job detail job-alpha", "write job detail job-beta",
-		"prune job details", "write flakiness report", "write search index", "remove retired public files",
+		"prune job details", "write flakiness report", "write search index",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("aggregated error missing %q: %v", want, err)
@@ -434,38 +438,6 @@ func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale job file still exists: %v", err)
-	}
-}
-
-func TestWriteAllRemovesRetiredPublicProjections(t *testing.T) {
-	dir := t.TempDir()
-	stale := []string{
-		filepath.Join(dir, "analysis_corrections.json"),
-		filepath.Join(dir, "remediations.json"),
-	}
-	for _, path := range stale {
-		if err := os.WriteFile(path, []byte(`{"stale":true}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	retained := filepath.Join(dir, "remediation_state.json")
-	if err := os.WriteFile(retained, []byte(`{"version":1}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), nil, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range stale {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("retired public projection %s still exists: %v", path, err)
-		}
-	}
-	if _, err := os.Stat(retained); err != nil {
-		t.Fatalf("retained private state was deleted: %v", err)
-	}
-	if !slices.Contains(NonPublishedFiles, "remediation_state.json") ||
-		!slices.Contains(NonPublishedFiles, "remediation_prow_catalog.json") {
-		t.Fatalf("legacy private files left the denylist: %v", NonPublishedFiles)
 	}
 }
 
@@ -560,7 +532,7 @@ func TestWriteManifestPublishesOnlyAggregateSkillMetadata(t *testing.T) {
 func TestPublicPatternOutputBackfillsCausalGroupIdentity(t *testing.T) {
 	dir := t.TempDir()
 	pattern := models.PatternAnalysis{
-		JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
+		ID: "stable-pattern", ContentHash: "stale", JobID: "job-causal", Subject: "job-causal", BuildsAnalyzed: 3,
 		Recurrence: models.PatternRecurrenceMixedCauses, Systemic: true, Confidence: "medium",
 		CausalGroups: []models.PatternCausalGroup{
 			{Builds: []string{"2", "1"}, RootCause: "missing call", Confidence: "high"},

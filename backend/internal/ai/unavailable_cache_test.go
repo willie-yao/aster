@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -139,7 +138,7 @@ func TestServiceAdvisoryPolicyDoesNotReuseUnavailableCooldown(t *testing.T) {
 	_, err := advisory.AnalyzeFailure(t.Context(), &http.Client{}, FailureAnalysisRequest{
 		JobID: "job", BuildPrefix: "logs/job/1/", Build: run.BuildInfo, TestCase: *tc, ConsecutiveFailures: 1,
 	})
-	if err == nil || errors.Is(err, ErrMissingArtifactCitation) || !strings.Contains(err.Error(), "browser factory") {
+	if err == nil || !strings.Contains(err.Error(), "browser factory") {
 		t.Fatalf("error = %v, want normal advisory analysis path", err)
 	}
 }

@@ -1479,11 +1479,6 @@ func (s *Service) stash(owner string, entry *previewEntry) (string, error) {
 	return s.previewStore.stash(owner, entry)
 }
 
-// take removes one persisted preview for compatibility with direct callers.
-func (s *Service) take(owner, token string) (*previewEntry, error) {
-	return s.previewStore.take(owner, token)
-}
-
 // tokenHash binds a preview to the admin who generated it without retaining the
 // raw owner identifier.
 func tokenHash(t string) string {

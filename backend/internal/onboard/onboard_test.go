@@ -149,6 +149,18 @@ func testOpts() Options {
 	}
 }
 
+func TestDerivedIDStripsOnlyAsterSuffix(t *testing.T) {
+	for repo, want := range map[string]string{
+		"example/project-aster":             "project",
+		"example/project-prow-ai-dashboard": "project-prow-ai-dashboard",
+		"example/project-prow-dashboard":    "project-prow-dashboard",
+	} {
+		if got := derivedID(Options{DashboardRepo: repo}); got != want {
+			t.Errorf("derivedID(%q) = %q, want %q", repo, got, want)
+		}
+	}
+}
+
 func TestRenderProjectYAML_ValidatesForTestGrid(t *testing.T) {
 	opts := testOpts()
 	data := buildScaffoldData(opts, InferCategories([]string{

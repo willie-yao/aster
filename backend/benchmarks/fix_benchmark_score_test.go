@@ -42,7 +42,7 @@ func (s *fixBenchmarkScore) add(name string, must, passed bool, detail string) {
 	s.Checks = append(s.Checks, fixBenchmarkCheck{Name: name, Must: must, Passed: passed, Detail: boundedFixBenchmarkDetail(detail)})
 }
 
-func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) fixBenchmarkScore {
+func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.ExecutionResult) fixBenchmarkScore {
 	var score fixBenchmarkScore
 	resultPresent := strings.TrimSpace(result.Diff) != "" && len(result.Files) > 0
 	score.add("result", true, resultPresent, "runtime returned a non-empty diff and file set")
@@ -164,7 +164,7 @@ func prepareFixBenchmarkRepo(sourceRoot string, benchmarkCase fixBenchmarkCase) 
 	return repoRoot, cleanup, nil
 }
 
-func makeFixBenchmarkResult(t *testing.T, sourceRoot string, benchmarkCase fixBenchmarkCase, files map[string]string) runtimepkg.GenerateResult {
+func makeFixBenchmarkResult(t *testing.T, sourceRoot string, benchmarkCase fixBenchmarkCase, files map[string]string) runtimepkg.ExecutionResult {
 	t.Helper()
 	repoRoot, cleanup, err := prepareFixBenchmarkRepo(sourceRoot, benchmarkCase)
 	if err != nil {
@@ -181,7 +181,7 @@ func makeFixBenchmarkResult(t *testing.T, sourceRoot string, benchmarkCase fixBe
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := runtimepkg.GenerateResult{Files: make(map[string]string, len(files)), Diff: string(diff)}
+	out := runtimepkg.ExecutionResult{Files: make(map[string]string, len(files)), Diff: string(diff)}
 	for path := range files {
 		contents, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(path)))
 		if err != nil {
@@ -345,7 +345,7 @@ func runFixBenchmarkVerifier(ctx context.Context, repoRoot string, benchmarkCase
 	return strings.TrimSpace(publicOutput + "\n" + verifierOutput), nil
 }
 
-func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.GenerateResult) (bool, string) {
+func runFixBenchmarkRegressionTests(ctx context.Context, sourceRoot string, benchmarkCase fixBenchmarkCase, result runtimepkg.ExecutionResult) (bool, string) {
 	repoRoot, cleanup, err := prepareFixBenchmarkRepo(sourceRoot, benchmarkCase)
 	if err != nil {
 		return false, err.Error()
@@ -454,16 +454,16 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 
 	tests := []struct {
 		name string
-		make func(t *testing.T) runtimepkg.GenerateResult
+		make func(t *testing.T) runtimepkg.ExecutionResult
 		miss string
 	}{
-		{name: "empty", make: func(*testing.T) runtimepkg.GenerateResult { return runtimepkg.GenerateResult{} }, miss: "result"},
-		{name: "test only", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "empty", make: func(*testing.T) runtimepkg.ExecutionResult { return runtimepkg.ExecutionResult{} }, miss: "result"},
+		{name: "test only", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Test-only change.\n",
 			})
 		}, miss: "file_scope"},
-		{name: "unexpected file", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "unexpected file", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			files := map[string]string{}
 			for path, contents := range benchmarkCase.ReferenceFiles {
 				files[path] = contents
@@ -471,7 +471,7 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			files[benchmarkCase.Dir+"/README.md"] = "unrelated\n"
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, files)
 		}, miss: "file_scope"},
-		{name: "unreported diff file", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "unreported diff file", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			files := map[string]string{}
 			for path, contents := range benchmarkCase.ReferenceFiles {
 				files[path] = contents
@@ -482,18 +482,18 @@ func TestFixBenchmarkRejectsIncompleteOrUnsafeResults(t *testing.T) {
 			delete(result.Files, extra)
 			return result
 		}, miss: "diff_contract"},
-		{name: "unapplicable diff", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "unapplicable diff", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			result := makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, benchmarkCase.ReferenceFiles)
 			result.Diff = "not a diff"
 			return result
 		}, miss: "diff_contract"},
-		{name: "nondiscriminating regression test", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "nondiscriminating regression test", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[0]: benchmarkCase.ReferenceFiles[benchmarkCase.RequiredFiles[0]],
 				benchmarkCase.RequiredFiles[1]: string(baseTest) + "\n// Comment-only test change.\n",
 			})
 		}, miss: "regression_test"},
-		{name: "semantically wrong but well formed", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "semantically wrong but well formed", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			return makeFixBenchmarkResult(t, sourceRoot, benchmarkCase, map[string]string{
 				benchmarkCase.RequiredFiles[0]: `package routetable
 
@@ -525,7 +525,7 @@ func TestDefaultControlPlaneRouteTableSetsAValue(t *testing.T) {
 `,
 			})
 		}, miss: "verification"},
-		{name: "protected file", make: func(t *testing.T) runtimepkg.GenerateResult {
+		{name: "protected file", make: func(t *testing.T) runtimepkg.ExecutionResult {
 			files := map[string]string{}
 			for path, contents := range benchmarkCase.ReferenceFiles {
 				files[path] = contents

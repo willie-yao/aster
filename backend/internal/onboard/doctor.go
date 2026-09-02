@@ -402,7 +402,7 @@ func reusableDeployReference(value string) bool {
 	if len(parts) != 5 || parts[0] != "willie-yao" || parts[2] != ".github" || parts[3] != "workflows" || parts[4] != "reusable-deploy.yml" {
 		return false
 	}
-	return parts[1] == "aster" || parts[1] == "prow-ai-dashboard"
+	return parts[1] == "aster"
 }
 
 func githubExpression(value any, scope, name string) bool {
@@ -536,11 +536,6 @@ func (e doctorExtraEnv) fold(prior envTokenState) envTokenState {
 func chartReadTokenState(values doctorKubernetesValues) envTokenState {
 	if !placeholder(values.AI.GitHubReadToken) || !placeholder(values.AI.GitHubReadTokenSecretName) {
 		return envTokenPresent
-	}
-	// ai.existingSecret only reaches the fetcher when AI is on, and the chart
-	// mounts that key with optional: true.
-	if values.AI.Enabled != nil && *values.AI.Enabled && !placeholder(values.AI.ExistingSecret) {
-		return envTokenOptional
 	}
 	return envTokenMissing
 }
@@ -699,7 +694,7 @@ func checkKubernetesPullRequestEscalation(add func(string, DoctorStatus, string,
 	case envTokenMissing:
 		add(name, DoctorWarn, "no GitHub read token reaches the server", "Set ai.githubReadTokenSecretName so escalation reads changed files authenticated rather than at the anonymous 60 requests per hour limit.")
 	case envTokenOptional:
-		add(name, DoctorWarn, "the server's GitHub read token comes from an optional Secret key that may not exist", "Set ai.githubReadTokenSecretName, or confirm that ai.existingSecret carries ai.githubReadTokenSecretKey. A missing optional key silently falls back to anonymous reads.")
+		add(name, DoctorWarn, "the server's GitHub read token comes from an optional Secret key that may not exist", "Make the Secret key required or set ai.githubReadTokenSecretName. A missing optional key silently falls back to anonymous reads.")
 	default:
 		add(name, DoctorPass, "escalation has a model, pull request triage, and a GitHub read token", "")
 	}

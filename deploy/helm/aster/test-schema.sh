@@ -103,6 +103,21 @@ networkPolicy:
 VALUES
 expect_pass oauth "$tmp/oauth.yaml"
 
+for property in privateRepositories scope chatScope; do
+  cat > "$tmp/invalid-oauth-$property.yaml" <<VALUES
+server:
+  actions:
+    oauth:
+      $property: legacy
+VALUES
+  expect_fail "invalid-oauth-$property" "$tmp/invalid-oauth-$property.yaml" "$property"
+done
+
+cat > "$tmp/invalid-network-policy-peers.yaml" <<'VALUES'
+networkPolicyPeers: []
+VALUES
+expect_fail invalid-network-policy-peers "$tmp/invalid-network-policy-peers.yaml" networkPolicyPeers
+
 cat > "$tmp/flexible.yaml" <<'VALUES'
 imagePullSecrets:
   - name: fixture-pull

@@ -34,8 +34,8 @@ func LoadTraceStore(path string) (*TraceStore, error) {
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return nil, fmt.Errorf("decode trace file: %w", err)
 	}
-	if snapshot.Version > analysisTraceVersion {
-		return nil, fmt.Errorf("trace version %d is newer than supported version %d", snapshot.Version, analysisTraceVersion)
+	if snapshot.Version != analysisTraceVersion {
+		return nil, fmt.Errorf("trace version %d is unsupported; current version is %d", snapshot.Version, analysisTraceVersion)
 	}
 	store := NewTraceStore()
 	if snapshot.Engine != nil {

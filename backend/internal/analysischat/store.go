@@ -20,7 +20,6 @@ import (
 
 const (
 	stateVersion    = 4
-	createVersion   = 2
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
 	maxStateBytes   = 64 << 20
@@ -34,19 +33,18 @@ type persistedState struct {
 }
 
 type persistedSession struct {
-	View                 SessionView                       `json:"view"`
-	Owner                string                            `json:"owner"`
-	Resolved             persistedResolvedAnalysis         `json:"resolved"`
-	Turns                int                               `json:"turns"`
-	ExpiresAt            time.Time                         `json:"expires_at"`
-	CreateRequestID      string                            `json:"create_request_id"`
-	CreateRequestHash    string                            `json:"create_request_hash"`
-	CreateRequestVersion int                               `json:"create_request_version,omitempty"`
-	Requests             map[string]persistedRequest       `json:"requests,omitempty"`
-	FixSources           map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
-	Active               *persistedActiveTurn              `json:"active,omitempty"`
-	Retired              bool                              `json:"retired,omitempty"`
-	FixBaseExpiresAt     time.Time                         `json:"fix_base_expires_at,omitempty"`
+	View              SessionView                       `json:"view"`
+	Owner             string                            `json:"owner"`
+	Resolved          persistedResolvedAnalysis         `json:"resolved"`
+	Turns             int                               `json:"turns"`
+	ExpiresAt         time.Time                         `json:"expires_at"`
+	CreateRequestID   string                            `json:"create_request_id"`
+	CreateRequestHash string                            `json:"create_request_hash"`
+	Requests          map[string]persistedRequest       `json:"requests,omitempty"`
+	FixSources        map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
+	Active            *persistedActiveTurn              `json:"active,omitempty"`
+	Retired           bool                              `json:"retired,omitempty"`
+	FixBaseExpiresAt  time.Time                         `json:"fix_base_expires_at,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -246,22 +244,10 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, false, fmt.Errorf("decoding analysis chat state: %w", err)
 	}
-	migrated := false
-	if state.Version == 1 {
-		migrateStateV1(&state)
-		migrated = true
-	}
-	if state.Version == 3 {
-		migrateStateV3(&state)
-		migrated = true
-	}
-	if state.Version == 2 {
-		migrateStateV2(&state)
-		migrated = true
-	}
 	if state.Version != stateVersion {
 		return nil, false, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
+	migrated := false
 	if state.Sessions == nil {
 		state.Sessions = map[string]*persistedSession{}
 	}
@@ -272,111 +258,6 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 		migrated = true
 	}
 	return &state, migrated, nil
-}
-
-func migrateStateV1(state *persistedState) {
-	state.Version = 2
-	for _, session := range state.Sessions {
-		if session == nil {
-			continue
-		}
-		if session.View.Analysis.Scope == "" {
-			session.View.Analysis.Scope = ScopeTest
-		}
-		if session.Resolved.Ref.Scope == "" {
-			session.Resolved.Ref.Scope = ScopeTest
-		}
-		if session.CreateRequestVersion == 0 {
-			session.CreateRequestVersion = 1
-		}
-	}
-}
-
-func migrateStateV3(state *persistedState) {
-	state.Version = 2
-}
-
-func migrateStateV2(state *persistedState) {
-	for _, session := range state.Sessions {
-		if session == nil {
-			continue
-		}
-		owner := normalizeOwner(session.Owner)
-		session.Owner = owner
-		session.View.CreatedBy = owner
-		for i := range session.View.Messages {
-			message := &session.View.Messages[i]
-			if message.Role == "user" && message.Actor == "" {
-				message.Actor = owner
-			}
-		}
-		for requestID, binding := range session.FixSources {
-			if !hasFixBindingDependency(binding) {
-				binding.References = map[string]bool{"legacy:" + requestID: true}
-				session.FixSources[requestID] = binding
-			}
-		}
-		if hasFixDependency(session.FixSources) {
-			retainUntil := time.Now().UTC().Add(analysisFixReferenceTTL)
-			if session.ExpiresAt.Before(retainUntil) {
-				extendSessionExpiry(session, retainUntil)
-			}
-		}
-		for requestID, request := range session.Requests {
-			if request.Actor == "" && !request.Prepared {
-				request.Actor = owner
-				session.Requests[requestID] = request
-			}
-		}
-		if session.Active != nil && session.Active.Actor == "" {
-			session.Active.Actor = owner
-		}
-	}
-	canonical := map[AnalysisRef]string{}
-	for id, session := range state.Sessions {
-		if session == nil {
-			continue
-		}
-		previousID, ok := canonical[session.View.Analysis]
-		if !ok || sharedSessionNewer(id, session, previousID, state.Sessions[previousID]) {
-			canonical[session.View.Analysis] = id
-		}
-	}
-	for id, session := range state.Sessions {
-		if session == nil || canonical[session.View.Analysis] == id {
-			continue
-		}
-		if !hasFixDependency(session.FixSources) {
-			delete(state.Sessions, id)
-			continue
-		}
-		retireMigratedSession(session)
-	}
-	state.Version = stateVersion
-}
-
-func retireMigratedSession(session *persistedSession) {
-	session.Retired = true
-	if session.Active == nil {
-		return
-	}
-	active := session.Active
-	if session.Requests == nil {
-		session.Requests = map[string]persistedRequest{}
-	}
-	request := session.Requests[active.RequestID]
-	if request.Actor == "" {
-		request.Actor = active.Actor
-	}
-	if request.Question == "" {
-		request.Question = active.Question
-	}
-	if request.Status == requestPending {
-		request.Status = requestUnknown
-	}
-	request.UpdatedAt = active.UpdatedAt.UTC().Format(time.RFC3339)
-	session.Requests[active.RequestID] = request
-	session.Active = nil
 }
 
 func sharedSessionNewer(candidateID string, candidate *persistedSession, currentID string, current *persistedSession) bool {

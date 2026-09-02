@@ -121,7 +121,7 @@ func TestRecorderCanDisableRecentOperations(t *testing.T) {
 	}
 }
 
-func TestNewRecorderRejectsMalformedAndNewerLedgers(t *testing.T) {
+func TestNewRecorderRejectsMalformedAndNoncurrentLedgers(t *testing.T) {
 	dir := t.TempDir()
 	malformed := filepath.Join(dir, "malformed.json")
 	if err := os.WriteFile(malformed, []byte("{"), 0o600); err != nil {
@@ -130,15 +130,17 @@ func TestNewRecorderRejectsMalformedAndNewerLedgers(t *testing.T) {
 	if _, err := NewRecorder(malformed, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {
 		t.Fatal("expected malformed-ledger error")
 	}
-	newer := filepath.Join(dir, "newer.json")
-	if err := os.WriteFile(newer, []byte(`{"version":3,"days":[],"recent_operations":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewRecorder(newer, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {
-		t.Fatal("expected newer-version error")
+	for _, version := range []int{1, 3} {
+		path := filepath.Join(dir, fmt.Sprintf("version-%d.json", version))
+		if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"version":%d,"days":[],"recent_operations":[]}`, version)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewRecorder(path, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {
+			t.Fatalf("expected version %d error", version)
+		}
 	}
 	invalidCurrency := filepath.Join(dir, "invalid-currency.json")
-	if err := os.WriteFile(invalidCurrency, []byte(`{"version":1,"currency":"123","days":[],"recent_operations":[]}`), 0o600); err != nil {
+	if err := os.WriteFile(invalidCurrency, []byte(`{"version":2,"currency":"123","days":[],"recent_operations":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NewRecorder(invalidCurrency, RecorderOptions{RetentionDays: 30, RecentOperations: 10}); err == nil {

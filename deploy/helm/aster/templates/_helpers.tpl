@@ -191,8 +191,6 @@ Name of the Secret holding the AI token.
 {{- define "aster.githubReadSecret" -}}
 {{- if .Values.ai.githubReadTokenSecretName -}}
 {{- .Values.ai.githubReadTokenSecretName -}}
-{{- else if and (not .Values.ai.githubReadToken) .Values.ai.existingSecret -}}
-{{- .Values.ai.existingSecret -}}
 {{- else -}}
 {{- printf "%s-github-read" (include "aster.fullname" .) -}}
 {{- end -}}
@@ -208,7 +206,7 @@ Name of the Secret holding the AI token.
 {{- if and .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName -}}
 {{- fail "ai.githubReadToken and ai.githubReadTokenSecretName are mutually exclusive" -}}
 {{- end -}}
-{{- if and (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName .Values.ai.existingSecret) (not .Values.ai.githubReadTokenSecretKey) -}}
+{{- if and (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName) (not .Values.ai.githubReadTokenSecretKey) -}}
 {{- fail "ai.githubReadTokenSecretKey is required when a GitHub read-token Secret is configured" -}}
 {{- end -}}
 {{- $contextWindow := printf "%v" .Values.ai.contextWindowTokens -}}

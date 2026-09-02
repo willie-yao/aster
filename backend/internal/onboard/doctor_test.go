@@ -218,7 +218,7 @@ func TestDoctor_KubernetesPullRequestEscalation(t *testing.T) {
 		{name: "enabled without pull request triage", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, want: DoctorFail},
 		{name: "enabled without a read token", serverYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n", aiYAML: aiValues, pullEnabled: true, want: DoctorWarn},
 		{
-			name:        "optional read token from an existing ai secret",
+			name:        "existing ai secret does not supply a read token",
 			serverYAML:  "server:\n  pullRequestEscalation:\n    enabled: true\n",
 			aiYAML:      aiValues + "  existingSecret: shared-ai\n",
 			pullEnabled: true,
@@ -348,7 +348,7 @@ func TestDoctor_PullRequestTriageCredential(t *testing.T) {
 		{name: "empty fallback does not shadow the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: \"\"\n", want: DoctorPass},
 		{name: "last duplicate wins", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      value: ghp-test\n    - name: GITHUB_READ_TOKEN\n      value: \"\"\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
 		{name: "optional override cannot take away the chart token", values: storage + "ai:\n  enabled: false\n  githubReadTokenSecretName: gh-read\nfetcher:\n  extraEnv:\n    - name: GITHUB_READ_TOKEN\n      valueFrom:\n        secretKeyRef:\n          name: gh\n          key: token\n          optional: true\n", want: DoctorPass},
-		{name: "fallback rescues an optional preferred token", values: storage + "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n  existingSecret: shared-ai\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n", want: DoctorPass},
+		{name: "github fallback supplies a token alongside an ai secret", values: storage + "ai:\n  enabled: true\n  api: chat_completions\n  endpoint: https://model.example.test/v1/chat/completions\n  model: fixture\n  existingSecret: shared-ai\nfetcher:\n  extraEnv:\n    - name: GITHUB_TOKEN\n      value: ghp-test\n", want: DoctorPass},
 		{name: "unrelated extraEnv", values: storage + "ai:\n  enabled: false\nfetcher:\n  extraEnv:\n    - name: HTTPS_PROXY\n      value: http://proxy\n", want: DoctorWarn, detail: "reads GitHub anonymously"},
 	}
 	for _, tc := range cases {
@@ -378,9 +378,8 @@ func TestDoctor_PullRequestTriageCredential(t *testing.T) {
 	}
 }
 
-// ai.existingSecret is mounted with optional: true, so doctor cannot prove the
-// key is present and must say so rather than passing the deployment.
-func TestDoctor_PullRequestTriageExistingSecretIsUnverifiable(t *testing.T) {
+// The provider Secret does not configure GitHub reads.
+func TestDoctor_PullRequestTriageExistingSecretStillReadsAnonymously(t *testing.T) {
 	const triageProjectYAML = doctorProjectYAML + `pull_requests:
   enabled: true
 `
@@ -403,6 +402,12 @@ ai:
 	if !hasDoctorCheck(report, "pull request triage credential", DoctorWarn) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
+	for _, check := range report.Checks {
+		if check.Name == "pull request triage credential" && strings.Contains(check.Detail, "reads GitHub anonymously") {
+			return
+		}
+	}
+	t.Fatalf("anonymous-read warning missing: %+v", report.Checks)
 }
 
 // The reusable workflow always passes the Actions token to the fetch step, so
@@ -765,7 +770,6 @@ func TestNormalizeDoctorProjectDir_IsAbsolute(t *testing.T) {
 func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
 	for _, valid := range []string{
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml@main",
-		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main",
 	} {
 		if !reusableDeployReference(valid) {
 			t.Errorf("valid reference rejected: %s", valid)
@@ -773,6 +777,7 @@ func TestReusableDeployReference_RequiresExactPathAndRef(t *testing.T) {
 	}
 	for _, invalid := range []string{
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml@",
+		"willie-yao/prow-ai-dashboard/.github/workflows/reusable-deploy.yml@main",
 		"willie-yao/prow-ai-dashboard/.github/workflows/other.yml@main",
 		"./.github/workflows/reusable-deploy.yml@main",
 	} {

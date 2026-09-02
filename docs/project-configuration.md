@@ -377,12 +377,9 @@ in the model response. Usage files are private operational state and are removed
 from Pages artifacts. A currency change is rejected while retained nonzero cost
 estimates still use the previous currency.
 
-Ledger version 2 adds cache-write counts, coverage provenance, and model
-breakdowns while loading version 1 files without dropping their token or cost
-totals. Legacy days remain explicitly coverage-unknown because cache-write and
-historical model counts cannot be reconstructed. Model identifiers are stored
-only when they pass a bounded safe identifier check. Endpoints and credentials
-are never persisted.
+Ledger version 2 stores cache-write counts, coverage provenance, and model
+breakdowns. Model identifiers are stored only when they pass a bounded safe
+identifier check. Endpoints and credentials are never persisted.
 
 ## Custom skills
 

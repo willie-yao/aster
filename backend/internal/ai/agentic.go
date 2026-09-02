@@ -84,11 +84,6 @@ var ErrToolsUnsupported = errors.New("ai endpoint does not support function call
 // ErrContextHeadroom means no safe provider request could be formed after compaction.
 var ErrContextHeadroom = errors.New("agentic request exceeds context headroom")
 
-// ErrMissingArtifactCitation is retained for callers that decode older private
-// benchmark records. Current analysis publishes safe drafts without validated citations as
-// preliminary instead of returning this error.
-var ErrMissingArtifactCitation = errors.New("no validated artifact citation supports the analysis")
-
 // ErrRejectedAnalysis means no safe structured analysis was available to publish.
 var ErrRejectedAnalysis = errors.New("analysis result failed the safe publication contract")
 

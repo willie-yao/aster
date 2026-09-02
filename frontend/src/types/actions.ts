@@ -26,7 +26,7 @@ export interface ActionEligibility {
     | "already_present"
     | "recovered"
     | "more_evidence_required";
-  code?: ActionReasonCode;
+  code: ActionReasonCode;
   reason: string;
 }
 

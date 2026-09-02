@@ -457,21 +457,24 @@ if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker-unset.yaml"; then
   exit 1
 fi
 
-# ai.existingSecret may or may not carry the read key, so the chart mounts it
-# optional. An explicitly named Secret must stay required.
+# The provider Secret does not configure a GitHub read token. An explicitly
+# named read-token Secret stays required.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \
   --set ai.endpoint=https://model.example.test/v1/chat/completions \
   --set ai.model=fixture-model \
   --set ai.existingSecret=shared-ai \
   --show-only templates/worker-deployment.yaml > "$tmp/triage-worker-existing.yaml"
-grep -Fq 'optional: true' "$tmp/triage-worker-existing.yaml"
+if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker-existing.yaml"; then
+  echo 'ai.existingSecret was referenced for the read token while AI is enabled' >&2
+  exit 1
+fi
 if grep -Fq 'optional: true' "$tmp/triage-worker.yaml"; then
   echo 'an explicitly named read-token Secret was rendered optional' >&2
   exit 1
 fi
 
-# With AI off the AI Secret is never deployed, so it must not be referenced.
+# The provider Secret also remains unrelated to GitHub reads when AI is off.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=false \
   --set ai.existingSecret=shared-ai \

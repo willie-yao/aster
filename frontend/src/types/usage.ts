@@ -1,7 +1,6 @@
-// source_investigation is retained for historical records only.
 export type AIUsageFeature =
   | "failure_analysis" | "pattern_analysis" | "analysis_chat" | "issue_draft"
-  | "fix_preview" | "fix_critique" | "pr_template" | "source_investigation";
+  | "fix_preview" | "fix_critique" | "pr_template";
 
 export interface AIUsageTotals {
   operations: number; cache_hits: number; suppressed_operations?: number; cooldown_retries?: number; failures: number;
@@ -39,7 +38,7 @@ export interface AIUsageReport {
     model_requests: number; reported_requests: number; priced_reported_requests?: number;
     cache_write_reported_requests?: number; cache_write_priced_requests?: number; cache_write_unreported_requests?: number;
     invalid_usage_requests?: number; unreported_requests: number; external_unmetered_operations: number;
-    model_gateway_excluded_operations?: number; pricing_added_after_requests?: number; legacy_coverage_unknown?: boolean; aggregate_overflow?: boolean;
+    model_gateway_excluded_operations?: number; pricing_added_after_requests?: number; aggregate_overflow?: boolean;
   };
   totals: AIUsageTotals;
   daily: AIUsageDaily[];

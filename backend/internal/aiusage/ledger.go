@@ -108,11 +108,9 @@ func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		return UsageLedger{}, false, fmt.Errorf("decode usage ledger: %w", err)
 	}
-	if ledger.Version < 1 || ledger.Version > LedgerVersion {
+	if ledger.Version != LedgerVersion {
 		return UsageLedger{}, false, fmt.Errorf("usage ledger version %d is unsupported; current version is %d", ledger.Version, LedgerVersion)
 	}
-	legacyVersion := ledger.Version
-	ledger.Version = LedgerVersion
 	ledger.RetentionDays = retentionDays
 	if ledger.Days == nil {
 		ledger.Days = []DailyUsage{}
@@ -126,11 +124,9 @@ func loadLedger(path string, retentionDays int) (UsageLedger, bool, error) {
 			ledger.DedupeOperations[operation.ID] = dedupeEntry(operation)
 		}
 	}
-	if legacyVersion >= 2 {
-		for i := range ledger.Days {
-			if ledger.Days[i].Models == nil && ledger.Days[i].ModelCountsKnown {
-				ledger.Days[i].Models = map[string]UsageTotals{}
-			}
+	for i := range ledger.Days {
+		if ledger.Days[i].Models == nil && ledger.Days[i].ModelCountsKnown {
+			ledger.Days[i].Models = map[string]UsageTotals{}
 		}
 	}
 	return ledger, true, nil

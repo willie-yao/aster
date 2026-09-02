@@ -214,5 +214,5 @@ func usageFeatures(origin aiusage.Origin) []aiusage.Feature {
 	if origin == aiusage.OriginServer {
 		return []aiusage.Feature{aiusage.FeatureAnalysisChat, aiusage.FeatureIssueDraft, aiusage.FeatureFixPreview}
 	}
-	return []aiusage.Feature{aiusage.FeatureFailureAnalysis, aiusage.FeaturePatternAnalysis, aiusage.FeatureSourceInvestigation}
+	return []aiusage.Feature{aiusage.FeatureFailureAnalysis, aiusage.FeaturePatternAnalysis}
 }

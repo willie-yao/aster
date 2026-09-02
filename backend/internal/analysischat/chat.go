@@ -566,21 +566,16 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	if err != nil {
 		return SessionView{}, err
 	}
-	legacyHash, err := hashLegacyTestAnalysisRef(ref)
-	if err != nil {
-		return SessionView{}, err
-	}
 	now := s.opts.Now().UTC()
 
 	var existing SessionView
 	ctx, cancel := s.store.context()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current, migrated, err := findCreateRequest(state, owner, requestID, requestHash, legacyHash)
+		current, err := findCreateRequest(state, owner, requestID, requestHash)
 		if err != nil {
 			return changed, err
 		}
-		changed = changed || migrated
 		if current != nil {
 			existing = s.sessionView(current)
 		}
@@ -610,13 +605,12 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	}
 	expires := now.Add(s.opts.SessionTTL)
 	created := &persistedSession{
-		Owner:                owner,
-		Resolved:             persistResolved(resolved, s.sourceRepo),
-		ExpiresAt:            expires,
-		CreateRequestID:      requestID,
-		CreateRequestHash:    requestHash,
-		CreateRequestVersion: createVersion,
-		Requests:             seedRequests,
+		Owner:             owner,
+		Resolved:          persistResolved(resolved, s.sourceRepo),
+		ExpiresAt:         expires,
+		CreateRequestID:   requestID,
+		CreateRequestHash: requestHash,
+		Requests:          seedRequests,
 		View: SessionView{
 			ID:        id,
 			CreatedBy: owner,
@@ -632,11 +626,10 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	defer cancel()
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
-		current, migrated, err := findCreateRequest(state, owner, requestID, requestHash, legacyHash)
+		current, err := findCreateRequest(state, owner, requestID, requestHash)
 		if err != nil {
 			return changed, err
 		}
-		changed = changed || migrated
 		if current == nil {
 			current = s.latestSessionForAnalysis(state, resolved)
 		}
@@ -825,22 +818,17 @@ func (s *Service) sessionLimitReached(state *persistedState, owner string) bool 
 	return owned >= s.opts.MaxSessionsPerOwner
 }
 
-func findCreateRequest(state *persistedState, owner, requestID, requestHash, legacyHash string) (*persistedSession, bool, error) {
+func findCreateRequest(state *persistedState, owner, requestID, requestHash string) (*persistedSession, error) {
 	for _, current := range state.Sessions {
 		if current == nil || current.Retired || current.Owner != owner || current.CreateRequestID != requestID {
 			continue
 		}
 		if current.CreateRequestHash != requestHash {
-			if current.CreateRequestVersion == 1 && current.CreateRequestHash == legacyHash {
-				current.CreateRequestHash = requestHash
-				current.CreateRequestVersion = createVersion
-				return current, true, nil
-			}
-			return nil, false, ErrIdempotencyConflict
+			return nil, ErrIdempotencyConflict
 		}
-		return current, false, nil
+		return current, nil
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
 func normalizeRequestID(value string) (string, error) {
@@ -863,14 +851,6 @@ func hashAnalysisRef(ref AnalysisRef) (string, error) {
 		return "", fmt.Errorf("encoding analysis chat idempotency input: %w", err)
 	}
 	return hashBytes(data), nil
-}
-
-func hashLegacyTestAnalysisRef(ref AnalysisRef) (string, error) {
-	if ref.Scope != ScopeTest {
-		return "", nil
-	}
-	ref.Scope = ""
-	return hashAnalysisRef(ref)
 }
 
 func hashText(value string) string {

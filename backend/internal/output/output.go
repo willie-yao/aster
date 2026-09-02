@@ -194,27 +194,7 @@ func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, detai
 	if err := WriteSearchIndex(dir, searchIndex); err != nil {
 		errs = append(errs, fmt.Errorf("write search index: %w", err))
 	}
-	if err := removeRetiredPublicFiles(dir); err != nil {
-		errs = append(errs, fmt.Errorf("remove retired public files: %w", err))
-	}
 	return errors.Join(errs...)
-}
-
-// retiredPublicFiles are public projections no longer produced by any feature.
-// A normal refresh removes them so an upgraded deployment cannot keep serving
-// stale data.
-var retiredPublicFiles = []string{
-	"analysis_corrections.json",
-	"remediations.json",
-}
-
-func removeRetiredPublicFiles(dir string) error {
-	for _, name := range retiredPublicFiles {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove retired public file %s: %w", name, err)
-		}
-	}
-	return nil
 }
 
 func pruneJobDetails(dir string, details []models.JobDetail) error {

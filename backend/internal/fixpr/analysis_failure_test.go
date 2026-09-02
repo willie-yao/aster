@@ -287,7 +287,7 @@ func TestAnalysisGenerationFailureRetainsOnlySafeDiagnostic(t *testing.T) {
 	results := sandboxCommandResults()
 	results[0].Stdout = "private stdout"
 	results[0].Stderr = "private stderr"
-	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
+	agent := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
 		Files: map[string]string{}, CommandResults: results,
 		StdoutSummary: "No deterministic repository edit was available.\nhttps://private.example/path token=secret-value",
@@ -324,7 +324,7 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 	results := sandboxCommandResults()
 	tests := []struct {
 		name       string
-		result     runtime.GenerateResult
+		result     runtime.ExecutionResult
 		err        error
 		maxFiles   int
 		want       AnalysisFailureCategory
@@ -332,44 +332,44 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 	}{
 		{
 			name: "too broad", maxFiles: 1, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalSucceeded, BaseSHA: exactAnalysisRevision,
 				ChangedFiles: []string{"a", "b"}, Files: map[string]string{"a": "1", "b": "2"}, Diff: "diff", CommandResults: results},
 		},
 		{
 			name: "runtime", maxFiles: 2, want: AnalysisFailureRuntimeInfrastructure,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureRuntime},
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureRuntime},
 			err:    runtime.ErrUnavailable,
 		},
 		{
 			name: "provider credential", maxFiles: 2, want: AnalysisFailureProviderCredential,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureProviderCredential,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureProviderCredential,
 				CommandResults: results},
 			err: errors.New("agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403)"),
 		},
 		{
 			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureReviewScope,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureReviewScope,
 				CommandResults: results},
 			err: errors.New("agent Sandbox execution failed"),
 		},
 		{
 			name: "result contract", maxFiles: 2, want: AnalysisFailureResultContract,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, ChangedFiles: []string{"../../private runtime text"}, CommandResults: results},
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, ChangedFiles: []string{"../../private runtime text"}, CommandResults: results},
 			err:    runtime.ErrMalformedResult,
 		},
 		{
 			name: "safety", maxFiles: 2, want: AnalysisFailureSafetyIntegrity,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureSafetyIntegrity, CommandResults: results},
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureSafetyIntegrity, CommandResults: results},
 			err:    errors.New("agent Sandbox execution failed"),
 		},
 		{
 			name: "timeout", maxFiles: 2, want: AnalysisFailureTimedOut,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalTimedOut},
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalTimedOut},
 			err:    context.DeadlineExceeded,
 		},
 		{
 			name: "cancelled", maxFiles: 2, want: AnalysisFailureCancelled,
-			result: runtime.GenerateResult{TerminalState: runtime.TerminalCancelled},
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalCancelled},
 			err:    runtime.ErrCancelled,
 		},
 	}

@@ -25,7 +25,7 @@ func testGatewayProvider(endpoint, model string) modelprovider.Config {
 // fakeAgentRuntime is a stand-in AgentRuntime that returns canned results and
 // records the spec it was called with.
 type fakeAgentRuntime struct {
-	res   runtime.GenerateResult
+	res   runtime.ExecutionResult
 	err   error
 	spec  runtime.GenerateSpec
 	calls int
@@ -53,7 +53,7 @@ func TestManagerGenerateMarksModelGatewayExclusion(t *testing.T) {
 	}
 }
 
-func (f *fakeAgentRuntime) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.GenerateResult, error) {
+func (f *fakeAgentRuntime) Generate(_ context.Context, spec runtime.GenerateSpec) (runtime.ExecutionResult, error) {
 	f.calls++
 	f.spec = spec
 	return f.res, f.err
@@ -66,14 +66,14 @@ func agentGenParams(ar *AgentConfig) genParams {
 // goodAgent returns a fake agent runtime that proposes a canned single-file fix,
 // used by the Reconcile tests to drive the (only) generation path.
 func goodAgent() *fakeAgentRuntime {
-	return &fakeAgentRuntime{res: runtime.GenerateResult{
+	return &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"templates/cluster.yaml": strings.Replace(sampleFile, "StandardSSD_LRS", "Premium_LRS", 1)},
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n@@\n-  diskType: StandardSSD_LRS\n+  diskType: Premium_LRS\n",
 	}}
 }
 
 func TestGenerateWithAgent_HappyPath(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"templates/cluster.yaml": "diskType: Premium_LRS\n"},
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
@@ -126,7 +126,7 @@ func TestAgentRuntimeSpecOmitsProviderPolicyForAgentOwnedEndpoint(t *testing.T) 
 }
 
 func TestGenerateWithAgent_NoChangeIsNotFixable(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{Files: map[string]string{}}}
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{Files: map[string]string{}}}
 	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "no code change") {
 		t.Errorf("expected a not-auto-fixable error, got %v", err)
@@ -134,7 +134,7 @@ func TestGenerateWithAgent_NoChangeIsNotFixable(t *testing.T) {
 }
 
 func TestGenerateWithAgent_RejectsTooManyFiles(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{Files: map[string]string{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{Files: map[string]string{
 		"a": "1", "b": "2", "c": "3", "d": "4",
 	}}}
 	gp := agentGenParams(&AgentConfig{Runtime: fa}) // maxFiles 3
@@ -146,7 +146,7 @@ func TestGenerateWithAgent_RejectsTooManyFiles(t *testing.T) {
 
 func TestGenerateWithAgent_ValidationFailureIsOneShotAndNotActionable(t *testing.T) {
 	fa := &fakeAgentRuntime{
-		res: runtime.GenerateResult{TerminalState: runtime.TerminalFailed, FailureReason: "validation command 1 failed"},
+		res: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureReason: "validation command 1 failed"},
 		err: errors.New("validation command 1 failed"),
 	}
 	gp := agentGenParams(&AgentConfig{Runtime: fa})
@@ -165,7 +165,7 @@ func TestGenerateWithAgentRejectsCompletedFailedCommandResults(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	results := sandboxCommandResults()
 	results[0].ExitCode = 1
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: "ref", Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff", CommandResults: results,
 	}}
 	reviewer := &fakeCompleter{}
@@ -206,7 +206,7 @@ func (e errWrap) Error() string { return "agent: " + e.err.Error() }
 func (e errWrap) Unwrap() error { return e.err }
 
 func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
 	}}
 	rev := &fakeCompleter{} // empty critique -> approved
@@ -224,7 +224,7 @@ func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
 }
 
 func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"a.yaml": "still wrong\n"}, Diff: "diff",
 	}}
 	rev := &fakeCompleter{critique: `{"issues": ["wrong value"]}`}
@@ -243,7 +243,7 @@ func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
 }
 
 func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
 	}}
 	rev := &fakeCompleter{critiqueErr: errors.New("review endpoint down")}
@@ -257,7 +257,7 @@ func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
 }
 
 func TestGenerateBuildWithAgentPassesRuntimeIdentity(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{Files: map[string]string{"a": "b"}, Diff: "diff"}}
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{Files: map[string]string{"a": "b"}, Diff: "diff"}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
 	gp := agentGenParams(&AgentConfig{Runtime: fa, ExecutionID: "build-request", WorkObserver: observer})
 	_, err := generateBuildWithAgent(context.Background(), gp, BuildFailure{RootCause: "failed", SuggestedFix: "fix it", SourceFiles: []string{"a"}})
@@ -274,7 +274,7 @@ func TestGenerateBuildWithAgentRejectsCompletedFailedCommandResults(t *testing.T
 	results := sandboxCommandResults()
 	results[0].TimedOut = true
 	results[0].ExitCode = -1
-	fa := &fakeAgentRuntime{res: runtime.GenerateResult{
+	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: "ref", Files: map[string]string{"a": "b"}, Diff: "diff", CommandResults: results,
 	}}
 	reviewer := &fakeCompleter{}

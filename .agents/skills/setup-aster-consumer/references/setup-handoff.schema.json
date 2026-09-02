@@ -22,10 +22,7 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": [
-        1,
-        2
-      ]
+      "const": 2
     },
     "plan_digest": {
       "$ref": "#/$defs/sha256"
@@ -545,38 +542,6 @@
     }
   },
   "allOf": [
-    {
-      "if": {
-        "properties": {
-          "schema_version": {
-            "const": 1
-          }
-        },
-        "required": [
-          "schema_version"
-        ]
-      },
-      "then": {
-        "properties": {
-          "deployment": {
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "k8s_storage_class"
-                  ]
-                },
-                {
-                  "required": [
-                    "k8s_existing_claim"
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      }
-    },
     {
       "if": {
         "properties": {

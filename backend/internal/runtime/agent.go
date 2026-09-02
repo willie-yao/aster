@@ -113,7 +113,7 @@ type GenerateTelemetry struct {
 // edits it, returning the changed files. Each backend defines its own process
 // isolation and tears down the workspace before returning.
 type AgentRuntime interface {
-	Generate(ctx context.Context, spec GenerateSpec) (GenerateResult, error)
+	Generate(ctx context.Context, spec GenerateSpec) (ExecutionResult, error)
 }
 
 // ManagedAgentRuntime can stop one exact external execution identity.

@@ -30,7 +30,7 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	failure := validAnalysisFailure()
 	files := map[string]string{"controllers/cluster_controller.go": "package controllers\n"}
 	diff := "diff --git a/controllers/cluster_controller.go b/controllers/cluster_controller.go\n"
-	agent := &fakeAgentRuntime{res: runtime.GenerateResult{
+	agent := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: failure.GenerationBaseRevision, Files: files, Diff: diff,
 		CommandResults: sandboxCommandResults(),
 	}}
@@ -106,7 +106,7 @@ func TestAgentSandboxCommandResultsFailClosed(t *testing.T) {
 			gotResults := cloneCommandResults(valid)
 			testCase.edit(&gotCommands, &gotResults)
 			agent := &AgentConfig{RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: gotCommands}}
-			_, err := executionVerificationForAgent(agent, runtime.GenerateResult{BaseSHA: strings.Repeat("a", 40), CommandResults: gotResults}, strings.Repeat("a", 40))
+			_, err := executionVerificationForAgent(agent, runtime.ExecutionResult{BaseSHA: strings.Repeat("a", 40), CommandResults: gotResults}, strings.Repeat("a", 40))
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Fatalf("error=%v want=%q", err, testCase.want)
 			}

@@ -1,9 +1,11 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +72,20 @@ func TestLoadAnalysisTraceStoreRestoresRetainedLedger(t *testing.T) {
 	if got := len(loadAnalysisTraceStore(filepath.Join(dir, "missing.json")).Snapshot().Traces); got != 0 {
 		t.Fatalf("missing snapshot restored %d traces, want 0", got)
 	}
+	if err := statefile.WriteJSON(path, ai.AnalysisTraceFile{Version: 2, Traces: []ai.AnalysisTrace{retained}}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	if got := len(loadAnalysisTraceStore(path).Snapshot().Traces); got != 0 {
+		t.Fatalf("unsupported snapshot restored %d traces, want 0", got)
+	}
+	if !strings.Contains(logs.String(), "failed to load retained AI traces: trace version 2 is unsupported") {
+		t.Fatalf("unsupported snapshot log = %q", logs.String())
+	}
+	logs.Reset()
 	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}

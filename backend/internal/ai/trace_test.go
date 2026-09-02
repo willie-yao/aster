@@ -194,6 +194,18 @@ func TestTraceStoreSaveUsesPrivateSchema(t *testing.T) {
 	}
 }
 
+func TestLoadTraceStoreRejectsNoncurrentVersions(t *testing.T) {
+	for _, version := range []int{0, analysisTraceVersion + 1} {
+		path := filepath.Join(t.TempDir(), "ai_traces.json")
+		if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"version":%d,"traces":[]}`, version)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadTraceStore(path); err == nil || !strings.Contains(err.Error(), "is unsupported") {
+			t.Fatalf("version %d error = %v", version, err)
+		}
+	}
+}
+
 func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	store := NewTraceStore()
 	for i := 0; i < analysisTraceMaxTraces+2; i++ {

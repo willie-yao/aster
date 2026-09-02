@@ -921,9 +921,6 @@ func benchmarkOutcomeForAnalysisError(err error) (benchmarkOutcome, error) {
 	if err == nil {
 		return benchmarkOutcomeUsable, nil
 	}
-	if errors.Is(err, ai.ErrMissingArtifactCitation) {
-		return benchmarkOutcomeCitationPolicyUnavailable, nil
-	}
 	return benchmarkOutcomeUnknown, err
 }
 
@@ -935,7 +932,6 @@ func TestBenchmarkOutcomeForAnalysisError(t *testing.T) {
 		ok      bool
 	}{
 		{name: "usable", outcome: benchmarkOutcomeUsable, ok: true},
-		{name: "citation policy", err: fmt.Errorf("wrapped: %w", ai.ErrMissingArtifactCitation), outcome: benchmarkOutcomeCitationPolicyUnavailable, ok: true},
 		{name: "provider", err: errors.New("provider 503"), outcome: benchmarkOutcomeUnknown},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: benchmarkOutcomeUnknown},
 		{name: "tools", err: ai.ErrToolsUnsupported, outcome: benchmarkOutcomeUnknown},

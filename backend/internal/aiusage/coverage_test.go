@@ -122,31 +122,43 @@ func TestModelProvenanceRejectsEndpointLikeValues(t *testing.T) {
 	}
 }
 
-func TestLegacyVersionOneLedgerMigratesWithoutDataLoss(t *testing.T) {
+func TestVersionOneLedgerIsRejectedAndCurrentModelMapIsRepaired(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "usage.json")
-	legacy := UsageLedger{
+	old := UsageLedger{
 		Version: 1, Currency: "USD", RetentionDays: 90,
-		Days: []DailyUsage{{
-			Date: "2026-08-10", Totals: UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 25, EstimatedCostNanos: 100},
-			Features: map[Feature]UsageTotals{FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 25, EstimatedCostNanos: 100}},
-		}},
-		RecentOperations: []OperationUsage{{ID: "0011223344556677", LogicalID: "0011223344556677", Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now.Format(time.RFC3339Nano), CompletedAt: now.Format(time.RFC3339Nano), Outcome: OutcomeSuccess, ModelRequests: 1, ReportedRequests: 1, InputTokens: 25, EstimatedCostNanos: 100, Currency: "USD", PricingHash: "legacy"}},
+		Days: []DailyUsage{}, RecentOperations: []OperationUsage{},
 	}
-	data, err := json.Marshal(legacy)
+	data, err := json.Marshal(old)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := NewRecorder(path, RecorderOptions{RetentionDays: 90, RecentOperations: 10, Now: func() time.Time { return now }}); err == nil {
+		t.Fatal("version 1 ledger was accepted")
+	}
+	current := UsageLedger{Version: LedgerVersion, Days: []DailyUsage{{Date: "2026-08-10", ModelCountsKnown: true}}, RecentOperations: []OperationUsage{}}
+	data, err = json.Marshal(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, existed, err := loadLedger(path, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !existed || loaded.Version != LedgerVersion || len(loaded.Days) != 1 || loaded.Days[0].Models == nil {
+		t.Fatalf("loaded current ledger = %+v existed=%t", loaded, existed)
+	}
 	recorder, err := NewRecorder(path, RecorderOptions{RetentionDays: 90, RecentOperations: 10, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := recorder.Snapshot()
-	if got.Version != LedgerVersion || len(got.Days) != 1 || got.Days[0].Totals.InputTokens != 25 || got.Days[0].Totals.EstimatedCostNanos != 100 ||
-		got.Days[0].CoverageCountsKnown || got.Days[0].ModelCountsKnown || len(got.RecentOperations) != 1 {
-		t.Fatalf("migrated ledger = %+v", got)
+	if recorder.ledger.Days[0].Models == nil {
+		t.Fatalf("recorder current ledger = %+v", recorder.ledger)
 	}
 }

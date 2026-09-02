@@ -19,12 +19,12 @@ import (
 
 func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	dataDir := t.TempDir()
-	fetcher := aiusage.UsageLedger{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+	fetcher := aiusage.UsageLedger{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
 		Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 100, OutputTokens: 10, EstimatedCostNanos: 1200},
 		Features:      map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1, InputTokens: 100, OutputTokens: 10, EstimatedCostNanos: 1200}},
 		PricingHashes: []string{"price-a"},
 	}}, RecentOperations: []aiusage.OperationUsage{{ID: "1", Feature: aiusage.FeatureFailureAnalysis, CompletedAt: "2026-08-02T12:00:00Z"}}}
-	serverLedger := aiusage.UsageLedger{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+	serverLedger := aiusage.UsageLedger{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
 		Date: "2026-08-03", Totals: aiusage.UsageTotals{Operations: 1, ExternalUnmeteredOperations: 1, ModelRequests: 1, UnreportedRequests: 1},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureAnalysisChat: {Operations: 1, ExternalUnmeteredOperations: 1, ModelRequests: 1, UnreportedRequests: 1}},
 	}}, RecentOperations: []aiusage.OperationUsage{{ID: "2", Feature: aiusage.FeatureAnalysisChat, CompletedAt: "2026-08-03T12:00:00Z"}}}
@@ -105,6 +105,16 @@ func TestAIUsageHandlerAuthenticatedMergedAndFiltered(t *testing.T) {
 	}
 	if !caps.Features.AIUsage {
 		t.Fatalf("capabilities = %+v", caps)
+	}
+}
+
+func TestReadUsageLedgerRejectsNoncurrentVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), output.AIUsageFetcherFilename)
+	if err := statefile.WritePrivateJSONDurable(path, aiusage.UsageLedger{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readUsageLedger(path); err == nil || !strings.Contains(err.Error(), "usage version 1 is unsupported") {
+		t.Fatalf("read error = %v", err)
 	}
 }
 
@@ -209,8 +219,8 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
 	ledgers := []aiusage.UsageLedger{
-		{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}, aiusage.FeatureAnalysisChat: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}}, PricingHashes: []string{"failure-price"}}}, RecentOperations: []aiusage.OperationUsage{{ID: "chat", Feature: aiusage.FeatureAnalysisChat, Currency: "USD", PricingHash: "chat-price", CompletedAt: "2026-08-02T12:00:00Z"}}},
-		{Version: 1, Currency: "EUR", Days: []aiusage.DailyUsage{{Date: "2026-07-01", Totals: aiusage.UsageTotals{Operations: 1}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1}}, PricingHashes: []string{"eur-price"}}}},
+		{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{Date: "2026-08-02", Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}, aiusage.FeatureAnalysisChat: {Operations: 1, ModelRequests: 1, ReportedRequests: 1}}, PricingHashes: []string{"failure-price"}}}, RecentOperations: []aiusage.OperationUsage{{ID: "chat", Feature: aiusage.FeatureAnalysisChat, Currency: "USD", PricingHash: "chat-price", CompletedAt: "2026-08-02T12:00:00Z"}}},
+		{Version: aiusage.LedgerVersion, Currency: "EUR", Days: []aiusage.DailyUsage{{Date: "2026-07-01", Totals: aiusage.UsageTotals{Operations: 1}, Features: map[aiusage.Feature]aiusage.UsageTotals{aiusage.FeatureFailureAnalysis: {Operations: 1}}, PricingHashes: []string{"eur-price"}}}},
 	}
 	report := buildUsageReport(ledgers, start, end, map[aiusage.Feature]bool{aiusage.FeatureAnalysisChat: true}, end, false)
 	if report.Currency != "USD" || report.MixedCurrency || report.MixedPricing {
@@ -218,10 +228,10 @@ func TestBuildUsageReportScopesProvenanceToFilters(t *testing.T) {
 	}
 }
 
-func TestBuildUsageReportMarksFilteredLegacyPricingUnknown(t *testing.T) {
+func TestBuildUsageReportMarksFilteredPricingCountsUnknown(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{{
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{{
 		Date:   "2026-08-02",
 		Totals: aiusage.UsageTotals{Operations: 2, ModelRequests: 2, ReportedRequests: 2},
 		Features: map[aiusage.Feature]aiusage.UsageTotals{
@@ -315,11 +325,11 @@ func TestBuildUsageReportRetainsPricingCoverageCounts(t *testing.T) {
 	}
 }
 
-func TestBuildUsageReportMarksMixedLegacyPricingUnknown(t *testing.T) {
+func TestBuildUsageReportMarksMixedPricingCountsUnknown(t *testing.T) {
 	start, _ := time.Parse(time.DateOnly, "2026-08-01")
 	end, _ := time.Parse(time.DateOnly, "2026-08-03")
-	report := buildUsageReport([]aiusage.UsageLedger{{Version: 1, Currency: "USD", Days: []aiusage.DailyUsage{
-		{Date: "2026-08-01", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"legacy-price"}},
+	report := buildUsageReport([]aiusage.UsageLedger{{Version: aiusage.LedgerVersion, Currency: "USD", Days: []aiusage.DailyUsage{
+		{Date: "2026-08-01", Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"retained-price"}},
 		{Date: "2026-08-02", PricingCountsKnown: true, Totals: aiusage.UsageTotals{Operations: 1, ModelRequests: 1, ReportedRequests: 1, PricedReportedRequests: 1, EstimatedCostNanos: 100}, PricingHashes: []string{"current-price"}},
 	}}}, start, end, nil, end, false)
 	if report.PricingCoverage != "unknown" || report.RangePriced {

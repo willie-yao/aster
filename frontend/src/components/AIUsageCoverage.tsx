@@ -49,7 +49,7 @@ function cacheWriteCoverage(data: AIUsageReport): string {
   const reported = data.coverage.cache_write_reported_requests;
   const priced = data.coverage.cache_write_priced_requests;
   const unreported = data.coverage.cache_write_unreported_requests;
-  if (reported === undefined && priced === undefined && unreported === undefined) return "Unavailable for legacy records";
+  if (reported === undefined && priced === undefined && unreported === undefined) return "Unavailable";
   if ((reported ?? 0) === 0 && (unreported ?? 0) === 0) return "No cache-write usage reported";
   const pricedText = `${(priced ?? 0).toLocaleString()} of ${(reported ?? 0).toLocaleString()} reported writes priced`;
   return (unreported ?? 0) > 0 ? `${pricedText} · ${unreported?.toLocaleString()} requests without cache-write usage` : pricedText;
@@ -60,7 +60,7 @@ function coverageSummary(data: AIUsageReport): string {
     case "complete":
       return "Every model request reported provider usage, and every reported cache-write token was priced.";
     case "partial":
-      return "Some model requests, cache writes, legacy records, or external runtimes are outside complete billing coverage.";
+      return "Some model requests, cache writes, or external runtimes are outside complete billing coverage.";
     case "unavailable":
       return "No provider request supplied complete usable accounting for this selection.";
   }
@@ -191,7 +191,6 @@ export function AIUsageCoverage({ data, partialDay }: { data: AIUsageReport; par
         <CoverageItem label="Model gateway excluded">{(coverage.model_gateway_excluded_operations ?? 0).toLocaleString()} operations</CoverageItem>
         <CoverageItem label="Invalid provider usage">{(coverage.invalid_usage_requests ?? 0).toLocaleString()} requests</CoverageItem>
         <CoverageItem label="Pricing added later">{(coverage.pricing_added_after_requests ?? 0).toLocaleString()} requests</CoverageItem>
-        <CoverageItem label="Legacy coverage">{coverage.legacy_coverage_unknown ? "Unknown for some records" : "Known"}</CoverageItem>
         <CoverageItem label="Current UTC day">{partialDay ? `${partialDay} is partial` : "No partial day in selection"}</CoverageItem>
       </Box>
 

@@ -5,7 +5,6 @@ import {
   buildActionEligibilityHint,
   eligibilityForCode,
   eligibilityForState,
-  normalizeActionEligibility,
   patternActionEligibilityHint,
   patternResolvable,
   patternDraftable,
@@ -103,10 +102,9 @@ test("pattern drafting stays independent of dismissal", () => {
   assert.equal(patternDraftable(legacy, { state: "retained", evidence_available: false }), false);
 });
 
-test("legacy eligibility payloads derive a compatible reason code", () => {
-  const legacy = normalizeActionEligibility({ state: "investigation_required", reason: "legacy reason" });
-  assert.equal(legacy.code, "investigation_required");
-  assert.equal(legacy.reason, "legacy reason");
+test("action eligibility titles use the required reason code", () => {
+  const eligibility = { state: "more_evidence_required" as const, code: "investigation_required" as const, reason: "Investigate" };
+  assert.equal(actionEligibilityTitle(eligibility), "Investigation required");
 });
 
 test("pattern dismissal never depends on the causal-group classification", () => {

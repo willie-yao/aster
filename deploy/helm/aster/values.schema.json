@@ -57,14 +57,6 @@
         "additionalProperties": true
       }
     },
-    "networkPolicyPeers": {
-      "type": "array",
-      "description": "Legacy networking.k8s.io/v1 NetworkPolicy peers.",
-      "items": {
-        "type": "object",
-        "additionalProperties": true
-      }
-    },
     "image": {
       "type": "object",
       "description": "Container image configuration.",
@@ -935,21 +927,9 @@
                   "type": "string",
                   "description": "Inline bot token for GitHub writes. Prefer existingSecret."
                 },
-                "privateRepositories": {
-                  "type": "boolean",
-                  "description": "Deprecated OAuth repository access switch. Remove this field and grant access to botToken instead."
-                },
                 "existingSecret": {
                   "type": "string",
                   "description": "Existing Secret containing OAuth credentials and BOT_TOKEN when actions are enabled."
-                },
-                "scope": {
-                  "type": "string",
-                  "description": "Deprecated OAuth scope override. OAuth now uses read:user and botToken performs writes."
-                },
-                "chatScope": {
-                  "type": "string",
-                  "description": "Deprecated chat OAuth scope override. OAuth now uses read:user and botToken performs writes."
                 }
               },
               "additionalProperties": false,

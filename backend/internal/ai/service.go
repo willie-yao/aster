@@ -565,11 +565,6 @@ func (s *Service) agenticCacheKey(jobID, buildID, testName, failureMessage strin
 	return AgenticCacheKeyForGeneration(s.module.Name(), s.cacheGeneration, jobID, buildID, testName, failureMessage)
 }
 
-// AgenticCacheKey returns the stable per-failure cache key.
-func AgenticCacheKey(moduleName, jobID, buildID, testName, failureMessage string) string {
-	return AgenticCacheKeyForGeneration(moduleName, "", jobID, buildID, testName, failureMessage)
-}
-
 // AgenticCacheKeyForGeneration returns the generation-scoped per-failure key.
 func AgenticCacheKeyForGeneration(moduleName, generation, jobID, buildID, testName, failureMessage string) string {
 	hash := failureHash(testName, failureMessage)

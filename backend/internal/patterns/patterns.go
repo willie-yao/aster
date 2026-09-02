@@ -296,15 +296,6 @@ func applyRemediationVerification(ctx context.Context, analyzer Analyzer, patter
 	pattern.RemediationVerification = &verification
 }
 
-// AssignIDs gives every pattern its stable frontend and actions identifier.
-func AssignIDs(details []models.JobDetail) {
-	for i := range details {
-		for j := range details[i].PatternAnalyses {
-			models.AssignPatternIdentity(&details[i].PatternAnalyses[j])
-		}
-	}
-}
-
 // CollectRecurring gathers systemic verdicts, ordered by confidence and span.
 func CollectRecurring(details []models.JobDetail) []models.PatternAnalysis {
 	var out []models.PatternAnalysis

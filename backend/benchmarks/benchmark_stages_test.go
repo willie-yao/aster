@@ -696,7 +696,7 @@ func TestBenchmarkTrialStatus(t *testing.T) {
 	}{
 		{name: "valid", outcome: benchmarkOutcomeUsable, result: valid, want: "valid_result"},
 		{name: "no result", outcome: benchmarkOutcomeUsable, want: "no_result"},
-		{name: "invalid", outcome: benchmarkOutcomeCitationPolicyUnavailable, err: ai.ErrMissingArtifactCitation, want: "invalid_result"},
+		{name: "invalid", outcome: benchmarkOutcomeCitationPolicyUnavailable, err: errors.New("analysis unavailable"), want: "invalid_result"},
 		{name: "contract warning", outcome: benchmarkOutcomeUsable, result: valid, trace: contract, want: "valid_result"},
 		{name: "rejected", outcome: benchmarkOutcomeUnknown, err: ai.ErrRejectedAnalysis, want: "invalid_result"},
 		{name: "timeout", outcome: benchmarkOutcomeUnknown, err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), want: "timeout"},

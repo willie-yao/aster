@@ -100,7 +100,7 @@ func LoadState(path, repo string) *State {
 		log.Printf("Warning: failed to parse pull request comment state: %v", err)
 		return fresh
 	}
-	if s.Repo != "" && s.Repo != repo {
+	if s.Repo != repo {
 		log.Printf("pull request comments: target repo changed (%s -> %s); starting state fresh", s.Repo, repo)
 		return fresh
 	}

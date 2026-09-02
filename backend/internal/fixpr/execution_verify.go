@@ -16,7 +16,7 @@ type ExecutionVerification struct {
 	AllowFailures bool                       `json:"allow_failures,omitempty"`
 }
 
-func executionVerificationForAgent(agent *AgentConfig, result runtime.GenerateResult, expectedBaseSHA string) (*ExecutionVerification, error) {
+func executionVerificationForAgent(agent *AgentConfig, result runtime.ExecutionResult, expectedBaseSHA string) (*ExecutionVerification, error) {
 	if agent == nil || !agent.RequireCommandResults {
 		return nil, nil
 	}
@@ -34,7 +34,7 @@ func executionVerificationForAgent(agent *AgentConfig, result runtime.GenerateRe
 	return verification, nil
 }
 
-func executionVerificationForAnalysisAgent(agent *AgentConfig, result runtime.GenerateResult, expectedBaseSHA string) (*ExecutionVerification, error) {
+func executionVerificationForAnalysisAgent(agent *AgentConfig, result runtime.ExecutionResult, expectedBaseSHA string) (*ExecutionVerification, error) {
 	if agent == nil || !agent.RequireCommandResults {
 		return nil, nil
 	}
