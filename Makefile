@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e install-golangci-lint lint fmt tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick snapshot-data \
        fe-install dev dev-mock mock-server fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-mock clean-all help
@@ -11,6 +11,8 @@ PROJECT_DIR ?= configs/example
 # Container image coordinates for `make image`.
 IMAGE ?= ghcr.io/willie-yao/aster
 VERSION ?= dev
+GOLANGCI_LINT_VERSION := v2.12.2
+GOLANGCI_LINT := $(CURDIR)/.bin/golangci-lint
 
 # Host and port the mock API server listens on, and the origin the Vite proxy
 # forwards to. Loopback by default: the mock server grants admin to any caller.
@@ -48,7 +50,7 @@ serve: build-server
 # static build, so rebuild to pick up frontend changes. Override PROJECT_DIR to
 # resolve issue/fix repos.
 dev-actions: build-server fe-build
-	AUTH_MODE=dev ACTIONS_ENABLED=1 TRUSTED_LOCAL_FIX_RUNTIME=1 BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
+	AUTH_MODE=dev ACTIONS_ENABLED=1 BOT_TOKEN=$${BOT_TOKEN:-dev-token} ./bin/server \
 		-data-dir=frontend/public/data \
 		-static-dir=frontend/dist \
 		-project-dir=$(PROJECT_DIR)
@@ -79,9 +81,16 @@ e2e:
 	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationE2E$$' -count=1 -v
 	cd backend && go test ./internal/fixpr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
 
-# Run Go linter (requires golangci-lint)
-lint:
-	cd backend && golangci-lint run ./...
+# Install the pinned Go linter.
+install-golangci-lint: $(GOLANGCI_LINT)
+
+$(GOLANGCI_LINT):
+	mkdir -p $(CURDIR)/.bin
+	GOBIN=$(CURDIR)/.bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+# Run the pinned Go linter.
+lint: install-golangci-lint
+	cd backend && GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(GOLANGCI_LINT) run ./...
 
 # Format Go code
 fmt:

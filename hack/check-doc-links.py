@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,15 +28,30 @@ HTML_ANCHOR = re.compile(r"<a\s+[^>]*(?:id|name)\s*=\s*[\"']([^\"']+)[\"']", re.
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$")
 INLINE_CODE = re.compile(r"`+([^`]*)`+")
 MD_LINK_TEXT = re.compile(r"\[([^\]]*)\]\([^)]*\)")
-SKIP_DIRS = frozenset({".git", "node_modules", "dist", "build", "vendor", "coverage"})
 EXTERNAL = ("http://", "https://", "mailto:", "tel:", "ftp://", "//")
 
 
 def markdown_files(root: Path) -> list[Path]:
+    base = root.resolve()
+    repository = Path(
+        subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+    )
+    output = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--full-name", "-z", "--", "*.md"],
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
     return sorted(
         path
-        for path in root.rglob("*.md")
-        if not SKIP_DIRS.intersection(path.relative_to(root).parts)
+        for relative in output.split(b"\0")
+        if relative
+        for path in [repository / relative.decode("utf-8")]
+        if path.is_file() and path.resolve().is_relative_to(base)
     )
 
 
@@ -99,6 +115,7 @@ def links(text: str) -> list[str]:
 
 
 def check(root: Path) -> list[str]:
+    root = root.resolve()
     errors: list[str] = []
     cache: dict[Path, set[str]] = {}
     base = root.resolve()
@@ -169,21 +186,40 @@ def self_test() -> None:
         ("directory target", {"a.md": "[x](sub)", "sub/b.md": "# B"}, 0),
         ("non-markdown target skips anchors", {"a.md": "[x](s.yaml#L3)", "s.yaml": "k: v"}, 0),
         ("uppercase anchor", {"a.md": "[x](b.md#Some-Heading)", "b.md": "## Some Heading"}, 0),
-        ("skipped directory", {"node_modules/a.md": "[x](nope.md)"}, 0),
+        (
+            "skipped directory",
+            {
+                ".gitignore": "frontend/node_modules/\n",
+                "frontend/node_modules/a.md": "[x](nope.md)",
+            },
+            0,
+        ),
     )
 
     for name, files, expected, *scope in cases:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
             for relative, content in files.items():
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content)
+            subprocess.run(["git", "-C", str(root), "add", "--all"], check=True)
             errors = check(root / scope[0] if scope else root)
             if len(errors) != expected:
                 raise AssertionError(f"{name}: expected {expected} error(s), got {errors}")
 
-    print(f"{len(cases)} documentation link scenarios passed")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+        (root / "tracked.md").write_text("# Tracked")
+        subprocess.run(["git", "-C", str(root), "add", "tracked.md"], check=True)
+        (root / "untracked.md").write_text("[missing](missing.md)")
+        errors = check(root)
+        if errors:
+            raise AssertionError(f"untracked Markdown ignored: got {errors}")
+
+    print(f"{len(cases) + 1} documentation link scenarios passed")
 
 
 def main() -> int:

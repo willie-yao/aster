@@ -14,8 +14,9 @@ cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
 CI runs build, test, and vet for the main backend module plus frontend type
-check, lint, and build. It does not enter the separate benchmark module. CI does
-not run `staticcheck`, so run it locally for backend changes.
+check, lint, and build. A benchmark-scoped job checks that the separate module
+is tidy and passes vet when benchmark files change. CI does not run
+`staticcheck`, so run it locally for backend changes.
 
 Check Go formatting with:
 
@@ -74,8 +75,9 @@ additional fixture trees.
 ## AI quality benchmark
 
 The opt-in benchmarks live in a separate Go module at `backend/benchmarks`.
-The main module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do
-not compile it. Live cases remain gated behind their own `RUN_*` or `BENCH_*`
+The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not
+compile it. CI checks its module metadata and vet result when benchmark files
+change. Live cases remain gated behind their own `RUN_*` or `BENCH_*`
 environment variable. Provider-free harness tests can be run directly with
 `go -C backend/benchmarks test ./... -count=1`.
 

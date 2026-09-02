@@ -13,6 +13,7 @@ import tempfile
 
 CLASSES = (
     "backend",
+    "benchmarks",
     "frontend",
     "helm_static",
     "platform_kind",
@@ -233,6 +234,11 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
                 result[name] = True
             matched = True
 
+        if under(path, "backend/benchmarks"):
+            result["benchmarks"] = True
+            matched = True
+            continue
+
         if under(path, "backend"):
             result["backend"] = True
             matched = True
@@ -350,6 +356,11 @@ def self_test() -> None:
         ("changelog index", ["CHANGELOG.md"], {"documentation"}),
         ("documentation link check", ["hack/check-doc-links.py"], {"documentation"}),
         (".gitattributes release contract", [".gitattributes"], set(CLASSES)),
+        (
+            "benchmark module",
+            ["backend/benchmarks/benchmark_test.go"],
+            {"benchmarks"},
+        ),
         (
             "frontend",
             ["frontend/src/App.tsx"],

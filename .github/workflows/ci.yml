@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.classify.outputs.backend }}
+      benchmarks: ${{ steps.classify.outputs.benchmarks }}
       frontend: ${{ steps.classify.outputs.frontend }}
       helm_static: ${{ steps.classify.outputs.helm_static }}
       platform_kind: ${{ steps.classify.outputs.platform_kind }}
@@ -93,6 +94,7 @@ jobs:
       - name: Summarize classification
         env:
           BACKEND: ${{ steps.classify.outputs.backend }}
+          BENCHMARKS: ${{ steps.classify.outputs.benchmarks }}
           FRONTEND: ${{ steps.classify.outputs.frontend }}
           HELM_STATIC: ${{ steps.classify.outputs.helm_static }}
           PLATFORM_KIND: ${{ steps.classify.outputs.platform_kind }}
@@ -107,6 +109,7 @@ jobs:
             echo '| Class | Run |'
             echo '| --- | --- |'
             echo "| Backend | $BACKEND |"
+            echo "| Benchmarks | $BENCHMARKS |"
             echo "| Frontend | $FRONTEND |"
             echo "| Helm/platform static | $HELM_STATIC |"
             echo "| Platform kind lifecycle | $PLATFORM_KIND |"
@@ -130,6 +133,8 @@ jobs:
         run: make check-repo-map
       - name: Test release CLI assets
         run: bash hack/test-release-cli-assets.sh
+      - name: Lint
+        run: make lint
       - name: Build
         working-directory: backend
         run: go build ./...
@@ -138,6 +143,23 @@ jobs:
         run: go test ./... -count=1
       - name: Vet
         working-directory: backend
+        run: go vet ./...
+
+  benchmarks:
+    needs: changes
+    if: needs.changes.outputs.benchmarks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/benchmarks/go.mod
+          cache-dependency-path: backend/benchmarks/go.sum
+      - name: Check module tidy
+        working-directory: backend/benchmarks
+        run: go mod tidy -diff
+      - name: Vet
+        working-directory: backend/benchmarks
         run: go vet ./...
 
   frontend:
