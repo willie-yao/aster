@@ -4,28 +4,36 @@ Aster supports OpenAI-compatible Chat Completions and Responses over HTTPS. The
 selected endpoint and model must implement function calling. There is no default
 provider and no tools-free fallback.
 
-## Configure the API, endpoint, and model
+## Configure provider coordinates and project behavior
 
-Portable provider coordinates live under `ai` in `project.yaml`:
+API, endpoint, model, and cache generation are deployment-owned. Direct
+commands read `AI_API`, `AI_ENDPOINT`, `AI_MODEL`, `AI_CACHE_GENERATION`, and
+`AI_TOKEN`. `AI_API` defaults to `chat_completions`; endpoint and model are
+required when AI is enabled. Do not put `api`, `endpoint`, `model`, or
+`cache_generation` under `ai` in `project.yaml`; strict decoding rejects them.
+
+Project-owned provider behavior and analysis policy remain under `ai` in
+`project.yaml`. This includes `headers`, `service_tier`, `agentic`, `critique`,
+and `usage`:
 
 ```yaml
 ai:
-  api: chat_completions       # or responses
-  endpoint: https://provider.example/v1/chat/completions
-  model: provider-model-id
-  headers:                    # optional non-secret headers
+  service_tier: flex            # optional, Responses on api.openai.com only
+  headers:                      # optional non-secret headers
     Some-Header: value
+  max_iters: 15                  # agentic loop tuning is inlined under ai
+  critique:
+    max_retries: 0
+  usage:
+    enabled: true
 ```
-
-`endpoint` and `model` are required when AI is enabled. They may instead come
-from `AI_ENDPOINT` and `AI_MODEL`. API, endpoint, and model resolution is
-`project.yaml` first, then environment. See
-[Project configuration](project-configuration.md) for the exact schema.
 
 Set the bearer credential as `AI_TOKEN`. Chat Completions sends
 `Authorization: Bearer <AI_TOKEN>` unless an explicit header overrides it.
 Custom header values in `project.yaml` are literal, so never put a credential in
-a public consumer file.
+a public consumer file. See
+[Project configuration](project-configuration.md) for the exact project-owned
+schema.
 
 ### GitHub Pages
 
@@ -43,7 +51,7 @@ jobs:
       ai-model: ${{ vars.AI_MODEL }}
       ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
-      ai-token: ${{ secrets.AI_TOKEN }}
+      AI_TOKEN: ${{ secrets.AI_TOKEN }}
 ```
 
 Variables keep private deployment coordinates out of committed source, but they
@@ -94,20 +102,22 @@ unless cache generation or another acceptance rule changes.
 
 ### GitHub Copilot
 
-Use the API listed by the model catalog's `supported_endpoints` field. Examples:
+Use the API listed by the model catalog's `supported_endpoints` field.
 
-```yaml
-ai:
-  api: responses
-  endpoint: https://api.githubcopilot.com/responses
-  model: <responses-model>
+Direct-command deployment variables for a Responses model:
+
+```bash
+export AI_API=responses
+export AI_ENDPOINT=https://api.githubcopilot.com/responses
+export AI_MODEL=<responses-model>
 ```
 
-```yaml
-ai:
-  api: chat_completions
-  endpoint: https://api.githubcopilot.com/chat/completions
-  model: <chat-completions-model>
+Direct-command deployment variables for a Chat Completions model:
+
+```bash
+export AI_API=chat_completions
+export AI_ENDPOINT=https://api.githubcopilot.com/chat/completions
+export AI_MODEL=<chat-completions-model>
 ```
 
 `AI_TOKEN` is a PAT with the `copilot_chat` user permission. Model availability
@@ -118,14 +128,19 @@ executors that run the coding agent.
 
 ### OpenAI
 
-Responses:
+Responses direct-command deployment variables:
+
+```bash
+export AI_API=responses
+export AI_ENDPOINT=https://api.openai.com/v1/responses
+export AI_MODEL=<model-id>
+```
+
+Optional project-owned behavior in `project.yaml`:
 
 ```yaml
 ai:
-  api: responses
-  endpoint: https://api.openai.com/v1/responses
-  model: <model-id>
-  service_tier: flex  # optional
+  service_tier: flex
 ```
 
 Flex processing is accepted only for this exact OpenAI host and the Responses
@@ -135,13 +150,12 @@ The provider-echoed tier is recorded on each model-request trace.
 Aster also preserves the Responses assistant `phase` field when compaction or
 forced finalization reconstructs an assistant message for a later request.
 
-Chat Completions:
+Chat Completions direct-command deployment variables:
 
-```yaml
-ai:
-  api: chat_completions
-  endpoint: https://api.openai.com/v1/chat/completions
-  model: <model-id>
+```bash
+export AI_API=chat_completions
+export AI_ENDPOINT=https://api.openai.com/v1/chat/completions
+export AI_MODEL=<model-id>
 ```
 
 `AI_TOKEN` is the API key. Responses requests use `store: false` and retain the
@@ -179,8 +193,8 @@ Completions is normally `/v1/chat/completions`.
 
 Each analysis records content-free fingerprints for the endpoint, model, prompt,
 and skills. Coordinate changes affect new analyses but do not invalidate an
-otherwise reusable entry. Set `ai.cache_generation`, `AI_CACHE_GENERATION`, the
-Pages `ai-cache-generation` input, or Helm `analysisCache.generation` for an
+otherwise reusable entry. Set `AI_CACHE_GENERATION`, the Pages
+`ai-cache-generation` input, or Helm `analysisCache.generation` for an
 intentional reversible rebaseline.
 
 Both provider APIs receive a content-free `prompt_cache_key` on the main

@@ -107,9 +107,11 @@ deploy/README.md
 Onboarding does not inspect a cluster or choose storage. Interactive runs leave
 a reviewed placeholder for later editing. Non-interactive Kubernetes runs
 require exactly one of `-k8s-storage-class` or `-k8s-existing-claim` so reviewed
-plan application can pass static doctor. The command does not create a namespace
-or Secret, install Helm releases, or configure DNS and ingress. It configures
-authoritative in-process analysis only. Follow the generated guide and
+plan application can pass static doctor. Generated values record that storage
+choice, deployment-owned AI coordinates, the intentional `120m` fetch timeout,
+and suspended CronJob starts. Other settings inherit the matching chart defaults.
+The command does not create a namespace or Secret, install Helm releases, or
+configure DNS and ingress. Follow the generated guide and
 [Kubernetes quickstart](kubernetes.md).
 
 ## Prompt handoff
@@ -117,7 +119,7 @@ authoritative in-process analysis only. Follow the generated guide and
 Prompt authoring is separate from the deployed provider. `handoff` mode writes a
 TODO prompt, `PROMPT_HANDOFF.md`, and the bundled
 `.opencode/skills/system-prompt-generation/SKILL.md` without running a model.
-`todo-template` writes only `prompts/system.md`; `--no-prompt` is an alias.
+`todo-template` writes only `prompts/system.md`.
 
 Complete flagged runs and the wizard default to `handoff`. The handoff records a
 resolved commit when possible, otherwise a known branch or unresolved ref. It
@@ -221,8 +223,8 @@ Exact-job discovery fails when a named bucket index is absent and cannot be
 combined with `-testgrid`. Add `-gcsweb-base` when the bucket is served through
 gcsweb.
 
-Use `--prompt-mode=todo-template` or `--no-prompt` when automation should not
-emit the prompt handoff bundle.
+Use `--prompt-mode=todo-template` when automation should not emit the prompt
+handoff bundle.
 
 ## Open a scaffold pull request
 

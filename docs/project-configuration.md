@@ -155,7 +155,8 @@ case-sensitive and a missing name fails discovery instead of silently publishing
 a partial dashboard. When presubmits are enabled, an exact name may also resolve
 through its direct `pr-logs/directory/<job>/` index.
 
-Periodics are included by default. Add presubmits with:
+Periodics are included by default. `discovery.include_presubmits` is the sole
+runtime authority for publishing presubmit jobs. Add them with:
 
 ```yaml
 discovery:
@@ -279,22 +280,13 @@ periodics that treats any failure as worth a look. Start with the default
 AI is optional at the fetcher level. When enabled, it needs a token, a non-empty
 `prompts/system.md`, and a function-calling model.
 
-Provider coordinates can come from YAML:
-
-```yaml
-ai:
-  endpoint: "https://api.example.net/v1/chat/completions"
-  model: "model-id"
-  cache_generation: ""
-```
-
-Public consumers normally omit provider values and use `AI_ENDPOINT`, `AI_MODEL`,
-optional `AI_REASONING_EFFORT`, and `AI_TOKEN` from the deployment. For cache generation, a non-empty
-`AI_CACHE_GENERATION` overrides `ai.cache_generation`; empty preserves the
+Provider coordinates are deployment-owned. Use `AI_API`, `AI_ENDPOINT`,
+`AI_MODEL`, optional `AI_REASONING_EFFORT`, and `AI_TOKEN`. A non-empty
+`AI_CACHE_GENERATION` selects a reversible cache namespace; empty preserves the
 historical cache-key shape. Generation values are limited to 64 characters and
 may contain alphanumerics, dot, underscore, and hyphen.
-`ai.service_tier: flex` enables OpenAI Flex processing only when `ai.api` is
-`responses` and the endpoint host is exactly `api.openai.com`. Other providers
+`ai.service_tier: flex` enables OpenAI Flex processing only when the deployment
+uses the `responses` API and the endpoint host is exactly `api.openai.com`. Other providers
 are rejected before any request. Flex raises an effective timeout below 15
 minutes to 15 minutes and falls back to `auto` after repeated provider capacity
 responses.
@@ -456,8 +448,8 @@ supported Fix runtime.
 Each validator is an `argv` list plus a timeout. Shell command strings, generic
 dispatchers, coding-agent re-entry, and shell interpretation are rejected. The
 final validator is always the exact staged-diff check. Generation is one-shot;
-validator failure cannot trigger model repair, `critique_retries` must be zero,
-and `ai.fix_prs.verify` is not supported by Agent Sandbox.
+validator failure cannot trigger model repair, and `critique_retries` must be
+zero.
 
 Secret names, image digests, namespace, ServiceAccounts, resources, networking,
 CA trust, and RuntimeClass are Helm-owned deployment settings. See:

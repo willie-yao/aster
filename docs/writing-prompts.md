@@ -127,8 +127,8 @@ skill may improve the prompt and propose inactive evidence recipes, but it must
 not activate recipes or tune only to one favorable case.
 
 Editing `prompts/system.md` affects new analyses. Existing reusable cache entries
-keep the `prompt_hash` provenance that produced them. Set `ai.cache_generation`
-or `AI_CACHE_GENERATION` to a new non-empty value when a prompt rewrite requires
+keep the `prompt_hash` provenance that produced them. Set
+`AI_CACHE_GENERATION` to a new non-empty value when a prompt rewrite requires
 an intentional full rebaseline. Returning to a previous generation reuses its
 unexpired entries. Use destructive cache clearing only for emergency recovery.
 

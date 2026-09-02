@@ -156,8 +156,9 @@ Image tags resolve in this order:
 2. `global.imageTag`.
 3. Chart `appVersion`.
 
-The generated values reset image tags to empty so an earlier snapshot does not
-remain pinned through reused values.
+New generated values omit image tags so the first install follows the chart
+`appVersion`. Keep any image tags already present in reused values empty unless
+the deployment intentionally pins a snapshot or split version.
 
 ### Guarded snapshot upgrade
 
@@ -222,8 +223,10 @@ and Helm release state.
 ## Configuration reference
 
 The complete commented defaults live in
-`deploy/helm/aster/values.yaml`. The table below highlights the
-main operator controls.
+`deploy/helm/aster/values.yaml`. Generated consumer values contain only reviewed
+storage and provider decisions plus the intentional `fetcher.timeout: 120m` and
+`fetcher.suspend: true` divergences. All other settings inherit chart defaults.
+The table below highlights the main operator controls.
 
 | Value | Purpose |
 | --- | --- |
