@@ -26,7 +26,10 @@ func Update(dir string, mutate func(*Ledger) bool) error {
 		return fmt.Errorf("lock recurrence ledger: %w", err)
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
-	ledger := Load(dir)
+	ledger, err := Load(dir)
+	if err != nil {
+		return fmt.Errorf("load recurrence ledger: %w", err)
+	}
 	if mutate == nil || !mutate(ledger) {
 		return nil
 	}

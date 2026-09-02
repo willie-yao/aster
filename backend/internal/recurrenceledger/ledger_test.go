@@ -12,6 +12,15 @@ func at(day int) time.Time {
 	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, day)
 }
 
+func loadLedger(t *testing.T, dir string) *Ledger {
+	t.Helper()
+	ledger, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ledger
+}
+
 func TestObserveRecordsFirstSightingAndCountsFailingBuilds(t *testing.T) {
 	ledger := &Ledger{Version: Version, Entries: map[string]Entry{}}
 	if !ledger.Observe([]Sighting{{
@@ -164,7 +173,7 @@ func TestUpdateRoundTripsThroughDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entry := Load(dir).Entries["sig-a"]
+	entry := loadLedger(t, dir).Entries["sig-a"]
 	if entry.Occurrences != 1 || entry.JobID != "job-1" {
 		t.Fatalf("entry=%+v", entry)
 	}
@@ -173,24 +182,70 @@ func TestUpdateRoundTripsThroughDisk(t *testing.T) {
 	}
 }
 
-func TestLoadStartsFreshOnMissingCorruptOrForeignVersionFiles(t *testing.T) {
+func TestLoadStartsFreshOnlyWhenMissing(t *testing.T) {
 	dir := t.TempDir()
-	if got := Load(dir); got.Version != Version || len(got.Entries) != 0 {
+	got, err := Load(dir)
+	if err != nil || got.Version != Version || len(got.Entries) != 0 {
 		t.Fatalf("missing file yielded %+v", got)
 	}
+}
+
+func TestLoadFailsClosedWithoutReplacingInvalidState(t *testing.T) {
+	for name, content := range map[string]string{
+		"corrupt":         "{not json",
+		"foreign version": `{"version":99,"entries":{"sig":{"signature":"sig"}}}`,
+		"missing entries": `{"version":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLedgerFile(t, dir, content)
+			if _, err := Load(dir); err == nil {
+				t.Fatal("invalid ledger was accepted")
+			}
+			data, err := os.ReadFile(filepath.Join(dir, FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != content {
+				t.Fatalf("ledger was replaced: %q", data)
+			}
+		})
+	}
+}
+
+func TestLoadReportsReadFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, FileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil {
+		t.Fatal("unreadable ledger was accepted")
+	}
+}
+
+func TestUpdatePreservesInvalidLedgerAndSkipsMutation(t *testing.T) {
 	for name, content := range map[string]string{
 		"corrupt":         "{not json",
 		"foreign version": `{"version":99,"entries":{"sig":{"signature":"sig"}}}`,
 	} {
-		writeLedgerFile(t, dir, content)
-		got := Load(dir)
-		if got.Version != Version || got.Entries == nil || len(got.Entries) != 0 {
-			t.Fatalf("%s yielded %+v", name, got)
-		}
-	}
-	writeLedgerFile(t, dir, `{"version":1}`)
-	if got := Load(dir); got.Entries == nil || len(got.Entries) != 0 {
-		t.Fatalf("nil entries yielded %+v", got)
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLedgerFile(t, dir, content)
+			mutated := false
+			if err := Update(dir, func(*Ledger) bool { mutated = true; return true }); err == nil {
+				t.Fatal("update accepted invalid ledger")
+			}
+			if mutated {
+				t.Fatal("mutation ran after load failure")
+			}
+			data, err := os.ReadFile(filepath.Join(dir, FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != content {
+				t.Fatalf("ledger was replaced: %q", data)
+			}
+		})
 	}
 }
 

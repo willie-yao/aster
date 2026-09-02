@@ -1,8 +1,14 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,6 +19,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/output"
 )
 
 // stubModule satisfies ai.Module for service tests. The prompt is returned
@@ -339,6 +346,69 @@ func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&srv.calls); got != 1 {
 		t.Errorf("server calls = %d, want 1 (second failure must bail before HTTP)", got)
+	}
+}
+
+func TestServiceProviderFailureExcludesResponseBodyFromEverySurface(t *testing.T) {
+	const sentinel = "PRIVATE_PROVIDER_RESPONSE_SENTINEL"
+	shrinkCallDelay(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "0")
+		w.Header().Set("X-Request-Id", "request-123")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"` + sentinel + `"}}`))
+	}))
+	defer server.Close()
+
+	client := newAgenticTestClient(t, server.URL)
+	registry, enabled := newServiceTestRegistry(t)
+	traces := NewTraceStore()
+	service := NewService(ServiceConfig{
+		Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", TraceStore: traces,
+	})
+	configureAgenticTestService(service, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
+
+	var logs bytes.Buffer
+	previousLogWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLogWriter) })
+	run := newRun("j", "1")
+	testCase := newFailedTC("Test private provider failure", "failed")
+	analysisErr := service.analyze(t.Context(), &http.Client{}, "j", "logs/j/1/", run, testCase, 1, nil, nil)
+	if analysisErr == nil {
+		t.Fatal("provider failure returned nil error")
+	}
+	if testCase.AISummary == nil {
+		t.Fatal("provider failure published no unavailable summary")
+	}
+	traceJSON, err := json.Marshal(traces.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.TestCases = []models.TestCase{*testCase}
+	dir := t.TempDir()
+	if err := output.WriteJobDetail(dir, models.JobDetail{JobID: "j", Name: "j", Runs: []models.BuildResult{*run}}); err != nil {
+		t.Fatal(err)
+	}
+	jobJSON, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename("j")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"error": analysisErr.Error(), "logs": logs.String(), "summary": testCase.AISummary.Summary,
+		"trace": string(traceJSON), "job JSON": string(jobJSON),
+	} {
+		if strings.Contains(text, sentinel) {
+			t.Fatalf("%s leaked provider response body: %s", name, text)
+		}
+	}
+	for _, want := range []string{"api=chat_completions", "model=claude-test", "category=http_error", "status=500", `request_id="request-123"`} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("safe provider diagnostics missing %q: %s", want, logs.String())
+		}
+	}
+	if !strings.Contains(analysisErr.Error(), "chat returned 500") || !strings.Contains(analysisErr.Error(), "request_id=request-123") {
+		t.Fatalf("provider error lost safe metadata: %v", analysisErr)
 	}
 }
 

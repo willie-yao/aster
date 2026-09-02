@@ -219,14 +219,14 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
-			log.Printf("  ⚠ AI endpoint rejected tools; analysis unavailable: %v", err)
+			s.logAnalysisFailure("AI endpoint rejected tools; analysis unavailable", tc.Name, err)
 			unavailableErr := fmt.Errorf("AI endpoint requires function-calling support: %w", err)
 			s.setUnavailable(tc, unavailableErr)
 			trace.Finish("unavailable", err)
 			usageOutcome = aiusage.OutcomeUnavailable
 			return unavailableErr
 		}
-		log.Printf("  ⚠ Agentic AI analysis failed for %s: %v", tc.Name, err)
+		s.logAnalysisFailure("Agentic AI analysis failed", tc.Name, err)
 		s.setUnavailable(tc, err)
 		trace.Finish("error", err)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -249,6 +249,21 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		trace.Finish("success", nil)
 	}
 	return nil
+}
+
+func (s *Service) logAnalysisFailure(message, testName string, err error) {
+	api, model := "", ""
+	if s != nil && s.client != nil {
+		api = s.client.APIMode()
+		model = s.client.ModelName()
+	}
+	metadata, _ := SafeProviderErrorMetadata(err)
+	category := metadata.Category
+	if category == "" {
+		category = traceErrorCode(err)
+	}
+	log.Printf("  ⚠ %s for %s: api=%s model=%s category=%s status=%d request_id=%q retry_after=%q: %v",
+		message, testName, api, model, category, metadata.StatusCode, metadata.RequestID, metadata.RetryAfter, err)
 }
 
 func (s *Service) refreshBuildFileLinks(ctx context.Context, client *http.Client, run *models.BuildResult, tc *models.TestCase) {

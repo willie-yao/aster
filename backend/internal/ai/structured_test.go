@@ -81,7 +81,7 @@ func TestCompleteStructuredFallsBackToForcedTool(t *testing.T) {
 }
 
 func TestCompleteStructuredUsesBoundedExtractorFallback(t *testing.T) {
-	unsupported := &modelHTTPError{API: "chat", StatusCode: 400, Body: "unsupported"}
+	unsupported := newModelHTTPError("chat", 400, "unsupported", http.Header{})
 	transport := &scriptedTransport{results: []scriptedTransportResult{
 		{err: unsupported},
 		{err: unsupported},
@@ -142,10 +142,11 @@ func TestStructuredWireMappings(t *testing.T) {
 }
 
 func TestSafeProviderErrorMetadataExcludesProviderBody(t *testing.T) {
+	const sentinel = "private provider body with model output"
 	headers := http.Header{}
 	headers.Set("Retry-After", "12")
 	headers.Set("X-GitHub-Request-Id", "request-123")
-	cause := newModelHTTPError("responses", 429, "private provider body with model output", headers)
+	cause := newModelHTTPError("responses", 429, sentinel, headers)
 	err := structuredFailureAt("provider request failed", "forced-function", cause)
 	metadata, ok := SafeProviderErrorMetadata(err)
 	if !ok {
@@ -155,7 +156,7 @@ func TestSafeProviderErrorMetadataExcludesProviderBody(t *testing.T) {
 		t.Fatalf("metadata = %+v", metadata)
 	}
 	for _, text := range []string{err.Error(), fmt.Sprintf("%+v", metadata)} {
-		if strings.Contains(text, cause.Body) || strings.Contains(text, "model output") {
+		if strings.Contains(text, sentinel) || strings.Contains(text, "model output") {
 			t.Fatalf("safe metadata exposed provider body: %s", text)
 		}
 	}

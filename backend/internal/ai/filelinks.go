@@ -210,10 +210,10 @@ func (s *Service) resolveFileLinksAtRef(ctx context.Context, client *http.Client
 		}
 		if ref != "" && ref != "HEAD" {
 			url, verification := s.resolveConfiguredSourceLinkAtRef(ctx, client, clean, ref)
-			switch {
-			case verification == linkPresent:
+			switch verification {
+			case linkPresent:
 				links[clean] = url
-			case verification == linkUnverified:
+			case linkUnverified:
 				// A once-verified path stays valid at an immutable revision, so
 				// keep the published link rather than letting a transient GitHub
 				// failure change this analysis's content hash.

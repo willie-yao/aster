@@ -397,6 +397,28 @@ func TestWriteAll(t *testing.T) {
 	}
 }
 
+func TestWriteAllAggregatesIndependentProjectionFailures(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(dir, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{
+		sampleJobDetail("job-alpha"), sampleJobDetail("job-beta"),
+	}, models.FlakinessReport{}, models.SearchIndex{})
+	if err == nil {
+		t.Fatal("WriteAll returned nil error")
+	}
+	for _, want := range []string{
+		"write manifest", "write dashboard", "write job detail job-alpha", "write job detail job-beta",
+		"prune job details", "write flakiness report", "write search index", "remove retired public files",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("aggregated error missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 	dir := t.TempDir()
 	stale := filepath.Join(dir, "jobs", "stale.json")
@@ -447,12 +469,12 @@ func TestWriteAllRemovesRetiredPublicProjections(t *testing.T) {
 	}
 }
 
-func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
+func TestWriteManifestOmitsPrivateProjectConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	cfg := sampleConfig()
 	cfg.AI = &project.AI{
-		Endpoint: "https://internal.example/v1/chat/completions",
-		Model:    "internal-only-model-name",
+		ServiceTier: "flex",
+		Headers:     map[string]string{"X-Private-Routing": "private-route"},
 	}
 	cfg.Notifications = &project.Notifications{Email: &project.EmailNotifications{
 		Enabled: true,
@@ -473,15 +495,7 @@ func TestWriteManifest_OmitsAIEndpointAndModel(t *testing.T) {
 		t.Fatalf("read manifest.json: %v", err)
 	}
 
-	// Raw-string assertions: the published JSON must not leak the model
-	// identifier or endpoint URL, even when set on the in-memory config.
-	if strings.Contains(string(data), "internal-only-model-name") {
-		t.Errorf("manifest.json leaks AI model identifier: %s", string(data))
-	}
-	if strings.Contains(string(data), "internal.example") {
-		t.Errorf("manifest.json leaks AI endpoint URL: %s", string(data))
-	}
-	for _, secret := range []string{"private-sender@example.com", "private-team@example.com", "smtp.internal.example", "private-user"} {
+	for _, secret := range []string{"private-route", "X-Private-Routing", "private-sender@example.com", "private-team@example.com", "smtp.internal.example", "private-user"} {
 		if strings.Contains(string(data), secret) {
 			t.Errorf("manifest.json leaks email notification config %q: %s", secret, string(data))
 		}

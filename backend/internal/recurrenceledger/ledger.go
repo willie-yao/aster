@@ -5,6 +5,8 @@ package recurrenceledger
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -19,7 +21,7 @@ import (
 const FileName = "recurrence_ledger.json"
 
 const (
-	// Version guards the on-disk shape. An unrecognized version starts fresh.
+	// Version guards the on-disk shape.
 	Version = 1
 	// RetentionWindow drops causes that have not failed for this long.
 	RetentionWindow = 180 * 24 * time.Hour
@@ -56,20 +58,28 @@ type Sighting struct {
 	Builds    []string
 }
 
-// Load reads the ledger from dir, returning empty (non-nil) state when the file
-// is missing, unreadable, or written by a different version so callers never
-// nil-check the map.
-func Load(dir string) *Ledger {
+// Load reads the ledger from dir. A missing file returns empty state; unreadable,
+// malformed, and foreign-version files fail closed.
+func Load(dir string) (*Ledger, error) {
 	fresh := &Ledger{Version: Version, Entries: map[string]Entry{}}
 	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return fresh, nil
+	}
 	if err != nil {
-		return fresh
+		return nil, fmt.Errorf("read recurrence ledger: %w", err)
 	}
 	var ledger Ledger
-	if err := json.Unmarshal(data, &ledger); err != nil || ledger.Version != Version || ledger.Entries == nil {
-		return fresh
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		return nil, fmt.Errorf("decode recurrence ledger: %w", err)
 	}
-	return &ledger
+	if ledger.Version != Version {
+		return nil, fmt.Errorf("recurrence ledger version %d is not supported", ledger.Version)
+	}
+	if ledger.Entries == nil {
+		return nil, fmt.Errorf("recurrence ledger entries are missing")
+	}
+	return &ledger, nil
 }
 
 // Save writes the ledger to dir atomically with private permissions.

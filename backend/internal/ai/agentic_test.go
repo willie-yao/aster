@@ -4482,7 +4482,10 @@ func TestAgenticSourceCatalogSectionEnumeratesOrderedImmutableSources(t *testing
 			t.Fatalf("source catalog prompt missing %q:\n%s", want, got)
 		}
 	}
-	if !(strings.Index(got, "source_id `client`") < strings.Index(got, "source_id `project`") && strings.Index(got, "source_id `project`") < strings.Index(got, "source_id `server`")) {
+	client := strings.Index(got, "source_id `client`")
+	project := strings.Index(got, "source_id `project`")
+	server := strings.Index(got, "source_id `server`")
+	if client >= project || project >= server {
 		t.Fatalf("source catalog prompt is not canonical: %s", got)
 	}
 }

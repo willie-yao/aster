@@ -13,7 +13,6 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
-	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 type chatCompletionsTransport struct {
@@ -158,11 +157,11 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("chat", resp.StatusCode, textutil.Truncate(string(raw), 500), resp.Header)
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("chat", resp.StatusCode, string(raw), resp.Header)
 	}
 	var wire chatCompletionsResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w; body=%s", err, textutil.Truncate(string(raw), 500))
+		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w", err)
 	}
 	out := decodeChatResponse(wire)
 	out.Attempts = attempts

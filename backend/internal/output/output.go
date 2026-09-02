@@ -2,6 +2,7 @@
 package output
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,29 +171,33 @@ func WriteManifest(dir string, cfg *project.Config) error {
 }
 
 // WriteAll writes dashboard.json, all job detail files, flakiness.json,
-// search-index.json, and manifest.json. Returns the first error encountered.
+// search-index.json, and manifest.json. Independent failures are aggregated.
 func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, details []models.JobDetail, flakiness models.FlakinessReport, searchIndex models.SearchIndex) error {
+	var errs []error
 	if err := WriteManifest(dir, cfg); err != nil {
-		return err
+		errs = append(errs, fmt.Errorf("write manifest: %w", err))
 	}
 	if err := WriteDashboard(dir, dashboard); err != nil {
-		return err
+		errs = append(errs, fmt.Errorf("write dashboard: %w", err))
 	}
 	for _, d := range details {
 		if err := WriteJobDetail(dir, d); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("write job detail %s: %w", d.JobID, err))
 		}
 	}
 	if err := pruneJobDetails(dir, details); err != nil {
-		return err
+		errs = append(errs, fmt.Errorf("prune job details: %w", err))
 	}
 	if err := WriteFlakinessReport(dir, flakiness); err != nil {
-		return err
+		errs = append(errs, fmt.Errorf("write flakiness report: %w", err))
 	}
 	if err := WriteSearchIndex(dir, searchIndex); err != nil {
-		return err
+		errs = append(errs, fmt.Errorf("write search index: %w", err))
 	}
-	return removeRetiredPublicFiles(dir)
+	if err := removeRetiredPublicFiles(dir); err != nil {
+		errs = append(errs, fmt.Errorf("remove retired public files: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // retiredPublicFiles are public projections no longer produced by any feature.
