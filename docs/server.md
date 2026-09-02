@@ -1,13 +1,8 @@
 # Server mode
 
-Kubernetes server mode serves the same public `/data/*.json` contract as GitHub
-Pages and adds authenticated APIs. The frontend probes `/api/capabilities` and
-enables only the features the server advertises. A static Pages deployment has
-no capability endpoint and remains read-only.
+Kubernetes server mode serves the same public `/data/*.json` contract as GitHub Pages and adds authenticated APIs. The frontend probes `/api/capabilities` and enables only the features the server advertises. A static Pages deployment has no capability endpoint and remains read-only.
 
-The server reads data written by the authoritative in-process fetcher or worker.
-It does not own scheduled failure analysis and does not change the public data
-schema.
+The server reads data written by the authoritative in-process fetcher or worker. It does not own scheduled failure analysis and does not change the public data schema.
 
 ## Endpoints
 
@@ -54,39 +49,24 @@ schema.
 | `GET /healthz` | Liveness and readiness. |
 | `GET /` | Serve the built SPA with deep-link fallback when `-static-dir` is set. |
 
-See [Pull request triage](pull-request-triage.md#optional-ai-escalation) for
-escalation eligibility, privacy, and deployment requirements.
+See [Pull request triage](pull-request-triage.md#optional-ai-escalation) for escalation eligibility, privacy, and deployment requirements.
 
 ## Capability contract
 
-`GET /api/capabilities` is the only frontend feature-discovery seam. It exposes
-safe engine identity and additive flags for authentication, chat, action
-requests, issue actions, Fix actions, traces, usage, and related
-server features. The UI must not infer write capability from a visible button or
-from `/data/*` content.
+`GET /api/capabilities` is the only frontend feature-discovery seam. It exposes safe engine identity and additive flags for authentication, chat, action requests, issue actions, Fix actions, traces, usage, and related server features. The UI must not infer write capability from a visible button or from `/data/*` content.
 
-Interactive features are independently gated. Analysis chat can be enabled
-without GitHub writes. File Issue can be enabled without Fix. A server may expose
-read-only trace and status views while every action flag remains false.
+Interactive features are independently gated. Analysis chat can be enabled without GitHub writes. File Issue can be enabled without Fix. A server may expose read-only trace and status views while every action flag remains false.
 
-The server sends same-origin security headers, denies framing and MIME sniffing,
-limits referrer and device capabilities, and keeps scripts and connections on the
-dashboard origin. MUI runtime styles require inline styles; scripts remain
-strictly external.
+The server sends same-origin security headers, denies framing and MIME sniffing, limits referrer and device capabilities, and keeps scripts and connections on the dashboard origin. MUI runtime styles require inline styles; scripts remain strictly external.
 
 ## Authentication and origin protection
 
 Two authentication modes share the same admin allowlist:
 
-- `oauth`: a GitHub OAuth App identifies the user with `read:user`. The encrypted
-  httpOnly session cookie stores the login, not the OAuth access token.
-- `proxy`: a trusted upstream SSO proxy authenticates the user and passes the
-  identity in `AUTH_PROXY_HEADER`.
+- `oauth`: a GitHub OAuth App identifies the user with `read:user`. The encrypted httpOnly session cookie stores the login, not the OAuth access token.
+- `proxy`: a trusted upstream SSO proxy authenticates the user and passes the identity in `AUTH_PROXY_HEADER`.
 
-`ADMIN_LOGINS` controls who may use authenticated features. GitHub writes use a
-separate server-held `BOT_TOKEN`; the signed-in user's identity is never reused
-as the write credential. Audit records keep the initiating admin login, while
-GitHub records the bot or contributor identity that performed the write.
+`ADMIN_LOGINS` controls who may use authenticated features. GitHub writes use a separate server-held `BOT_TOKEN`; the signed-in user's identity is never reused as the write credential. Audit records keep the initiating admin login, while GitHub records the bot or contributor identity that performed the write.
 
 Core settings:
 
@@ -100,125 +80,51 @@ Core settings:
 | `BOT_TOKEN` | Optional server-held GitHub write credential. It is not required for read-only chat. |
 | `TRUSTED_ORIGINS` | Additional exact public origins accepted for state-changing requests. |
 
-Register the OAuth callback as the dashboard origin plus
-`/api/auth/callback`. `OAUTH_REDIRECT_URL` must match it exactly.
+Register the OAuth callback as the dashboard origin plus `/api/auth/callback`. `OAUTH_REDIRECT_URL` must match it exactly.
 
-State-changing requests are protected by a `SameSite=Lax` session cookie plus an
-Origin check. When a reverse proxy forwards a different `Host` than the public
-hostname, configure the public origin. OAuth mode trusts the origin in
-`OAUTH_REDIRECT_URL`; proxy mode normally needs `TRUSTED_ORIGINS` explicitly.
-Tokens are never returned to the browser or written to logs.
+State-changing requests are protected by a `SameSite=Lax` session cookie plus an Origin check. When a reverse proxy forwards a different `Host` than the public hostname, configure the public origin. OAuth mode trusts the origin in `OAUTH_REDIRECT_URL`; proxy mode normally needs `TRUSTED_ORIGINS` explicitly. Tokens are never returned to the browser or written to logs.
 
 ## Analysis chat
 
-Enable chat only with authentication, the normal provider configuration, and a
-private state directory. Chat is read-only and does not require `BOT_TOKEN`.
-Static Pages deployments do not serve it. Each model turn defaults to 10 minutes;
-operators can set `server.chat.timeout` to a value up to 30 minutes.
+Enable chat only with authentication, the normal provider configuration, and a private state directory. Chat is read-only and does not require `BOT_TOKEN`. Static Pages deployments do not serve it. Each model turn defaults to 10 minutes; operators can set `server.chat.timeout` to a value up to 30 minutes.
 
-One shared session is bound to each exact current analysis identity. Authenticated
-operators see the same transcript and active-turn progress. Only one turn may run
-at a time, and only the operator who started it may cancel it. Test,
-recurring-pattern, and causal-group scopes are supported. A
-causal-group session is bound to the parent pattern ID and hash plus the cause ID
-and hash. It exposes the cause's failed member builds, including single-build
-causes, plus the newest later completed run when one is available. The later run
-is comparison evidence, not a member of the cause. A passing comparison proves
-only that the cause did not reproduce in that run; the chat must compare the
-test and triggering inputs before describing it as resolved. Cause chat does not
-require the parent pattern to be systemic. The server refuses the session when
-any member build has left the published window.
+One shared session is bound to each exact current analysis identity. Authenticated operators see the same transcript and active-turn progress. Only one turn may run at a time, and only the operator who started it may cancel it. Test, recurring-pattern, and causal-group scopes are supported. A causal-group session is bound to the parent pattern ID and hash plus the cause ID and hash. It exposes the cause's failed member builds, including single-build causes, plus the newest later completed run when one is available. The later run is comparison evidence, not a member of the cause. A passing comparison proves only that the cause did not reproduce in that run; the chat must compare the test and triggering inputs before describing it as resolved. Cause chat does not require the parent pattern to be systemic. The server refuses the session when any member build has left the published window.
 
-The resolved evidence is frozen when a session is created. The comparison build
-is identified in the model context, and a refreshed lookup does not reuse the
-old shared session when a newer comparison run appears. An already-open session
-continues to describe the evidence available when it was created.
+The resolved evidence is frozen when a session is created. The comparison build is identified in the model context, and a refreshed lookup does not reuse the old shared session when a newer comparison run appears. An already-open session continues to describe the evidence available when it was created.
 
-Each start or message uses a unique `Idempotency-Key`. Repeating the
-same key and body returns the original state; reusing the key for different
-input fails. Streaming clients may reconnect to an existing server-owned turn.
-Disconnecting does not cancel it, while explicit cancellation and server
-shutdown persist a terminal cancelled outcome.
+Each start or message uses a unique `Idempotency-Key`. Repeating the same key and body returns the original state; reusing the key for different input fails. Streaming clients may reconnect to an existing server-owned turn. Disconnecting does not cancel it, while explicit cancellation and server shutdown persist a terminal cancelled outcome.
 
-The model may use only the configured read-only artifact and pinned-source
-capabilities. It has no shell, GitHub write, repository write, or live cluster
-access. Citations are verified against the artifacts the conversation actually
-read, including reads from earlier turns of the same conversation. The quote a
-citation carries is attributed by the engine from what those reads returned
-rather than copied from the model, so a citation naming a passage the tools never
-returned, or one so generic it names several, cannot be verified. Invalid
-citations are omitted individually. When verified citations remain, the answer
-is marked partially verified and may start a Fix investigation with only the
-validated citations carried as artifact evidence. An answer with no verified
-citation, or one that does not
-follow the response format, remains unverified and cannot start a Fix preview. A
-response that only announces the model's next step is
-not an answer: the engine asks the model to take that step or conclude, and the
-turn fails if it does neither.
+The model may use only the configured read-only artifact and pinned-source capabilities. It has no shell, GitHub write, repository write, or live cluster access. Citations are verified against the artifacts the conversation actually read, including reads from earlier turns of the same conversation. The quote a citation carries is attributed by the engine from what those reads returned rather than copied from the model, so a citation naming a passage the tools never returned, or one so generic it names several, cannot be verified. Invalid citations are omitted individually. When verified citations remain, the answer is marked partially verified and may start a Fix investigation with only the validated citations carried as artifact evidence. An answer with no verified citation, or one that does not follow the response format, remains unverified and cannot start a Fix preview. A response that only announces the model's next step is not an answer: the engine asks the model to take that step or conclude, and the turn fails if it does neither.
 
-After each initial or reconciliation AI publication, the fetcher prepares up to
-three active causal groups that do not already have a current finding,
-preferring causes on published recurring patterns so the budget reaches the
-causes a maintainer can open. These best-effort findings use the same
-cause-scoped member and comparison artifacts and citation validation as
-interactive chat. They
-are cached by cause, model, prompt, and AI cache generation. A prepared finding
-seeds a new cause conversation without using one of the maintainer's admitted
-turns. Preparation failures never fail or roll back dashboard publication, and
-the remaining causes are retried on later runs.
+After each initial or reconciliation AI publication, the fetcher prepares up to three active causal groups that do not already have a current finding, preferring causes on published recurring patterns so the budget reaches the causes a maintainer can open. These best-effort findings use the same cause-scoped member and comparison artifacts and citation validation as interactive chat. They are cached by cause, model, prompt, and AI cache generation. A prepared finding seeds a new cause conversation without using one of the maintainer's admitted turns. Preparation failures never fail or roll back dashboard publication, and the remaining causes are retried on later runs.
 
-A proposed revision or Fix finding is still inert model output. Source
-compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff
-requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
+A proposed revision or Fix finding is still inert model output. Source compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
-Sessions are stored in private shared state and have bounded admitted turns.
-They normally expire after inactivity; a session referenced by an admitted Fix
-request is retained through that request's confirmation window. The Helm chart uses a `Recreate` server rollout when
-chat is enabled so old and new binaries never write different chat-state schemas
-at the same time. Equivalent manual deployments must stop old server replicas
-before starting the new version. User questions and attempts retain the
-initiating operator for attribution. The state contains transcripts and selected failure
-context, so the RWX volume and backups are operator-private. Replicas require
-advisory locking, atomic rename, and file and directory synchronization.
+Sessions are stored in private shared state and have bounded admitted turns. They normally expire after inactivity; a session referenced by an admitted Fix request is retained through that request's confirmation window. The Helm chart uses a `Recreate` server rollout when chat is enabled so old and new binaries never write different chat-state schemas at the same time. Equivalent manual deployments must stop old server replicas before starting the new version. User questions and attempts retain the initiating operator for attribution. The state contains transcripts and selected failure context, so the RWX volume and backups are operator-private. Replicas require advisory locking, atomic rename, and file and directory synchronization.
 
 ## Admin-gated actions
 
-Actions are disabled unless authentication and a project directory are
-configured. The server first resolves the current published subject and runs the
-same deterministic eligibility, remediation-policy, and pinned-source checks used
-at preview and confirmation.
+Actions are disabled unless authentication and a project directory are configured. The server first resolves the current published subject and runs the same deterministic eligibility, remediation-policy, and pinned-source checks used at preview and confirmation.
 
 The common lifecycle is:
 
 1. The owner explicitly requests a draft.
-2. The server creates an owner-bound persistent action request or short-lived
-   synchronous preview.
+2. The server creates an owner-bound persistent action request or short-lived synchronous preview.
 3. The UI shows the exact issue or draft PR content and all warnings.
 4. The owner explicitly confirms that exact draft.
-5. The server repeats current-data and policy checks, then performs the write with
-   the configured credential.
+5. The server repeats current-data and policy checks, then performs the write with the configured credential.
 
-Persistent requests survive normal restarts when ready. Unfinished external
-runtime work is reconciled or marked failed. Requests are idempotent and may be
-atomically superseded by a replacement draft. Confirmation never regenerates
-content silently.
+Persistent requests survive normal restarts when ready. Unfinished external runtime work is reconciled or marked failed. Requests are idempotent and may be atomically superseded by a replacement draft. Confirmation never regenerates content silently.
 
-File Issue and Mark Resolved use the standard server runtime. Fix generation is
-separate, experimental, and uses Agent Sandbox. Its source, patch, warning,
-regeneration, and confirmation contracts are in [Fix PR generation](fix-prs.md).
+File Issue and Mark Resolved use the standard server runtime. Fix generation is separate, experimental, and uses Agent Sandbox. Its source, patch, warning, regeneration, and confirmation contracts are in [Fix PR generation](fix-prs.md).
 
-Successful GitHub confirmations append a private write-audit record containing
-the initiating and confirming login, action kind, target, result URL, timestamps,
-and reconciliation status. Credentials are not stored.
+Successful GitHub confirmations append a private write-audit record containing the initiating and confirming login, action kind, target, result URL, timestamps, and reconciliation status. Credentials are not stored.
 
-Email delivery after a draft becomes ready is optional and does not change who
-may review or confirm it. SMTP configuration belongs in
-[Notifications](notifications.md).
+Email delivery after a draft becomes ready is optional and does not change who may review or confirm it. SMTP configuration belongs in [Notifications](notifications.md).
 
 ## Private data boundary
 
-Public `/data/*` serving uses an allowlist and rejects private files and hidden
-directories. Private state includes:
+Public `/data/*` serving uses an allowlist and rejects private files and hidden directories. Private state includes:
 
 - analysis chat transcripts, prepared cause findings, and locks;
 - action requests, preview state, and write audit;
@@ -226,14 +132,9 @@ directories. Private state includes:
 - fetch status and pass history;
 - AI usage ledgers;
 
-Authenticated APIs expose only sanitized, purpose-specific views. They never
-return provider credentials, OAuth tokens, bot tokens, prompts, raw model
-responses, unrestricted source, raw artifact content, or private filesystem
-paths.
+Authenticated APIs expose only sanitized, purpose-specific views. They never return provider credentials, OAuth tokens, bot tokens, prompts, raw model responses, unrestricted source, raw artifact content, or private filesystem paths.
 
-Usage reports preserve provider-reported versus unavailable token fields and use
-only operator-configured pricing. Trace and diagnostic views contain bounded
-control-flow codes, counts, durations, and safe identities.
+Usage reports preserve provider-reported versus unavailable token fields and use only operator-configured pricing. Trace and diagnostic views contain bounded control-flow codes, counts, durations, and safe identities.
 
 ## Run locally
 
@@ -243,12 +144,10 @@ Fetch or copy dashboard data first, then run:
 make serve
 ```
 
-For a self-contained local server with development authentication and action
-capabilities:
+For a self-contained local server with development authentication and action capabilities:
 
 ```bash
 make dev-actions PROJECT_DIR=../<consumer-repo>
 ```
 
-Development authentication is local-only. Do not expose it as a production
-identity mechanism.
+Development authentication is local-only. Do not expose it as a production identity mechanism.

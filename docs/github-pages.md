@@ -1,24 +1,17 @@
 # Deploying with GitHub Actions and Pages
 
-The Pages path runs the fetcher in GitHub Actions, builds the SPA, and publishes
-a static read-only dashboard. It needs no cluster or application server.
+The Pages path runs the fetcher in GitHub Actions, builds the SPA, and publishes a static read-only dashboard. It needs no cluster or application server.
 
-Use this path when the AI endpoint is reachable from the selected Actions runner
-and you do not need interactive admin actions.
+Use this path when the AI endpoint is reachable from the selected Actions runner and you do not need interactive admin actions.
 
 ## Prerequisites
 
 - A host repository that does not already publish another Pages site.
 - `project.yaml` and `prompts/system.md` in the repository root or one subdirectory.
-- When AI is enabled, an OpenAI-compatible Chat Completions or Responses
-  endpoint with function calling.
-- When AI is enabled, the API selector, endpoint URL, model id, and bearer
-  token.
+- When AI is enabled, an OpenAI-compatible Chat Completions or Responses endpoint with function calling.
+- When AI is enabled, the API selector, endpoint URL, model id, and bearer token.
 
-Run the guided [`aster onboard`](onboarding-a-new-project.md) flow to generate
-and validate these files. The wizard does not enable Pages or write repository
-variables and Secrets. Use `-dry-run` to review the complete plan without
-writing files.
+Run the guided [`aster onboard`](onboarding-a-new-project.md) flow to generate and validate these files. The wizard does not enable Pages or write repository variables and Secrets. Use `-dry-run` to review the complete plan without writing files.
 
 You can also create the workflow below manually.
 
@@ -56,12 +49,9 @@ jobs:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 ```
 
-When AI is enabled and fetch is not skipped, `AI_ENDPOINT` and `AI_MODEL` are
-required deployment variables. `AI_API` is optional and defaults to
-`chat_completions`.
+When AI is enabled and fetch is not skipped, `AI_ENDPOINT` and `AI_MODEL` are required deployment variables. `AI_API` is optional and defaults to `chat_completions`.
 
-Set `project_dir` to a subdirectory such as `dashboard` when the consumer files
-are not at the repository root.
+Set `project_dir` to a subdirectory such as `dashboard` when the consumer files are not at the repository root.
 
 ## Repository configuration
 
@@ -82,12 +72,9 @@ gh variable set AI_MODEL --repo my-org/my-dashboard
 gh secret set AI_TOKEN --repo my-org/my-dashboard
 ```
 
-The variable and secret commands read values interactively. You may also pass
-`--body` for nonsecret variables. Keep the token in `AI_TOKEN`; never put it in
-`AI_ENDPOINT`, `project.yaml`, or the workflow.
+The variable and secret commands read values interactively. You may also pass `--body` for nonsecret variables. Keep the token in `AI_TOKEN`; never put it in `AI_ENDPOINT`, `project.yaml`, or the workflow.
 
-The provider used to draft `prompts/system.md` during onboarding is a separate
-choice. Using it does not configure the deployed Pages workflow.
+The provider used to draft `prompts/system.md` during onboarding is a separate choice. Using it does not configure the deployed Pages workflow.
 
 Validate the local scaffold and workflow structure with:
 
@@ -95,29 +82,20 @@ Validate the local scaffold and workflow structure with:
 aster onboard doctor -project-dir ./my-dashboard
 ```
 
-Doctor validates the workflow mappings but cannot read the values stored in
-GitHub repository variables or Secrets.
+Doctor validates the workflow mappings but cannot read the values stored in GitHub repository variables or Secrets.
 
 ## Engine version
 
-The workflow ref controls both the reusable workflow and the engine checkout.
-Pin a currently published version exactly:
+The workflow ref controls both the reusable workflow and the engine checkout. Pin a currently published version exactly:
 
 ```yaml
 # Current prerelease, pinned exactly.
 uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
 ```
 
-After a stable release is published, pin its exact `vMAJOR.MINOR.PATCH` tag.
-Commit SHAs are appropriate for engine development. Do not use `@main`,
-`@latest`, or a moving major alias as a production version.
+After a stable release is published, pin its exact `vMAJOR.MINOR.PATCH` tag. Commit SHAs are appropriate for engine development. Do not use `@main`, `@latest`, or a moving major alias as a production version.
 
-The reusable workflow fails closed when GitHub does not provide its resolved
-repository, ref, or commit SHA. After checkout it verifies that the engine HEAD
-matches that commit. Every published site includes `data/provenance.json` with
-the caller commit, reusable-workflow commit, and engine commit. TestGrid
-consumers also include the effective test-infra revision when `manifest.json`
-reports one.
+The reusable workflow fails closed when GitHub does not provide its resolved repository, ref, or commit SHA. After checkout it verifies that the engine HEAD matches that commit. Every published site includes `data/provenance.json` with the caller commit, reusable-workflow commit, and engine commit. TestGrid consumers also include the effective test-infra revision when `manifest.json` reports one.
 
 ## Host repository layout
 
@@ -137,9 +115,7 @@ dashboard/prompts/system.md
 .github/workflows/deploy.yml
 ```
 
-Set `project_dir: dashboard` in the deploy workflow. A repository can publish only one
-Pages site. If it already has one, use a dedicated dashboard repository or the
-Kubernetes-native deployment.
+Set `project_dir: dashboard` in the deploy workflow. A repository can publish only one Pages site. If it already has one, use a dedicated dashboard repository or the Kubernetes-native deployment.
 
 ## First deploy
 
@@ -152,38 +128,29 @@ After the run succeeds, check:
 
 - The Pages root returns the dashboard.
 - `/data/manifest.json` has the expected branding.
-- `/data/provenance.json` reports matching reusable-workflow and engine commits,
-  plus the effective test-infra revision for TestGrid discovery.
+- `/data/provenance.json` reports matching reusable-workflow and engine commits, plus the effective test-infra revision for TestGrid discovery.
 - `/data/dashboard.json` contains the discovered jobs.
 - A failed test in `/data/jobs/*.json` contains AI analysis with a `citations_verified` disposition.
 
-See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site
-is empty or analysis is unavailable.
+See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site is empty or analysis is unavailable.
 
 ## Intentional AI cache rebaseline
 
-Provider, model, prompt, and skill changes affect new analyses but do not
-invalidate existing reusable entries. Use the reusable workflow's
-`ai-cache-generation` input for a reversible full rebaseline:
+Provider, model, prompt, and skill changes affect new analyses but do not invalidate existing reusable entries. Use the reusable workflow's `ai-cache-generation` input for a reversible full rebaseline:
 
 ```yaml
 with:
   ai-cache-generation: "2"
 ```
 
-Generation `2` misses generation `1`; returning to `1` reuses its unexpired
-entries. Empty preserves all historical keys byte-for-byte. The value is not
-published in dashboard JSON. Keep `.github/workflows/reusable-clear-cache.yml`
-for emergency destructive cleanup only.
+Generation `2` misses generation `1`; returning to `1` reuses its unexpired entries. Empty preserves all historical keys byte-for-byte. The value is not published in dashboard JSON. Keep `.github/workflows/reusable-clear-cache.yml` for emergency destructive cleanup only.
 
 ## Private AI endpoints
 
-GitHub-hosted runners cannot reach a ClusterIP or private network endpoint. Use
-one of these options:
+GitHub-hosted runners cannot reach a ClusterIP or private network endpoint. Use one of these options:
 
 1. Choose the [Kubernetes-native deployment](kubernetes.md).
-2. Set the reusable workflow's `runs-on` input to a preconfigured self-hosted
-   runner that can reach the endpoint.
+2. Set the reusable workflow's `runs-on` input to a preconfigured self-hosted runner that can reach the endpoint.
 3. Fetch elsewhere, commit `<project_dir>/data`, and set `skip-fetch: true`.
 
 For pre-fetched data:
@@ -204,8 +171,7 @@ Operational cache and write-state files are removed before Pages publication.
 
 ### Email notifications
 
-Enable `notifications.email` in `project.yaml`, then pass the SMTP password when
-the relay uses authentication:
+Enable `notifications.email` in `project.yaml`, then pass the SMTP password when the relay uses authentication:
 
 ```yaml
 jobs:
@@ -220,24 +186,10 @@ jobs:
 gh secret set EMAIL_SMTP_PASSWORD --repo my-org/my-dashboard
 ```
 
-The SMTP host must be reachable from the selected runner. Keep
-`notifications.email.action_links` false because a static Pages deployment has
-no authenticated action API. See [Email notifications](notifications.md) for the
-project configuration and TLS modes.
+The SMTP host must be reachable from the selected runner. Keep `notifications.email.action_links` false because a static Pages deployment has no authenticated action API. See [Email notifications](notifications.md) for the project configuration and TLS modes.
 
 ## A Pages deployment performs no maintainer-initiated GitHub writes
 
-A static Pages site has no authenticated action API, so the guarded dashboard
-actions are all [Kubernetes-native](kubernetes.md) server features: interactive
-chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md), which
-additionally requires the Agent Sandbox runtime. Of those, File Issue and Fix PR
-generation are the GitHub writes; chat is read-only and Mark Resolved updates
-local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages
-consumer's `project.yaml` has nothing to act on.
+A static Pages site has no authenticated action API, so the guarded dashboard actions are all [Kubernetes-native](kubernetes.md) server features: interactive chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md), which additionally requires the Agent Sandbox runtime. Of those, File Issue and Fix PR generation are the GitHub writes; chat is read-only and Mark Resolved updates local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages consumer's `project.yaml` has nothing to act on.
 
-One unattended write does run here, because it happens in the fetch step rather
-than the server: the optional bot comment on newly opened pull requests, which
-posts only when `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied as
-secrets. It is off by default and stays in dry run until `dry_run` is explicitly
-false. See
-[Pull request triage](pull-request-triage.md#optional-bot-comment).
+One unattended write does run here, because it happens in the fetch step rather than the server: the optional bot comment on newly opened pull requests, which posts only when `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied as secrets. It is off by default and stays in dry run until `dry_run` is explicitly false. See [Pull request triage](pull-request-triage.md#optional-bot-comment).

@@ -1,22 +1,10 @@
 # Kubernetes deployment quickstart
 
-Use Kubernetes when the dashboard needs a private in-cluster model endpoint,
-shared persistent data, authenticated server features, or cluster-local
-integration. Use [GitHub Actions and Pages](github-pages.md) for a public,
-read-only dashboard that does not need a cluster.
+Use Kubernetes when the dashboard needs a private in-cluster model endpoint, shared persistent data, authenticated server features, or cluster-local integration. Use [GitHub Actions and Pages](github-pages.md) for a public, read-only dashboard that does not need a cluster.
 
-Start with `aster onboard` and select **Kubernetes with Helm**. The generated
-consumer repository contains `project.yaml`, `prompts/system.md`, optional
-skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`.
-Interactive onboarding leaves storage as a reviewed placeholder. For
-non-interactive onboarding, provide exactly one of `-k8s-storage-class` or
-`-k8s-existing-claim`; the CLI does not infer platform storage.
+Start with `aster onboard` and select **Kubernetes with Helm**. The generated consumer repository contains `project.yaml`, `prompts/system.md`, optional skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`. Interactive onboarding leaves storage as a reviewed placeholder. For non-interactive onboarding, provide exactly one of `-k8s-storage-class` or `-k8s-existing-claim`; the CLI does not infer platform storage.
 
-This page is the canonical contributor install, verification, upgrade, and
-rollback procedure. Cluster administrators should prepare prerequisites with
-[Kubernetes platform setup](kubernetes-platform.md). Detailed chart behavior is
-in the [Kubernetes operator reference](kubernetes-reference.md).
-For pull-based deployments, see [Flux GitOps deployment](kubernetes-gitops.md).
+This page is the canonical contributor install, verification, upgrade, and rollback procedure. Cluster administrators should prepare prerequisites with [Kubernetes platform setup](kubernetes-platform.md). Detailed chart behavior is in the [Kubernetes operator reference](kubernetes-reference.md). For pull-based deployments, see [Flux GitOps deployment](kubernetes-gitops.md).
 
 ## Prerequisites
 
@@ -31,9 +19,7 @@ Obtain these reviewed inputs from the platform administrator:
 - the public origin and OAuth callback, when enabled;
 - one expected project job for first-deployment verification.
 
-Install Helm 4, `kubectl`, `curl`, `awk`, `python3`, `install`, and either
-`sha256sum` or `shasum`. Do not place credentials in consumer files, Helm
-arguments, or shell history.
+Install Helm 4, `kubectl`, `curl`, `awk`, `python3`, `install`, and either `sha256sum` or `shasum`. Do not place credentials in consumer files, Helm arguments, or shell history.
 
 Set project-specific variables from the consumer repository root:
 
@@ -49,13 +35,11 @@ export PUBLIC_URL="" # set when an external public origin is configured
 export EXPECTED_JOB="<expected-job-name>"
 ```
 
-Keep `CONTEXT` explicit in every Kubernetes and Helm command. Use the CLI and
-charts from the same release.
+Keep `CONTEXT` explicit in every Kubernetes and Helm command. Use the CLI and charts from the same release.
 
 ## Download and verify the CLI
 
-A normal contributor uses the published binary and does not need an engine
-source checkout or local build.
+A normal contributor uses the published binary and does not need an engine source checkout or local build.
 
 ```bash
 export CLI_DIR="$HOME/.local/share/aster/$CLI_VERSION"
@@ -88,8 +72,7 @@ install -m 0755 "$DOWNLOAD_DIR/$CLI_ASSET" "$CLI_DIR/$CLI_ASSET"
 export ASTER="$CLI_DIR/$CLI_ASSET"
 ```
 
-A missing asset, missing checksum entry, checksum mismatch, or unavailable
-checksum tool stops the procedure.
+A missing asset, missing checksum entry, checksum mismatch, or unavailable checksum tool stops the procedure.
 
 ## Review the consumer bundle
 
@@ -98,12 +81,10 @@ Review before every install or upgrade:
 - discovery, branding, source identity, and expected jobs in `project.yaml`;
 - every claim and TODO in `prompts/system.md`;
 - each consumer diagnostic skill;
-- storage, provider coordinates, Secret references, and optional features in
-  `deploy/values.yaml`;
+- storage, provider coordinates, Secret references, and optional features in `deploy/values.yaml`;
 - immutable application, remote-fixer, and executor image identities.
 
-Keep chat, GitHub writes, public ingress, and experimental runtimes disabled
-until the baseline dashboard is healthy.
+Keep chat, GitHub writes, public ingress, and experimental runtimes disabled until the baseline dashboard is healthy.
 
 Inspect the complete values for the selected chart version when needed:
 
@@ -147,10 +128,7 @@ Run the live read-only doctor before the write command:
   --chart-version "$CHART_VERSION"
 ```
 
-The live doctor uses Kubernetes `GET` and `LIST`, metadata-only Secret checks,
-Helm release metadata, and local chart rendering. It does not read Secret
-payloads, create a Sandbox, call a provider, or write cluster resources. Resolve
-blocking checks and review unverified external facts with the platform owner.
+The live doctor uses Kubernetes `GET` and `LIST`, metadata-only Secret checks, Helm release metadata, and local chart rendering. It does not read Secret payloads, create a Sandbox, call a provider, or write cluster resources. Resolve blocking checks and review unverified external facts with the platform owner.
 
 ## Install
 
@@ -164,13 +142,11 @@ blocking checks and review unverified external facts with the platform owner.
   --chart-version "$CHART_VERSION"
 ```
 
-Install refuses an existing release. The wrapper validates the current bundle,
-waits for readiness, and requests Helm rollback on failure.
+Install refuses an existing release. The wrapper validates the current bundle, waits for readiness, and requests Helm rollback on failure.
 
 ## Verify the first deployment
 
-Resolve release-owned objects through stable labels and wait for the writer and
-server:
+Resolve release-owned objects through stable labels and wait for the writer and server:
 
 ```bash
 SERVER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
@@ -187,8 +163,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$SERVER"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$WRITER" --timeout=10m
 ```
 
-Port-forward the Service in a second terminal, then verify published and private
-paths:
+Port-forward the Service in a second terminal, then verify published and private paths:
 
 ```bash
 kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward "service/$SERVICE" 18080:80
@@ -210,9 +185,7 @@ if [ -n "$EXECUTION_NAMESPACE" ]; then
 fi
 ```
 
-Confirm branding, the expected project job, authentication when enabled, normal
-DNS, and the configured public-origin topology. Do not use a direct-IP
-kubeconfig, edit `/etc/hosts`, remove the cluster CA, or disable TLS validation.
+Confirm branding, the expected project job, authentication when enabled, normal DNS, and the configured public-origin topology. Do not use a direct-IP kubeconfig, edit `/etc/hosts`, remove the cluster CA, or disable TLS validation.
 
 ## Upgrade
 
@@ -247,9 +220,7 @@ After selecting and verifying the new CLI and matching chart version, run:
   --chart-version "$CHART_VERSION"
 ```
 
-Upgrade requires an existing release, reuses deployed values, applies the
-current consumer bundle, waits for readiness, and requests rollback on failure.
-Repeat first-deployment verification after the upgrade.
+Upgrade requires an existing release, reuses deployed values, applies the current consumer bundle, waits for readiness, and requests rollback on failure. Repeat first-deployment verification after the upgrade.
 
 ## Roll back
 
@@ -261,9 +232,7 @@ git restore --source="$PRIOR_CONSUMER_COMMIT" -- \
 git restore --source="$PRIOR_CONSUMER_COMMIT" -- skills 2>/dev/null || true
 ```
 
-Restore the CLI and chart version matching the prior consumer state, rerun the
-live doctor with `--action upgrade`, and repeat verification. Rollback does not
-delete retained PVC data or externally owned platform resources.
+Restore the CLI and chart version matching the prior consumer state, rerun the live doctor with `--action upgrade`, and repeat verification. Rollback does not delete retained PVC data or externally owned platform resources.
 
 ## Next references
 

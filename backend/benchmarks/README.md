@@ -1,31 +1,16 @@
 # AI quality benchmark
 
-This directory is a separate Go module for opt-in quality benchmarks. The main
-backend module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do not
-compile it. Live benchmarks remain gated behind their own `RUN_*` or `BENCH_*`
-environment variable. The module's local `replace` directive binds its Aster
-dependency to the parent checkout. Run `go -C backend/benchmarks mod tidy` after
-changing benchmark-only dependencies.
+This directory is a separate Go module for opt-in quality benchmarks. The main backend module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do not compile it. Live benchmarks remain gated behind their own `RUN_*` or `BENCH_*` environment variable. The module's local `replace` directive binds its Aster dependency to the parent checkout. Run `go -C backend/benchmarks mod tidy` after changing benchmark-only dependencies.
 
-They live outside `backend/internal/e2e` on purpose: that package now holds only
-`pipeline_test.go`, the hermetic regression test that uses a scripted model and
-never calls a real endpoint.
+They live outside `backend/internal/e2e` on purpose: that package now holds only `pipeline_test.go`, the hermetic regression test that uses a scripted model and never calls a real endpoint.
 
 ## What it does
 
-For each case in `benchCases`, the benchmark runs `ai.Service` with the
-filesystem and Kubernetes tools against a real build's artifact tree. It checks
-the model output against `must` and `nice` signal regexes. A missed `must` signal
-fails the test. Each trial also reports the unique successful filesystem and
-Kubernetes Tool names and their call counts from the current private trace
-format.
+For each case in `benchCases`, the benchmark runs `ai.Service` with the filesystem and Kubernetes tools against a real build's artifact tree. It checks the model output against `must` and `nice` signal regexes. A missed `must` signal fails the test. Each trial also reports the unique successful filesystem and Kubernetes Tool names and their call counts from the current private trace format.
 
 ## Running it
 
-Run these commands from the repository root. The live benchmark is skipped
-unless `RUN_AI_BENCHMARK` is set and an endpoint is configured. It costs real
-model tokens or GPU. Provider-free harness tests can be run with
-`go -C backend/benchmarks test ./... -count=1`.
+Run these commands from the repository root. The live benchmark is skipped unless `RUN_AI_BENCHMARK` is set and an endpoint is configured. It costs real model tokens or GPU. Provider-free harness tests can be run with `go -C backend/benchmarks test ./... -count=1`.
 
 ```bash
 RUN_AI_BENCHMARK=1 \
@@ -34,10 +19,7 @@ AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
 go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
-The frozen cross-project evaluation cohort is available as an external manifest.
-Run each case separately with its matching consumer. The manifest validates the
-consumer commit plus `project.yaml` and `prompts/system.md` hashes before making
-provider requests:
+The frozen cross-project evaluation cohort is available as an external manifest. Run each case separately with its matching consumer. The manifest validates the consumer commit plus `project.yaml` and `prompts/system.md` hashes before making provider requests:
 
 ```bash
 manifest="$PWD/backend/benchmarks/testdata/benchmarks/cross-project-eval.json"
@@ -54,13 +36,7 @@ run_case kueue-was-podgroup-api-mismatch /path/to/kueue-aster-eval
 run_case gcp-pd-csi-windows-mount-visibility /path/to/gcp-pd-csi-prow-dashboard-eval
 ```
 
-The first five-case corpus-growth batch is pinned in
-`testdata/benchmarks/corpus-batch-1.json`. It covers a Cluster API kind-version
-gate, a CAPA webhook CA mismatch, an AWS EBS CSI checksum-service failure, an
-Azure Disk PVC update conflict, and a Kubernetes Windows test-selection
-failure. Its fixtures and source revisions are public and digest-pinned. The
-cases do not pin one project consumer, so a run may supply the frozen project
-configuration and prompt appropriate to the comparison.
+The first five-case corpus-growth batch is pinned in `testdata/benchmarks/corpus-batch-1.json`. It covers a Cluster API kind-version gate, a CAPA webhook CA mismatch, an AWS EBS CSI checksum-service failure, an Azure Disk PVC update conflict, and a Kubernetes Windows test-selection failure. Its fixtures and source revisions are public and digest-pinned. The cases do not pin one project consumer, so a run may supply the frozen project configuration and prompt appropriate to the comparison.
 
 The pinned baseline consumer commits are:
 
@@ -68,61 +44,23 @@ The pinned baseline consumer commits are:
 - Kueue: `e4257c64fc9c5344b01919488fc76aa3fb0618b7`
 - GCP PD CSI: `f74fc047a1f6de10eec334207c4e58ce743bdcac`
 
-The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be
-grounded in the frozen build evidence and are not source-grounding controls. The
-GCP PD CSI reference is medium confidence, so that case also accepts the engine's
-citation-policy unavailable result instead of rewarding an unsupported owner.
+The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be grounded in the frozen build evidence and are not source-grounding controls. The GCP PD CSI reference is medium confidence, so that case also accepts the engine's citation-policy unavailable result instead of rewarding an unsupported owner.
 
 Options:
 
-- `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml`
-  AI tuning and `prompts/system.md`, so the run matches that live deploy exactly.
-  Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
-- `BENCH_VARIANT_DIR=<consumer-variant>` evaluates a prompt or recipe variant
-  while keeping `BENCH_PROJECT_DIR` as the immutable pinned baseline. The
-  variant must have a byte-identical `project.yaml`; only the effective
-  `prompts/system.md` and `skills/*.yaml` inputs may change. Set a stable
-  `BENCH_ARM` whenever a variant is used. The baseline arm defaults to
-  `baseline`.
-- `BENCH_CASE=<case-id>` selects one exact external-manifest case. Pinned
-  cross-project consumers require this so one project's prompt is never applied
-  to another project's fixture.
-- External manifest cases may set `test_source: build` for a Prow build-level
-  failure that has no JUnit case. This preserves the production failure signal
-  and build-specific floor policy.
-- `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed
-  fixture. Only works before Prow garbage-collects the build.
-- `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set
-  `BENCH_REPETITION_START=<index>` when an isolated operation must retain its
-  planned repetition number instead of restarting at 1.
-- `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key
-  namespace used by production.
-- `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a
-  deterministic isolated subdirectory. The harness rejects a pre-existing
-  `ai_cache.json` so a requested cold operation cannot silently become warm.
-- `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new
-  client, and evaluates the exact current cache policy without a provider call.
-  The private JSONL result separately records whether persistence was attempted
-  and accepted, the policy rejection reason, whether lookup was attempted and
-  accepted, the lookup rejection reason, restored floor markers, whether a
-  hard-policy unavailable cooldown was found, and a provider-request count of
-  zero.
-- `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`,
-  `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model)
-  floors so a stronger model can be benchmarked fairly, since the weak-model
-  floors distort a strong model that answers concisely. Example for a strong
-  hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
-- The harness derives and enforces the maximum provider requests admitted by the
-  exact agentic configuration. The cap includes the configured loop, the single
-  byte-floor extension, forced finalization, and one bounded critique repair.
-  Transport retries count through each trace event's `attempts` value, and a truncated trace fails closed because request usage would be
-  incomplete. Private JSONL records `provider_request_cap`, logical
-  `model_requests`, actual `provider_attempts`, logical request bytes, separate
-  Responses wire-request bytes, and `trace_truncated`.
+- `BENCH_PROJECT_DIR=<consumer-repo>` loads that consumer's real `project.yaml` AI tuning and `prompts/system.md`, so the run matches that live deploy exactly. Without it, a compact built-in prompt and the live CAPZ-Dynamo tuning are used.
+- `BENCH_VARIANT_DIR=<consumer-variant>` evaluates a prompt or recipe variant while keeping `BENCH_PROJECT_DIR` as the immutable pinned baseline. The variant must have a byte-identical `project.yaml`; only the effective `prompts/system.md` and `skills/*.yaml` inputs may change. Set a stable `BENCH_ARM` whenever a variant is used. The baseline arm defaults to `baseline`.
+- `BENCH_CASE=<case-id>` selects one exact external-manifest case. Pinned cross-project consumers require this so one project's prompt is never applied to another project's fixture.
+- External manifest cases may set `test_source: build` for a Prow build-level failure that has no JUnit case. This preserves the production failure signal and build-specific floor policy.
+- `BENCH_USE_GCS=1` reads artifacts from live GCS instead of the committed fixture. Only works before Prow garbage-collects the build.
+- `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set `BENCH_REPETITION_START=<index>` when an isolated operation must retain its planned repetition number instead of restarting at 1.
+- `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key namespace used by production.
+- `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a deterministic isolated subdirectory. The harness rejects a pre-existing `ai_cache.json` so a requested cold operation cannot silently become warm.
+- `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new client, and evaluates the exact current cache policy without a provider call. The private JSONL result separately records whether persistence was attempted and accepted, the policy rejection reason, whether lookup was attempted and accepted, the lookup rejection reason, restored floor markers, whether a hard-policy unavailable cooldown was found, and a provider-request count of zero.
+- `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model) floors so a stronger model can be benchmarked fairly, since the weak-model floors distort a strong model that answers concisely. Example for a strong hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
+- The harness derives and enforces the maximum provider requests admitted by the exact agentic configuration. The cap includes the configured loop, the single byte-floor extension, forced finalization, and one bounded critique repair. Transport retries count through each trace event's `attempts` value, and a truncated trace fails closed because request usage would be incomplete. Private JSONL records `provider_request_cap`, logical `model_requests`, actual `provider_attempts`, logical request bytes, separate Responses wire-request bytes, and `trace_truncated`.
 
-For the Claude hard-policy production-readiness matrix, the fixed configuration
-uses `max_iters: 11`, a non-zero byte floor, and one critique retry. Its exact
-maximum is:
+For the Claude hard-policy production-readiness matrix, the fixed configuration uses `max_iters: 11`, a non-zero byte floor, and one critique retry. Its exact maximum is:
 
 ```text
 11 configured iterations + 1 byte-floor extension = 12 main-loop requests
@@ -133,114 +71,34 @@ maximum is:
 2 compatibility requests + 4 x 15 = 62 total Claude requests
 ```
 
-The selected operation cap is 15. Transport retries consume that same cap rather
-than receiving extra headroom. A larger value would hide an unbounded or
-unexpected runtime path rather than provide legitimate headroom.
+The selected operation cap is 15. Transport retries consume that same cap rather than receiving extra headroom. A larger value would hide an unbounded or unexpected runtime path rather than provide legitimate headroom.
 
 ## Telemetry
 
-Each completed analysis reports the configured quality-gate result and bounded
-usage counters. The output includes evidence-plan coverage, GCS-floor bypass,
-critique status and version, a short skill-set hash prefix, budget exhaustion,
-context truncations, model and Tool failures, model
-requests, and provider-reported input and output tokens. Private JSONL output
-also records the derived provider-request cap, GCS bytes, floor markers, sorted safe Tool counts, floor-nudge
-reasons, the hashed cache generation, zero-request cache reload results, and
-draft metadata that omits raw draft text. Draft metadata contains stable critique rule IDs,
-matched skill IDs, applicable missing or unavailable evidence-group IDs, and the
-selected attempt. It also records each draft's manifest signal hits and totals,
-including the required-signal subset, without retaining the scored text. These
-details are written only to the private benchmark JSONL; production traces remain
-content-free. The JSONL records
-both raw critique findings and the findings that survive deterministic publication
-sanitization. It also records every best/fallback
-replacement decision with evidence revisions, strict-dominance state, and a
-stable acceptance or rejection reason. Decision events displace older ordinary
-trace events if the per-analysis cap is full. It does not contain draft text.
+Each completed analysis reports the configured quality-gate result and bounded usage counters. The output includes evidence-plan coverage, GCS-floor bypass, critique status and version, a short skill-set hash prefix, budget exhaustion, context truncations, model and Tool failures, model requests, and provider-reported input and output tokens. Private JSONL output also records the derived provider-request cap, GCS bytes, floor markers, sorted safe Tool counts, floor-nudge reasons, the hashed cache generation, zero-request cache reload results, and draft metadata that omits raw draft text. Draft metadata contains stable critique rule IDs, matched skill IDs, applicable missing or unavailable evidence-group IDs, and the selected attempt. It also records each draft's manifest signal hits and totals, including the required-signal subset, without retaining the scored text. These details are written only to the private benchmark JSONL; production traces remain content-free. The JSONL records both raw critique findings and the findings that survive deterministic publication sanitization. It also records every best/fallback replacement decision with evidence revisions, strict-dominance state, and a stable acceptance or rejection reason. Decision events displace older ordinary trace events if the per-analysis cap is full. It does not contain draft text.
 
-Human review uses rubric version 2 with five dimensions scored from 0 to 2:
-diagnosis, artifact evidence, claim discipline, remediation, and source
-grounding. The maximum human score is 10. Every private JSONL row records the
-rubric version and maximum so report generation cannot describe the same totals
-with a different denominator.
+Human review uses rubric version 2 with five dimensions scored from 0 to 2: diagnosis, artifact evidence, claim discipline, remediation, and source grounding. The maximum human score is 10. Every private JSONL row records the rubric version and maximum so report generation cannot describe the same totals with a different denominator.
 
-Every private JSONL row also records the experiment arm, engine commit, fixture
-digest, pinned baseline consumer commit, effective project and prompt digests,
-merged skill-set hash, API mode, a sanitized provider-configuration digest,
-frozen pricing, evidence condition, frozen-evidence digest when present, and one
-effective-input digest. Persistent cold-cache paths include the arm and
-effective-input digest, so separate arms and evidence conditions cannot silently
-share an analysis cache.
+Every private JSONL row also records the experiment arm, engine commit, fixture digest, pinned baseline consumer commit, effective project and prompt digests, merged skill-set hash, API mode, a sanitized provider-configuration digest, frozen pricing, evidence condition, frozen-evidence digest when present, and one effective-input digest. Persistent cold-cache paths include the arm and effective-input digest, so separate arms and evidence conditions cannot silently share an analysis cache.
 
-The trace summary reports the floor-nudge count and ordered reasons, context
-compaction and over-budget counts, critique and evidence retries, and accepted-uncached events. Successful Tool
-names and per-Tool counts remain sorted. If an analysis fails before producing
-`AIAnalysis`, the benchmark prints the available trace and Tool summaries before
-failing the test.
+The trace summary reports the floor-nudge count and ordered reasons, context compaction and over-budget counts, critique and evidence retries, and accepted-uncached events. Successful Tool names and per-Tool counts remain sorted. If an analysis fails before producing `AIAnalysis`, the benchmark prints the available trace and Tool summaries before failing the test.
 
-External cases may define bounded `evidence_groups` containing path, content,
-and scoring-only root-cause regexes. Before a provider request, the benchmark
-scans the pinned fixture and records whether each required signal exists. During
-the trial it separately records candidate-path selection, decisive excerpt
-delivery, model receipt, final citation, and root-cause-only causal use.
-`evidence_group_sources` distinguishes native model Tool calls (`model_tool`),
-deterministic critique repair (`repair_injection`), and a prepared frozen
-benchmark bundle (`oracle_prompt`). An oracle excerpt counts as model receipt
-only after the trace shows that a model request containing the prepared prompt
-was made. An untagged
-test-only read is `unknown` and does not count as model receipt. The private
-JSONL stores only content-free group states and never stores matching content.
+External cases may define bounded `evidence_groups` containing path, content, and scoring-only root-cause regexes. Before a provider request, the benchmark scans the pinned fixture and records whether each required signal exists. During the trial it separately records candidate-path selection, decisive excerpt delivery, model receipt, final citation, and root-cause-only causal use. `evidence_group_sources` distinguishes native model Tool calls (`model_tool`), deterministic critique repair (`repair_injection`), and a prepared frozen benchmark bundle (`oracle_prompt`). An oracle excerpt counts as model receipt only after the trace shows that a model request containing the prepared prompt was made. An untagged test-only read is `unknown` and does not count as model receipt. The private JSONL stores only content-free group states and never stores matching content.
 
-`trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`,
-`contract_violation`, `timeout`, and `runtime_failure`. A parseable safe result
-remains `valid_result` when a bounded finalization repair or other contract
-warning occurred. The separate `contract_violation` boolean preserves that
-telemetry without converting displayable analysis into a lifecycle failure. The
-JSONL row is written before a failing trial stops the test.
+`trial_status` distinguishes `valid_result`, `no_result`, `invalid_result`, `contract_violation`, `timeout`, and `runtime_failure`. A parseable safe result remains `valid_result` when a bounded finalization repair or other contract warning occurred. The separate `contract_violation` boolean preserves that telemetry without converting displayable analysis into a lifecycle failure. The JSONL row is written before a failing trial stops the test.
 
-Both arms record `structured_valid`, `displayable`, `analysis_disposition`, and
-`citations_verified` separately. `preliminary` means safe structured content with
-unresolved evidence or quality warnings. Citation verification checks that cited
-artifact text was read and occurs at the stated range. It does not establish that
-the text entails the cause or supports every causal link. A miss in a separate
-benchmark evidence signal does not retroactively make the runtime result
-malformed. Action eligibility is not a benchmark quality metric; it requires authenticated request-time policy and confirmation outside either arm.
+Both arms record `structured_valid`, `displayable`, `analysis_disposition`, and `citations_verified` separately. `preliminary` means safe structured content with unresolved evidence or quality warnings. Citation verification checks that cited artifact text was read and occurs at the stated range. It does not establish that the text entails the cause or supports every causal link. A miss in a separate benchmark evidence signal does not retroactively make the runtime result malformed. Action eligibility is not a benchmark quality metric; it requires authenticated request-time policy and confirmation outside either arm.
 
-`BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only
-`kueue-oracle-v1` condition is available only for the pinned Kueue API-version
-case. It extracts a compact line-centered bundle from the verified fixture,
-checks the committed bundle hash, and gives those raw artifact lines to the
-in-process model. Preparation has one 30-second deadline and a 128 MiB aggregate
-scan budget. Scoring names, regexes, and the reference diagnosis are not included
-in the model-visible bundle. The evidence-stage configuration is hashed, and
-its expected sorted IDs are paired across comparison records so missing stages
-fail closed. This condition
-changes only benchmark input and identity. It does not change production
-analysis behavior.
+`BENCH_EVIDENCE_CONDITION` defaults to `fixture-v1`. The benchmark-only `kueue-oracle-v1` condition is available only for the pinned Kueue API-version case. It extracts a compact line-centered bundle from the verified fixture, checks the committed bundle hash, and gives those raw artifact lines to the in-process model. Preparation has one 30-second deadline and a 128 MiB aggregate scan budget. Scoring names, regexes, and the reference diagnosis are not included in the model-visible bundle. The evidence-stage configuration is hashed, and its expected sorted IDs are paired across comparison records so missing stages fail closed. This condition changes only benchmark input and identity. It does not change production analysis behavior.
 
-JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim
-policy checks. This prevents a placeholder or abstaining answer from appearing
-moderately successful merely because it avoids forbidden claims.
+JSONL also separates `diagnosis_signal_hits` from transient and forbidden-claim policy checks. This prevents a placeholder or abstaining answer from appearing moderately successful merely because it avoids forbidden claims.
 
-Scored benchmark runs reject `AGENTIC_TRACE_TOOLS`, so retained telemetry never
-prints prompts, model response text, Tool arguments, Tool output, endpoints,
-model coordinates, credentials, or full hashes.
+Scored benchmark runs reject `AGENTIC_TRACE_TOOLS`, so retained telemetry never prints prompts, model response text, Tool arguments, Tool output, endpoints, model coordinates, credentials, or full hashes.
 
-Each frozen case declares an `evidence_mode`. `artifact_only` requires artifact
-evidence and canonical artifact citations but does not require a repository read.
-`artifact_and_source` additionally freezes expected repository, revision, path,
-and line ranges plus source-backed diagnosis signals. The comparative requirement
-is complete content-read coverage of every frozen range plus all source-backed
-signals. Citation emission and verification are reported as per-arm capability
-telemetry only. They do not participate in cross-arm grounding or classification
-gates. Source citations, relevant files, or source-backed claims remain invalid
-without source evidence regardless of the case mode. The exact comparison reports
-both evidence categories separately and is incomplete when either category is
-absent.
+Each frozen case declares an `evidence_mode`. `artifact_only` requires artifact evidence and canonical artifact citations but does not require a repository read. `artifact_and_source` additionally freezes expected repository, revision, path, and line ranges plus source-backed diagnosis signals. The comparative requirement is complete content-read coverage of every frozen range plus all source-backed signals. Citation emission and verification are reported as per-arm capability telemetry only. They do not participate in cross-arm grounding or classification gates. Source citations, relevant files, or source-backed claims remain invalid without source evidence regardless of the case mode. The exact comparison reports both evidence categories separately and is incomplete when either category is absent.
 
 
-To separate retrieval from reasoning on the Kueue case, run the same cold trial
-with the frozen oracle condition:
+To separate retrieval from reasoning on the Kueue case, run the same cold trial with the frozen oracle condition:
 
 ```bash
 BENCH_EVIDENCE_CONDITION=kueue-oracle-v1 \
@@ -260,9 +118,7 @@ BENCH_RESULTS_JSONL=/private/bench/kueue-oracle.jsonl \
 go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
-A miss with `model_received_evidence=true` is evidence of a reasoning or causal
-synthesis failure. A miss with that field false remains a retrieval failure.
-Verify the pinned extraction without a provider by running:
+A miss with `model_received_evidence=true` is evidence of a reasoning or causal synthesis failure. A miss with that field false remains a retrieval failure. Verify the pinned extraction without a provider by running:
 
 ```bash
 RUN_BENCHMARK_FIXTURE_VALIDATION=1 \
@@ -271,79 +127,25 @@ go -C backend/benchmarks test . -run TestKueueOracleEvidenceFixture -v -count=1
 
 ## Signal tiers
 
-Each case's `signals` are regexes checked against the model's summary, root
-cause, and suggested fix. A `must` signal that misses fails the test. A `nice`
-signal is informational (how deep the analysis got). Some `nice` signals are
-labeled `STRETCH`: an aspirational bar even strong models miss today, tracked
-but never required. Keep the `must` bar at the achievable correct diagnosis so
-the benchmark is a real regression gate rather than permanently red.
+Each case's `signals` are regexes checked against the model's summary, root cause, and suggested fix. A `must` signal that misses fails the test. A `nice` signal is informational (how deep the analysis got). Some `nice` signals are labeled `STRETCH`: an aspirational bar even strong models miss today, tracked but never required. Keep the `must` bar at the achievable correct diagnosis so the benchmark is a real regression gate rather than permanently red.
 
 ## Fixtures
 
-Prow garbage-collects GCS artifacts on a rolling window, so each case's full
-artifact tree is snapshotted and published as a `.tar.gz` asset on the
-historical `benchmark-fixtures` release in `willie-yao/prow-ai-dashboard`. By
-default the benchmark downloads
-the asset, extracts it to a local cache (`os.UserCacheDir()`), and reads it
-through the `local` storage provider, so the agent traverses the exact
-real directory structure. The download is cached across runs.
+Prow garbage-collects GCS artifacts on a rolling window, so each case's full artifact tree is snapshotted and published as a `.tar.gz` asset on the historical `benchmark-fixtures` release in `willie-yao/prow-ai-dashboard`. By default the benchmark downloads the asset, extracts it to a local cache (`os.UserCacheDir()`), and reads it through the `local` storage provider, so the agent traverses the exact real directory structure. The download is cached across runs.
 
-To add a case: capture a real failing build, snapshot its full bucket-relative
-tree, upload it as a release asset, and add a `benchCase` referencing the asset
-plus the root-cause signals a correct analysis should contain.
+To add a case: capture a real failing build, snapshot its full bucket-relative tree, upload it as a release asset, and add a `benchCase` referencing the asset plus the root-cause signals a correct analysis should contain.
 
 ### Current cases
 
-- **ccm-dualstack-control-plane-routetable** (`ccm-dualstack-capz-6358.tar.gz`):
-  `pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30` build
-  `2062345846720040960`. Failed 100% because CAPZ does not default a route table
-  onto the control-plane subnet; on dual-stack Calico runs `encapsulation: None`,
-  so the control plane cannot reach worker pod CIDRs, the Calico APIService goes
-  unreachable, and every namespace hangs Terminating. All 64 failed tests report
-  only "timed out waiting for the condition", so the agent must read the
-  `AzureCluster` resource dump to find the empty control-plane route table. Fixed
-  in cluster-api-provider-azure PR #6358, in a different repo than the job. This
-  is the hard/aspirational case: the exact route-table cause is a `STRETCH`
-  signal, and the `must` bar is the achievable high-level diagnosis (systemic,
-  control-plane/networking, CAPZ).
+- **ccm-dualstack-control-plane-routetable** (`ccm-dualstack-capz-6358.tar.gz`): `pull-cloud-provider-azure-e2e-ccm-dualstack-capz-1-30` build `2062345846720040960`. Failed 100% because CAPZ does not default a route table onto the control-plane subnet; on dual-stack Calico runs `encapsulation: None`, so the control plane cannot reach worker pod CIDRs, the Calico APIService goes unreachable, and every namespace hangs Terminating. All 64 failed tests report only "timed out waiting for the condition", so the agent must read the `AzureCluster` resource dump to find the empty control-plane route table. Fixed in cluster-api-provider-azure PR #6358, in a different repo than the job. This is the hard/aspirational case: the exact route-table cause is a `STRETCH` signal, and the `must` bar is the achievable high-level diagnosis (systemic, control-plane/networking, CAPZ).
 
-- **flatcar-worker-dns-providerid**
-  (`flatcar-sysext-dns-providerid.tar.gz`):
-  `periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24` build
-  `2073261474372915200` from July 4, 2026. The Flatcar worker VM and Node were
-  running, but the Node retained its external-cloud-provider initialization
-  taint and never gained a providerID. cloud-node-manager then crash-looped
-  because it could not reach the API Service ClusterIP. The initiating error is
-  one artifact deeper: worker kube-proxy never synchronized because its API
-  endpoint DNS lookup used `[::1]:53`, which refused the connection. Build
-  `2074370797262082048` passed on July 7, 2026 with the same Kubernetes,
-  Flatcar, and containerd versions. This is the middle case: it requires a short
-  generic Kubernetes artifact chain, but not Azure route-table expertise. The
-  cloud-node-manager/providerID chain is required; the final kube-proxy/DNS hop
-  is tracked as a stretch signal.
+- **flatcar-worker-dns-providerid** (`flatcar-sysext-dns-providerid.tar.gz`): `periodic-cluster-api-provider-azure-e2e-v1beta1-release-1-24` build `2073261474372915200` from July 4, 2026. The Flatcar worker VM and Node were running, but the Node retained its external-cloud-provider initialization taint and never gained a providerID. cloud-node-manager then crash-looped because it could not reach the API Service ClusterIP. The initiating error is one artifact deeper: worker kube-proxy never synchronized because its API endpoint DNS lookup used `[::1]:53`, which refused the connection. Build `2074370797262082048` passed on July 7, 2026 with the same Kubernetes, Flatcar, and containerd versions. This is the middle case: it requires a short generic Kubernetes artifact chain, but not Azure route-table expertise. The cloud-node-manager/providerID chain is required; the final kube-proxy/DNS hop is tracked as a stretch signal.
 
-- **apiversion-upgrade-clusterctl-aso-ratelimit**
-  (`apiversion-upgrade-aso-clusterctl.tar.gz`):
-  `periodic-cluster-api-provider-azure-apiversion-upgrade-main` build
-  `2074603331648491520`. `clusterctl upgrade` scales the Azure Service Operator
-  (ASO) controller down during the management-cluster provider upgrade, so ASO's
-  CRD conversion webhook becomes unreachable. clusterctl's object-graph
-  discovery then fails listing ASO resource CRDs (VirtualNetworksSubnet,
-  ManagedClustersAgentPool) because the storage-version conversion call is
-  refused, retrying until the client-side rate limiter hits its context
-  deadline. Unlike the route-table case, the proximate cause is stated verbatim
-  in `build-log.txt` and the `clusterctl-upgrade.log` dumps, so a competent agent
-  finds it by reading the logs. Persistent (7+ consecutive builds); the real fix
-  is partly upstream in cluster-api's clusterctl upgrade sequencing. This is the
-  achievable case: a strong analysis scores full marks.
+- **apiversion-upgrade-clusterctl-aso-ratelimit** (`apiversion-upgrade-aso-clusterctl.tar.gz`): `periodic-cluster-api-provider-azure-apiversion-upgrade-main` build `2074603331648491520`. `clusterctl upgrade` scales the Azure Service Operator (ASO) controller down during the management-cluster provider upgrade, so ASO's CRD conversion webhook becomes unreachable. clusterctl's object-graph discovery then fails listing ASO resource CRDs (VirtualNetworksSubnet, ManagedClustersAgentPool) because the storage-version conversion call is refused, retrying until the client-side rate limiter hits its context deadline. Unlike the route-table case, the proximate cause is stated verbatim in `build-log.txt` and the `clusterctl-upgrade.log` dumps, so a competent agent finds it by reading the logs. Persistent (7+ consecutive builds); the real fix is partly upstream in cluster-api's clusterctl upgrade sequencing. This is the achievable case: a strong analysis scores full marks.
 
 ## Cause-resolution comparison benchmark
 
-The Flatcar cause-resolution benchmark checks that analysis chat does not call a
-cause fixed merely because a later run passed with different inputs. Its frozen
-fixture contains failed builds `2090605942025490432` and
-`2091715517269151744`, where `stable-1.35` selected Kubernetes v1.35.8, and
-comparison build `2092830007742173184`, where it selected v1.35.6.
+The Flatcar cause-resolution benchmark checks that analysis chat does not call a cause fixed merely because a later run passed with different inputs. Its frozen fixture contains failed builds `2090605942025490432` and `2091715517269151744`, where `stable-1.35` selected Kubernetes v1.35.8, and comparison build `2092830007742173184`, where it selected v1.35.6.
 
 ```bash
 RUN_CAUSE_RESOLUTION_BENCHMARK=1 \
@@ -351,5 +153,4 @@ AI_ENDPOINT=<chat-completions-url> AI_MODEL=<model> AI_TOKEN=<token> \
 go -C backend/benchmarks test . -run TestAnalysisChatCauseResolutionBenchmark -v -timeout 20m
 ```
 
-The fixture-integrity test runs with the benchmark module tests. The model
-benchmark remains opt-in because it makes provider calls.
+The fixture-integrity test runs with the benchmark module tests. The model benchmark remains opt-in because it makes provider calls.

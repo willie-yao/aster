@@ -1,11 +1,8 @@
 # Aster platform chart
 
-This chart installs the release-specific Agent Sandbox platform boundary used by
-one Aster application release. The cluster administrator installs
-it before the application chart.
+This chart installs the release-specific Agent Sandbox platform boundary used by one Aster application release. The cluster administrator installs it before the application chart.
 
-For cluster prerequisites, ownership, acceptance, and the complete lifecycle,
-see [Kubernetes platform setup](../../../docs/kubernetes-platform.md).
+For cluster prerequisites, ownership, acceptance, and the complete lifecycle, see [Kubernetes platform setup](../../../docs/kubernetes-platform.md).
 
 ## Resource ownership
 
@@ -18,12 +15,9 @@ The chart owns:
 - an immutable application, namespace, runtime, egress, and gateway binding;
 - an optional digest-pinned model gateway and its Service and policies.
 
-It does not own Agent Sandbox CRDs or controller, RuntimeClass handlers, nodes,
-RWX storage, Secret values, application workloads, DNS, certificates, identity
-applications, or external infrastructure.
+It does not own Agent Sandbox CRDs or controller, RuntimeClass handlers, nodes, RWX storage, Secret values, application workloads, DNS, certificates, identity applications, or external infrastructure.
 
-Retained execution resources carry `helm.sh/resource-policy: keep` so uninstall
-does not remove the security boundary around active or terminating workloads.
+Retained execution resources carry `helm.sh/resource-policy: keep` so uninstall does not remove the security boundary around active or terminating workloads.
 
 ## Required values
 
@@ -46,14 +40,9 @@ modelGateway:
   enabled: false
 ```
 
-`allowedFQDNs` must list only exact project-required hosts. The current Cilium
-backend expects DNS in `kube-system` with `k8s-app: kube-dns`. Empty lists,
-wildcards, internal names, raw CIDRs, and alternate policy modes fail closed.
+`allowedFQDNs` must list only exact project-required hosts. The current Cilium backend expects DNS in `kube-system` with `k8s-app: kube-dns`. Empty lists, wildcards, internal names, raw CIDRs, and alternate policy modes fail closed.
 
-When `modelGateway.enabled` is true, also provide a digest-pinned image, exact
-upstream URL and host, existing provider and TLS Secret names, and a public FQDN
-for the privately resolved Service. Gateway egress is restricted to the
-configured upstream host.
+When `modelGateway.enabled` is true, also provide a digest-pinned image, exact upstream URL and host, existing provider and TLS Secret names, and a public FQDN for the privately resolved Service. Gateway egress is restricted to the configured upstream host.
 
 The full schema is in `values.schema.json`.
 
@@ -87,9 +76,7 @@ helm upgrade --install "$PLATFORM_RELEASE" \
   --rollback-on-failure
 ```
 
-Use the same command for upgrades after reviewing the render and Helm history.
-`application.releaseName` and `execution.namespace` cannot change after first
-installation.
+Use the same command for upgrades after reviewing the render and Helm history. `application.releaseName` and `execution.namespace` cannot change after first installation.
 
 The application values reference the platform identity:
 
@@ -105,11 +92,6 @@ agentSandbox:
 
 ## Rollback and uninstall
 
-Roll back with Helm to a recorded prior revision. Platform rollback does not
-change externally owned controller, runtime, node, storage, Secret, DNS,
-certificate, or provider resources.
+Roll back with Helm to a recorded prior revision. Platform rollback does not change externally owned controller, runtime, node, storage, Secret, DNS, certificate, or provider resources.
 
-Uninstall retains the execution namespace, binding, quota, limits,
-ServiceAccount, default-deny policy, and Cilium policy. Confirm there are no
-Sandboxes, Pods, or application RBAC references before separately deleting
-those retained resources.
+Uninstall retains the execution namespace, binding, quota, limits, ServiceAccount, default-deny policy, and Cilium policy. Confirm there are no Sandboxes, Pods, or application RBAC references before separately deleting those retained resources.

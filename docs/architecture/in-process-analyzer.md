@@ -1,46 +1,24 @@
 # In-process failure analyzer architecture
 
-This document describes the authoritative per-build failure analyzer used by
-Aster. It focuses on implementation ownership and control flow.
-Configuration details remain in [Agentic analysis](../agentic.md),
-[Project configuration](../project-configuration.md), [AI providers](../ai-providers.md),
-and [diagnostic skills](../skills.md).
+This document describes the authoritative per-build failure analyzer used by Aster. It focuses on implementation ownership and control flow. Configuration details remain in [Agentic analysis](../agentic.md), [Project configuration](../project-configuration.md), [AI providers](../ai-providers.md), and [diagnostic skills](../skills.md).
 
 ## Architectural role
 
-The dashboard owns failure-analysis policy. Both the GitHub Pages workflow and
-the normal Kubernetes deployment run the same Go analyzer through the fetcher
-or worker. `backend/internal/analysisruntime` wires project configuration,
-provider transport, tools, budgets, cache, and usage recording. The
-implementation that decides what to publish is `backend/internal/ai`, exposed
-through the `ai.FailureAnalyzer` interface and implemented by `ai.Service`.
+The dashboard owns failure-analysis policy. Both the GitHub Pages workflow and the normal Kubernetes deployment run the same Go analyzer through the fetcher or worker. `backend/internal/analysisruntime` wires project configuration, provider transport, tools, budgets, cache, and usage recording. The implementation that decides what to publish is `backend/internal/ai`, exposed through the `ai.FailureAnalyzer` interface and implemented by `ai.Service`.
 
-The Kubernetes API server serves published data and optional interactive
-features. It does not replace the fetcher or worker as the owner of scheduled
-failure analysis.
+The Kubernetes API server serves published data and optional interactive features. It does not replace the fetcher or worker as the owner of scheduled failure analysis.
 
 Safe structured output has a separate publication disposition:
 
-- `preliminary` is displayable with bounded warnings and remains eligible for
-  reanalysis. It does not directly authorize an action, but a usable diagnosis
-  can feed correlation or chat-derived Fix flows with their own evidence gates;
-- `citations_verified` has verified artifact citations and no unresolved
-  condition that degrades the publication disposition;
-- rejected output has no usable `AIAnalysis` and follows the existing unavailable
-  path.
+- `preliminary` is displayable with bounded warnings and remains eligible for reanalysis. It does not directly authorize an action, but a usable diagnosis can feed correlation or chat-derived Fix flows with their own evidence gates;
+- `citations_verified` has verified artifact citations and no unresolved condition that degrades the publication disposition;
+- rejected output has no usable `AIAnalysis` and follows the existing unavailable path.
 
-Direct action eligibility is never stored as analysis state. It is derived later
-from a `citations_verified` result plus the existing critique version, source
-verification, authentication, confirmation, deduplication, and Sandbox controls. Cache
-acceptance remains independent from safe publication.
+Direct action eligibility is never stored as analysis state. It is derived later from a `citations_verified` result plus the existing critique version, source verification, authentication, confirmation, deduplication, and Sandbox controls. Cache acceptance remains independent from safe publication.
 
 ## End-to-end flow
 
-`backend/cmd/aster` calls `fetcher.Run` for a one-shot refresh.
-`backend/cmd/worker` calls `fetcher.RunWatch` for repeated refreshes. After job
-discovery, artifact loading, JUnit parsing, and aggregation,
-`fetcher.analyzeFailuresWithAI` schedules each failed `models.TestCase` through
-the shared `FailureAnalyzer` contract.
+`backend/cmd/aster` calls `fetcher.Run` for a one-shot refresh. `backend/cmd/worker` calls `fetcher.RunWatch` for repeated refreshes. After job discovery, artifact loading, JUnit parsing, and aggregation, `fetcher.analyzeFailuresWithAI` schedules each failed `models.TestCase` through the shared `FailureAnalyzer` contract.
 
 ```mermaid
 flowchart TD
@@ -62,52 +40,30 @@ flowchart TD
     N --> O["Public job and flakiness JSON"]
 ```
 
-The scheduling pass and `ai.Service.analyze` both revalidate an analysis already
-attached to a cached build. Preliminary results remain reanalysis-eligible. The
-service checks the private agentic cache before artifact-tree scanning,
-evidence-plan construction, and provider calls. Normal cache policy is stricter
-than safe publication and can reject a preliminary result without hiding it.
+The scheduling pass and `ai.Service.analyze` both revalidate an analysis already attached to a cached build. Preliminary results remain reanalysis-eligible. The service checks the private agentic cache before artifact-tree scanning, evidence-plan construction, and provider calls. Normal cache policy is stricter than safe publication and can reject a preliminary result without hiding it.
 
 ## Prompt composition and skills
 
-Project startup calls `analysisruntime.LoadProject`. The system prompt has a
-fixed ownership order:
+Project startup calls `analysisruntime.LoadProject`. The system prompt has a fixed ownership order:
 
 1. engine `ai.BasePrompt`;
 2. the mandatory consumer `prompts/system.md`, under a project-specific heading;
 3. engine `ai.ResponseFormatFooter`;
 4. engine agentic tool guidance appended when `doAnalyzeAgentic` starts.
 
-The per-failure user message comes from
-`backend/internal/ai/modules/universal`. It contains bounded failure metadata,
-the failure message and body, and starting tool suggestions. The service adds
-bounded Prow job metadata. Normal in-process execution analyzes one test per
-request. After a private cache miss, the agentic loop prepends a bounded
-artifact-path seed and any ranked evidence plan.
+The per-failure user message comes from `backend/internal/ai/modules/universal`. It contains bounded failure metadata, the failure message and body, and starting tool suggestions. The service adds bounded Prow job metadata. Normal in-process execution analyzes one test per request. After a private cache miss, the agentic loop prepends a bounded artifact-path seed and any ranked evidence plan.
 
-Skills are not another free-form prompt layer. Engine profiles and consumer
-`skills/*.yaml` files are loaded into one deterministic set. The Prow profile is
-always selected; Kubernetes recipes are selected when Kubernetes tools are in
-the effective tool configuration. The initial failure signal selects evidence
-plans before the first model call. Later, draft text selects applicable recipes
-for critique, evidence requirements, and bounded repair. The merged skill hash
-is retained as provenance.
+Skills are not another free-form prompt layer. Engine profiles and consumer `skills/*.yaml` files are loaded into one deterministic set. The Prow profile is always selected; Kubernetes recipes are selected when Kubernetes tools are in the effective tool configuration. The initial failure signal selects evidence plans before the first model call. Later, draft text selects applicable recipes for critique, evidence requirements, and bounded repair. The merged skill hash is retained as provenance.
 
 ## Investigation tools and boundaries
 
-The authoritative loop is function-calling only. An endpoint that rejects tools
-makes analysis unavailable; there is no tools-free diagnostic fallback.
-`analysisruntime.New` registers these read-only capabilities:
+The authoritative loop is function-calling only. An endpoint that rejects tools makes analysis unavailable; there is no tools-free diagnostic fallback. `analysisruntime.New` registers these read-only capabilities:
 
-- `filesystem`: list, find, read, tail, grep, and timeline operations over one
-  build's artifact browser;
-- `k8s`: optional discovery helpers that navigate Kubernetes-shaped artifact
-  trees without contacting a live cluster;
-- `repotree`: read-only list, read, and grep operations added automatically only
-  when the build resolves to an immutable source repository revision.
+- `filesystem`: list, find, read, tail, grep, and timeline operations over one build's artifact browser;
+- `k8s`: optional discovery helpers that navigate Kubernetes-shaped artifact trees without contacting a live cluster;
+- `repotree`: read-only list, read, and grep operations added automatically only when the build resolves to an immutable source repository revision.
 
-No authoritative analysis tool can execute a shell command, modify artifacts,
-patch source, call GitHub write APIs, or change a cluster.
+No authoritative analysis tool can execute a shell command, modify artifacts, patch source, call GitHub write APIs, or change a cluster.
 
 The main boundaries are layered rather than represented by one counter:
 
@@ -120,127 +76,52 @@ The main boundaries are layered rather than represented by one counter:
 | Model-visible bytes | A context-derived model-byte budget and per-tool result caps bound inserted evidence. |
 | Context | The runtime prefers an operator context-window override, then provider metadata, then a bounded fallback. A conservative one-byte-per-token estimate reserves completion and finalization headroom. |
 
-Before each provider request, old tool results may be compacted into bounded
-stubs while recent evidence remains verbatim. If the request still cannot fit,
-the loop publishes the best previously selected draft when one exists or marks
-the analysis unavailable.
+Before each provider request, old tool results may be compacted into bounded stubs while recent evidence remains verbatim. If the request still cannot fit, the loop publishes the best previously selected draft when one exists or marks the analysis unavailable.
 
 ## Evidence and citations
 
-The loop takes one bounded artifact-tree snapshot for the path seed and ranked
-skill evidence plan. A plan group is covered only by a successful, non-empty
-content read that matches the required path and any same-artifact content
-predicates. Complete plan coverage can satisfy the evidence-byte floor without
-requiring arbitrary extra reads.
+The loop takes one bounded artifact-tree snapshot for the path seed and ranked skill evidence plan. A plan group is covered only by a successful, non-empty content read that matches the required path and any same-artifact content predicates. Complete plan coverage can satisfy the evidence-byte floor without requiring arbitrary extra reads.
 
-Only content-bearing `read_artifact`, `tail_artifact`, and `grep_artifact`
-results count as artifact evidence. Directory listings, failed calls, empty
-results, and guessed paths do not. Source reads are tracked separately so
-source-file claims cannot be justified by artifact reads.
+Only content-bearing `read_artifact`, `tail_artifact`, and `grep_artifact` results count as artifact evidence. Directory listings, failed calls, empty results, and guessed paths do not. Source reads are tracked separately so source-file claims cannot be justified by artifact reads.
 
-The loop retains a bounded line ledger from the exact model-visible artifact
-payloads. `evidence_citations` are validated against that ledger for safe path,
-line range, and exact quote. Deterministic critique also rejects unread artifact
-or source citations. Before publication, invalid citations are removed and
-unsupported line-number claims are stripped. The public citation list therefore
-reflects evidence actually returned to the model, not paths merely present in
-the artifact tree. Citation validation does not determine whether a quote entails
-the initiating cause or supports each material causal link.
+The loop retains a bounded line ledger from the exact model-visible artifact payloads. `evidence_citations` are validated against that ledger for safe path, line range, and exact quote. Deterministic critique also rejects unread artifact or source citations. Before publication, invalid citations are removed and unsupported line-number claims are stripped. The public citation list therefore reflects evidence actually returned to the model, not paths merely present in the artifact tree. Citation validation does not determine whether a quote entails the initiating cause or supports each material causal link.
 
-`min_tool_calls` and `min_gcs_bytes` are cacheability floors. If a model tries to
-finish below a floor, the loop can nudge it to continue investigating. A final
-result may still be publishable under the configured critique policy while
-remaining ineligible for cache persistence.
+`min_tool_calls` and `min_gcs_bytes` are cacheability floors. If a model tries to finish below a floor, the loop can nudge it to continue investigating. A final result may still be publishable under the configured critique policy while remaining ineligible for cache persistence.
 
 ## Draft lifecycle and selection
 
 Model output is never accepted directly. The current lifecycle is:
 
-1. A tools-free response is parsed into the `analysisResponse` JSON shape.
-   Parseable JSON attached to a tool-bearing turn is retained only as a fallback
-   candidate while the requested tools still run. If the loop exhausts
-   iterations or the response does not parse, one finalization request forces
-   the exact `submit_analysis` function schema with ordinary investigation tools
-   absent.
-2. Deterministic critique checks citation integrity, unread paths, unsafe or
-   unverified source paths, unsupported line claims, persistent-failure versus
-   transient conflicts, remediations that leave nothing to act on, remediation
-   punts, and recipe-required evidence.
-3. When permitted by retry, time, context, and evidence budgets, critique can
-   inject bounded missing evidence, allow another tool turn, and request a
-   revised structured draft.
-4. Deterministic draft selection keeps the best parseable candidate. A
-   replacement cannot introduce a hard-rule regression, and a changed root cause
-   requires new evidence.
+1. A tools-free response is parsed into the `analysisResponse` JSON shape. Parseable JSON attached to a tool-bearing turn is retained only as a fallback candidate while the requested tools still run. If the loop exhausts iterations or the response does not parse, one finalization request forces the exact `submit_analysis` function schema with ordinary investigation tools absent.
+2. Deterministic critique checks citation integrity, unread paths, unsafe or unverified source paths, unsupported line claims, persistent-failure versus transient conflicts, remediations that leave nothing to act on, remediation punts, and recipe-required evidence.
+3. When permitted by retry, time, context, and evidence budgets, critique can inject bounded missing evidence, allow another tool turn, and request a revised structured draft.
+4. Deterministic draft selection keeps the best parseable candidate. A replacement cannot introduce a hard-rule regression, and a changed root cause requires new evidence.
 
-Critique rules are classified as hard failures or soft warnings. Hard findings
-cover structural, citation, source-grounding, and contradiction failures. Soft
-findings cover evidence availability and remediation-quality warnings. The
-configured cache policy determines which classifications block reuse:
-`strict` accepts almost no warnings, `hard` blocks hard findings, and `advisory`
-records findings without making critique itself a cache barrier.
+Critique rules are classified as hard failures or soft warnings. Hard findings cover structural, citation, source-grounding, and contradiction failures. Soft findings cover evidence availability and remediation-quality warnings. The configured cache policy determines which classifications block reuse: `strict` accepts almost no warnings, `hard` blocks hard findings, and `advisory` records findings without making critique itself a cache barrier.
 
-If finalization fails, the loop prefers an earlier parseable draft, including a
-strict structured candidate attached to a tool-bearing turn. The selected draft
-still passes normal publication sanitization, critique classification, and
-analysis disposition. When no parseable draft exists, the result remains
-unavailable. Finalization recovery does not change pattern, correction,
-remediation, action, or Fix eligibility.
+If finalization fails, the loop prefers an earlier parseable draft, including a strict structured candidate attached to a tool-bearing turn. The selected draft still passes normal publication sanitization, critique classification, and analysis disposition. When no parseable draft exists, the result remains unavailable. Finalization recovery does not change pattern, correction, remediation, action, or Fix eligibility.
 
 ## Cache and current-floor revalidation
 
-The private cache key scopes the universal module, optional cache-generation
-fingerprint, job, build, and a short hash of the test name plus normalized
-failure message. Build scope is required because analyses cite build-specific
-paths and lines.
+The private cache key scopes the universal module, optional cache-generation fingerprint, job, build, and a short hash of the test name plus normalized failure message. Build scope is required because analyses cite build-specific paths and lines.
 
-Cache data records the structured result plus investigation counters, critique
-state, and model, prompt, and skill fingerprints. The model hash is
-a one-way fingerprint of provider API mode, endpoint, model, and reasoning
-effort. These fingerprints are provenance, not automatic invalidation selectors.
-A model, endpoint, prompt, skill, or failure-streak change affects new results
-but does not by itself reject an otherwise current entry.
+Cache data records the structured result plus investigation counters, critique state, and model, prompt, and skill fingerprints. The model hash is a one-way fingerprint of provider API mode, endpoint, model, and reasoning effort. These fingerprints are provenance, not automatic invalidation selectors. A model, endpoint, prompt, skill, or failure-streak change affects new results but does not by itself reject an otherwise current entry.
 
-Every attached or private entry is reconstructed and checked against the current
-contract. Reuse requires a valid, unexpired agentic result that meets current
-tool and evidence floors, the current critique version and configured critique
-policy, and the current cache generation. A
-rejection is treated as a miss without deleting all cache state, so a later run
-can reuse entries under a compatible configuration.
+Every attached or private entry is reconstructed and checked against the current contract. Reuse requires a valid, unexpired agentic result that meets current tool and evidence floors, the current critique version and configured critique policy, and the current cache generation. A rejection is treated as a miss without deleting all cache state, so a later run can reuse entries under a compatible configuration.
 
-Normal floor changes and critique-version changes do not need a generation
-change because current-floor revalidation handles them. Prompt, model, endpoint,
-and skill changes also do not require one, but they do not force reanalysis. Set
-`AI_CACHE_GENERATION` only when an operator intentionally wants a reversible
-full rebaseline that existing acceptance gates would otherwise allow.
+Normal floor changes and critique-version changes do not need a generation change because current-floor revalidation handles them. Prompt, model, endpoint, and skill changes also do not require one, but they do not force reanalysis. Set `AI_CACHE_GENERATION` only when an operator intentionally wants a reversible full rebaseline that existing acceptance gates would otherwise allow.
 
 ## Publication and private state
 
-Public job JSON contains the failure summary, root cause, severity, suggested
-fix, verified evidence citations, source links, and intentionally exposed
-per-analysis telemetry such as tool calls, context and artifact bytes, elapsed
-time, cache or same-failure reuse, budget state, critique status, and provenance
-fingerprints. The provider model name is not serialized.
-The in-process path records provider-reported token and cost details in private
-traces and usage ledgers rather than copying those totals into the public
-analysis object.
+Public job JSON contains the failure summary, root cause, severity, suggested fix, verified evidence citations, source links, and intentionally exposed per-analysis telemetry such as tool calls, context and artifact bytes, elapsed time, cache or same-failure reuse, budget state, critique status, and provenance fingerprints. The provider model name is not serialized. The in-process path records provider-reported token and cost details in private traces and usage ledgers rather than copying those totals into the public analysis object.
 
-After the separate pattern pass, `patterns.MergeLastGood` classifies each job's
-refresh as current, retained, failed or unavailable, or not applicable. A failed
-eligible refresh retains a prior valid pattern when one exists and otherwise
-publishes no fabricated fallback. The resulting causal-group projections are
-published in job details and aggregated into `flakiness.json`.
+After the separate pattern pass, `patterns.MergeLastGood` classifies each job's refresh as current, retained, failed or unavailable, or not applicable. A failed eligible refresh retains a prior valid pattern when one exists and otherwise publishes no fabricated fallback. The resulting causal-group projections are published in job details and aggregated into `flakiness.json`.
 
-Raw provider exchanges are transient and are not included in traces or public
-output. Private persisted state includes `ai_cache.json`, `ai_traces.json`,
-fetcher and server usage ledgers, fetch status, and side-effect state. Pages strips private
-files before deployment, and the Kubernetes server rejects them from the
-data-serving path.
+Raw provider exchanges are transient and are not included in traces or public output. Private persisted state includes `ai_cache.json`, `ai_traces.json`, fetcher and server usage ledgers, fetch status, and side-effect state. Pages strips private files before deployment, and the Kubernetes server rejects them from the data-serving path.
 
 ## Downstream and separate operations
 
-The analyzer publishes evidence and diagnosis. Other packages consume that
-output through separate authority and lifecycle gates:
+The analyzer publishes evidence and diagnosis. Other packages consume that output through separate authority and lifecycle gates:
 
 | Surface | Owner and boundary | Guide |
 | --- | --- | --- |
