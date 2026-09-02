@@ -456,30 +456,11 @@ func ValidateAIAPI(api string) error {
 	return fmt.Errorf("AI API %q is invalid (want %q or %q)", api, AIAPIChatCompletions, AIAPIResponses)
 }
 
-// AI configures the agentic failure-analysis pipeline: the endpoint and model
-// to call, optional request headers, analysis concurrency, and the inlined
-// agentic loop tuning.
+// AI configures project-owned failure-analysis behavior.
 type AI struct {
-	// API selects chat_completions (default) or responses.
-	API string `yaml:"api,omitempty" json:"-"`
-
-	// Endpoint is the OpenAI-compatible chat-completions URL. Required when AI is
-	// enabled because the engine has no default provider. Falls back to
-	// AI_ENDPOINT when unset here. Excluded from manifest.json.
-	Endpoint string `yaml:"endpoint,omitempty" json:"-"`
-
-	// Model is the model identifier the provider expects. Required when AI is
-	// enabled; falls back to the AI_MODEL env var when unset here. Excluded
-	// from manifest.json.
-	Model string `yaml:"model,omitempty" json:"-"`
-
 	// ServiceTier enables OpenAI flex processing for Responses requests.
 	// It is excluded from manifest.json.
 	ServiceTier string `yaml:"service_tier,omitempty" json:"-"`
-
-	// CacheGeneration selects a reversible namespace for all AI cache keys.
-	// AI_CACHE_GENERATION overrides it when non-empty. Excluded from public JSON.
-	CacheGeneration string `yaml:"cache_generation,omitempty" json:"-"`
 
 	// Headers are extra HTTP headers merged into every AI request after
 	// the defaults. Use for provider-specific routing headers or to
@@ -646,30 +627,6 @@ type AIProvider struct {
 	Headers         map[string]string
 }
 
-// ResolveAIProvider applies environment fallbacks to the project configuration.
-func (c *Config) ResolveAIProvider(apiFallback, endpointFallback, modelFallback, reasoningEffortFallback string) AIProvider {
-	api := strings.ToLower(strings.TrimSpace(apiFallback))
-	if api == "" {
-		api = AIAPIChatCompletions
-	}
-	out := AIProvider{API: api, Endpoint: endpointFallback, Model: modelFallback, ReasoningEffort: modelprovider.CanonicalReasoningEffort(reasoningEffortFallback)}
-	if c == nil || c.AI == nil {
-		return out
-	}
-	if value := strings.ToLower(strings.TrimSpace(c.AI.API)); value != "" {
-		out.API = value
-	}
-	if c.AI.Endpoint != "" {
-		out.Endpoint = c.AI.Endpoint
-	}
-	if c.AI.Model != "" {
-		out.Model = c.AI.Model
-	}
-	out.ServiceTier = strings.ToLower(strings.TrimSpace(c.AI.ServiceTier))
-	out.Headers = c.AI.Headers
-	return out
-}
-
 // ValidateAIProvider validates the shared provider request contract.
 func ValidateAIProvider(provider AIProvider) error {
 	if err := ValidateAIAPI(provider.API); err != nil {
@@ -718,10 +675,6 @@ type FixPRs struct {
 	// an LLM reviewer's objections before the fix is dropped. Defaults to 1; 0
 	// disables the review. Excluded from manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
-	// Verify builds and vets a proposed fix in a trusted local Runtime before the
-	// PR is opened. Agent Sandbox uses agent_runtime.allowed_commands instead and
-	// rejects this legacy verifier. Excluded from manifest.json.
-	Verify *FixVerify `yaml:"verify,omitempty" json:"-"`
 	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
 	// real workspace clone). A nil block uses opencode with defaults. Excluded
 	// from manifest.json.
@@ -847,45 +800,6 @@ func parseFixAgentCommandTimeout(value string) (time.Duration, error) {
 		return 0, fmt.Errorf("must use positive whole seconds or minutes")
 	}
 	return timeout, nil
-}
-
-// FixVerify configures pre-PR verification of a proposed fix.
-type FixVerify struct {
-	// Enabled turns verification on. Defaults to false.
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// Commands override the default verification. Each entry is one command line
-	// split on spaces (no shell). Defaults to `go build ./...` then
-	// `go vet ./...`.
-	Commands []string `yaml:"commands,omitempty" json:"-"`
-	// Timeout bounds each command, e.g. "10m". Empty uses the Runtime default.
-	Timeout string `yaml:"timeout,omitempty" json:"-"`
-}
-
-// ParsedCommands splits each configured command line into argv. An empty result
-// tells the caller to use its built-in default.
-func (v *FixVerify) ParsedCommands() [][]string {
-	if v == nil {
-		return nil
-	}
-	out := make([][]string, 0, len(v.Commands))
-	for _, c := range v.Commands {
-		if f := strings.Fields(c); len(f) > 0 {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// ParsedTimeout returns the per-command timeout, or 0 when unset or invalid.
-func (v *FixVerify) ParsedTimeout() time.Duration {
-	if v == nil {
-		return 0
-	}
-	d, err := time.ParseDuration(strings.TrimSpace(v.Timeout))
-	if err != nil {
-		return 0
-	}
-	return d
 }
 
 // ParsedTimeout returns the agent generation timeout, or 0 when unset or
@@ -1444,16 +1358,6 @@ func (c *Config) Validate() error {
 			c.Storage.Provider, storage.ProviderGCS, storage.ProviderGCSWeb, storage.ProviderLocal))
 	}
 
-	if c.AI != nil {
-		api := strings.ToLower(strings.TrimSpace(c.AI.API))
-		if api != "" && api != AIAPIChatCompletions && api != AIAPIResponses {
-			return fmt.Errorf("ai.api %q is invalid (want %q or %q)", c.AI.API, AIAPIChatCompletions, AIAPIResponses)
-		}
-		if err := ValidateAICacheGeneration(c.AI.CacheGeneration); err != nil {
-			return fmt.Errorf("ai.cache_generation: %w", err)
-		}
-	}
-
 	if len(missing) > 0 {
 		return fmt.Errorf("project config missing required field(s): %s", strings.Join(missing, ", "))
 	}
@@ -1620,13 +1524,6 @@ func (c *Config) Validate() error {
 		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
 			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables the review)")
 		}
-		if verify := f.Verify; verify != nil {
-			if value := strings.TrimSpace(verify.Timeout); value != "" {
-				if _, err := time.ParseDuration(value); err != nil {
-					return fmt.Errorf("ai.fix_prs.verify.timeout %q is not a valid duration", verify.Timeout)
-				}
-			}
-		}
 		if ar := f.AgentRuntime; ar != nil {
 			runtimeType := strings.TrimSpace(ar.Type)
 			if ar.MaxTurns < 0 {
@@ -1643,9 +1540,6 @@ func (c *Config) Validate() error {
 			}
 			if runtimeType != "" && runtimeType != "agent-sandbox" {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (want %q)", ar.Type, "agent-sandbox")
-			}
-			if f.Verify != nil && f.Verify.Enabled {
-				return fmt.Errorf("ai.fix_prs.verify is not allowed with agent-sandbox; use agent_runtime.allowed_commands")
 			}
 			if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
 				return fmt.Errorf("ai.fix_prs.critique_retries must be 0 for the one-shot agent-sandbox runtime")

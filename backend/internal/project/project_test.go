@@ -983,41 +983,33 @@ notifications:
 	}
 }
 
-func TestValidateFixVerifyTimeout(t *testing.T) {
-	cfg := validConfig()
-	cfg.AI = &AI{FixPRs: &FixPRs{
-		Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com",
-		Verify: &FixVerify{Enabled: true, Timeout: "not-a-duration"},
-	}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "verify.timeout") {
-		t.Fatalf("Validate error = %v, want verify.timeout", err)
+func TestParseRejectsRemovedFixVerificationField(t *testing.T) {
+	_, err := parse(strings.NewReader(validYAML + `
+ai:
+  fix_prs:
+    verify:
+      enabled: true
+`))
+	if err == nil || !strings.Contains(err.Error(), "field verify not found") {
+		t.Fatalf("parse error = %v, want removed verify field rejection", err)
 	}
 }
 
-func TestResolveAIProviderAPI(t *testing.T) {
-	cfg := &Config{AI: &AI{API: AIAPIResponses, Endpoint: "https://example/v1/responses", Model: "m", ServiceTier: modelprovider.ServiceTierFlex}}
-	got := cfg.ResolveAIProvider(AIAPIChatCompletions, "fallback", "fallback-model", " HIGH ")
-	if got.API != AIAPIResponses || got.Endpoint != cfg.AI.Endpoint || got.Model != "m" || got.ReasoningEffort != "high" || got.ServiceTier != modelprovider.ServiceTierFlex {
-		t.Fatalf("provider = %+v", got)
-	}
-	defaults := (&Config{}).ResolveAIProvider("", "endpoint", "model", "")
-	if defaults.API != AIAPIChatCompletions {
-		t.Fatalf("default API = %q", defaults.API)
+func TestParseRejectsDeploymentOwnedAIFields(t *testing.T) {
+	for _, field := range []string{"api", "endpoint", "model", "cache_generation"} {
+		t.Run(field, func(t *testing.T) {
+			_, err := parse(strings.NewReader(validYAML + "\nai:\n  " + field + ": value\n"))
+			if err == nil || !strings.Contains(err.Error(), "field "+field+" not found") {
+				t.Fatalf("parse error = %v, want removed %s field rejection", err, field)
+			}
+		})
 	}
 }
 
 func TestValidateAIProviderRejectsUnknownReasoningEffort(t *testing.T) {
-	provider := (&Config{}).ResolveAIProvider("", "endpoint", "model", "ultra")
+	provider := AIProvider{API: AIAPIChatCompletions, Endpoint: "endpoint", Model: "model", ReasoningEffort: "ultra"}
 	if err := ValidateAIProvider(provider); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
 		t.Fatalf("ValidateAIProvider error = %v", err)
-	}
-}
-
-func TestValidateRejectsUnknownAIAPI(t *testing.T) {
-	cfg := validConfig()
-	cfg.AI = &AI{API: "unknown"}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ai.api") {
-		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -1567,23 +1559,6 @@ ai:
 	provider := cfg.EffectiveFixPRs().AgentRuntime.ModelProvider.RuntimeConfig()
 	if provider.ReasoningEffort != modelprovider.ReasoningEffortHigh {
 		t.Fatalf("reasoning effort = %q", provider.ReasoningEffort)
-	}
-}
-
-func TestValidateRejectsLegacyLocalVerifierWithAgentSandbox(t *testing.T) {
-	cfg := validConfig()
-	allowBash := false
-	cfg.AI = &AI{FixPRs: &FixPRs{
-		Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com",
-		Verify: &FixVerify{Enabled: true, Commands: []string{"go test ./..."}},
-		AgentRuntime: &FixAgentRuntime{
-			Type: "agent-sandbox", AllowBash: &allowBash, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
-			AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-			ModelProvider:   validAgentSandboxModelProvider(),
-		},
-	}}
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "use agent_runtime.allowed_commands") {
-		t.Fatalf("validation error = %v", err)
 	}
 }
 

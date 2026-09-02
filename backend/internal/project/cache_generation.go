@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	// AICacheGenerationEnv overrides ai.cache_generation when non-empty.
+	// AICacheGenerationEnv selects the deployment-owned cache namespace.
 	AICacheGenerationEnv = "AI_CACHE_GENERATION"
 	// AIReasoningEffortEnv selects the optional provider reasoning effort.
 	AIReasoningEffortEnv  = "AI_REASONING_EFFORT"
@@ -33,18 +33,6 @@ func ValidateAICacheGeneration(value string) error {
 		return fmt.Errorf("AI cache generation must start with an alphanumeric character and contain only alphanumerics, dot, underscore, or hyphen")
 	}
 	return nil
-}
-
-// ResolveAICacheGeneration applies the environment-over-project precedence.
-func ResolveAICacheGeneration(configValue, envValue string) (string, error) {
-	value := configValue
-	if strings.TrimSpace(envValue) != "" {
-		value = envValue
-	}
-	if err := ValidateAICacheGeneration(value); err != nil {
-		return "", err
-	}
-	return value, nil
 }
 
 // AICacheGenerationFingerprint returns the safe cache-key namespace.

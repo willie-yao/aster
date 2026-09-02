@@ -38,12 +38,12 @@ import (
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
-	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/server"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -189,7 +189,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	}
 	opts.AIUsageEnabled = usageRecorder != nil
 	if cfg.AI != nil {
-		opts.AIUsageModel = cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv)).Model
+		opts.AIUsageModel = strings.TrimSpace(os.Getenv("AI_MODEL"))
 		pricing := cfg.AI.EffectiveUsage().Pricing
 		if pricing.Currency != "" {
 			table, priceErr := aiusage.NewPriceTable(aiusage.Rates{
@@ -256,20 +256,11 @@ func exactJUnitChatFixEnabled(fixConfig project.FixPRs) bool {
 	return fixConfig.Enabled && fixConfig.AgentRuntime != nil && fixConfig.AgentRuntime.Type == "agent-sandbox"
 }
 
-func fixActionsEnabled(fixConfig project.FixPRs, authMode string) (bool, error) {
+func fixActionsEnabled(fixConfig project.FixPRs) bool {
 	if !fixConfig.Enabled || fixConfig.AgentRuntime == nil {
-		return false, nil
+		return false
 	}
-	if fixConfig.Verify != nil && fixConfig.Verify.Enabled {
-		trusted, err := engineruntime.TrustedLocalRuntimeEnabled()
-		if err != nil {
-			return false, err
-		}
-		if !trusted {
-			return false, fmt.Errorf("ai.fix_prs.verify requires %s=true on a trusted development or CI host", engineruntime.TrustedLocalRuntimeEnv)
-		}
-	}
-	return fixConfig.AgentRuntime.Type == "" || fixConfig.AgentRuntime.Type == "agent-sandbox", nil
+	return fixConfig.AgentRuntime.Type == "" || fixConfig.AgentRuntime.Type == "agent-sandbox"
 }
 
 type interactiveFeatures struct {
@@ -372,7 +363,17 @@ func configureAuthenticator(opts *server.Options, actionsEnabled bool) error {
 }
 
 func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
-	provider := cfg.ResolveAIProvider(os.Getenv("AI_API"), os.Getenv("AI_ENDPOINT"), os.Getenv("AI_MODEL"), os.Getenv(project.AIReasoningEffortEnv))
+	normalized := modelprovider.Normalize(modelprovider.Config{
+		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
+		ReasoningEffort: modelprovider.ReasoningEffort(os.Getenv(project.AIReasoningEffortEnv)),
+	})
+	provider := project.AIProvider{
+		API: normalized.API, Endpoint: normalized.Endpoint, Model: normalized.Model, ReasoningEffort: normalized.ReasoningEffort,
+	}
+	if cfg.AI != nil {
+		provider.ServiceTier = strings.ToLower(strings.TrimSpace(cfg.AI.ServiceTier))
+		provider.Headers = cfg.AI.Headers
+	}
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
@@ -381,10 +382,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
 		UsageRecorder: usageRecorder,
 	})
-	fixActions, err := fixActionsEnabled(cfg.EffectiveFixPRs(), opts.AuthMode)
-	if err != nil {
-		return nil, err
-	}
+	fixActions := fixActionsEnabled(cfg.EffectiveFixPRs())
 	actionService.ConfigureFixActions(fixActions)
 	opts.DisableFixActions = !fixActions
 	opts.Actions = actionService
@@ -417,7 +415,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	if token == "" {
 		return nil, fmt.Errorf("analysis chat requires AI_TOKEN")
 	}
-	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
+	projectRuntime, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.DeploymentConfig{
 		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"), ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
 		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 	})
@@ -617,7 +615,7 @@ func enablePullRequestEscalation(
 	if cfg.PullRequests == nil || !cfg.PullRequests.Enabled {
 		return fmt.Errorf("pull request escalation requires pull_requests.enabled in project.yaml")
 	}
-	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.ProviderFallbacks{
+	loaded, err := analysisruntime.LoadProject(projectDir, cfg, analysisruntime.DeploymentConfig{
 		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
 		ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
 		CacheGeneration: os.Getenv(project.AICacheGenerationEnv),

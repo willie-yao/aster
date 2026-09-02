@@ -11,11 +11,8 @@ name: Reusable Deploy
 #     deploy:
 #       uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
 #       with:
-#         # Optional: keep private or preview model identifiers and private
-#         # endpoint URLs out of the public project.yaml by sourcing them
-#         # from repo variables (`gh variable set AI_MODEL ...`) instead.
-#         # The project.yaml `ai.model` / `ai.endpoint` fields still win
-#         # if set.
+#         # Provider coordinates are deployment-owned. Source them from
+#         # repository variables (`gh variable set AI_MODEL ...`).
 #         ai-model: ${{ vars.AI_MODEL }}
 #         ai-endpoint: ${{ vars.AI_ENDPOINT }}
 #         ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
@@ -52,17 +49,17 @@ on:
         type: boolean
         default: true
       ai-api:
-        description: "Optional. AI API: chat_completions (default) or responses. The yaml ai.api field wins if set."
+        description: "Optional. AI API: chat_completions (default) or responses."
         required: false
         type: string
         default: ""
       ai-model:
-        description: "Optional. AI model identifier passed to the fetcher as AI_MODEL. Use this with a repo variable (vars.AI_MODEL) to keep private or preview model labels out of the public project.yaml. The yaml ai.model field wins if set."
+        description: "AI model identifier passed to the fetcher as AI_MODEL. Use a repository variable such as vars.AI_MODEL."
         required: false
         type: string
         default: ""
       ai-endpoint:
-        description: "Optional. URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use this with a repo variable (vars.AI_ENDPOINT) to keep private endpoint URLs out of the public project.yaml. The yaml ai.endpoint field wins if set."
+        description: "URL for the selected AI API, passed to the fetcher as AI_ENDPOINT. Use a repository variable such as vars.AI_ENDPOINT."
         required: false
         type: string
         default: ""
