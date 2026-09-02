@@ -35,8 +35,10 @@ type SafeCommandResult struct {
 type AnalysisFixFailureDetail string
 
 const (
-	AnalysisFixFailureDetailNoRepositoryChange  AnalysisFixFailureDetail = "no_repository_change"
-	AnalysisFixFailureDetailReviewScopeExceeded AnalysisFixFailureDetail = "review_scope_exceeded"
+	AnalysisFixFailureDetailNoRepositoryChange   AnalysisFixFailureDetail = "no_repository_change"
+	AnalysisFixFailureDetailReviewScopeExceeded  AnalysisFixFailureDetail = "review_scope_exceeded"
+	AnalysisFixFailureDetailProviderUnauthorized AnalysisFixFailureDetail = "provider_unauthorized"
+	AnalysisFixFailureDetailProviderForbidden    AnalysisFixFailureDetail = "provider_forbidden"
 )
 
 // AnalysisFixFailureView reports a bounded exact-JUnit generation failure.

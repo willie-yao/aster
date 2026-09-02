@@ -27,7 +27,7 @@ const reasonMessages: Record<ActionReasonCode, string> = {
   source_revision_diverged: "The failure commit is not an ancestor of its branch head, so a patch cannot be safely generated.",
   source_changed: "A verified source path is unavailable or changed between the failure revision and its branch head.",
   provider_credential_rejected:
-    "The model provider rejected the sandbox credential. Generation cannot succeed until the credential is fixed.",
+    "The model provider refused the sandbox request. Check the Agent Sandbox provider configuration and provider-side authorization before retrying.",
   generation_failed: "Draft generation did not complete successfully.",
 };
 

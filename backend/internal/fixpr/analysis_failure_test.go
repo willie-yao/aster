@@ -3,11 +3,13 @@ package fixpr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -323,12 +325,13 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	results := sandboxCommandResults()
 	tests := []struct {
-		name       string
-		result     runtime.ExecutionResult
-		err        error
-		maxFiles   int
-		want       AnalysisFailureCategory
-		wantDetail AnalysisFailureDetail
+		name        string
+		result      runtime.ExecutionResult
+		err         error
+		maxFiles    int
+		want        AnalysisFailureCategory
+		wantDetail  AnalysisFailureDetail
+		wantSummary bool
 	}{
 		{
 			name: "too broad", maxFiles: 1, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
@@ -342,9 +345,11 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 		},
 		{
 			name: "provider credential", maxFiles: 2, want: AnalysisFailureProviderCredential,
+			wantDetail: AnalysisFailureDetailProviderForbidden, wantSummary: true,
 			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureProviderCredential,
+				ProviderError:  &runtime.ProviderErrorDetail{StatusCode: 403, Message: "Forbidden", AuthSecretName: "agent-sandbox-model", AuthSecretKey: "AI_TOKEN", Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "gpt-fixture"},
 				CommandResults: results},
-			err: errors.New("agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403)"),
+			err: errors.New("agent Sandbox execution failed: model provider refused the sandbox request (HTTP 403)"),
 		},
 		{
 			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
@@ -395,7 +400,11 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			if len(diagnostic.ChangedFiles) != 0 {
 				t.Fatalf("diagnostic exposed changed files: %v", diagnostic.ChangedFiles)
 			}
-			if diagnostic.OperatorSummary != "" {
+			if tt.wantSummary {
+				if diagnostic.OperatorSummary == "" {
+					t.Fatal("diagnostic omitted operator summary")
+				}
+			} else if diagnostic.OperatorSummary != "" {
 				t.Fatalf("diagnostic exposed agent summary: %q", diagnostic.OperatorSummary)
 			}
 		})
@@ -430,6 +439,127 @@ func TestAnalysisPreviewPinsAndTargetsFailureBranch(t *testing.T) {
 	for _, branch := range pr.resolveBranches {
 		if branch != "release-1.25" {
 			t.Fatalf("resolved branches = %v, want only the failure branch", pr.resolveBranches)
+		}
+	}
+}
+
+func TestProviderCredentialOperatorSummaryDistinguishesStatusAndRedactsMessage(t *testing.T) {
+	base := runtime.ProviderErrorDetail{
+		Message:        "request failed Authorization: Bearer ghp-fixture-secret token=second-secret",
+		ProviderID:     "github-copilot",
+		AuthSecretName: "agent-sandbox-model",
+		AuthSecretKey:  "AI_TOKEN",
+		Endpoint:       "https://api.githubcopilot.com/chat/completions",
+		Model:          "gpt-fixture",
+	}
+
+	unauthorized := base
+	unauthorized.StatusCode = 401
+	unauthorizedSummary := providerCredentialOperatorSummary(&unauthorized)
+	for _, want := range []string{
+		"HTTP 401: credential rejected; check it.", "Secret agent-sandbox-model/AI_TOKEN",
+		"endpoint https|api.githubcopilot.com/chat/completions", "model gpt-fixture", "Provider github-copilot",
+	} {
+		if !strings.Contains(unauthorizedSummary, want) {
+			t.Fatalf("401 summary missing %q: %s", want, unauthorizedSummary)
+		}
+	}
+
+	forbidden := base
+	forbidden.StatusCode = 403
+	forbiddenSummary := providerCredentialOperatorSummary(&forbidden)
+	for _, want := range []string{"HTTP 403: request refused", "provider entitlement", "organization policy", "quota", "proxy or mesh authorization"} {
+		if !strings.Contains(forbiddenSummary, want) {
+			t.Fatalf("403 summary missing %q: %s", want, forbiddenSummary)
+		}
+	}
+	if strings.Contains(forbiddenSummary, "invalid credential") || strings.Contains(forbiddenSummary, "credential rejected") {
+		t.Fatalf("403 summary overstates credential failure: %s", forbiddenSummary)
+	}
+	for _, secret := range []string{"ghp-fixture-secret", "second-secret"} {
+		if strings.Contains(unauthorizedSummary, secret) || strings.Contains(forbiddenSummary, secret) {
+			t.Fatalf("provider summary disclosed %q: 401=%q 403=%q", secret, unauthorizedSummary, forbiddenSummary)
+		}
+	}
+}
+
+func TestProviderCredentialOperatorSummaryPreservesLongMessageThroughAPIRedaction(t *testing.T) {
+	message := strings.Repeat("provider-detail-", 25)
+	if len(message) != 400 {
+		t.Fatalf("fixture message is %d bytes", len(message))
+	}
+	for _, statusCode := range []int{401, 403} {
+		t.Run(fmt.Sprintf("HTTP_%d", statusCode), func(t *testing.T) {
+			summary := providerCredentialOperatorSummary(&runtime.ProviderErrorDetail{
+				StatusCode: statusCode, Message: message, ProviderID: "github-copilot",
+				AuthSecretName: "capz-aster-fix-model", AuthSecretKey: "AI_TOKEN",
+				Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "gpt-fixture",
+			})
+			visible := redact.OperatorText(summary)
+			if visible != summary || len(summary) != providerOperatorSummaryBytes {
+				t.Fatalf("summary did not fill the bounded output: len=%d summary=%q visible=%q", len(summary), summary, visible)
+			}
+			messageStart := strings.Index(summary, " Provider message: ") + len(" Provider message: ")
+			if messageStart < len(" Provider message: ") {
+				t.Fatalf("summary omitted provider message label: %q", summary)
+			}
+			renderedMessage := summary[messageStart:]
+			minimumPrefix := providerMessageSummaryBytes - len("…")
+			if len(renderedMessage) < providerMessageSummaryBytes ||
+				!strings.HasPrefix(renderedMessage, message[:minimumPrefix]) || !strings.HasSuffix(renderedMessage, "…") {
+				t.Fatalf("provider message budget was not preserved: len=%d message=%q", len(renderedMessage), renderedMessage)
+			}
+			for _, reference := range []string{
+				"capz-aster-fix-model", "AI_TOKEN",
+				"https", "api.githubcopilot.com/chat/completions", "gpt-fixture", "github-copilot",
+			} {
+				if !strings.Contains(visible, reference) {
+					t.Fatalf("operator summary omitted %q: %q", reference, visible)
+				}
+			}
+			if statusCode == 403 && !strings.Contains(visible, "Check credential access or provider entitlement, organization policy, quota, and proxy or mesh authorization.") {
+				t.Fatalf("403 summary omitted advisory: %q", visible)
+			}
+		})
+	}
+}
+
+func TestProviderConfigSummaryDistinguishesLongSecretNames(t *testing.T) {
+	prefix := "shared-analysis-fix-secret-"
+	suffixes := []string{"-primary", "-fallback"}
+	summaries := make([]string, 0, len(suffixes))
+	for _, suffix := range suffixes {
+		name := prefix + strings.Repeat("a", 253-len(prefix)-len(suffix)) + suffix
+		summary := providerCredentialOperatorSummary(&runtime.ProviderErrorDetail{
+			StatusCode: 403, Message: strings.Repeat("provider-detail-", 25), ProviderID: strings.Repeat("p", 200),
+			AuthSecretName: name, AuthSecretKey: "AI_TOKEN",
+			Endpoint: "https://" + strings.Repeat("endpoint", 80) + ".example/chat/completions",
+			Model:    strings.Repeat("model", 100),
+		})
+		if !strings.Contains(summary, suffix) {
+			t.Fatalf("summary lost distinguishing Secret suffix %q: %q", suffix, summary)
+		}
+		summaries = append(summaries, summary)
+	}
+	if summaries[0] == summaries[1] {
+		t.Fatalf("distinct Secret names rendered identically: %q", summaries[0])
+	}
+}
+
+func TestProviderCredentialOperatorSummaryBoundsPathologicalInputs(t *testing.T) {
+	summary := providerCredentialOperatorSummary(&runtime.ProviderErrorDetail{
+		StatusCode: 403, Message: strings.Repeat("provider-detail-", 100), ProviderID: strings.Repeat("p", 500),
+		AuthSecretName: strings.Repeat("s", 253), AuthSecretKey: strings.Repeat("k", 253),
+		Endpoint: "https://" + strings.Repeat("endpoint", 100) + ".example/chat/completions",
+		Model:    strings.Repeat("model", 200),
+	})
+	visible := redact.OperatorText(summary)
+	if len(summary) > providerOperatorSummaryBytes || visible != summary {
+		t.Fatalf("pathological summary escaped its bound: len=%d summary=%q visible=%q", len(summary), summary, visible)
+	}
+	for _, component := range []string{"Secret ", "/", "endpoint ", "model ", "Provider ", "Provider message: ", "proxy or mesh authorization"} {
+		if !strings.Contains(summary, component) {
+			t.Fatalf("pathological summary omitted %q: %q", component, summary)
 		}
 	}
 }

@@ -249,6 +249,17 @@ test("shared observer refresh cannot overwrite a conversation reset", () => {
   assert.match(chat, /busy \|\| restoring \|\| resetting/);
 });
 
+test("source citations show immutable identity without artifact links", () => {
+  const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  const types = readFileSync(resolve(process.cwd(), "src/types/analysisChat.ts"), "utf8");
+  assert.match(types, /repository\?: string/);
+  assert.match(types, /revision\?: string/);
+  assert.match(chat, /sourceCitation = Boolean\(citation\.repository \|\| citation\.revision\)/);
+  assert.match(chat, /sourceCitation \? null : fileToUrl\(citation\.path, fileCtx\)/);
+  assert.match(chat, /\{citation\.repository\}@\{citation\.revision\}/);
+  assert.match(chat, /citation\.repository \?\? "".*citation\.revision \?\? ""/);
+});
+
 test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 

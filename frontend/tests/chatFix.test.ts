@@ -96,6 +96,13 @@ test("chat fix citation verification accumulates across the conversation", () =>
   ]);
   assert.deepEqual([...later], ["two"]);
 
+  const sourceOnly = answer("source", false);
+  sourceOnly.citations = [{
+    repository: "example/project", revision: "0123456789abcdef0123456789abcdef01234567",
+    path: "pkg/controller.go", line_start: 10, line_end: 10, quote: "return err",
+  }];
+  assert.equal(chatFixVerifiedCitationRequestIDs([sourceOnly]).size, 0);
+
   assert.equal(chatFixVerifiedCitationRequestIDs([question("one"), answer("one", false)]).size, 0);
   assert.equal(chatFixVerifiedCitationRequestIDs(undefined).size, 0);
 });
@@ -301,6 +308,24 @@ test("exact JUnit request presentation separates recoverable hard and observatio
   });
   assert.equal(reasonOnly?.severity, "error");
   assert.equal(reasonOnly?.canRegenerate, false);
+  const unauthorized = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "provider_credential_rejected",
+    failure: {
+      category: "provider_credential", detail: "provider_unauthorized", terminal_state: "failed",
+      operator_summary: "Auth Secret agent-sandbox-model, key AI_TOKEN.",
+    },
+  });
+  assert.equal(unauthorized?.severity, "warning");
+  assert.equal(unauthorized?.canRegenerate, true);
+  assert.match(unauthorized?.message ?? "", /rejected the sandbox credential \(HTTP 401\)/);
+  const forbidden = chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "provider_credential_rejected",
+    failure: { category: "provider_credential", detail: "provider_forbidden", terminal_state: "failed" },
+  });
+  assert.equal(forbidden?.canRegenerate, true);
+  assert.match(forbidden?.message ?? "", /refused the request \(HTTP 403\)/);
+  assert.match(forbidden?.message ?? "", /model entitlement/);
+  assert.doesNotMatch(forbidden?.message ?? "", /invalid credential/);
   const hard = chatFixRequestPresentation({
     ...base, status: "failed", reason_code: "unsafe_remediation", error: "Unsafe remediation blocked.",
     failure: { category: "safety_integrity" },
@@ -313,14 +338,24 @@ test("exact JUnit request presentation separates recoverable hard and observatio
   assert.equal(pending?.shouldObserve, true);
 });
 
-test("exact JUnit regeneration is one explicit replacement with changed feedback", () => {
+test("exact JUnit regeneration keeps feedback replacement separate from provider retry", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
   const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
-  assert.match(regenerate, /recoverableTerminal = request\.status === "failed" && request\.failure\?\.category === "no_reviewable_patch"/);
-  assert.match(regenerate, /if \(!recoverableTerminal\) \{[\s\S]*cancelAnalysisChatFixRequest/);
+  assert.match(regenerate, /providerCredentialRetry = request\.status === "failed" && request\.failure\?\.category === "provider_credential"/);
+  assert.match(regenerate, /feedbackReplacement = request\.status === "failed" && request\.failure\?\.category === "no_reviewable_patch"/);
+  const createRequest = regenerate.indexOf("const replacement = await createAnalysisChatFixRequest");
+  const providerClearBranch = regenerate.indexOf("if (providerCredentialRetry)", createRequest);
+  const clearStored = regenerate.indexOf("clearStoredChatFixRequest", providerClearBranch);
+  assert.ok(createRequest >= 0 && providerClearBranch > createRequest && clearStored > providerClearBranch);
+  const beforeCreate = regenerate.slice(0, createRequest);
+  assert.doesNotMatch(beforeCreate, /if \(providerCredentialRetry\) \{[\s\S]*clearStoredChatFixRequest/);
+  assert.doesNotMatch(beforeCreate, /setRequest\(null\)/);
+  assert.match(regenerate, /if \(!providerCredentialRetry && !feedbackReplacement\) \{[\s\S]*cancelAnalysisChatFixRequest/);
   assert.equal((regenerate.match(/createAnalysisChatFixRequest\(/g) ?? []).length, 1);
-  assert.match(regenerate, /recoverableTerminal \? request\.id : undefined/);
-  assert.match(dialog, /disabled=\{busy !== null \|\| !hasRevisedInstruction\}/);
+  assert.match(regenerate, /feedbackReplacement \? request\.id : undefined/);
+  assert.match(dialog, /disabled=\{busy !== null \|\| \(!isProviderCredentialRetry && !hasRevisedInstruction\)\}/);
+  assert.match(dialog, /Retry fix preview/);
+  assert.match(dialog, /Provider diagnostic/);
   assert.match(dialog, /!request && !preview && !url/);
   assert.match(dialog, /Review fix preview/);
 });

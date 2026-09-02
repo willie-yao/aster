@@ -531,7 +531,8 @@ type agentState struct {
 	analysisEvidenceBudget   int
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
-	sourceContentByPath map[string][]string
+	sourceContentByPath  map[string][]string
+	sourceEvidenceByPath map[string]*analysisChatEvidence
 
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state
@@ -897,13 +898,13 @@ func sanitizePublishedCitations(parsed analysisResponse, context analysisCitatio
 		}
 	}
 	parsed.EvidenceCitations = valid
-	parsed.RootCause = removeUncitedLineClaims(parsed.RootCause, valid)
-	parsed.Summary = removeUncitedLineClaims(parsed.Summary, valid)
-	parsed.SuggestedFix = removeUncitedLineClaims(parsed.SuggestedFix, valid)
+	parsed.RootCause = removeUncitedLineClaims(parsed.RootCause, valid, nil)
+	parsed.Summary = removeUncitedLineClaims(parsed.Summary, valid, nil)
+	parsed.SuggestedFix = removeUncitedLineClaims(parsed.SuggestedFix, valid, nil)
 	return parsed
 }
 
-func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) string {
+func removeUncitedLineClaims(text string, citations []models.EvidenceCitation, additionallySupported func(proseLineClaim) bool) string {
 	claims := proseLineClaims(text)
 	if len(claims) == 0 {
 		return text
@@ -918,6 +919,9 @@ func removeUncitedLineClaims(text string, citations []models.EvidenceCitation) s
 				supported = true
 				break
 			}
+		}
+		if !supported && additionallySupported != nil {
+			supported = additionallySupported(claim)
 		}
 		if supported {
 			out.WriteString(text[claim.MatchStart:claim.MatchEnd])

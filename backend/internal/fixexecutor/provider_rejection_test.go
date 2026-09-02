@@ -11,24 +11,40 @@ import (
 
 func TestProviderCredentialRejectionRecognizesAuthFailuresOnly(t *testing.T) {
 	tests := []struct {
-		name   string
-		stdout string
-		want   string
+		name         string
+		stdout       string
+		wantReason   string
+		wantStatus   int
+		wantMessage  string
+		wantProvider string
 	}{
 		{
-			name:   "forbidden",
-			stdout: `{"type":"error","error":{"name":"APIError","data":{"message":"Forbidden","statusCode":403,"isRetryable":false}}}`,
-			want:   "model provider rejected the sandbox credential (HTTP 403)",
+			name:        "forbidden",
+			stdout:      `{"type":"error","error":{"name":"APIError","data":{"message":"Forbidden","statusCode":403,"isRetryable":false}}}`,
+			wantReason:  "model provider refused the sandbox request (HTTP 403)",
+			wantStatus:  403,
+			wantMessage: "Forbidden",
 		},
 		{
-			name:   "unauthorized after other events",
-			stdout: "{\"type\":\"text\",\"part\":{\"text\":\"working\"}}\n{\"type\":\"error\",\"error\":{\"name\":\"APIError\",\"data\":{\"statusCode\":401}}}",
-			want:   "model provider rejected the sandbox credential (HTTP 401)",
+			name:        "unauthorized after other events",
+			stdout:      "{\"type\":\"text\",\"part\":{\"text\":\"working\"}}\n{\"type\":\"error\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Unauthorized token=ghp-fixture-secret\",\"statusCode\":401}}}",
+			wantReason:  "model provider rejected the sandbox credential (HTTP 401)",
+			wantStatus:  401,
+			wantMessage: "Unauthorized token=[redacted]",
 		},
 		{
-			name:   "provider auth error",
-			stdout: `{"type":"error","error":{"name":"ProviderAuthError","data":{}}}`,
-			want:   "model provider rejected the sandbox credential",
+			name:        "first matching event wins",
+			stdout:      "{\"type\":\"error\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Forbidden first\",\"statusCode\":403}}}\n{\"type\":\"error\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Unauthorized second\",\"statusCode\":401}}}",
+			wantReason:  "model provider refused the sandbox request (HTTP 403)",
+			wantStatus:  403,
+			wantMessage: "Forbidden first",
+		},
+		{
+			name:         "provider auth error",
+			stdout:       `{"type":"error","error":{"name":"ProviderAuthError","data":{"message":"No provider auth","providerID":"github-copilot"}}}`,
+			wantReason:   "model provider rejected the sandbox credential",
+			wantMessage:  "No provider auth",
+			wantProvider: "github-copilot",
 		},
 		{name: "rate limited", stdout: `{"type":"error","error":{"name":"APIError","data":{"statusCode":429,"isRetryable":false}}}`},
 		{name: "server error", stdout: `{"type":"error","error":{"name":"APIError","data":{"statusCode":503}}}`},
@@ -38,9 +54,18 @@ func TestProviderCredentialRejectionRecognizesAuthFailuresOnly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason, rejected := providerCredentialRejection(tt.stdout)
-			if rejected != (tt.want != "") || reason != tt.want {
-				t.Fatalf("reason=%q rejected=%v want=%q", reason, rejected, tt.want)
+			reason, detail, rejected := providerCredentialRejection(tt.stdout)
+			if rejected != (tt.wantReason != "") || reason != tt.wantReason {
+				t.Fatalf("reason=%q rejected=%v want=%q", reason, rejected, tt.wantReason)
+			}
+			if !rejected {
+				if detail != nil {
+					t.Fatalf("detail = %+v", detail)
+				}
+				return
+			}
+			if detail == nil || detail.StatusCode != tt.wantStatus || detail.Message != tt.wantMessage || detail.ProviderID != tt.wantProvider {
+				t.Fatalf("detail=%+v want status=%d message=%q provider=%q", detail, tt.wantStatus, tt.wantMessage, tt.wantProvider)
 			}
 		})
 	}
@@ -49,7 +74,7 @@ func TestProviderCredentialRejectionRecognizesAuthFailuresOnly(t *testing.T) {
 func TestExecuteClassifiesProviderCredentialRejection(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	request := fixtureRequest(repository, sha)
-	stdout := `{"type":"error","error":{"name":"APIError","data":{"message":"Forbidden: token not authorized for this integration","statusCode":403,"isRetryable":false}}}`
+	stdout := `{"type":"error","error":{"name":"APIError","data":{"message":"Forbidden: token=ghp-fixture-secret","statusCode":403,"isRetryable":false}}}`
 	result := Execute(context.Background(), request, Options{
 		WorkspaceRoot: t.TempDir(),
 		RunOpenCode: func(context.Context, OpenCodeSpec) (string, string, error) {
@@ -59,8 +84,16 @@ func TestExecuteClassifiesProviderCredentialRejection(t *testing.T) {
 	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureProviderCredential {
 		t.Fatalf("result = %+v", result)
 	}
-	if result.FailureReason != "model provider rejected the sandbox credential (HTTP 403)" {
+	if result.FailureReason != "model provider refused the sandbox request (HTTP 403)" {
 		t.Fatalf("reason = %q", result.FailureReason)
+	}
+	if result.ProviderError == nil || result.ProviderError.StatusCode != 403 ||
+		result.ProviderError.Message != "Forbidden: token=[redacted]" ||
+		result.ProviderError.Endpoint != "" || result.ProviderError.Model != "" {
+		t.Fatalf("provider error = %+v", result.ProviderError)
+	}
+	if strings.Contains(result.ProviderError.Message, "ghp-fixture-secret") {
+		t.Fatalf("provider error disclosed token: %+v", result.ProviderError)
 	}
 	if err := result.Validate(request); err != nil {
 		t.Fatalf("validate: %v", err)

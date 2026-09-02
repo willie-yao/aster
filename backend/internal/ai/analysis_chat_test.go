@@ -9,11 +9,14 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/fixpr"
@@ -24,6 +27,21 @@ type fixedBrowserFactory struct {
 	browser     artifacts.Browser
 	prefix      string
 	displayName string
+}
+
+type countingSourceReader struct {
+	lists int
+	reads int
+}
+
+func (r *countingSourceReader) ListTree(context.Context) ([]string, error) {
+	r.lists++
+	return nil, nil
+}
+
+func (r *countingSourceReader) ReadFile(context.Context, string) (string, bool, error) {
+	r.reads++
+	return "", false, nil
 }
 
 func (f *fixedBrowserFactory) ForBuild(prefix, displayName string) artifacts.Browser {
@@ -39,6 +57,25 @@ func (f *fixedBrowserFactory) ForBuilds(_ []analysischat.ArtifactBuild) artifact
 func newAnalysisChatAgentForTest(t *testing.T, serverURL string, browser artifacts.Browser, opts AnalysisChatOptions) *AnalysisChatAgent {
 	t.Helper()
 	registry, enabled := newTestRegistry(t)
+	agent, err := NewAnalysisChatAgent(
+		newAgenticTestClient(t, serverURL),
+		ComposeAnalysisChatSystemPrompt("Project knowledge."),
+		registry, enabled, &fixedBrowserFactory{browser: browser}, opts,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent
+}
+
+func newAnalysisChatAgentWithRepoToolsForTest(t *testing.T, serverURL string, browser artifacts.Browser, opts AnalysisChatOptions) *AnalysisChatAgent {
+	t.Helper()
+	registry, _ := newTestRegistry(t)
+	repotree.Register(registry)
+	enabled, err := registry.Enable([]string{"filesystem", "repotree"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	agent, err := NewAnalysisChatAgent(
 		newAgenticTestClient(t, serverURL),
 		ComposeAnalysisChatSystemPrompt("Project knowledge."),
@@ -75,6 +112,17 @@ func analysisChatTurn() analysischat.Turn {
 	}
 }
 
+func causeAnalysisChatTurn() analysischat.Turn {
+	turn := analysisChatTurn()
+	turn.Scope = analysischat.ScopeCause
+	turn.Pattern = &models.PatternAnalysis{ID: "pattern-1", Subject: "controller stopped", Systemic: true}
+	turn.Build.RepoRefs = map[string]string{
+		"kubernetes-sigs/cluster-api-provider-azure": "0123456789abcdef0123456789abcdef01234567",
+	}
+	turn.EvidenceBuilds = []analysischat.ArtifactBuild{{BuildPrefix: turn.BuildPrefix, Build: turn.Build}}
+	return turn
+}
+
 // analysisChatReplyVerified reports whether a parse produced an answer whose
 // citations passed verification.
 func analysisChatReplyVerified(reply analysischat.Reply, err error) bool {
@@ -106,6 +154,47 @@ func TestAnalysisChatAgentChallengesAfterReadingArtifact(t *testing.T) {
 	}
 	if reply.Citations[0].LineStart != 0 || reply.Citations[0].LineEnd != 0 {
 		t.Fatalf("tail citation retained unverifiable lines: %+v", reply.Citations[0])
+	}
+}
+
+func TestAnalysisChatAgentAcceptsMixedReplyWithoutCorrectiveRound(t *testing.T) {
+	shrinkCallDelay(t)
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{
+		"path": "builds/123/build-log.txt", "offset": 0, "length": 1024,
+	}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The artifact proves the controller stopped, but the source attribution is not verified.",
+		"assessment":"challenges",
+		"citations":[
+			{"repository":null,"revision":null,"path":"builds/123/build-log.txt","line_start":1,"line_end":1,"quote":"controller stopped"},
+			{"repository":"kubernetes-sigs/cluster-api-provider-azure","revision":"0123456789abcdef0123456789abcdef01234567","path":"controllers/cluster_controller.go","line_start":10,"line_end":10,"quote":"return err"}
+		],
+		"proposed_revision":{"root_cause":"The controller stopped before completing reconciliation.","suggested_fix":"Correct the controller failure and rerun."}
+	}`))
+	agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"builds/123/build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{
+		MaxIters: 3, Timeout: time.Second,
+		SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+	})
+
+	reply, err := agent.Reply(t.Context(), causeAnalysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ValidationRetries != 0 || reply.Assessment != "challenges" || reply.ProposedRevision == nil {
+		t.Fatalf("reply = %+v", reply)
+	}
+	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/123/build-log.txt" || len(reply.EvidenceWarnings) != 1 {
+		t.Fatalf("reply evidence = %+v", reply)
+	}
+	if reply.ProposedRevision.RootCause != "The controller stopped before completing reconciliation." ||
+		reply.ProposedRevision.SuggestedFix != "Correct the controller failure and rerun." {
+		t.Fatalf("proposed revision = %+v", reply.ProposedRevision)
+	}
+	if len(server.requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(server.requests))
 	}
 }
 
@@ -397,16 +486,35 @@ func TestAnalysisChatDecodeErrorReportsWrongFieldType(t *testing.T) {
 }
 
 func TestAnalysisChatPromptShowsTheCitationShape(t *testing.T) {
-	for _, key := range []string{`"path"`, `"line_start"`, `"line_end"`, `"quote"`} {
+	for _, key := range []string{`"repository"`, `"revision"`, `"path"`, `"line_start"`, `"line_end"`, `"quote"`} {
 		if !strings.Contains(analysisChatResponseFormat, key) {
 			t.Fatalf("prompt does not name the citation key %s", key)
 		}
 	}
-	if !strings.Contains(analysisChatResponseFormat, "only the keys path, line_start, line_end, and quote") {
+	if !strings.Contains(analysisChatResponseFormat, "only the keys repository, revision, path, line_start") {
 		t.Fatal("prompt does not close the citation key set")
 	}
 	if !strings.Contains(analysisChatResponseFormat, "empty citations array") {
 		t.Fatal("prompt does not say an uncited answer uses an empty array")
+	}
+	for _, want := range []string{
+		"Artifact citations use null repository and",
+		"canonical owner/repo and full revision",
+		"grep_repo locates code",
+		"Call read_repo_file",
+	} {
+		if !strings.Contains(analysisChatResponseFormat, want) {
+			t.Fatalf("prompt missing source citation rule %q", want)
+		}
+	}
+	schema, err := json.Marshal(analysisChatStructuredFormat().Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"additionalProperties":false`, `"repository"`, `"revision"`, `"required":["repository","revision","path","line_start","line_end","quote"]`} {
+		if !bytes.Contains(schema, []byte(want)) {
+			t.Fatalf("structured citation schema missing %s: %s", want, schema)
+		}
 	}
 }
 
@@ -666,6 +774,113 @@ func TestParseAnalysisChatReplyCategorizesCitationMismatch(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatSourceCitationValidatesRecordedCurrentTurnBytes(t *testing.T) {
+	reader := &countingSourceReader{}
+	revision := "0123456789abcdef0123456789abcdef01234567"
+	source := &analysisChatSourceCitationContext{
+		Primary: tools.RepoSource{
+			ID: tools.PrimarySourceID, Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure",
+			Revision: revision, Reader: reader,
+		},
+		Evidence: map[string]*analysisChatEvidence{
+			"pkg/controller.go": {
+				Segments: []string{"if err != nil {\nreturn err\n}"},
+				Lines:    map[int]string{10: "if err != nil {", 11: "return err"},
+			},
+		},
+	}
+	raw := `{"answer":"pkg/controller.go:10-11 returns the reconciliation error.","citations":[{"repository":"KUBERNETES-SIGS/CLUSTER-API-PROVIDER-AZURE","revision":"` + revision + `","path":"./pkg/controller.go","line_start":10,"line_end":11,"quote":"return err"}],"assessment":"supports","proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidatesWithSource(raw, nil, source)
+	if err != nil || stats.EvidenceGate != "" || reply.Unverified || len(reply.Citations) != 1 {
+		t.Fatalf("reply=%+v stats=%+v err=%v", reply, stats, err)
+	}
+	citation := reply.Citations[0]
+	if citation.Repository != "kubernetes-sigs/cluster-api-provider-azure" || citation.Revision != revision ||
+		citation.Path != "pkg/controller.go" || citation.LineStart != 10 || citation.LineEnd != 11 {
+		t.Fatalf("citation = %+v", citation)
+	}
+	if reader.lists != 0 || reader.reads != 0 {
+		t.Fatalf("citation validation accessed source reader: lists=%d reads=%d", reader.lists, reader.reads)
+	}
+
+	base := analysischat.Citation{
+		Repository: "kubernetes-sigs/cluster-api-provider-azure", Revision: revision,
+		Path: "pkg/controller.go", LineStart: 10, LineEnd: 11, Quote: "return err",
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*analysischat.Citation)
+	}{
+		{name: "missing revision", mutate: func(c *analysischat.Citation) { c.Revision = "" }},
+		{name: "repository mismatch", mutate: func(c *analysischat.Citation) { c.Repository = "other/repo" }},
+		{name: "revision mismatch", mutate: func(c *analysischat.Citation) { c.Revision = strings.Repeat("f", 40) }},
+		{name: "path mismatch", mutate: func(c *analysischat.Citation) { c.Path = "pkg/other.go" }},
+		{name: "quote mismatch", mutate: func(c *analysischat.Citation) { c.Quote = "different text" }},
+		{name: "line mismatch", mutate: func(c *analysischat.Citation) { c.LineStart, c.LineEnd = 12, 12 }},
+		{name: "partial line range", mutate: func(c *analysischat.Citation) { c.LineStart = 0 }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			citation := base
+			testCase.mutate(&citation)
+			if failure := validateAnalysisChatCitation(&citation, nil, source, 1); failure == nil {
+				t.Fatalf("citation unexpectedly verified: %+v", citation)
+			}
+		})
+	}
+	if reader.lists != 0 || reader.reads != 0 {
+		t.Fatalf("mismatch validation accessed source reader: lists=%d reads=%d", reader.lists, reader.reads)
+	}
+}
+
+func TestAnalysisChatGrepSourceEvidenceIsQuoteOnly(t *testing.T) {
+	revision := strings.Repeat("1", 40)
+	source := &analysisChatSourceCitationContext{
+		Primary: tools.RepoSource{Owner: "example", Name: "project", Revision: revision},
+		Evidence: map[string]*analysisChatEvidence{
+			"pkg/controller.go": {Segments: []string{"func reconcile() error"}, Lines: map[int]string{}},
+		},
+	}
+	quoteOnly := `{"answer":"The source declares reconcile.","citations":[{"repository":"example/project","revision":"` + revision + `","path":"pkg/controller.go","line_start":null,"line_end":null,"quote":"func reconcile"}],"assessment":"supports","proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidatesWithSource(quoteOnly, nil, source)
+	if err != nil || stats.EvidenceGate != "" || len(reply.Citations) != 1 || reply.Citations[0].LineStart != 0 {
+		t.Fatalf("quote-only reply=%+v stats=%+v err=%v", reply, stats, err)
+	}
+	withLines := `{"answer":"The source declares reconcile.","citations":[{"repository":"example/project","revision":"` + revision + `","path":"pkg/controller.go","line_start":7,"line_end":7,"quote":"func reconcile"}],"assessment":"supports","proposed_revision":null}`
+	reply, stats, err = parseAnalysisChatReplyCandidatesWithSource(withLines, nil, source)
+	if err != nil || !reply.Unverified || stats.EvidenceGate != analysischat.UnverifiedCitation {
+		t.Fatalf("line-ranged grep reply=%+v stats=%+v err=%v", reply, stats, err)
+	}
+}
+
+func TestAnalysisChatSourceLineClaimsRequireMatchingVerifiedRange(t *testing.T) {
+	revision := strings.Repeat("2", 40)
+	source := &analysisChatSourceCitationContext{
+		Primary: tools.RepoSource{Owner: "example", Name: "project", Revision: revision},
+		Evidence: map[string]*analysisChatEvidence{
+			"pkg/controller.go": {Segments: []string{"return err"}, Lines: map[int]string{10: "return err"}},
+		},
+	}
+	citation := `{"repository":"example/project","revision":"` + revision + `","path":"pkg/controller.go","line_start":10,"line_end":10,"quote":"return err"}`
+	for _, testCase := range []struct {
+		name, answer string
+		wantClaim    string
+	}{
+		{name: "matching", answer: "pkg/controller.go:10 returns the error.", wantClaim: "pkg/controller.go:10"},
+		{name: "mismatched", answer: "pkg/controller.go:11 returns the error.", wantClaim: "pkg/controller.go"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := `{"answer":` + strconv.Quote(testCase.answer) + `,"citations":[` + citation + `],"assessment":"supports","proposed_revision":null}`
+			reply, stats, err := parseAnalysisChatReplyCandidatesWithSource(raw, nil, source)
+			if err != nil || stats.EvidenceGate != "" || !strings.Contains(reply.Answer, testCase.wantClaim) {
+				t.Fatalf("reply=%+v stats=%+v err=%v", reply, stats, err)
+			}
+			if testCase.name == "mismatched" && strings.Contains(reply.Answer, ":11") {
+				t.Fatalf("unsupported source line survived: %q", reply.Answer)
+			}
+		})
+	}
+}
+
 func TestParseAnalysisChatReplyValidatesCrossBuildReferences(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{
 		"builds/103/build-log.txt": {Segments: []string{"build 103 failed first"}, Lines: map[int]string{}},
@@ -725,7 +940,7 @@ func TestParseAnalysisChatReplyRejectsDuplicateFields(t *testing.T) {
 
 func TestComposeAnalysisChatSystemPromptKeepsSeparateSchema(t *testing.T) {
 	prompt := ComposeAnalysisChatSystemPrompt("Consumer fact.")
-	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"citations": [`, `{"path": "build-log.txt"`, "preserve the full builds/<build-id>/"} {
+	for _, want := range []string{"Consumer fact.", "published AI analysis is a hypothesis", `"citations": [`, `{"repository": null, "revision": null, "path": "build-log.txt"`, "preserve the full builds/<build-id>/"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("prompt missing %q", want)
 		}
@@ -1395,6 +1610,58 @@ func TestPatternAnalysisChatToolsExcludeSingleBuildHelpers(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatRepositoryToolsAreCauseScopedAndResolved(t *testing.T) {
+	tests := []struct {
+		name       string
+		turn       func() analysischat.Turn
+		wantSource bool
+	}{
+		{name: "resolved cause", turn: causeAnalysisChatTurn, wantSource: true},
+		{name: "unresolved cause", turn: func() analysischat.Turn {
+			turn := causeAnalysisChatTurn()
+			turn.Build.RepoRefs = nil
+			turn.EvidenceBuilds[0].Build = turn.Build
+			return turn
+		}},
+		{name: "whole pattern", turn: func() analysischat.Turn {
+			turn := causeAnalysisChatTurn()
+			turn.Scope = analysischat.ScopePattern
+			return turn
+		}},
+		{name: "test", turn: analysisChatTurn},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := newScriptedChatServer(t)
+			server.push(200, chatRespFinal(`{"answer":"The published context is sufficient.","citations":[],"assessment":"explains","proposed_revision":null}`))
+			agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
+				MaxIters: 2, Timeout: time.Second,
+				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+			})
+			if _, err := agent.Reply(t.Context(), testCase.turn()); err != nil {
+				t.Fatal(err)
+			}
+			request := string(server.requests[0])
+			for _, name := range []string{"list_repo_tree", "read_repo_file", "grep_repo"} {
+				if got := strings.Contains(request, `"name":"`+name+`"`); got != testCase.wantSource {
+					t.Fatalf("request source tool %s present=%t want=%t: %s", name, got, testCase.wantSource, request)
+				}
+			}
+			if testCase.wantSource {
+				for _, want := range []string{
+					"kubernetes-sigs/cluster-api-provider-azure",
+					"0123456789abcdef0123456789abcdef01234567",
+					"selected failed build 123",
+				} {
+					if !strings.Contains(request, want) {
+						t.Fatalf("resolved cause request missing %q: %s", want, request)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestAnalysisChatFinalizationUsesForcedFunctionAndRecordsUsage(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
@@ -1982,6 +2249,25 @@ func TestSeedAnalysisChatEvidenceRestoresProvenCitations(t *testing.T) {
 	// mapped back to lines, so only its text is restored.
 	if len(evidence["junit.xml"].Lines) != 0 {
 		t.Fatalf("mismatched range seeded lines: %+v", evidence["junit.xml"].Lines)
+	}
+}
+
+func TestSeedAnalysisChatEvidenceSkipsSourceCitationsBeforePathNormalization(t *testing.T) {
+	history := []analysischat.Message{{
+		Role: "assistant",
+		Citations: []analysischat.Citation{{
+			Repository: "example/project", Revision: strings.Repeat("1", 40),
+			Path: "pkg/controller.go", LineStart: 10, LineEnd: 10, Quote: "return err",
+		}},
+	}}
+	evidence := seedAnalysisChatEvidence(history, 0)
+	if len(evidence) != 0 {
+		t.Fatalf("source citation entered artifact evidence: %+v", evidence)
+	}
+	raw := `{"answer":"The artifact repeats the source text.","citations":[{"path":"pkg/controller.go","quote":"return err"}],"assessment":"supports","proposed_revision":null}`
+	reply, stats, err := parseAnalysisChatReplyCandidates(raw, evidence)
+	if err != nil || !reply.Unverified || stats.EvidenceGate != analysischat.UnverifiedReference {
+		t.Fatalf("reply=%+v stats=%+v err=%v", reply, stats, err)
 	}
 }
 

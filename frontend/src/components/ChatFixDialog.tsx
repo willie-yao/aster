@@ -145,10 +145,12 @@ export function ChatFixDialog({
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
   const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
+  const isProviderCredentialRetry = request?.status === "failed"
+    && request.failure?.category === "provider_credential";
   const hasRevisedInstruction = Boolean(
     instruction.trim() && instruction.trim() !== submittedInstruction.trim(),
   );
-  const instructionHelperText = requestPresentation?.canRegenerate && !hasRevisedInstruction
+  const instructionHelperText = requestPresentation?.canRegenerate && !isProviderCredentialRetry && !hasRevisedInstruction
     ? `Change the previous instruction to enable regeneration. ${chatFixInstructionBytes(instruction)}/4096 bytes`
     : `${chatFixInstructionBytes(instruction)}/4096 bytes`;
 
@@ -287,7 +289,8 @@ export function ChatFixDialog({
 
   async function regeneratePreview() {
     if (!exactAnalysis || !message?.request_id || !request?.id || busy) return;
-    if (!instruction.trim() || instruction.trim() === submittedInstruction.trim()) {
+    const providerCredentialRetry = request.status === "failed" && request.failure?.category === "provider_credential";
+    if (!providerCredentialRetry && (!instruction.trim() || instruction.trim() === submittedInstruction.trim())) {
       setError("Edit the maintainer instruction before regenerating the preview.");
       return;
     }
@@ -299,8 +302,8 @@ export function ChatFixDialog({
     setError(null);
     setObservationMessage(null);
     try {
-      const recoverableTerminal = request.status === "failed" && request.failure?.category === "no_reviewable_patch";
-      if (!recoverableTerminal) {
+      const feedbackReplacement = request.status === "failed" && request.failure?.category === "no_reviewable_patch";
+      if (!providerCredentialRetry && !feedbackReplacement) {
         let cancelled = await cancelAnalysisChatFixRequest(request.id);
         while (actionRequestIsPollable(cancelled.status)) {
           await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -320,10 +323,14 @@ export function ChatFixDialog({
         sessionID,
         message.request_id,
         instruction,
-        recoverableTerminal ? request.id : undefined,
+        feedbackReplacement ? request.id : undefined,
         controller.signal,
       );
       if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
+      if (providerCredentialRetry) {
+        clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
+        setPreview(null);
+      }
       storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: replacement.id, instruction });
       setSubmittedInstruction(instruction);
       setRequest(replacement);
@@ -519,13 +526,13 @@ export function ChatFixDialog({
             {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
               <Alert severity={requestPresentation.severity} role="status" variant="outlined">
                 <Typography variant="body2" sx={{ fontWeight: 750, mb: 0.4 }}>
-                  Generation completed without a patch
+                  {isProviderCredentialRetry ? "Provider request refused" : "Generation completed without a patch"}
                 </Typography>
                 <Typography variant="body2">{requestPresentation.message}</Typography>
                 {request?.failure?.operator_summary && (
                   <Box sx={{ mt: 1.1 }}>
                     <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                      Coding agent summary
+                      {isProviderCredentialRetry ? "Provider diagnostic" : "Coding agent summary"}
                     </Typography>
                     <Typography variant="body2" color="textSecondary">
                       {request.failure.operator_summary}
@@ -550,10 +557,12 @@ export function ChatFixDialog({
               <Button
                 variant="outlined"
                 onClick={() => void regeneratePreview()}
-                disabled={busy !== null || !hasRevisedInstruction}
+                disabled={busy !== null || (!isProviderCredentialRetry && !hasRevisedInstruction)}
                 sx={{ alignSelf: "flex-start" }}
               >
-                {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
+                {busy === "regenerate"
+                  ? isProviderCredentialRetry ? "Retrying" : "Regenerating"
+                  : isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
               </Button>
             )}
           </Stack>

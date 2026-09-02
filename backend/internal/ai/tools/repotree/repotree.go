@@ -185,18 +185,19 @@ type ReadObservation struct {
 	SourceID           string
 	Path               string
 	LineStart, LineEnd int
+	ByteStart, ByteEnd int
 }
 
-func completeReadLineRange(content string, offset, end int) (int, int, bool) {
+func completeReadLineRange(content string, offset, end int) (int, int, int, int, bool) {
 	if offset < 0 || end <= offset || end > len(content) {
-		return 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	start := offset
 	if start > 0 && content[start-1] != '\n' {
 		if next := strings.IndexByte(content[start:end], '\n'); next >= 0 {
 			start += next + 1
 		} else {
-			return 0, 0, false
+			return 0, 0, 0, 0, false
 		}
 	}
 	finish := end
@@ -204,11 +205,11 @@ func completeReadLineRange(content string, offset, end int) (int, int, bool) {
 		if prior := strings.LastIndexByte(content[start:finish], '\n'); prior >= 0 {
 			finish = start + prior + 1
 		} else {
-			return 0, 0, false
+			return 0, 0, 0, 0, false
 		}
 	}
 	if finish <= start || strings.TrimSpace(content[start:finish]) == "" {
-		return 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	lineStart := 1 + strings.Count(content[:start], "\n")
 	lineEnd := lineStart + strings.Count(content[start:finish], "\n")
@@ -218,7 +219,7 @@ func completeReadLineRange(content string, offset, end int) (int, int, bool) {
 	if lineEnd < lineStart {
 		lineEnd = lineStart
 	}
-	return lineStart, lineEnd, true
+	return lineStart, lineEnd, start - offset, finish - offset, true
 }
 
 type readTool struct{}
@@ -296,8 +297,11 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			"content":   slice,
 		},
 	}
-	if lineStart, lineEnd, ok := completeReadLineRange(content, offset, end); ok {
-		result.Observation = ReadObservation{SourceID: selected.ID, Path: args.Path, LineStart: lineStart, LineEnd: lineEnd}
+	if lineStart, lineEnd, byteStart, byteEnd, ok := completeReadLineRange(content, offset, end); ok {
+		result.Observation = ReadObservation{
+			SourceID: selected.ID, Path: args.Path, LineStart: lineStart, LineEnd: lineEnd,
+			ByteStart: byteStart, ByteEnd: byteEnd,
+		}
 	}
 	return result
 }

@@ -102,7 +102,7 @@ func ReasonMessage(code ReasonCode) string {
 	case ReasonSourceChanged:
 		return "A verified source path is unavailable or changed between the failure revision and its branch head."
 	case ReasonProviderCredentialRejected:
-		return "The model provider rejected the sandbox credential. Generation cannot succeed until the credential is fixed."
+		return "The model provider refused the sandbox request. Check the Agent Sandbox provider configuration and provider-side authorization before retrying."
 	case ReasonGenerationFailed:
 		return "Draft generation did not complete successfully."
 	default:

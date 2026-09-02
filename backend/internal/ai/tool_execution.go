@@ -114,7 +114,7 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 			for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
 				s.recordSourceRead(repoPath)
 			}
-			s.recordSourceContent(tc, visiblePayload)
+			s.recordSourceContent(tc, visiblePayload, result.Observation)
 		}
 	}
 
@@ -522,7 +522,7 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 	return casePath, NormalizeArtifactCitation(casePath)
 }
 
-func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}) {
+func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}, observation any) {
 	if payload == nil {
 		return
 	}
@@ -536,16 +536,76 @@ func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]in
 		}
 		s.sourceContentByPath[norm] = append(s.sourceContentByPath[norm], content)
 	}
+	addCitationEvidence := func(rawPath, content string) *analysisChatEvidence {
+		if s.sourceEvidenceByPath == nil || strings.TrimSpace(content) == "" {
+			return nil
+		}
+		path, err := artifacts.SafePath(strings.TrimSpace(rawPath))
+		if err != nil || path == "" {
+			return nil
+		}
+		entry := s.sourceEvidenceByPath[path]
+		if entry == nil {
+			entry = &analysisChatEvidence{Lines: map[int]string{}}
+			s.sourceEvidenceByPath[path] = entry
+		}
+		appendAnalysisChatEvidenceCandidate(entry, content)
+		return entry
+	}
 	switch tc.Function.Name {
 	case "read_repo_file":
 		path := extractToolPathArg(tc.Function.Arguments)
 		if content, _ := payload["content"].(string); content != "" {
 			add(path, content)
+			entry := addCitationEvidence(path, content)
+			if entry == nil {
+				return
+			}
+			visibleLengthMatches := false
+			switch length := payload["length"].(type) {
+			case int:
+				visibleLengthMatches = length == len(content)
+			case float64:
+				visibleLengthMatches = length == float64(len(content))
+			}
+			// JSON replaces invalid UTF-8, so raw byte offsets are valid only
+			// when the visible content kept the same byte length.
+			if !visibleLengthMatches {
+				return
+			}
+			var read repotree.ReadObservation
+			switch value := observation.(type) {
+			case repotree.ReadObservation:
+				read = value
+			case *repotree.ReadObservation:
+				if value != nil {
+					read = *value
+				}
+			}
+			safePath, err := artifacts.SafePath(strings.TrimSpace(path))
+			observationPath, observationErr := artifacts.SafePath(strings.TrimSpace(read.Path))
+			if err != nil || observationErr != nil || safePath == "" || observationPath != safePath ||
+				read.SourceID != s.sources.PrimaryID() || read.LineStart <= 0 || read.LineEnd < read.LineStart ||
+				read.ByteStart < 0 || read.ByteEnd <= read.ByteStart || read.ByteEnd > len(content) {
+				return
+			}
+			lines := strings.Split(content[read.ByteStart:read.ByteEnd], "\n")
+			if strings.HasSuffix(content[read.ByteStart:read.ByteEnd], "\n") {
+				lines = lines[:len(lines)-1]
+			}
+			if len(lines) != read.LineEnd-read.LineStart+1 {
+				return
+			}
+			for i, line := range lines {
+				entry.Lines[read.LineStart+i] = line
+			}
 		}
 	case "grep_repo":
 		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
 			path, _ := match["path"].(string)
-			add(path, flattenGrepContext(match["context"]))
+			content := flattenGrepContext(match["context"])
+			add(path, content)
+			addCitationEvidence(path, content)
 		}
 	}
 }

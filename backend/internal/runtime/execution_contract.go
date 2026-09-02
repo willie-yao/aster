@@ -112,6 +112,17 @@ type ResourceMetadata struct {
 	MeasuredUsage    bool   `json:"measured_usage"`
 }
 
+// ProviderErrorDetail retains the bounded provider rejection metadata needed by operators.
+type ProviderErrorDetail struct {
+	StatusCode     int    `json:"status_code,omitempty"`
+	Message        string `json:"message,omitempty"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	AuthSecretName string `json:"auth_secret_name,omitempty"`
+	AuthSecretKey  string `json:"auth_secret_key,omitempty"`
+	Endpoint       string `json:"endpoint,omitempty"`
+	Model          string `json:"model,omitempty"`
+}
+
 // ExecutionResult is the provider-neutral outcome of a bounded fix execution.
 type ExecutionResult struct {
 	Version        int                  `json:"version,omitempty"`
@@ -127,6 +138,7 @@ type ExecutionResult struct {
 	DurationMs     int64                `json:"duration_ms,omitempty"`
 	Resources      ResourceMetadata     `json:"resources,omitempty"`
 	FailureReason  string               `json:"failure_reason,omitempty"`
+	ProviderError  *ProviderErrorDetail `json:"provider_error,omitempty"`
 
 	// Output is the legacy bounded summary consumed by the existing Fix PR path.
 	Output string `json:"-"`

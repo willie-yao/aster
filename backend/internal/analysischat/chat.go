@@ -166,12 +166,14 @@ type AnalysisRef struct {
 	CausalGroupHash     string `json:"causal_group_hash,omitempty"`
 }
 
-// Citation identifies artifact evidence used in one answer.
+// Citation identifies artifact or source evidence used in one answer.
 type Citation struct {
-	Path      string `json:"path"`
-	LineStart int    `json:"line_start,omitempty"`
-	LineEnd   int    `json:"line_end,omitempty"`
-	Quote     string `json:"quote,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Revision   string `json:"revision,omitempty"`
+	Path       string `json:"path"`
+	LineStart  int    `json:"line_start,omitempty"`
+	LineEnd    int    `json:"line_end,omitempty"`
+	Quote      string `json:"quote,omitempty"`
 }
 
 // Revision is a proposed replacement for the published conclusion.

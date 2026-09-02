@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -35,33 +36,40 @@ Return one JSON object. The required fields are:
 {
   "answer": "Direct answer to the maintainer",
   "citations": [
-    {"path": "build-log.txt", "line_start": 120, "line_end": 124, "quote": "exact text a tool returned"}
+    {"repository": null, "revision": null, "path": "build-log.txt", "line_start": 120, "line_end": 124, "quote": "exact text a tool returned"}
   ]
 }
 
-Use an empty citations array when no artifact evidence supports the answer. A
-citation object uses only the keys path, line_start, line_end, and quote, and no
-others. Assessment is optional and, when present, must be "supports",
+Use an empty citations array when no verified evidence supports the answer. A
+citation object uses only the keys repository, revision, path, line_start,
+line_end, and quote, and no others. Artifact citations use null repository and
+revision. Source citations use the canonical owner/repo and full revision from
+the immutable source catalog. Source citations are allowed only when repository
+tools and an immutable source catalog are present. grep_repo locates code and
+can support quote-only evidence with null line coordinates. Call read_repo_file
+before publishing a line-ranged source citation. Assessment is optional and,
+when present, must be "supports",
 "challenges", "inconclusive", or null. proposed_revision is optional and may be a
 complete root_cause and suggested_fix object only when assessment is
 "challenges". Normal follow-up answers should omit both optional fields.
-Citations must name artifacts read during this conversation. The quote locates
-the passage: copy enough of the tool output to identify one passage and no other,
+Citations must name artifacts read during this conversation or source read during
+the current turn. The quote locates the passage: copy enough of the tool output to identify one passage and no other,
 and the engine replaces it with the exact text the tool returned. Wrapping,
-indentation, and colour codes do not matter. A quote so short or so common that
-it matches several passages cannot be resolved. Use line_start and line_end only
-when a tool returned source line numbers. An answer whose citations cannot be
-verified is returned to the maintainer labelled unverified, so cite only evidence
-the tools actually returned. Output JSON only.`
+indentation, and colour codes do not matter. A
+quote so short or so common that it matches several passages cannot be resolved.
+Use line_start and line_end only when a tool returned source line numbers. An
+answer whose citations cannot be verified is returned to the maintainer labelled
+unverified, so cite only evidence the tools actually returned. Output JSON only.`
 
 const analysisChatToolDocs = `
 
 Available tools inspect the selected Prow build or the explicitly provided
-recurring-pattern builds only. Use the tool schemas to
-list, read, tail, search, or inspect Kubernetes-shaped artifacts as available.
-Cite the exact artifact paths returned by tools and the line numbers that support
-the answer. For recurring-pattern builds, preserve the full builds/<build-id>/
-prefix in every citation.`
+recurring-pattern builds. When an immutable source catalog is present, repository
+tools also inspect that exact project revision. Use the tool schemas to list,
+read, tail, search, or inspect Kubernetes-shaped artifacts and source as
+available. Cite the exact artifact paths returned by tools and the line numbers
+that support the answer. For recurring-pattern builds, preserve the full builds/<build-id>/
+prefix in every artifact citation.`
 
 const (
 	analysisChatFallbackContextBytes           = 192 << 10
@@ -92,10 +100,10 @@ const (
 const analysisChatMaxCorrectiveRounds = 2
 
 // analysisChatCorrectivePrompt asks the model to repair one specific failure
-// with the artifact tools still available.
+// with the read-only tools still available.
 func analysisChatCorrectivePrompt(detail string) string {
 	return "Your previous response did not pass validation: " + detail +
-		". Read the artifacts you need with the available read-only tools, then return one corrected JSON object" +
+		". Read the evidence you need with the available read-only tools, then return one corrected JSON object" +
 		" whose citations quote content those tools returned."
 }
 
@@ -107,6 +115,10 @@ const analysisChatAnnouncementCorrectivePrompt = "Your previous response announc
 	" Output JSON only."
 
 func analysisChatStructuredFormat() ResponseFormat {
+	nullableString := []any{
+		map[string]any{"type": "string"},
+		map[string]any{"type": "null"},
+	}
 	stringOrNull := []any{
 		map[string]any{"type": "string", "enum": []string{"supports", "challenges", "inconclusive"}},
 		map[string]any{"type": "null"},
@@ -123,7 +135,7 @@ func analysisChatStructuredFormat() ResponseFormat {
 		map[string]any{"type": "null"},
 	}
 	return ResponseFormat{
-		Name: "analysis_chat_reply", Description: "Return an analysis chat answer with artifact citations.",
+		Name: "analysis_chat_reply", Description: "Return an analysis chat answer with verified artifact or source citations.",
 		Schema: map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
@@ -133,12 +145,14 @@ func analysisChatStructuredFormat() ResponseFormat {
 					"items": map[string]any{
 						"type": "object", "additionalProperties": false,
 						"properties": map[string]any{
+							"repository": map[string]any{"anyOf": nullableString},
+							"revision":   map[string]any{"anyOf": nullableString},
 							"path":       map[string]any{"type": "string"},
 							"line_start": map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "null"}}},
 							"line_end":   map[string]any{"anyOf": []any{map[string]any{"type": "integer", "minimum": 1}, map[string]any{"type": "null"}}},
 							"quote":      map[string]any{"type": "string"},
 						},
-						"required": []string{"path", "line_start", "line_end", "quote"},
+						"required": []string{"repository", "revision", "path", "line_start", "line_end", "quote"},
 					},
 				},
 				"assessment":        map[string]any{"anyOf": stringOrNull},
@@ -170,6 +184,9 @@ type AnalysisChatOptions struct {
 	ContextByteBudget int
 	Timeout           time.Duration
 	SingleToolCall    bool
+	SourceRepoOwner   string
+	SourceRepoName    string
+	GitHubReadToken   string
 }
 
 func (o AnalysisChatOptions) normalized() AnalysisChatOptions {
@@ -245,7 +262,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	start := time.Now()
 	var browser artifacts.Browser
-	enabledTools := a.enabledTools
+	enabledTools := slices.Clone(a.enabledTools)
 	if turn.Pattern != nil {
 		enabledTools = patternAnalysisChatTools(enabledTools)
 		if !hasAnalysisChatContentReader(enabledTools) {
@@ -261,19 +278,42 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	} else {
 		browser = a.browserFactory.ForBuild(turn.BuildPrefix, turn.Build.JobName+"/"+turn.Build.BuildID)
 	}
+	enabledTools = slices.DeleteFunc(enabledTools, isRepoTool)
+	var sources *tools.SourceCatalog
+	if turn.Scope == analysischat.ScopeCause {
+		if source, ok := buildsource.Resolve(turn.Build, a.opts.SourceRepoOwner, a.opts.SourceRepoName); ok {
+			reader := NewGitHubRepoReader(source.Owner, source.Name, source.Revision, a.opts.GitHubReadToken)
+			var err error
+			sources, err = tools.NewPrimarySourceCatalog(source.Owner, source.Name, source.Revision, reader)
+			if err != nil {
+				return analysischat.Reply{}, fmt.Errorf("configuring analysis chat source: %w", err)
+			}
+			enabledTools = append(enabledTools, "list_repo_tree", "read_repo_file", "grep_repo")
+		}
+	}
 	state := &agentState{
 		browser: browser, opts: AgenticOptions{
 			MaxIters: a.opts.MaxIters, ModelByteBudget: a.opts.ModelByteBudget,
 			GCSByteBudget: a.opts.GCSByteBudget, ContextByteBudget: a.opts.ContextByteBudget,
 			Timeout: a.opts.Timeout, SingleToolCall: a.opts.SingleToolCall,
 		},
-		registry: a.registry, enabledTools: enabledTools, cache: tools.NewBoundedCache(128, 4<<20),
+		registry: a.registry, enabledTools: enabledTools, cache: tools.NewBoundedCache(128, 4<<20), sources: sources,
 		webURLBase: turn.Build.WebURL, startTime: start,
+	}
+	var sourceCitationContext *analysisChatSourceCitationContext
+	if sources != nil {
+		primary, _ := sources.Primary()
+		state.sourceEvidenceByPath = map[string]*analysisChatEvidence{}
+		sourceCitationContext = &analysisChatSourceCitationContext{Primary: primary, Evidence: state.sourceEvidenceByPath}
 	}
 
 	contextMessage, err := analysisChatContext(turn)
 	if err != nil {
 		return analysischat.Reply{}, err
+	}
+	if sources != nil {
+		contextMessage += agenticSourceCatalogSection(sources) +
+			"\n\nThis immutable source catalog is for selected failed build " + turn.Build.BuildID + "."
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
 	schemaBytes := schemaPayloadBytes(schemas)
@@ -321,14 +361,14 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			if len(message.ToolCalls) == 0 || message.Content == nil || strings.TrimSpace(*message.Content) == "" {
 				return
 			}
-			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(*message.Content, evidence)
+			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidatesWithSource(*message.Content, evidence, sourceCitationContext)
 			if candidateErr == nil && candidateStats.EvidenceGate == "" {
 				fallback = &analysisChatFallback{reply: candidate, evidenceRevision: evidenceRevision}
 			}
 		},
 		onAnswer: func(answer toolLoopAnswer) toolLoopDecision {
 			turn.ReportProgress(analysischat.PhaseFinalizing)
-			reply, stats, validationErr := parseAnalysisChatReplyCandidates(answer.Content, evidence)
+			reply, stats, validationErr := parseAnalysisChatReplyCandidatesWithSource(answer.Content, evidence, sourceCitationContext)
 			if validationErr == nil && stats.EvidenceGate == "" {
 				accepted = &reply
 				return toolLoopAccept()
@@ -426,7 +466,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	}
 	providerStart := time.Now()
 	finalCtx := WithStructuredCompletionPhase(loopCtx, "analysis_chat_finalize")
-	reply, stats, raw, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence)
+	reply, stats, raw, structured, err := a.callAnalysisChatFinal(finalCtx, messages, evidence, sourceCitationContext)
 	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 	modelCalls += structured.modelCalls()
 	providerAttempts += structured.providerAttempts()
@@ -519,6 +559,7 @@ func (a *AnalysisChatAgent) callAnalysisChatFinal(
 	ctx context.Context,
 	messages []modelMessage,
 	evidence map[string]*analysisChatEvidence,
+	source *analysisChatSourceCitationContext,
 ) (analysischat.Reply, analysisChatParseStats, string, structuredMessagesResult, error) {
 	var reply analysischat.Reply
 	var stats analysisChatParseStats
@@ -526,7 +567,7 @@ func (a *AnalysisChatAgent) callAnalysisChatFinal(
 	result, err := a.client.completeStructuredMessagesWithMetadata(
 		ctx, messages, analysisChatStructuredFormat(), analysisChatMaxResponseBytes, true,
 		func(raw string) structuredValidationResult {
-			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidates(raw, evidence)
+			candidate, candidateStats, candidateErr := parseAnalysisChatReplyCandidatesWithSource(raw, evidence, source)
 			if candidateErr == nil || analysisChatValidationRank(candidateStats.Category) >= analysisChatValidationRank(stats.Category) {
 				stats = candidateStats
 				reported = raw
@@ -1125,6 +1166,9 @@ func seedAnalysisChatEvidence(history []analysischat.Message, contextByteBudget 
 			continue
 		}
 		for _, citation := range message.Citations {
+			if citation.Repository != "" || citation.Revision != "" {
+				continue
+			}
 			quote := strings.TrimSpace(citation.Quote)
 			if quote == "" || seeded+len(quote) > seedBudget {
 				continue

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -228,14 +230,78 @@ func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
 }
 
 func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
-	state := &agentState{}
+	state := &agentState{sourceEvidenceByPath: map[string]*analysisChatEvidence{}}
 	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo"}}, map[string]interface{}{
 		"matches": []interface{}{map[string]interface{}{
 			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
 		}},
-	})
+	}, nil)
 	if got := state.preparePublishedAnalysis(analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("visible grep grounding was not recorded: %q", got)
+	}
+	if evidence := state.sourceEvidenceByPath["Makefile"]; evidence == nil || len(evidence.Segments) != 1 || len(evidence.Lines) != 0 {
+		t.Fatalf("grep citation evidence = %+v", evidence)
+	}
+}
+
+func TestRecordSourceContentMapsOnlyObservedCompleteReadLines(t *testing.T) {
+	repo := &fakeSourceRepo{files: map[string]string{}}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
+	})
+	content := "partial\ncomplete one\ncomplete two\ntrailing"
+	byteStart := strings.Index(content, "complete one")
+	byteEnd := strings.Index(content, "trailing")
+	state := &agentState{sources: catalog, sourceEvidenceByPath: map[string]*analysisChatEvidence{}}
+	state.recordSourceContent(
+		modelToolCall{Function: modelFunction{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
+		map[string]interface{}{"content": content, "length": len(content)},
+		repotree.ReadObservation{
+			SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 11,
+			ByteStart: byteStart, ByteEnd: byteEnd,
+		},
+	)
+	evidence := state.sourceEvidenceByPath["pkg/controller.go"]
+	if evidence == nil || len(evidence.Segments) != 1 || evidence.Segments[0] != content {
+		t.Fatalf("read citation segments = %+v", evidence)
+	}
+	if evidence.Lines[10] != "complete one" || evidence.Lines[11] != "complete two" || len(evidence.Lines) != 2 {
+		t.Fatalf("read citation lines = %+v", evidence.Lines)
+	}
+}
+
+func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
+	repo := &fakeSourceRepo{files: map[string]string{}}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
+	})
+	full := "// café comment here\nabc\ndef\n\nafter\n"
+	raw := full[7:31]
+	state := &agentState{
+		sources: catalog, sourceEvidenceByPath: map[string]*analysisChatEvidence{},
+		startTime: time.Now(),
+	}
+	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, map[string]interface{}{
+		"content": raw, "length": len(raw),
+	}))
+	visibleContent, _ := visible["content"].(string)
+	if len(visibleContent) == len(raw) {
+		t.Fatalf("test did not exercise JSON UTF-8 replacement: raw=%d visible=%d", len(raw), len(visibleContent))
+	}
+	state.recordSourceContent(
+		modelToolCall{Function: modelFunction{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"path.go"}`}},
+		visible,
+		repotree.ReadObservation{
+			SourceID: tools.PrimarySourceID, Path: "path.go", LineStart: 2, LineEnd: 4,
+			ByteStart: 15, ByteEnd: 24,
+		},
+	)
+	evidence := state.sourceEvidenceByPath["path.go"]
+	if evidence == nil || len(evidence.Segments) != 1 {
+		t.Fatalf("quote-only source evidence = %+v", evidence)
+	}
+	if len(evidence.Lines) != 0 {
+		t.Fatalf("JSON-shifted line mapping was recorded: %+v", evidence.Lines)
 	}
 }
 

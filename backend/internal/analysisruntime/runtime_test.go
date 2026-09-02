@@ -379,3 +379,47 @@ func TestRuntimeAppliesOptionalComparisonOutputLimit(t *testing.T) {
 		t.Fatalf("default max output tokens = %d", unlimited.MaxOutputTokens)
 	}
 }
+
+func TestRuntimeCarriesGitHubReadToken(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
+	configured := &Project{
+		Config: &project.Config{AI: &project.AI{}},
+		Provider: project.AIProvider{
+			API: ai.APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+		},
+		AnalysisSource: project.SourceRepo{Owner: "example", Name: "project"},
+	}
+	runtime, err := New(t.Context(), Options{Project: configured, GitHubReadToken: "read-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GitHubReadToken != "read-token" {
+		t.Fatalf("GitHub read token = %q", runtime.GitHubReadToken)
+	}
+}
+
+func TestAnalysisChatContractFingerprintIncludesSourceIdentityNotToken(t *testing.T) {
+	newRuntime := func(owner, name, token string) *Runtime {
+		return &Runtime{
+			EnabledTools: []string{"list_artifacts", "read_artifact"},
+			Project: &Project{
+				Config: &project.Config{AI: &project.AI{}},
+				Provider: project.AIProvider{
+					API: ai.APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
+				},
+				AnalysisSource: project.SourceRepo{Owner: owner, Name: name},
+			},
+			GitHubReadToken: token,
+		}
+	}
+	first := newRuntime("example", "project", "token-one")
+	if first.AnalysisChatContractFingerprint() != newRuntime("example", "project", "token-two").AnalysisChatContractFingerprint() {
+		t.Fatal("fingerprint changed with token contents")
+	}
+	if first.AnalysisChatContractFingerprint() != newRuntime("example", "project", "").AnalysisChatContractFingerprint() {
+		t.Fatal("fingerprint changed with token availability")
+	}
+	if first.AnalysisChatContractFingerprint() == newRuntime("example", "other", "token-one").AnalysisChatContractFingerprint() {
+		t.Fatal("fingerprint ignored source repository identity")
+	}
+}

@@ -134,6 +134,7 @@ func LoadProject(projectDir string, cfg *project.Config, deployment DeploymentCo
 // Options configure reusable model and Tool runtime state.
 type Options struct {
 	Token           string
+	GitHubReadToken string
 	DataDir         string
 	Project         *Project
 	UsageRecorder   *aiusage.Recorder
@@ -151,6 +152,7 @@ type Runtime struct {
 	ContextWindowTokens int
 	RequestTokenBudget  int
 	MaxOutputTokens     int
+	GitHubReadToken     string
 	Project             *Project
 	UsageRecorder       *aiusage.Recorder
 	UsageOrigin         aiusage.Origin
@@ -211,6 +213,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ContextWindowTokens: budgets.ContextWindowTokens,
 		RequestTokenBudget:  budgets.RequestTokenBudget,
 		MaxOutputTokens:     opts.MaxOutputTokens,
+		GitHubReadToken:     opts.GitHubReadToken,
 		Project:             opts.Project,
 		UsageRecorder:       opts.UsageRecorder,
 		UsageOrigin:         opts.UsageOrigin,
@@ -226,13 +229,15 @@ func (r *Runtime) AnalysisChatContractFingerprint() string {
 	}
 	payload, _ := json.Marshal(struct {
 		API, Endpoint, Model, Reasoning, CacheGeneration, Prompt, SkillHash string
+		SourceOwner, SourceName                                             string
 		Tools                                                               []string
 		ModelBytes, ContextBytes, MaxOutputTokens, MaxIters                 int
 		SingleToolCall                                                      bool
 		ContractVersion                                                     int
 	}{
 		r.Project.Provider.API, r.Project.Provider.Endpoint, r.Project.Provider.Model, string(r.Project.Provider.ReasoningEffort),
-		r.Project.CacheGenerationFingerprint, ai.ComposeAnalysisChatSystemPrompt(r.Project.ConsumerPrompt), r.Project.SkillSet.Hash(), append([]string(nil), r.EnabledTools...),
+		r.Project.CacheGenerationFingerprint, ai.ComposeAnalysisChatSystemPrompt(r.Project.ConsumerPrompt), r.Project.SkillSet.Hash(),
+		r.Project.AnalysisSource.Owner, r.Project.AnalysisSource.Name, append([]string(nil), r.EnabledTools...),
 		r.ModelByteBudget, r.ContextByteBudget, r.MaxOutputTokens, maxIters, effective.SingleToolCall, 1,
 	})
 	sum := sha256.Sum256(payload)
@@ -317,6 +322,8 @@ func (r *Runtime) newAnalysisChatAgent(backend storage.Backend, requestedTimeout
 			MaxIters: maxIters, ModelByteBudget: r.ModelByteBudget,
 			GCSByteBudget: analysisChatGCSByteBudget, ContextByteBudget: r.ContextByteBudget,
 			Timeout: timeout, SingleToolCall: effective.SingleToolCall,
+			SourceRepoOwner: r.Project.AnalysisSource.Owner, SourceRepoName: r.Project.AnalysisSource.Name,
+			GitHubReadToken: r.GitHubReadToken,
 		},
 	)
 }

@@ -469,37 +469,80 @@ func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 }
 
 func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
-	service, _ := requestTestService(t)
-	service.ConfigureAsyncRequests(time.Minute, nil)
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
-		return PreviewResult{}, classifiedAnalysisFixFailure(
-			ReasonProviderCredentialRejected, AnalysisFixFailureProviderCredential, runtime.TerminalFailed,
-			errors.New("agent fix generation: agent Sandbox execution failed: model provider rejected the sandbox credential (HTTP 403) "+
-				"from https://gateway.internal/v1 with Bearer ghp-fixture-secret"),
-		)
+	message := strings.Repeat("provider-detail-", 18) + "final-detail"
+	if len(message) != 300 {
+		t.Fatalf("fixture message is %d bytes", len(message))
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
-	if final.ReasonCode != ReasonProviderCredentialRejected || final.Failure == nil ||
-		final.Failure.Category != AnalysisFixFailureProviderCredential {
-		t.Fatalf("final = %+v", final)
-	}
-	if final.Error != ReasonMessage(ReasonProviderCredentialRejected) || final.Error == ReasonMessage(ReasonGenerationFailed) {
-		t.Fatalf("error = %q", final.Error)
-	}
-	logged := logs.String()
-	if !strings.Contains(logged, "model provider rejected the sandbox credential (HTTP 403)") ||
-		!strings.Contains(logged, string(ReasonProviderCredentialRejected)) {
-		t.Fatalf("log = %q", logged)
-	}
-	if strings.Contains(logged, "ghp-fixture-secret") || strings.Contains(logged, "gateway.internal") {
-		t.Fatalf("log disclosed private material: %q", logged)
+	for _, testCase := range []struct {
+		name       string
+		statusCode int
+		detail     AnalysisFixFailureDetail
+		statusText string
+	}{
+		{name: "unauthorized", statusCode: 401, detail: AnalysisFixFailureDetailProviderUnauthorized, statusText: "credential rejected"},
+		{name: "forbidden", statusCode: 403, detail: AnalysisFixFailureDetailProviderForbidden, statusText: "request refused"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, _ := requestTestService(t)
+			service.ConfigureAsyncRequests(time.Minute, nil)
+			var logs bytes.Buffer
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			summary := fmt.Sprintf(
+				"Provider message: %s HTTP %d: %s. Secret capz-aster-fix-model/AI_TOKEN; endpoint scheme=https address=api.githubcopilot.com/chat/completions; model gpt-fixture. Provider github-copilot.",
+				message, testCase.statusCode, testCase.statusText,
+			)
+			service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+				return PreviewResult{}, &classifiedAnalysisFixError{
+					failure: &AnalysisFixFailureView{
+						Category: AnalysisFixFailureProviderCredential, Detail: testCase.detail,
+						TerminalState: runtime.TerminalFailed, OperatorSummary: summary,
+					},
+					cause: withReason(
+						ReasonProviderCredentialRejected,
+						errors.New("agent fix generation: provider request failed from https://gateway.internal/v1 with Bearer ghp-fixture-secret"),
+						summary,
+					),
+				}
+			}
+			created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+			if final.ReasonCode != ReasonProviderCredentialRejected || final.Failure == nil ||
+				final.Failure.Category != AnalysisFixFailureProviderCredential || final.Failure.Detail != testCase.detail {
+				t.Fatalf("final = %+v", final)
+			}
+			if !strings.Contains(final.Failure.OperatorSummary, message) {
+				t.Fatalf("persisted provider message was truncated: %q", final.Failure.OperatorSummary)
+			}
+			if final.Error != ReasonMessage(ReasonProviderCredentialRejected) {
+				t.Fatalf("error = %q", final.Error)
+			}
+			encoded, err := json.Marshal(final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"ghp-fixture-secret", "gateway.internal"} {
+				if strings.Contains(string(encoded), secret) {
+					t.Fatalf("API-visible request disclosed %q: %s", secret, encoded)
+				}
+			}
+			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+			restored, err := reloaded.GetRequest(created.ID, "alice")
+			if err != nil || restored.Failure == nil || !strings.Contains(restored.Failure.OperatorSummary, message) ||
+				restored.Error != ReasonMessage(ReasonProviderCredentialRejected) {
+				t.Fatalf("restored=%+v err=%v", restored, err)
+			}
+			logged := logs.String()
+			if !strings.Contains(logged, string(ReasonProviderCredentialRejected)) {
+				t.Fatalf("log = %q", logged)
+			}
+			if strings.Contains(logged, "ghp-fixture-secret") || strings.Contains(logged, "gateway.internal") {
+				t.Fatalf("log disclosed private material: %q", logged)
+			}
+		})
 	}
 }
 

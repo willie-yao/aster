@@ -435,6 +435,7 @@ func (r *AgentSandboxRuntime) Generate(ctx context.Context, spec engineruntime.G
 	if err != nil {
 		return result, errors.Join(fmt.Errorf("%w: agent Sandbox result: %v", engineruntime.ErrMalformedResult, err), runErr)
 	}
+	r.enrichProviderError(&parsed)
 	parsed.Resources = raw.Resources
 	parsed.Telemetry = result.Telemetry
 	parsed.Output = boundedSummary(parsed.StdoutSummary, parsed.StderrSummary, parsed.FailureReason)
@@ -864,6 +865,22 @@ func decodeExecutionResult(raw string) (engineruntime.ExecutionResult, error) {
 		return result, fmt.Errorf("result contains trailing data")
 	}
 	return result, nil
+}
+
+func (r *AgentSandboxRuntime) enrichProviderError(result *engineruntime.ExecutionResult) {
+	if result.ProviderError == nil {
+		return
+	}
+	detail := *result.ProviderError
+	detail.AuthSecretName = r.opts.ProviderSecretRef.Name
+	detail.AuthSecretKey = r.opts.ProviderSecretRef.Key
+	if detail.Endpoint == "" {
+		detail.Endpoint = r.opts.ModelProvider.Endpoint
+	}
+	if detail.Model == "" {
+		detail.Model = r.opts.ModelProvider.Model
+	}
+	result.ProviderError = &detail
 }
 
 func compareExecutionFiles(result engineruntime.ExecutionResult, files map[string]string) error {
