@@ -195,7 +195,6 @@ type AgentSandboxRuntime struct {
 var (
 	_ engineruntime.AgentRuntime        = (*AgentSandboxRuntime)(nil)
 	_ engineruntime.ManagedAgentRuntime = (*AgentSandboxRuntime)(nil)
-	_ agentsandbox.Runner               = (*AgentSandboxRuntime)(nil)
 )
 
 // NewAgentSandboxRuntime constructs the production adapter.

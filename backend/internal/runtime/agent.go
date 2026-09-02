@@ -15,8 +15,7 @@ import (
 
 // GenerateSpec is a one-shot code-generation run: materialize Repo at its ref,
 // run a coding-agent CLI with Instruction in the workspace, and return the files
-// the agent changed. It is the generative counterpart to Spec (which runs a
-// fixed command for verification).
+// the agent changed.
 type GenerateSpec struct {
 	Repo RepoRef
 	// Instruction is the fix task handed to the coding agent.
@@ -48,7 +47,7 @@ type GenerateSpec struct {
 	// NetworkDomains are additional outbound destinations required by the task.
 	// The custom endpoint host is added automatically.
 	NetworkDomains []string
-	// Timeout bounds the whole run (clone plus agent). Zero uses defaultTimeout.
+	// Timeout bounds the whole run (clone plus agent). Zero uses the Runtime default.
 	Timeout time.Duration
 	// ExpectedBaseSHA is the immutable base the caller will independently verify.
 	ExpectedBaseSHA string

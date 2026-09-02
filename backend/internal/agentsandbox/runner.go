@@ -2,7 +2,6 @@
 package agentsandbox
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -42,13 +41,6 @@ type Result struct {
 	Resources      engineruntime.ResourceMetadata
 	Telemetry      engineruntime.GenerateTelemetry
 	Work           *engineruntime.WorkRef
-}
-
-// Runner executes one bounded workload and confirms cleanup before returning.
-type Runner interface {
-	Run(context.Context, Spec) (Result, error)
-	Cleanup(context.Context, engineruntime.WorkRef) error
-	RuntimeIdentity() string
 }
 
 // ValidateSpec checks the generic workload boundary before Kubernetes writes.

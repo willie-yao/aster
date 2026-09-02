@@ -1,56 +1,11 @@
 package fixpr
 
 import (
-	"context"
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
-	"github.com/willie-yao/aster/backend/internal/runtime"
 )
-
-// fakeRuntime is a runtime.Runtime test double returning a scripted result.
-type fakeRuntime struct {
-	res runtime.Result
-	err error
-}
-
-func (f fakeRuntime) Run(context.Context, runtime.Spec) (runtime.Result, error) {
-	return f.res, f.err
-}
-
-func TestVerify_Verdicts(t *testing.T) {
-	base := ghpr.Base{HeadSHA: "deadbeef"}
-	files := map[string]string{"a.go": "package a"}
-
-	cases := []struct {
-		name string
-		rt   runtime.Runtime
-		want VerifyStatus
-	}{
-		{name: "passed", rt: fakeRuntime{res: runtime.Result{ExitCode: 0}}, want: VerifyPassed},
-		{name: "failed", rt: fakeRuntime{res: runtime.Result{ExitCode: 1, Output: "boom"}}, want: VerifyFailed},
-		{name: "timeout", rt: fakeRuntime{res: runtime.Result{TimedOut: true}}, want: VerifyFailed},
-		{name: "unavailable-skips", rt: fakeRuntime{err: runtime.ErrUnavailable}, want: VerifySkipped},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &Manager{opts: Options{Verify: &VerifyConfig{Runtime: tc.rt}}}
-			got := m.verify(context.Background(), base, files, nil)
-			if got.Status != tc.want {
-				t.Errorf("status = %q, want %q (summary=%q)", got.Status, tc.want, got.Summary)
-			}
-		})
-	}
-}
-
-func TestVerify_NotConfiguredSkips(t *testing.T) {
-	m := &Manager{opts: Options{}}
-	if got := m.verify(context.Background(), ghpr.Base{HeadSHA: "x"}, nil, nil); got.Status != VerifySkipped {
-		t.Errorf("status = %q, want skipped", got.Status)
-	}
-}
 
 func TestPRBody_RendersVerdict(t *testing.T) {
 	p := models.PatternAnalysis{Subject: "flaky job", BuildsAnalyzed: 4, Confidence: "high"}

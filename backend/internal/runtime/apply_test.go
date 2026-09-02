@@ -4,11 +4,46 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func initRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+	runTestGit(t, dir, "config", "user.email", "t@example.com")
+	runTestGit(t, dir, "config", "user.name", "t")
+	runTestGit(t, dir, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(dir, "orig.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, dir, "add", "-A")
+	runTestGit(t, dir, "commit", "-q", "--no-gpg-sign", "-m", "base")
+	return dir
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_TERMINAL_PROMPT=0",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
 
 func TestApplyDiffReconstructsChangedFiles(t *testing.T) {
 	repo := initRepo(t)

@@ -43,7 +43,7 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 		return nil, err
 	}
 	key := "fix-build::" + failure.ID
-	verified := m.verify(ctx, base, fix.files, fix.executionVerification)
+	verified := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description := buildFailureDescription(failure, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
