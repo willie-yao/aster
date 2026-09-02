@@ -72,7 +72,7 @@ export function chatFixVerifiedCitationRequestIDs(messages: AnalysisChatMessage[
   let cited = false;
   for (const message of messages ?? []) {
     if (message.role !== "assistant") continue;
-    if (message.citations?.length) cited = true;
+    if (message.citations?.some((citation) => !citation.repository && !citation.revision)) cited = true;
     if (cited && message.request_id) verified.add(message.request_id);
   }
   return verified;

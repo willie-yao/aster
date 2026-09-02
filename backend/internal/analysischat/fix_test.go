@@ -397,6 +397,56 @@ func TestServiceFixCandidateAllowsPartiallyVerifiedAnswer(t *testing.T) {
 	}
 }
 
+func TestConversationCitationsExcludeSourceEvidenceFromFixEligibility(t *testing.T) {
+	artifact := Citation{Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "terminal failure"}
+	source := Citation{
+		Repository: "example/repo", Revision: "0123456789abcdef0123456789abcdef01234567",
+		Path: "controllers/reconciler.go", LineStart: 10, LineEnd: 10, Quote: "return err",
+	}
+	if got := conversationCitations([]Message{{Role: "assistant", RequestID: "source", Citations: []Citation{source}}}, "source"); got != nil {
+		t.Fatalf("source-only citations = %+v", got)
+	}
+	got := conversationCitations([]Message{{Role: "assistant", RequestID: "mixed", Citations: []Citation{source, artifact}}}, "mixed")
+	if !slices.Equal(got, []Citation{artifact}) {
+		t.Fatalf("mixed citations = %+v", got)
+	}
+}
+
+func TestServiceFixCandidateRequiresArtifactCitationWhenSourceCitationExists(t *testing.T) {
+	service, session, requestID := fixCandidateReadyService(t)
+	source := Citation{
+		Repository: "example/repo", Revision: "0123456789abcdef0123456789abcdef01234567",
+		Path: "controllers/reconciler.go", LineStart: 10, LineEnd: 10, Quote: "return err",
+	}
+	setCitations := func(citations []Citation) {
+		t.Helper()
+		ctx, cancel := service.store.context()
+		err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+			answer := assistantResponse(state.Sessions[session.ID].View.Messages, requestID)
+			answer.Citations = citations
+			return true, nil
+		})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	pattern := fixCandidatePattern()
+	setCitations([]Citation{source})
+	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("source-only fix candidate error = %v", err)
+	}
+	artifact := Citation{Path: "build-log.txt", LineStart: 42, LineEnd: 44, Quote: "terminal bootstrap failure"}
+	setCitations([]Citation{source, artifact})
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(candidate.ArtifactCitations, []Citation{artifact}) {
+		t.Fatalf("artifact citations = %+v", candidate.ArtifactCitations)
+	}
+}
+
 func TestServiceFixCandidateAccumulatesEarlierEvidenceWarnings(t *testing.T) {
 	service, session, firstRequestID := fixCandidateReadyService(t)
 	ctx, cancel := service.store.context()

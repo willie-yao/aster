@@ -393,11 +393,12 @@ function AssistantMessage({
             </Stack>
             <Stack spacing={0.75}>
               {message.citations.map((citation, index) => {
-                const url = fileToUrl(citation.path, fileCtx);
+                const sourceCitation = Boolean(citation.repository || citation.revision);
+                const url = sourceCitation ? null : fileToUrl(citation.path, fileCtx);
                 const lines = formatLines(citation);
                 return (
                   <Box
-                    key={`${citation.path}-${citation.line_start ?? 0}-${index}`}
+                    key={`${citation.repository ?? ""}-${citation.revision ?? ""}-${citation.path}-${citation.line_start ?? 0}-${index}`}
                     sx={{
                       borderLeft: "2px solid",
                       borderColor: "success.main",
@@ -406,6 +407,11 @@ function AssistantMessage({
                     }}
                   >
                     <Stack direction="row" spacing={0.75} sx={{ alignItems: "baseline", flexWrap: "wrap" }}>
+                      {sourceCitation && (
+                        <Typography component="span" sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 650 }}>
+                          {citation.repository}@{citation.revision}
+                        </Typography>
+                      )}
                       {url ? (
                         <Link
                           href={url}

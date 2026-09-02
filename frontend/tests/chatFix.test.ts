@@ -96,6 +96,13 @@ test("chat fix citation verification accumulates across the conversation", () =>
   ]);
   assert.deepEqual([...later], ["two"]);
 
+  const sourceOnly = answer("source", false);
+  sourceOnly.citations = [{
+    repository: "example/project", revision: "0123456789abcdef0123456789abcdef01234567",
+    path: "pkg/controller.go", line_start: 10, line_end: 10, quote: "return err",
+  }];
+  assert.equal(chatFixVerifiedCitationRequestIDs([sourceOnly]).size, 0);
+
   assert.equal(chatFixVerifiedCitationRequestIDs([question("one"), answer("one", false)]).size, 0);
   assert.equal(chatFixVerifiedCitationRequestIDs(undefined).size, 0);
 });
