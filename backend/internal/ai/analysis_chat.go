@@ -47,7 +47,10 @@ revision. Source citations use the canonical owner/repo and full revision from
 the immutable source catalog. Source citations are allowed only when repository
 tools and an immutable source catalog are present. grep_repo locates code and
 can support quote-only evidence with null line coordinates. Call read_repo_file
-before publishing a line-ranged source citation. Assessment is optional and,
+before publishing a line-ranged source citation. Only read_repo_file provides
+authoritative source coordinates. Choose a narrow sub-range inside its returned
+line_start/line_end and set quote to exactly the text from that cited sub-range.
+Assessment is optional and,
 when present, must be "supports",
 "challenges", "inconclusive", or null. proposed_revision is optional and may be a
 complete root_cause and suggested_fix object only when assessment is

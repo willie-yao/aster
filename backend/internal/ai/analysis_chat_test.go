@@ -502,6 +502,9 @@ func TestAnalysisChatPromptShowsTheCitationShape(t *testing.T) {
 		"canonical owner/repo and full revision",
 		"grep_repo locates code",
 		"Call read_repo_file",
+		"Only read_repo_file provides\nauthoritative source coordinates",
+		"Choose a narrow sub-range inside its returned",
+		"set quote to exactly the text from that cited sub-range",
 	} {
 		if !strings.Contains(analysisChatResponseFormat, want) {
 			t.Fatalf("prompt missing source citation rule %q", want)
@@ -771,6 +774,83 @@ func TestParseAnalysisChatReplyCategorizesCitationMismatch(t *testing.T) {
 	if !reply.Unverified || reply.UnverifiedReason != analysischat.UnverifiedCitation ||
 		reply.Assessment != "inconclusive" || len(reply.Citations) != 0 {
 		t.Fatalf("reply=%+v", reply)
+	}
+}
+
+func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
+	const (
+		path     = "pkg/controller.go"
+		revision = "0123456789abcdef0123456789abcdef01234567"
+	)
+	content := "partial leading line\ncomplete line two\ncomplete line three\npartial trailing line"
+	offset := strings.Index(content, "leading")
+	end := strings.Index(content, " trailing")
+	length := end - offset
+	requested := content[offset:end]
+
+	registry := tools.NewRegistry()
+	repotree.Register(registry)
+	enabled, err := registry.Enable([]string{"repotree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: revision,
+		Reader: &fakeSourceRepo{files: map[string]string{path: content}},
+	}
+	state := &agentState{
+		sources:  testSourceCatalog(t, tools.PrimarySourceID, primary),
+		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
+		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
+		sourceEvidenceByPath: map[string]*analysisChatEvidence{},
+	}
+	arguments, err := json.Marshal(map[string]interface{}{
+		"source_id": tools.PrimarySourceID, "path": path, "offset": offset, "length": length,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := dispatchAgenticTool(t.Context(), state, modelToolCall{
+		ID: "repo-read", Type: "function",
+		Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)},
+	})
+	visible := modelVisibleToolPayload(envelope)
+	if visible == nil {
+		t.Fatalf("model-visible payload is not JSON: %q", envelope)
+	}
+	if visible["offset"] != float64(offset) || visible["length"] != float64(length) || visible["content"] != requested {
+		t.Fatalf("visible raw range = offset %v length %v content %q, want %d %d %q", visible["offset"], visible["length"], visible["content"], offset, length, requested)
+	}
+	lineStart, startOK := visible["line_start"].(float64)
+	lineEnd, endOK := visible["line_end"].(float64)
+	if !startOK || !endOK || lineStart != 2 || lineEnd != 3 {
+		t.Fatalf("visible line range = %v-%v, want 2-3", visible["line_start"], visible["line_end"])
+	}
+
+	evidence := state.sourceEvidenceByPath[path]
+	if evidence == nil {
+		t.Fatal("source evidence was not recorded")
+	}
+	if len(evidence.Lines) != 2 || evidence.Lines[2] != "complete line two" || evidence.Lines[3] != "complete line three" {
+		t.Fatalf("recorded source lines = %+v", evidence.Lines)
+	}
+	if _, ok := evidence.Lines[1]; ok {
+		t.Fatalf("partial leading line became line-addressable: %+v", evidence.Lines)
+	}
+	if _, ok := evidence.Lines[4]; ok {
+		t.Fatalf("partial trailing line became line-addressable: %+v", evidence.Lines)
+	}
+
+	citation := analysischat.Citation{
+		Repository: "example/project", Revision: revision, Path: path,
+		LineStart: int(lineStart), LineEnd: int(lineStart), Quote: evidence.Lines[int(lineStart)],
+	}
+	source := &analysisChatSourceCitationContext{Primary: primary, Evidence: state.sourceEvidenceByPath}
+	if failure := validateAnalysisChatCitation(&citation, nil, source, 1); failure != nil {
+		t.Fatalf("published line citation did not validate: %+v", failure)
+	}
+	if citation.Quote != "complete line two" || citation.LineStart != 2 || citation.LineEnd != 2 {
+		t.Fatalf("validated citation = %+v", citation)
 	}
 }
 

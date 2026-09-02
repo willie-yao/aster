@@ -230,8 +230,9 @@ func (*readTool) Schema() tools.Schema {
 	return tools.Schema{
 		Type: "function",
 		Function: tools.FunctionDecl{
-			Name:        "read_repo_file",
-			Description: "Read a byte range of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call.",
+			Name: "read_repo_file",
+			Description: "Read a byte range of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call. " +
+				"When line_start and line_end are present, they are absolute source coordinates for complete lines wholly contained in content; partial leading or trailing lines are outside the range.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -298,6 +299,8 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		},
 	}
 	if lineStart, lineEnd, byteStart, byteEnd, ok := completeReadLineRange(content, offset, end); ok {
+		result.Payload["line_start"] = lineStart
+		result.Payload["line_end"] = lineEnd
 		result.Observation = ReadObservation{
 			SourceID: selected.ID, Path: args.Path, LineStart: lineStart, LineEnd: lineEnd,
 			ByteStart: byteStart, ByteEnd: byteEnd,
