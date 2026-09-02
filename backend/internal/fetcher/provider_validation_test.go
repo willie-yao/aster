@@ -26,9 +26,6 @@ branding:
     owner: example
     name: repo
 ai:
-  api: chat_completions
-  endpoint: https://model.invalid/v1/chat/completions
-  model: openai/gpt-5.4
   tools: [filesystem]
 `, storageDir)
 	if err := os.WriteFile(filepath.Join(projectDir, "project.yaml"), []byte(config), 0o600); err != nil {
@@ -41,6 +38,9 @@ ai:
 		t.Fatal(err)
 	}
 	t.Setenv("AI_TOKEN", "fixture")
+	t.Setenv("AI_API", "chat_completions")
+	t.Setenv("AI_ENDPOINT", "https://model.invalid/v1/chat/completions")
+	t.Setenv("AI_MODEL", "openai/gpt-5.4")
 	t.Setenv("AI_REASONING_EFFORT", "high")
 	_, err := setupPipeline(Options{ProjectDir: projectDir, OutDir: t.TempDir(), EnableAI: true})
 	if err == nil || !strings.Contains(err.Error(), "set reasoning effort to none or use responses") {

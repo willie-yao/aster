@@ -31,7 +31,6 @@ export interface FetchFollowUpComponent {
 
 export interface FetchFollowUpProgress {
   notifications?: FetchFollowUpComponent;
-  remediation?: FetchFollowUpComponent;
   automatic_issues?: FetchFollowUpComponent;
 }
 

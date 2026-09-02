@@ -74,7 +74,7 @@ func ReadHistory(path string) (History, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return History{}, errors.New("fetch history has trailing data")
 	}
-	if history.SchemaVersion != 1 && history.SchemaVersion != 2 && history.SchemaVersion != 3 && history.SchemaVersion != 4 && history.SchemaVersion != HistorySchemaVersion {
+	if history.SchemaVersion != HistorySchemaVersion {
 		return History{}, fmt.Errorf("unsupported fetch history schema %d", history.SchemaVersion)
 	}
 	if len(history.Passes) > HistoryLimit {

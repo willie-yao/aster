@@ -78,7 +78,6 @@ test("inline evidence includes analyzed failures without a failure message", () 
         status: "failed",
         ai_analysis: {
           generated_at: "2026-08-07T00:00:00Z",
-          model: "test",
           root_cause: "cause",
           severity: "High",
           suggested_fix: "fix",

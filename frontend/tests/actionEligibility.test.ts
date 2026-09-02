@@ -59,7 +59,7 @@ test("pattern action eligibility handles deterministic blocked states", () => {
 
 test("build action eligibility requires current quality and verified files", () => {
   const analysis = {
-    generated_at: "now", model: "m", mode: "agentic", disposition: "citations_verified" as const, critique_passed: true, critique_version: 7,
+    generated_at: "now", mode: "agentic", disposition: "citations_verified" as const, critique_passed: true, critique_version: 7,
     root_cause: "cause", severity: "High", suggested_fix: "Use `MissingHelper`.",
   };
   assert.equal(buildActionEligibilityHint(analysis, 7)?.state, "more_evidence_required");

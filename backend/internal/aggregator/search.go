@@ -89,7 +89,7 @@ func BuildSearchIndex(jobResults map[string][]models.BuildResult, jobs []models.
 			TabName:  meta.TabName,
 			Branch:   meta.Branch,
 			Category: meta.Category,
-			Status:   meta.TabName, // placeholder status for job entries
+			Status:   string(CurrentJobStatus(jobResults[jobID])),
 		})
 	}
 

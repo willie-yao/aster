@@ -75,8 +75,12 @@ func runPipeline(t *testing.T, projectDir string, enableAI bool) string {
 	t.Helper()
 	// Clear env that fetcher.Run reads, so a developer's environment can't make
 	// the pipeline reach email, GitHub, or a real AI endpoint.
-	for _, k := range []string{"EMAIL_SMTP_PASSWORD", "ISSUE_TOKEN", "GITHUB_TOKEN", "AI_ENDPOINT", "AI_MODEL"} {
+	for _, k := range []string{"EMAIL_SMTP_PASSWORD", "ISSUE_TOKEN", "GITHUB_TOKEN"} {
 		t.Setenv(k, "")
+	}
+	if !enableAI {
+		t.Setenv("AI_ENDPOINT", "")
+		t.Setenv("AI_MODEL", "")
 	}
 	outDir := t.TempDir()
 	err := fetcher.Run(context.Background(), fetcher.Options{
@@ -180,7 +184,9 @@ func TestPipeline_WithAI(t *testing.T) {
 		`"severity":"High","suggested_fix":"Raise the control-plane bootstrap timeout above 600s so all three machines have time to register",` +
 		`"relevant_files":["build-log.txt"]}`)
 	t.Setenv("AI_TOKEN", "test-token")
-	aiBlock := "  endpoint: \"" + script.URL + "\"\n  model: \"script-model\"\n  tools: [filesystem]\n"
+	t.Setenv("AI_ENDPOINT", script.URL)
+	t.Setenv("AI_MODEL", "script-model")
+	aiBlock := "  tools: [filesystem]\n"
 	projectDir := writeProject(t, aiBlock)
 	expectedSkills, selection, err := skills.LoadForTools(projectDir, []string{"filesystem"})
 	if err != nil {

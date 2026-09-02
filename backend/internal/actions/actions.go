@@ -243,7 +243,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 }
 
 // ConfigureFixActions controls whether Fix PR preview and confirmation are exposed.
-// Production server startup disables them for the local OpenCode runtime.
+// Production server startup disables them when no supported runtime is configured.
 func (s *Service) ConfigureFixActions(enabled bool) {
 	s.fixActionsEnabled = enabled
 }
@@ -771,21 +771,6 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 		Critique:        critique,
 		CritiqueRetries: critiqueRetries,
 		PRFiller:        prFiller,
-	}
-	if eff.Verify != nil && eff.Verify.Enabled && ar.Type != "agent-sandbox" {
-		trusted, err := runtime.TrustedLocalRuntimeEnabled()
-		if err != nil {
-			return nil, err
-		}
-		if !trusted {
-			return nil, fmt.Errorf("local Fix PR verification requires %s=true on a trusted development or CI host", runtime.TrustedLocalRuntimeEnv)
-		}
-		opts.Verify = &fixpr.VerifyConfig{
-			Runtime:  runtime.NewLocal(),
-			Commands: eff.Verify.ParsedCommands(),
-			Timeout:  eff.Verify.ParsedTimeout(),
-			Token:    userToken,
-		}
 	}
 	allowBash := ar.AllowBash == nil || *ar.AllowBash
 	agentRuntime, err := fixruntime.New(ar)

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -499,7 +498,11 @@ func previewHandler(timeout time.Duration, run previewFunc) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		instruction := decodeInstruction(r)
+		instruction, err := decodeInstruction(w, r)
+		if err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
@@ -528,7 +531,7 @@ func confirmHandler(timeout time.Duration, run confirmFunc) http.Handler {
 		var body struct {
 			Token string `json:"token"`
 		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil || strings.TrimSpace(body.Token) == "" {
+		if err := decodeWriteBody(w, r, &body, 4096, false); err != nil || strings.TrimSpace(body.Token) == "" {
 			http.Error(w, "missing token", http.StatusBadRequest)
 			return
 		}
@@ -547,12 +550,14 @@ func confirmHandler(timeout time.Duration, run confirmFunc) http.Handler {
 
 // decodeInstruction reads an optional {"instruction": ...} from the request
 // body, tolerating an absent or empty body.
-func decodeInstruction(r *http.Request) string {
+func decodeInstruction(w http.ResponseWriter, r *http.Request) (string, error) {
 	var body struct {
 		Instruction string `json:"instruction"`
 	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body)
-	return strings.TrimSpace(body.Instruction)
+	if err := decodeWriteBody(w, r, &body, 8192, true); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(body.Instruction), nil
 }
 
 type actionReasonResponse struct {
@@ -651,13 +656,7 @@ func createActionRequestHandler(run createActionRequestFunc, allowFix bool) http
 			Instruction         string `json:"instruction"`
 			SupersedesRequestID string `json:"supersedes_request_id"`
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
-		if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-		var extra any
-		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err := decodeWriteBody(w, r, &body, 8192, true); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -756,7 +755,10 @@ func resolveHandler(run func(failureID, login, note string) error) http.Handler 
 		var body struct {
 			Note string `json:"note"`
 		}
-		_ = json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body)
+		if err := decodeWriteBody(w, r, &body, 8192, true); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
 		if err := run(id, identity.Login, body.Note); err != nil {
 			writeActionError(w, id, identity.Login, err)
 			return

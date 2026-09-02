@@ -22,7 +22,7 @@ import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetc
 const fetchStatusSource = readFileSync(resolve(process.cwd(), "src/components/FetchStatus.tsx"), "utf8");
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 12,
+  schema_version: 13,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -88,7 +88,6 @@ const completedStatus: FetchProgressStatus = {
   side_effect_phase: "completed",
   follow_up: {
     notifications: { state: "completed" },
-    remediation: { state: "completed" },
     automatic_issues: { state: "skipped", reason: "not-configured" },
   },
 };
@@ -139,7 +138,6 @@ const statusFixtures = {
       notifications: {
         state: "failed", code: "notification-delivery", summary: "Email notification delivery failed",
       },
-      remediation: { state: "completed" },
       automatic_issues: { state: "skipped", reason: "not-configured" },
     },
   }),
@@ -154,7 +152,6 @@ const statusFixtures = {
       notifications: {
         state: "failed", code: "notification-delivery", summary: "Email notification delivery failed",
       },
-      remediation: { state: "completed" },
     },
   }),
   staleIdle: response("stale", {
@@ -178,7 +175,6 @@ const statusFixtures = {
     side_effect_phase: "cancelled",
     follow_up: {
       notifications: { state: "completed" },
-      remediation: { state: "cancelled" },
     },
   }),
 };

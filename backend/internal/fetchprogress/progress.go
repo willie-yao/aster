@@ -2,7 +2,6 @@
 package fetchprogress
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -159,32 +158,6 @@ type FollowUpComponentStatus struct {
 type FollowUpProgress struct {
 	Notifications   *FollowUpComponentStatus `json:"notifications,omitempty"`
 	AutomaticIssues *FollowUpComponentStatus `json:"automatic_issues,omitempty"`
-	// Remediation and AutomaticFixPRs are deprecated components from the removed
-	// closed-loop remediation and scheduled fix-PR features. They stay decodable
-	// so a status file written by an older engine still loads under strict
-	// decoding. They are never produced.
-	Remediation     *FollowUpComponentStatus `json:"-"`
-	AutomaticFixPRs *FollowUpComponentStatus `json:"-"`
-}
-
-// UnmarshalJSON decodes follow-up progress, accepting the deprecated
-// remediation and automatic fix-PR components written by older engine versions.
-func (p *FollowUpProgress) UnmarshalJSON(data []byte) error {
-	type followUpProgress FollowUpProgress
-	var raw struct {
-		followUpProgress
-		Remediation     *FollowUpComponentStatus `json:"remediation,omitempty"`
-		AutomaticFixPRs *FollowUpComponentStatus `json:"automatic_fix_prs,omitempty"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&raw); err != nil {
-		return err
-	}
-	*p = FollowUpProgress(raw.followUpProgress)
-	p.Remediation = raw.Remediation
-	p.AutomaticFixPRs = raw.AutomaticFixPRs
-	return nil
 }
 
 // JobProgress tracks aggregate job completion.
@@ -221,12 +194,7 @@ type CacheRejectionProgress struct {
 	ToolFloor     int `json:"tool_floor"`
 	EvidenceFloor int `json:"evidence_floor"`
 	Critique      int `json:"critique"`
-	// Deprecated fields remain decodable for status schemas through version 6.
-	Skill                int `json:"skill,omitempty"`
-	Model                int `json:"model,omitempty"`
-	Prompt               int `json:"prompt,omitempty"`
-	TransientPersistence int `json:"transient_persistence,omitempty"`
-	Malformed            int `json:"malformed"`
+	Malformed     int `json:"malformed"`
 }
 
 // Add increments one known privacy-safe rejection category.
@@ -251,11 +219,11 @@ func (p *CacheRejectionProgress) Add(reason string) {
 }
 
 func (p CacheRejectionProgress) total() int {
-	return p.Missing + p.Expired + p.ToolFloor + p.EvidenceFloor + p.Critique + p.Skill + p.Model + p.Prompt + p.TransientPersistence + p.Malformed
+	return p.Missing + p.Expired + p.ToolFloor + p.EvidenceFloor + p.Critique + p.Malformed
 }
 
 func (p CacheRejectionProgress) valid() bool {
-	return p.Missing >= 0 && p.Expired >= 0 && p.ToolFloor >= 0 && p.EvidenceFloor >= 0 && p.Critique >= 0 && p.Skill >= 0 && p.Model >= 0 && p.Prompt >= 0 && p.TransientPersistence >= 0 && p.Malformed >= 0
+	return p.Missing >= 0 && p.Expired >= 0 && p.ToolFloor >= 0 && p.EvidenceFloor >= 0 && p.Critique >= 0 && p.Malformed >= 0
 }
 
 // AnalysisPlan is the finalized pre-execution logical workload.
@@ -424,7 +392,7 @@ func Read(path string) (Status, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Status{}, errors.New("fetch status has trailing data")
 	}
-	if status.SchemaVersion != 1 && status.SchemaVersion != 2 && status.SchemaVersion != 3 && status.SchemaVersion != 4 && status.SchemaVersion != 5 && status.SchemaVersion != 6 && status.SchemaVersion != 7 && status.SchemaVersion != 8 && status.SchemaVersion != 9 && status.SchemaVersion != 10 && status.SchemaVersion != 11 && status.SchemaVersion != 12 && status.SchemaVersion != SchemaVersion {
+	if status.SchemaVersion != SchemaVersion {
 		return Status{}, fmt.Errorf("unsupported fetch status schema %d", status.SchemaVersion)
 	}
 	if err := status.validate(); err != nil {
@@ -748,10 +716,6 @@ func (t *Tracker) recoverInterrupted() {
 	now := t.now()
 	priorPhase := previous.Phase
 	previous.SchemaVersion = SchemaVersion
-	previous.Analyses.CacheRejections.Skill = 0
-	previous.Analyses.CacheRejections.Model = 0
-	previous.Analyses.CacheRejections.Prompt = 0
-	previous.Analyses.CacheRejections.TransientPersistence = 0
 	if previous.PhaseDurationsMS == nil {
 		previous.PhaseDurationsMS = map[string]int64{}
 	}

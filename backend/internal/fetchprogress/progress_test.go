@@ -1,10 +1,10 @@
 package fetchprogress
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -116,13 +116,64 @@ func TestReadRejectsUnknownSchemaCorruptAndUnknownState(t *testing.T) {
 	}
 }
 
+func TestReadRejectsPreviousSchemaAndRetiredFields(t *testing.T) {
+	status := testStatus(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	status.FollowUp = &FollowUpProgress{Notifications: &FollowUpComponentStatus{State: FollowUpCompleted}}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := maps.Clone(raw)
+	previous["schema_version"] = float64(SchemaVersion - 1)
+	cacheField := cloneJSONMap(t, raw)
+	cacheField["analyses"].(map[string]any)["cache_rejections"].(map[string]any)["skill"] = float64(1)
+	followUpField := cloneJSONMap(t, raw)
+	followUpField["follow_up"].(map[string]any)["remediation"] = map[string]any{"state": "disabled"}
+
+	for name, value := range map[string]map[string]any{
+		"previous schema":             previous,
+		"retired cache counter":       cacheField,
+		"retired follow-up component": followUpField,
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "status.json")
+			if err := os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Read(path); err == nil {
+				t.Fatalf("Read accepted %s", encoded)
+			}
+		})
+	}
+}
+
+func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clone map[string]any
+	if err := json.Unmarshal(data, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
 func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	status := testStatus(now.Add(-time.Minute))
-	status.SchemaVersion = 6
 	status.Analyses.StaleWork = 4
-	status.Analyses.CacheRejections = CacheRejectionProgress{Skill: 1, Model: 1, Prompt: 1, TransientPersistence: 1}
 	if err := Write(Path(dir), status); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +187,7 @@ func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted || got.PhaseStartedAt != now ||
-		got.Analyses.CacheRejections.Skill != 0 || got.Analyses.CacheRejections.Model != 0 || got.Analyses.CacheRejections.Prompt != 0 || got.Analyses.CacheRejections.TransientPersistence != 0 {
+		got.Analyses.StaleWork != 4 {
 		t.Fatalf("recovered status = %+v", got)
 	}
 	if tracker.Snapshot().Outcome != OutcomeInterrupted || len(logs) != 1 {
@@ -444,7 +495,7 @@ func TestReadHistoryRejectsUnknownSchemaAndCorruption(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, body := range []string{`{"schema_version":99,"passes":[]}`, `{"schema_version":1`} {
+	for _, body := range []string{`{"schema_version":99,"passes":[]}`, `{"schema_version":4,"passes":[]}`, `{"schema_version":1`} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -529,109 +580,6 @@ func TestTrackerPatternAttemptAccounting(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("pattern progress = %+v, want %+v", got, want)
-	}
-}
-
-func TestReadAcceptsPreviousCheckpointFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 2
-	status.Analyses.CheckpointCommitted = false
-	status.Patterns.CacheHits = 0
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous status schema: %v", err)
-	}
-}
-
-func TestReadHistoryAcceptsPreviousSameFailureReuseFreeSchema(t *testing.T) {
-	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
-	history := History{SchemaVersion: 4, Passes: []PassSummary{{RunID: "run", PassID: "pass", PassType: PassOneShot, StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded}}}
-	path := HistoryPath(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadHistory(path); err != nil {
-		t.Fatalf("reading previous same-failure-reuse-free history: %v", err)
-	}
-}
-
-func TestReadHistoryAcceptsPreviousCohortFreeSchema(t *testing.T) {
-	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
-	history := History{SchemaVersion: 3, Passes: []PassSummary{{
-		RunID: "run", PassID: "pass", PassType: PassOneShot,
-		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
-	}}}
-	path := HistoryPath(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadHistory(path); err != nil {
-		t.Fatalf("reading previous cohort-free history: %v", err)
-	}
-}
-
-func TestReadHistoryAcceptsPreviousExactCounterFreeSchema(t *testing.T) {
-	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
-	history := History{SchemaVersion: 2, Passes: []PassSummary{{
-		RunID: "run", PassID: "pass", PassType: PassOneShot,
-		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
-	}}}
-	path := HistoryPath(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadHistory(path); err != nil {
-		t.Fatalf("reading previous exact-counter-free history: %v", err)
-	}
-}
-
-func TestReadHistoryAcceptsPreviousCheckpointFreeSchema(t *testing.T) {
-	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	history := History{SchemaVersion: 1, Passes: []PassSummary{{
-		RunID: "run", PassID: "pass", PassType: PassOneShot,
-		StartedAt: now, CompletedAt: now.Add(time.Second), Outcome: OutcomeSucceeded,
-	}}}
-	path := HistoryPath(t.TempDir())
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadHistory(path); err != nil {
-		t.Fatalf("reading previous history schema: %v", err)
 	}
 }
 
@@ -763,162 +711,6 @@ func TestStatusRejectsInconsistentSameFailureCohorts(t *testing.T) {
 	}
 }
 
-func TestCurrentStatusOmitsObsoleteCacheRejectionCategories(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, category := range []string{"skill", "model", "prompt", "transient_persistence"} {
-		if bytes.Contains(data, []byte(`"`+category+`"`)) {
-			t.Fatalf("current status emitted obsolete category %q: %s", category, data)
-		}
-	}
-}
-
-func TestReadAcceptsPreviousSameFailureReuseFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 10
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous same-failure-reuse-free schema: %v", err)
-	}
-}
-
-func TestReadAcceptsPreviousCohortFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 9
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous cohort-free schema: %v", err)
-	}
-}
-
-func TestReadAcceptsRetiredRemediationFollowUpComponent(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
-	status.FollowUp = &FollowUpProgress{
-		Notifications:   &FollowUpComponentStatus{State: FollowUpCompleted},
-		AutomaticIssues: &FollowUpComponentStatus{State: FollowUpDisabled},
-	}
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	followUp, ok := raw["follow_up"].(map[string]any)
-	if !ok {
-		t.Fatalf("follow_up has type %T", raw["follow_up"])
-	}
-	followUp["remediation"] = map[string]any{"state": "skipped", "reason": "not-configured"}
-	legacy, err := json.Marshal(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "status.json")
-	if err := os.WriteFile(path, legacy, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Read(path)
-	if err != nil {
-		t.Fatalf("reading retired remediation follow-up component: %v", err)
-	}
-	if got.FollowUp == nil || got.FollowUp.Notifications == nil ||
-		got.FollowUp.Notifications.State != FollowUpCompleted {
-		t.Fatalf("follow-up = %+v", got.FollowUp)
-	}
-	rewritten, err := json.Marshal(got.FollowUp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(rewritten), "remediation") {
-		t.Fatalf("retired component was re-emitted: %s", rewritten)
-	}
-}
-
-func TestReadAcceptsPreviousExactCounterFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 8
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous exact-counter-free schema: %v", err)
-	}
-}
-
-func TestReadAcceptsPreviousConfigurationRejectionStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 6
-	status.Analyses.NewWork = 0
-	status.Analyses.StaleWork = 4
-	status.Analyses.CacheRejections = CacheRejectionProgress{Skill: 1, Model: 1, Prompt: 1, TransientPersistence: 1}
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous configuration-rejection schema: %v", err)
-	}
-}
-
-func TestReadAcceptsPreviousCompatibleReuseFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 5
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous status schema: %v", err)
-	}
-}
-
-func TestReadAcceptsPreviousBuildSubjectStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 4
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous status schema: %v", err)
-	}
-}
-
 func TestTrackerExactReuseCompletesWithoutTaskActivity(t *testing.T) {
 	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
 		write:        func(string, Status) error { return nil },
@@ -1025,62 +817,5 @@ func TestTrackerRecordsAndCancelsFollowUpComponents(t *testing.T) {
 	after := tracker.Snapshot()
 	if after.FollowUp.AutomaticIssues.State != FollowUpCancelled {
 		t.Fatalf("cancelled follow-up progress = %+v", after.FollowUp)
-	}
-}
-
-// TestReadAcceptsRetiredFollowUpComponents proves a status file written by an
-// engine that still ran scheduled fix PRs loads under strict decoding.
-func TestReadAcceptsRetiredFollowUpComponents(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
-	status.FollowUp = &FollowUpProgress{
-		AutomaticIssues: &FollowUpComponentStatus{State: FollowUpCompleted},
-	}
-	path := Path(t.TempDir())
-	if err := Write(path, status); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	followUp, ok := decoded["follow_up"].(map[string]any)
-	if !ok {
-		t.Fatalf("follow_up missing from %s", raw)
-	}
-	followUp["automatic_fix_prs"] = map[string]any{"state": "disabled"}
-	followUp["remediation"] = map[string]any{"state": "disabled"}
-	withRetired, err := json.Marshal(decoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, withRetired, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := Read(path)
-	if err != nil {
-		t.Fatalf("Read error = %v, want retired components accepted", err)
-	}
-	if got.FollowUp == nil || got.FollowUp.AutomaticIssues == nil || got.FollowUp.AutomaticIssues.State != FollowUpCompleted {
-		t.Fatalf("follow-up = %+v", got.FollowUp)
-	}
-}
-
-func TestReadAcceptsPreviousFollowUpFreeStatusSchema(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
-	status.SchemaVersion = 11
-	path := filepath.Join(t.TempDir(), "status.json")
-	data, err := json.Marshal(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Read(path); err != nil {
-		t.Fatalf("reading previous follow-up-free schema: %v", err)
 	}
 }

@@ -41,14 +41,11 @@ import (
 )
 
 type Options struct {
-	ProjectDir   string
-	OutDir       string
-	BuildsPerJob int
-	Workers      int
-	Timeout      time.Duration
-	// IncludePresubmits fetches presubmit jobs in addition to periodics.
-	// The project discovery policy and this direct CLI override are combined.
-	IncludePresubmits    bool
+	ProjectDir           string
+	OutDir               string
+	BuildsPerJob         int
+	Workers              int
+	Timeout              time.Duration
 	EnableAI             bool
 	PrepareCauseFindings bool
 	AIMaxOutputTokens    int
@@ -139,11 +136,11 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	}
 	var aiProject *analysisruntime.Project
 	if enableAI {
-		fallbacks := analysisruntime.ProviderFallbacks{
+		deployment := analysisruntime.DeploymentConfig{
 			API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"), ReasoningEffort: os.Getenv(project.AIReasoningEffortEnv),
 			CacheGeneration: os.Getenv(project.AICacheGenerationEnv),
 		}
-		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, fallbacks)
+		aiProject, err = analysisruntime.LoadProject(opts.ProjectDir, cfg, deployment)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +168,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		aiToken:           aiToken,
 		aiProject:         aiProject,
 		usageRecorder:     usageRecorder,
-		includePresubmits: opts.IncludePresubmits || cfg.Discovery.IncludePresubmits,
+		includePresubmits: cfg.Discovery.IncludePresubmits,
 	}
 	p.warnPullRequestTokenMissing()
 	p.warnCommentCredentialsMissing()

@@ -678,7 +678,7 @@ func (s *Service) verifyAnalysisSourceSnapshot(ctx context.Context, repo sourcei
 		return "", fmt.Errorf("source reader is unavailable")
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte(fmt.Sprintf("v%d\x00%s", analysisSourceVerificationVersion, strings.ToLower(repo.Owner+"/"+repo.Name+"@"+repo.Revision))))
+	_, _ = fmt.Fprintf(hash, "v%d\x00%s", analysisSourceVerificationVersion, strings.ToLower(repo.Owner+"/"+repo.Name+"@"+repo.Revision))
 	for _, file := range files {
 		content, found, err := reader.ReadFile(ctx, file)
 		if err != nil || !found {

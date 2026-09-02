@@ -117,6 +117,33 @@ func TestBuildSearchIndex_StatusFromLatestRun(t *testing.T) {
 	}
 }
 
+func TestBuildSearchIndex_JobStatusUsesNewestRun(t *testing.T) {
+	jobs := searchJobs()[:1]
+	for _, testCase := range []struct {
+		name string
+		runs []models.BuildResult
+		want string
+	}{
+		{name: "passing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", searchHoursAgo(1), true, nil)}, want: string(models.JobCurrentPassing)},
+		{name: "failing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", searchHoursAgo(1), false, nil)}, want: string(models.JobCurrentFailing)},
+		{name: "running", runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "2", JobName: "job-alpha", Result: "PENDING"}}}, want: string(models.JobCurrentRunning)},
+		{name: "unknown", runs: []models.BuildResult{}, want: string(models.JobCurrentUnknown)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			index := BuildSearchIndex(map[string][]models.BuildResult{"job-alpha": testCase.runs}, jobs, searchBaseTime)
+			for _, entry := range index.Entries {
+				if entry.Kind == "job" {
+					if entry.Status != testCase.want {
+						t.Fatalf("status = %q, want %q", entry.Status, testCase.want)
+					}
+					return
+				}
+			}
+			t.Fatal("job entry not found")
+		})
+	}
+}
+
 func TestBuildSearchIndex_SkippedOnlyExclusion(t *testing.T) {
 	// Test that appears only as "skipped" should be excluded.
 	jobs := searchJobs()[:1]

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
@@ -22,6 +23,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -33,8 +35,8 @@ const (
 	analysisChatDefaultTimeout = analysischat.DefaultTurnTimeout
 )
 
-// ProviderFallbacks are used when project.yaml omits provider fields.
-type ProviderFallbacks struct {
+// DeploymentConfig is the provider and cache configuration supplied by the deploy path.
+type DeploymentConfig struct {
 	API             string
 	Endpoint        string
 	Model           string
@@ -56,7 +58,7 @@ type Project struct {
 }
 
 // LoadProject loads and validates the dashboard-owned AI configuration.
-func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallbacks) (*Project, error) {
+func LoadProject(projectDir string, cfg *project.Config, deployment DeploymentConfig) (*Project, error) {
 	if cfg == nil {
 		var err error
 		cfg, err = project.Load(filepath.Join(projectDir, "project.yaml"))
@@ -64,7 +66,17 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 			return nil, fmt.Errorf("loading project config: %w", err)
 		}
 	}
-	provider := cfg.ResolveAIProvider(fallbacks.API, fallbacks.Endpoint, fallbacks.Model, fallbacks.ReasoningEffort)
+	normalized := modelprovider.Normalize(modelprovider.Config{
+		API: deployment.API, Endpoint: deployment.Endpoint, Model: deployment.Model,
+		ReasoningEffort: modelprovider.ReasoningEffort(deployment.ReasoningEffort),
+	})
+	provider := project.AIProvider{
+		API: normalized.API, Endpoint: normalized.Endpoint, Model: normalized.Model, ReasoningEffort: normalized.ReasoningEffort,
+	}
+	if cfg.AI != nil {
+		provider.ServiceTier = strings.ToLower(strings.TrimSpace(cfg.AI.ServiceTier))
+		provider.Headers = cfg.AI.Headers
+	}
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
@@ -72,18 +84,14 @@ func LoadProject(projectDir string, cfg *project.Config, fallbacks ProviderFallb
 		return nil, err
 	}
 	if provider.Endpoint == "" || provider.Model == "" {
-		return nil, fmt.Errorf("AI is enabled but no provider is configured: set ai.endpoint and ai.model in project.yaml, or the AI_ENDPOINT and AI_MODEL env vars")
+		return nil, fmt.Errorf("AI is enabled but no provider is configured: set AI_ENDPOINT and AI_MODEL in the deployment")
 	}
 	prompt, err := project.LoadPrompt(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("loading AI prompt: %w", err)
 	}
-	configuredGeneration := ""
-	if cfg.AI != nil {
-		configuredGeneration = cfg.AI.CacheGeneration
-	}
-	cacheGeneration, err := project.ResolveAICacheGeneration(configuredGeneration, fallbacks.CacheGeneration)
-	if err != nil {
+	cacheGeneration := deployment.CacheGeneration
+	if err := project.ValidateAICacheGeneration(cacheGeneration); err != nil {
 		return nil, fmt.Errorf("resolving AI cache generation: %w", err)
 	}
 	set, selection, err := skills.LoadForTools(projectDir, cfg.AI.EffectiveAgentic().Tools)

@@ -84,7 +84,6 @@ export interface EvidenceCitation {
 
 export interface AIAnalysis {
   generated_at: string;
-  model: string;
   root_cause: string;
   severity: string;
   suggested_fix: string;
