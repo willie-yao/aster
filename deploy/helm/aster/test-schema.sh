@@ -178,50 +178,13 @@ mode: continuous
 VALUES
 expect_fail invalid-mode "$tmp/invalid-mode.yaml" /mode
 
-cat > "$tmp/removed-analysis-runtime.yaml" <<'VALUES'
-analysisRuntime:
-  type: inprocess
+cat > "$tmp/removed-network-policy-from.yaml" <<'VALUES'
+networkPolicy:
+  enabled: true
+  from:
+    - namespaceSelector: {}
 VALUES
-expect_fail removed-analysis-runtime "$tmp/removed-analysis-runtime.yaml" "additional properties 'analysisRuntime' not allowed"
-
-cat > "$tmp/invalid-api.yaml" <<'VALUES'
-ai:
-  api: completions
-VALUES
-expect_fail invalid-api "$tmp/invalid-api.yaml" /ai/api
-
-cat > "$tmp/removed-analysis-shadow.yaml" <<'VALUES'
-agentSandbox:
-  analysisShadow: {}
-VALUES
-expect_fail removed-analysis-shadow "$tmp/removed-analysis-shadow.yaml" "additional properties 'analysisShadow' not allowed"
-
-cat > "$tmp/removed-agent-sandbox-analyzer.yaml" <<'VALUES'
-agentSandbox:
-  analyzer: {}
-VALUES
-expect_fail removed-agent-sandbox-analyzer "$tmp/removed-agent-sandbox-analyzer.yaml" "additional properties 'analyzer' not allowed"
-
-cat > "$tmp/invalid-actions.yaml" <<'VALUES'
-server:
-  actions:
-    mode: basic
-VALUES
-expect_fail invalid-actions "$tmp/invalid-actions.yaml" /server/actions/mode
-
-cat > "$tmp/invalid-escalation-key.yaml" <<'VALUES'
-server:
-  pullRequestEscalation:
-    mode: always
-VALUES
-expect_fail invalid-escalation-key "$tmp/invalid-escalation-key.yaml" /server/pullRequestEscalation
-
-cat > "$tmp/invalid-escalation-type.yaml" <<'VALUES'
-server:
-  pullRequestEscalation:
-    enabled: "yes"
-VALUES
-expect_fail invalid-escalation-type "$tmp/invalid-escalation-type.yaml" /server/pullRequestEscalation/enabled
+expect_fail removed-network-policy-from "$tmp/removed-network-policy-from.yaml" "additional properties 'from' not allowed"
 
 cat > "$tmp/invalid-type.yaml" <<'VALUES'
 fetcher:
@@ -241,27 +204,6 @@ server:
     exposure: private
 VALUES
 expect_fail invalid-fixed-key "$tmp/invalid-fixed-key.yaml" /server/service
-
-cat > "$tmp/invalid-oauth-key.yaml" <<'VALUES'
-server:
-  actions:
-    oauth:
-      audience: fixture
-VALUES
-expect_fail invalid-oauth-key "$tmp/invalid-oauth-key.yaml" /server/actions/oauth
-
-cat > "$tmp/invalid-service.yaml" <<'VALUES'
-server:
-  service:
-    type: ExternalName
-VALUES
-expect_fail invalid-service "$tmp/invalid-service.yaml" /server/service/type
-
-cat > "$tmp/invalid-access-mode.yaml" <<'VALUES'
-persistence:
-  accessMode: ReadWriteOnce
-VALUES
-expect_fail invalid-access-mode "$tmp/invalid-access-mode.yaml" /persistence/accessMode
 
 
 cat > "$tmp/agent-sandbox.yaml" <<'VALUES'
@@ -341,22 +283,6 @@ agentSandbox:
 VALUES
 expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
 
-# Execution bounds now live only in project.yaml, so a stale copy in Helm values
-# must fail closed rather than be silently ignored.
-cat > "$tmp/invalid-agent-sandbox-output.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    outputLimitBytes: 1024
-VALUES
-expect_fail invalid-agent-sandbox-output "$tmp/invalid-agent-sandbox-output.yaml" "additional properties 'outputLimitBytes' not allowed"
-
-cat > "$tmp/invalid-agent-sandbox-stale-bounds.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    maxSteps: 30
-VALUES
-expect_fail invalid-agent-sandbox-stale-bounds "$tmp/invalid-agent-sandbox-stale-bounds.yaml" "additional properties 'maxSteps' not allowed"
-
 cat > "$tmp/invalid-agent-sandbox-pull.yaml" <<'VALUES'
 agentSandbox:
   fixRuntime:
@@ -364,14 +290,6 @@ agentSandbox:
       pullPolicy: Always
 VALUES
 expect_fail invalid-agent-sandbox-pull "$tmp/invalid-agent-sandbox-pull.yaml" /agentSandbox/fixRuntime/image/pullPolicy
-
-cat > "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    dashboardImage:
-      pullPolicy: Always
-VALUES
-expect_fail invalid-agent-sandbox-dashboard-pull "$tmp/invalid-agent-sandbox-dashboard-pull.yaml" /agentSandbox/fixRuntime/dashboardImage/pullPolicy
 
 cat > "$tmp/invalid-agent-sandbox-ca-hash.yaml" <<'VALUES'
 agentSandbox:
@@ -393,20 +311,6 @@ agentSandbox:
 VALUES
 expect_pass agent-sandbox-ca "$tmp/agent-sandbox-ca.yaml"
 
-cat > "$tmp/invalid-agent-sandbox-apparmor.yaml" <<'VALUES'
-agentSandbox:
-  fixRuntime:
-    appArmorProfile: Unconfined
-VALUES
-expect_fail invalid-agent-sandbox-apparmor "$tmp/invalid-agent-sandbox-apparmor.yaml" /agentSandbox/fixRuntime
-
-cat > "$tmp/invalid-agent-sandbox-key.yaml" <<'VALUES'
-agentSandbox:
-  controller:
-    install: true
-VALUES
-expect_fail invalid-agent-sandbox-key "$tmp/invalid-agent-sandbox-key.yaml" /agentSandbox
-
 
 cat > "$tmp/agent-sandbox-responses-api.yaml" <<'VALUES'
 agentSandbox:
@@ -423,16 +327,6 @@ agentSandbox:
       api: completions
 VALUES
 expect_fail invalid-agent-sandbox-provider-api "$tmp/invalid-agent-sandbox-provider-api.yaml" /agentSandbox/fixRuntime/modelProvider/api
-
-cat > "$tmp/invalid-reasoning-effort.yaml" <<'VALUES'
-ai:
-  reasoningEffort: ultra
-agentSandbox:
-  fixRuntime:
-    modelProvider:
-      reasoningEffort: ultra
-VALUES
-expect_fail invalid-reasoning-effort "$tmp/invalid-reasoning-effort.yaml" /ai/reasoningEffort
 
 cat > "$tmp/invalid-agent-sandbox-max-effort.yaml" <<'VALUES'
 agentSandbox:

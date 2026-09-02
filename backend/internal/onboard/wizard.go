@@ -285,10 +285,7 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
-	if opts.NoPrompt && opts.PromptMode != "" && opts.PromptMode != promptModeTemplate {
-		return fmt.Errorf("--no-prompt cannot be combined with --prompt-mode=%s", opts.PromptMode)
-	}
-	if opts.PromptMode == "" && !opts.NoPrompt {
+	if opts.PromptMode == "" {
 		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
 			{Value: promptModeHandoff, Label: "Create an agent handoff bundle (recommended)", Description: "Writes a reusable skill and reviewable TODO prompt for your own coding agent."},
 			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
@@ -297,12 +294,6 @@ func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) 
 			return err
 		}
 		opts.PromptMode = mode
-	}
-	switch effectivePromptMode(*opts) {
-	case promptModeHandoff:
-		opts.NoPrompt = false
-	case promptModeTemplate:
-		opts.NoPrompt = true
 	}
 	return nil
 }

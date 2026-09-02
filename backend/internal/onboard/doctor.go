@@ -357,25 +357,17 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 		return
 	}
 	var missing []string
-	externalValues := []string{"AI_TOKEN"}
-	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Endpoint) == "" {
-		externalValues = append(externalValues, "AI_ENDPOINT")
-		if !githubExpression(deploy.With["ai-endpoint"], "vars", "AI_ENDPOINT") {
-			missing = append(missing, "ai-endpoint")
-		}
+	externalValues := []string{"AI_ENDPOINT", "AI_MODEL", "AI_TOKEN"}
+	if !githubExpression(deploy.With["ai-endpoint"], "vars", "AI_ENDPOINT") {
+		missing = append(missing, "ai-endpoint")
 	}
-	if cfg.AI == nil || strings.TrimSpace(cfg.AI.Model) == "" {
-		externalValues = append(externalValues, "AI_MODEL")
-		if !githubExpression(deploy.With["ai-model"], "vars", "AI_MODEL") {
-			missing = append(missing, "ai-model")
-		}
+	if !githubExpression(deploy.With["ai-model"], "vars", "AI_MODEL") {
+		missing = append(missing, "ai-model")
 	}
-	if cfg.AI == nil || strings.TrimSpace(cfg.AI.API) == "" {
-		if value, ok := deploy.With["ai-api"]; ok {
-			externalValues = append(externalValues, "AI_API")
-			if !githubExpression(value, "vars", "AI_API") {
-				missing = append(missing, "ai-api")
-			}
+	if value, ok := deploy.With["ai-api"]; ok {
+		externalValues = append(externalValues, "AI_API")
+		if !githubExpression(value, "vars", "AI_API") {
+			missing = append(missing, "ai-api")
 		}
 	}
 	if value, ok := deploy.With["ai-reasoning-effort"]; ok {
@@ -446,7 +438,6 @@ type doctorNetworkPolicyIngressRule struct {
 type doctorNetworkPolicyValues struct {
 	Enabled bool                             `yaml:"enabled"`
 	Ingress []doctorNetworkPolicyIngressRule `yaml:"ingress"`
-	From    []doctorNetworkPolicyPeer        `yaml:"from"`
 }
 
 type doctorKubernetesValues struct {
@@ -630,19 +621,8 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 	api := values.AI.API
 	endpoint := values.AI.Endpoint
 	model := values.AI.Model
-	if cfg.AI != nil {
-		if strings.TrimSpace(cfg.AI.API) != "" {
-			api = cfg.AI.API
-		}
-		if strings.TrimSpace(cfg.AI.Endpoint) != "" {
-			endpoint = cfg.AI.Endpoint
-		}
-		if strings.TrimSpace(cfg.AI.Model) != "" {
-			model = cfg.AI.Model
-		}
-	}
 	if err := project.ValidateAIAPI(api); err != nil {
-		add("Kubernetes AI", DoctorFail, err.Error(), "Set ai.api to chat_completions or responses in project.yaml or deploy/values.yaml.")
+		add("Kubernetes AI", DoctorFail, err.Error(), "Set ai.api to chat_completions or responses in deploy/values.yaml.")
 		return
 	}
 	var missing []string
@@ -803,19 +783,7 @@ func doctorNetworkPolicyRestricted(policy doctorNetworkPolicyValues) bool {
 		}
 		return ipBlocks <= 1
 	}
-	if len(policy.From) == 0 {
-		return false
-	}
-	ipBlocks := 0
-	for _, peer := range policy.From {
-		if peer.IPBlock != nil {
-			ipBlocks++
-		}
-		if !doctorNetworkPolicyPeerRestricted(peer) {
-			return false
-		}
-	}
-	return ipBlocks <= 1
+	return false
 }
 
 func doctorNetworkPolicyPeerRestricted(peer doctorNetworkPolicyPeer) bool {

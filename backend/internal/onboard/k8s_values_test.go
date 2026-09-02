@@ -4,8 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"runtime"
-	"sort"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,6 +13,15 @@ import (
 )
 
 var updateK8sValuesGolden = flag.Bool("update-k8s-values-golden", false, "update the generated Kubernetes values golden file")
+
+var chartEqualGeneratedPaths = []string{
+	"global.imageTag", "image.tag", "mode",
+	"persistence.enabled", "persistence.existingClaim", "persistence.accessMode", "persistence.size", "persistence.retain",
+	"ai.reasoningEffort", "ai.contextWindowTokens", "ai.tokenSecretKey", "ai.githubReadTokenSecretName", "ai.githubReadTokenSecretKey",
+	"fetcher.buildsPerJob", "fetcher.workers", "fetcher.watchInterval", "fetcher.reconcileInterval",
+	"server.chat.enabled", "server.actions.enabled", "server.service.type", "server.service.port",
+	"ingress.enabled", "networkPolicy.enabled", "networkPolicy.ingress",
+}
 
 func TestK8sValuesGolden(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
@@ -40,45 +48,21 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
 	root := parseYAMLMap(t, values)
 
-	assertYAMLValue(t, root, "watch", "mode")
-	assertYAMLValue(t, root, false, "server", "chat", "enabled")
-	assertYAMLValue(t, root, false, "server", "actions", "enabled")
-	assertYAMLValue(t, root, "ClusterIP", "server", "service", "type")
-	assertYAMLValue(t, root, 80, "server", "service", "port")
-	assertYAMLValue(t, root, false, "ingress", "enabled")
-	assertYAMLValue(t, root, false, "networkPolicy", "enabled")
-
 	for path, want := range map[string]any{
-		"persistence.enabled":          true,
-		"persistence.existingClaim":    "",
-		"persistence.storageClass":     "fixture-rwx",
-		"persistence.accessMode":       "ReadWriteMany",
-		"persistence.size":             "1Gi",
-		"persistence.retain":           true,
-		"ai.enabled":                   true,
-		"ai.api":                       project.AIAPIResponses,
-		"ai.endpoint":                  "https://provider.example/v1/responses",
-		"ai.model":                     "fixture-model",
-		"ai.contextWindowTokens":       0,
-		"ai.existingSecret":            "<existing-ai-secret>",
-		"ai.tokenSecretKey":            "AI_TOKEN",
-		"ai.githubReadTokenSecretName": "",
-		"ai.githubReadTokenSecretKey":  "GITHUB_READ_TOKEN",
-		"fetcher.buildsPerJob":         10,
-		"fetcher.workers":              5,
-		"fetcher.timeout":              "120m",
-		"fetcher.watchInterval":        "5m",
-		"fetcher.reconcileInterval":    "1h",
-		"fetcher.suspend":              true,
+		"persistence.storageClass": "fixture-rwx",
+		"ai.enabled":               true,
+		"ai.api":                   project.AIAPIResponses,
+		"ai.endpoint":              "https://provider.example/v1/responses",
+		"ai.model":                 "fixture-model",
+		"ai.existingSecret":        "<existing-ai-secret>",
+		"fetcher.timeout":          "120m",
+		"fetcher.suspend":          true,
 	} {
 		assertYAMLValue(t, root, want, strings.Split(path, ".")...)
 	}
 
-	fetcher := yamlMapAt(t, root, "fetcher")
-	for _, cronOnly := range []string{"schedule", "concurrencyPolicy", "activeDeadlineSeconds", "backoffLimit", "restartPolicy"} {
-		if _, ok := fetcher[cronOnly]; ok {
-			t.Errorf("cron-only key fetcher.%s is active in the watch scaffold", cronOnly)
-		}
+	for _, path := range chartEqualGeneratedPaths {
+		assertYAMLAbsent(t, root, strings.Split(path, ".")...)
 	}
 }
 
@@ -86,7 +70,7 @@ func TestK8sValuesStorageSelection(t *testing.T) {
 	t.Run("storage class", func(t *testing.T) {
 		data := k8sValuesFixtureData(true)
 		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
-		assertYAMLValue(t, root, "", "persistence", "existingClaim")
+		assertYAMLAbsent(t, root, "persistence", "existingClaim")
 		assertYAMLValue(t, root, "fixture-rwx", "persistence", "storageClass")
 	})
 
@@ -96,43 +80,29 @@ func TestK8sValuesStorageSelection(t *testing.T) {
 		data.K8sExistingClaim = "shared-data"
 		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
 		assertYAMLValue(t, root, "shared-data", "persistence", "existingClaim")
-		assertYAMLValue(t, root, "", "persistence", "storageClass")
+		assertYAMLAbsent(t, root, "persistence", "storageClass")
 	})
 
 	t.Run("interactive placeholder", func(t *testing.T) {
 		data := k8sValuesFixtureData(true)
 		data.K8sStorageClass = ""
 		root := parseYAMLMap(t, renderK8sValuesForTest(t, data))
-		assertYAMLValue(t, root, "", "persistence", "existingClaim")
+		assertYAMLAbsent(t, root, "persistence", "existingClaim")
 		assertYAMLValue(t, root, "<your-rwx-storage-class>", "persistence", "storageClass")
 	})
 }
 
-func TestK8sValuesDocumentsOptionalConfiguration(t *testing.T) {
+func TestK8sValuesDocumentsChartFallbacks(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
 	for _, want := range []string{
-		`# schedule: "0 */6 * * *"`,
-		"# oauth:",
-		`#   # Include OAUTH_CLIENT_SECRET, SESSION_KEY, and BOT_TOKEN when actions are enabled.`,
-		`#   existingSecret: "<oauth-secret>"`,
-		"# proxy:",
-		"# hosts:",
-		"# ingress value above from [] to a list",
-		"# resources: {}",
-		"# nodeSelector: {}",
-		"# tolerations: []",
-		"# affinity: {}",
+		"All omitted settings use the",
+		"defaults from the matching published chart version",
 		"helm show values oci://ghcr.io/willie-yao/charts/aster",
-		"Use values.schema.json from the same published chart version",
-		"Published values reference:",
+		"Intentionally longer than the chart default",
+		"Keep CronJob starts disabled while the chart-default watch worker is active",
 	} {
 		if !strings.Contains(values, want) {
 			t.Errorf("generated values missing %q\n---\n%s", want, values)
-		}
-	}
-	for _, duplicateExample := range []string{"# ingress:"} {
-		if strings.Contains(values, duplicateExample) {
-			t.Errorf("optional example repeats active key %q\n---\n%s", duplicateExample, values)
 		}
 	}
 }
@@ -158,10 +128,7 @@ func TestK8sValuesDisabledAIStaysValid(t *testing.T) {
 	root := parseYAMLMap(t, values)
 	assertYAMLValue(t, root, false, "ai", "enabled")
 	assertYAMLValue(t, root, "", "ai", "existingSecret")
-	assertYAMLValue(t, root, "AI_TOKEN", "ai", "tokenSecretKey")
-	if !strings.Contains(values, "When enabling AI later") {
-		t.Fatalf("AI-disabled values omit later-enablement guidance\n---\n%s", values)
-	}
+	assertYAMLAbsent(t, root, "ai", "tokenSecretKey")
 }
 
 func TestK8sValuesDoNotDependOnMutableEngineRef(t *testing.T) {
@@ -179,24 +146,78 @@ func TestK8sValuesDoNotDependOnMutableEngineRef(t *testing.T) {
 	}
 }
 
-func TestK8sValuesActiveKeysExistInChartDefaults(t *testing.T) {
-	values := parseYAMLMap(t, renderK8sValuesForTest(t, k8sValuesFixtureData(true)))
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	chartValuesPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "deploy", "helm", "aster", "values.yaml")
-	chartBytes, err := os.ReadFile(chartValuesPath)
+func TestK8sValuesChartDefaultClassification(t *testing.T) {
+	chartBytes, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "aster", "values.yaml"))
 	if err != nil {
 		t.Fatalf("read chart values: %v", err)
 	}
-	chartValues := parseYAMLMap(t, string(chartBytes))
+	chart := parseYAMLMap(t, string(chartBytes))
 
-	paths := yamlLeafPaths(values, nil)
-	sort.Strings(paths)
+	originalGenerated := map[string]any{
+		"global.imageTag": "", "image.tag": "", "mode": "watch",
+		"persistence.enabled": true, "persistence.existingClaim": "", "persistence.storageClass": "fixture-rwx",
+		"persistence.accessMode": "ReadWriteMany", "persistence.size": "1Gi", "persistence.retain": true,
+		"ai.enabled": true, "ai.api": project.AIAPIResponses, "ai.endpoint": "https://provider.example/v1/responses",
+		"ai.model": "fixture-model", "ai.reasoningEffort": "", "ai.contextWindowTokens": 0,
+		"ai.existingSecret": "<existing-ai-secret>", "ai.tokenSecretKey": "AI_TOKEN",
+		"ai.githubReadTokenSecretName": "", "ai.githubReadTokenSecretKey": "GITHUB_READ_TOKEN",
+		"fetcher.buildsPerJob": 10, "fetcher.workers": 5, "fetcher.timeout": "120m",
+		"fetcher.watchInterval": "5m", "fetcher.reconcileInterval": "1h", "fetcher.suspend": true,
+		"server.chat.enabled": false, "server.actions.enabled": false, "server.service.type": "ClusterIP",
+		"server.service.port": 80, "ingress.enabled": false, "networkPolicy.enabled": false,
+		"networkPolicy.ingress": []any{},
+	}
+	type valuePair struct {
+		generated any
+		chart     any
+	}
+	fixtureDecisions := map[string]valuePair{
+		"persistence.storageClass": {"fixture-rwx", ""},
+		"ai.enabled":               {true, false},
+		"ai.api":                   {project.AIAPIResponses, project.AIAPIChatCompletions},
+		"ai.endpoint":              {"https://provider.example/v1/responses", ""},
+		"ai.model":                 {"fixture-model", ""},
+		"ai.existingSecret":        {"<existing-ai-secret>", ""},
+	}
+	intentionalDivergences := map[string]valuePair{
+		"fetcher.timeout": {"120m", "30m"},
+		"fetcher.suspend": {true, false},
+	}
+
+	counts := map[string]int{}
+	retained := map[string]any{}
+	for path, generatedValue := range originalGenerated {
+		chartValue, ok := lookupYAMLPath(chart, strings.Split(path, ".")...)
+		if !ok {
+			t.Fatalf("generated active key %s is absent from chart defaults", path)
+		}
+		pair := valuePair{generatedValue, chartValue}
+		switch {
+		case reflect.DeepEqual(pair, fixtureDecisions[path]):
+			counts["fixture"]++
+			retained[path] = generatedValue
+		case reflect.DeepEqual(pair, intentionalDivergences[path]):
+			counts["divergent"]++
+			retained[path] = generatedValue
+		case reflect.DeepEqual(generatedValue, chartValue):
+			counts["equal"]++
+		default:
+			t.Errorf("unclassified generated value %s: generated=%#v chart=%#v", path, generatedValue, chartValue)
+		}
+	}
+	if len(originalGenerated) != 32 || counts["equal"] != 24 || counts["fixture"] != 6 || counts["divergent"] != 2 {
+		t.Fatalf("classification paths=%d equal=%d fixture=%d divergent=%d", len(originalGenerated), counts["equal"], counts["fixture"], counts["divergent"])
+	}
+
+	generated := parseYAMLMap(t, renderK8sValuesForTest(t, k8sValuesFixtureData(true)))
+	paths := yamlLeafPaths(generated, nil)
+	if len(paths) != len(retained) {
+		t.Fatalf("generated leaves=%d, want %d retained decisions", len(paths), len(retained))
+	}
 	for _, path := range paths {
-		if _, ok := lookupYAMLPath(chartValues, strings.Split(path, ".")...); !ok {
-			t.Errorf("generated active key %s is absent from chart defaults", path)
+		value, _ := lookupYAMLPath(generated, strings.Split(path, ".")...)
+		if !reflect.DeepEqual(value, retained[path]) {
+			t.Errorf("retained %s=%#v, want %#v", path, value, retained[path])
 		}
 	}
 }
@@ -243,17 +264,24 @@ func assertYAMLValue(t *testing.T, root map[string]any, want any, path ...string
 	}
 }
 
-func yamlMapAt(t *testing.T, root map[string]any, path ...string) map[string]any {
+func assertYAMLAbsent(t *testing.T, root map[string]any, path ...string) {
 	t.Helper()
-	value, ok := lookupYAMLPath(root, path...)
-	if !ok {
-		t.Fatalf("missing active YAML object %s", strings.Join(path, "."))
+	if value, ok := lookupYAMLPath(root, path...); ok {
+		t.Errorf("unexpected active YAML key %s=%#v", strings.Join(path, "."), value)
 	}
-	result, ok := value.(map[string]any)
-	if !ok {
-		t.Fatalf("%s has type %T, want object", strings.Join(path, "."), value)
+}
+
+func setYAMLPath(root map[string]any, value any, path ...string) {
+	current := root
+	for _, part := range path[:len(path)-1] {
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			current[part] = next
+		}
+		current = next
 	}
-	return result
+	current[path[len(path)-1]] = value
 }
 
 func lookupYAMLPath(root map[string]any, path ...string) (any, bool) {

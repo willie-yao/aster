@@ -106,6 +106,11 @@ func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	if !hasDoctorCheck(report, "Pages AI", DoctorFail) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
+	for _, check := range report.Checks {
+		if check.Name == "Pages AI" && (!strings.Contains(check.Detail, "ai-endpoint") || !strings.Contains(check.Detail, "ai-model") || strings.Contains(check.Detail, "ai-api")) {
+			t.Fatalf("Pages AI detail = %q", check.Detail)
+		}
+	}
 }
 
 func TestDoctor_KubernetesPlaceholdersAreActionable(t *testing.T) {
@@ -159,6 +164,7 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "cluster ip with deny all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "cluster ip with removed from-only policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  from:\n    - namespaceSelector:\n        matchLabels:\n          name: ingress\n", want: DoctorWarn},
 		{name: "cluster ip with catch all network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - {}\n", want: DoctorWarn},
 		{name: "cluster ip with empty pod selector", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - podSelector: {}\n", want: DoctorWarn},
 		{name: "cluster ip with empty namespace labels", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchLabels: {}\n", want: DoctorWarn},
@@ -576,7 +582,7 @@ func TestK8sYourPrefixStoragePlanApplyAndDoctor(t *testing.T) {
 			opts := Options{
 				TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 				SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
-				OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true, AIEnabled: &disabled,
+				OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate, AIEnabled: &disabled,
 				K8sStorageClass: test.storageClass, K8sExistingClaim: test.existingClaim,
 			}
 			plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
@@ -665,29 +671,6 @@ func TestDoctor_PagesWorkflowCanLiveAboveProjectDir(t *testing.T) {
 	}
 }
 
-func TestDoctor_PagesAcceptsProviderCoordinatesInProjectConfig(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
-	workflow := `jobs:
-  deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
-    secrets:
-      AI_TOKEN: ${{ secrets.AI_TOKEN }}
-`
-	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
-	files["/consumer/project.yaml"] = projectYAML
-	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
-		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
-	})
-	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {
-		t.Fatalf("checks = %+v", report.Checks)
-	}
-}
-
 func TestDoctor_PagesSkipFetchDoesNotRequireProviderMappings(t *testing.T) {
 	workflow := `jobs:
   deploy:
@@ -719,25 +702,18 @@ func TestDoctor_PagesProjectDirMismatchFails(t *testing.T) {
 	}
 }
 
-func TestDoctor_KubernetesUsesProjectProviderCoordinates(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
+func TestDoctor_KubernetesRequiresValuesProviderCoordinates(t *testing.T) {
 	values := `persistence:
   storageClass: fast
   accessMode: ReadWriteMany
 ai:
   enabled: true
 `
-	files := doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values})
-	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
+		files:   doctorFiles(map[string]string{"/consumer/deploy/values.yaml": values}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
-	if !hasDoctorCheck(report, "Kubernetes AI", DoctorPass) {
+	if !hasDoctorCheck(report, "Kubernetes AI", DoctorFail) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 }
@@ -841,25 +817,19 @@ func TestDoctor_PagesDynamicAIBranchWarns(t *testing.T) {
 	}
 }
 
-func TestDoctor_ProjectAPIOverridesStaleWorkflowFallback(t *testing.T) {
-	projectYAML := doctorProjectYAML + `ai:
-  api: responses
-  endpoint: https://provider.example/v1/responses
-  model: model-id
-`
+func TestDoctor_PagesOmittedAPIDefaultsToChatCompletions(t *testing.T) {
 	workflow := `jobs:
   deploy:
     uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@main
     with:
-      ai-api: stale-literal
+      ai-endpoint: ${{ vars.AI_ENDPOINT }}
+      ai-model: ${{ vars.AI_MODEL }}
       ai-reasoning-effort: ${{ vars.AI_REASONING_EFFORT }}
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
 `
-	files := doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow})
-	files["/consumer/project.yaml"] = projectYAML
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
-		files:   files,
+		files:   doctorFiles(map[string]string{"/consumer/.github/workflows/deploy.yml": workflow}),
 		sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
 	})
 	if !hasDoctorCheck(report, "Pages AI", DoctorPass) {

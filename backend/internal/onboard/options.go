@@ -87,8 +87,6 @@ type Options struct {
 	// GitHubToken authenticates metadata/doc reads and scaffold PR creation. It
 	// is never copied into a plan or generated file.
 	GitHubToken string
-	// NoPrompt forces the TODO template.
-	NoPrompt bool
 	// PromptTimeout bounds prompt authoring, including agent execution.
 	PromptTimeout time.Duration
 

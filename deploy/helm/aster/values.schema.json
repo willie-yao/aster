@@ -1259,17 +1259,6 @@
             }
           ],
           "description": ""
-        },
-        "from": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/networkPolicyPeers"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": ""
         }
       },
       "additionalProperties": false,

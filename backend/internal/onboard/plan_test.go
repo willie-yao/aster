@@ -17,7 +17,7 @@ func TestBuildPlan_RendersAndValidatesWithoutWriting(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -49,7 +49,7 @@ func TestBuildPlan_DeferredAIDropsProviderCoordinates(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true, K8sStorageClass: "shared-rwx",
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate, K8sStorageClass: "shared-rwx",
 		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://private.example/v1/responses", AIModel: "private-model",
 		deferDeploymentAI: true,
 	}
@@ -73,7 +73,7 @@ func TestBuildPlan_FlagDisabledAIPreservesProviderSeed(t *testing.T) {
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 		AIEnabled: &disabled, AIAPI: "responses", AIEndpoint: "https://provider.example/v1/responses", AIModel: "seed-model",
 		K8sStorageClass: "shared-rwx",
 	}
@@ -101,7 +101,7 @@ func TestBuildPlan_DoesNotRetainCredentials(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 		AIToken: "fixture-ai-token", GitHubToken: "fixture-github-token",
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
@@ -127,7 +127,7 @@ func TestBuildPlan_OpenPRDoesNotRequireWriteCredential(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", NoPrompt: true, OpenPR: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", PromptMode: promptModeTemplate, OpenPR: true,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -145,7 +145,7 @@ func TestApply_RejectsModifiedPlanBeforeWriting(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestApply_RejectsProjectMutationBeforeWriting(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestApply_RejectsMismatchedDashboardRepoFields(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -202,7 +202,7 @@ func TestApply_RejectsGitHubTokenInPlanFiles(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -233,7 +233,7 @@ func TestApply_RejectsGitHubTokenInPlanMetadataBeforeValidation(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -273,7 +273,7 @@ func TestBuildPlanPassesExistingJobEvidenceToPromptBuilder(t *testing.T) {
 			deps.prompts = prompts
 			opts := Options{
 				TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-				SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+				SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 			}
 			if _, err := buildPlan(context.Background(), opts, planning, deps); err != nil {
 				t.Fatalf("buildPlan: %v", err)
@@ -297,7 +297,7 @@ func TestApply_RejectsDestinationChangesAfterReview(t *testing.T) {
 	deps.files = localScaffoldWriter{}
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: dir, NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: dir, PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -323,7 +323,7 @@ func TestBuildPlanDoesNotRenderMachineSpecificOutputPath(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
 		SourceRepo: "example/project", Mode: modePages, EngineRef: "main",
-		OutDir: "/private/machine-specific/dashboard", NoPrompt: true,
+		OutDir: "/private/machine-specific/dashboard", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -340,7 +340,7 @@ func TestValidatePlanRejectsUnnormalizedDestination(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
 	if err != nil {
@@ -356,7 +356,7 @@ func TestBuildPlanRecordsReproducibleHandoffInputs(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", NoPrompt: true,
+		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
 		ArtifactAccess: artifactAccessPublic,
 		ModeReasons:    []string{"Artifacts and provider are reachable from GitHub Actions."},
 	}
@@ -389,7 +389,7 @@ func TestValidatePlanRejectsUnreviewedK8sStoragePlaceholder(t *testing.T) {
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: defaultTestDashboardRepo,
 		SourceRepo: "example/project", Mode: modeK8s, EngineRef: "main",
-		OutDir: filepath.Join(t.TempDir(), "consumer"), NoPrompt: true, AIEnabled: &disabled,
+		OutDir: filepath.Join(t.TempDir(), "consumer"), PromptMode: promptModeTemplate, AIEnabled: &disabled,
 		allowK8sStoragePlaceholder: true,
 	}
 	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
