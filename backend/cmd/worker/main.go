@@ -27,9 +27,28 @@ var (
 	imageTag = "dev"
 )
 
+func signalRootContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	stop := func() {
+		signal.Stop(signals)
+		cancel()
+	}
+	go func() {
+		select {
+		case <-signals:
+			signal.Stop(signals)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, stop
+}
+
 func main() {
 	credentialenv.SanitizeAndReport()
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signalRootContext()
 	defer stop()
 
 	if err := run(ctx, os.Args[1:]); err != nil && !errors.Is(err, context.Canceled) {
@@ -59,7 +78,6 @@ func parseOptions(args []string) (fetcher.Options, time.Duration, time.Duration,
 	fs.IntVar(&opts.BuildsPerJob, "builds", 10, "number of recent builds to fetch per job")
 	fs.IntVar(&opts.Workers, "workers", 5, "number of concurrent job fetchers")
 	fs.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "per-pass fetch timeout")
-	fs.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to periodics")
 	fs.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	fs.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	fs.DurationVar(&watchInterval, "watch-interval", 5*time.Minute, "how often to refresh data reusing the cached job list")

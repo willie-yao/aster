@@ -1,18 +1,40 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
 
+func sealLegacySession(t *testing.T, c *sessionCodec, login, token string, exp int64) string {
+	t.Helper()
+	plain, err := json.Marshal(struct {
+		Login  string `json:"login"`
+		Token  string `json:"token"`
+		Policy string `json:"policy,omitempty"`
+		Exp    int64  `json:"exp"`
+	}{Login: login, Token: token, Policy: c.policy, Exp: exp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, c.aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	sealed := c.aead.Seal(nonce, nonce, plain, nil)
+	return base64.RawURLEncoding.EncodeToString(sealed)
+}
+
 func TestSessionCodec_RoundTrip(t *testing.T) {
 	c, err := newSessionCodec("secret", true, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := c.seal(session{Login: "alice", Token: "tok", Exp: time.Now().Add(time.Hour).Unix()})
+	sealed, err := c.seal(session{Login: "alice", Exp: time.Now().Add(time.Hour).Unix()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,14 +42,29 @@ func TestSessionCodec_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if got.Login != "alice" || got.Token != "tok" {
+	if got.Login != "alice" {
 		t.Errorf("round trip = %+v", got)
+	}
+}
+
+func TestSessionCodec_OpensLegacyTokenField(t *testing.T) {
+	c, err := newSessionCodec("secret", true, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := sealLegacySession(t, c, "alice", "legacy-user-token", time.Now().Add(time.Hour).Unix())
+	got, err := c.open(sealed)
+	if err != nil {
+		t.Fatalf("open legacy session: %v", err)
+	}
+	if got.Login != "alice" {
+		t.Fatalf("legacy session = %+v", got)
 	}
 }
 
 func TestSessionCodec_RejectsExpired(t *testing.T) {
 	c, _ := newSessionCodec("secret", true, time.Hour)
-	sealed, _ := c.seal(session{Login: "alice", Token: "tok", Exp: time.Now().Add(-time.Minute).Unix()})
+	sealed, _ := c.seal(session{Login: "alice", Exp: time.Now().Add(-time.Minute).Unix()})
 	if _, err := c.open(sealed); err == nil {
 		t.Fatal("expected expired session to be rejected")
 	}
@@ -35,9 +72,13 @@ func TestSessionCodec_RejectsExpired(t *testing.T) {
 
 func TestSessionCodec_RejectsTamper(t *testing.T) {
 	c, _ := newSessionCodec("secret", true, time.Hour)
-	sealed, _ := c.seal(session{Login: "alice", Token: "tok", Exp: time.Now().Add(time.Hour).Unix()})
-	// Flip a character; GCM auth must reject it.
-	tampered := sealed[:len(sealed)-1] + string(rune(sealed[len(sealed)-1]^1))
+	sealed, _ := c.seal(session{Login: "alice", Exp: time.Now().Add(time.Hour).Unix()})
+	raw, err := base64.RawURLEncoding.DecodeString(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 1
+	tampered := base64.RawURLEncoding.EncodeToString(raw)
 	if _, err := c.open(tampered); err == nil {
 		t.Fatal("expected tampered session to be rejected")
 	}
@@ -46,7 +87,7 @@ func TestSessionCodec_RejectsTamper(t *testing.T) {
 func TestSessionCodec_WrongKeyFails(t *testing.T) {
 	c1, _ := newSessionCodec("secret-a", true, time.Hour)
 	c2, _ := newSessionCodec("secret-b", true, time.Hour)
-	sealed, _ := c1.seal(session{Login: "alice", Token: "tok", Exp: time.Now().Add(time.Hour).Unix()})
+	sealed, _ := c1.seal(session{Login: "alice", Exp: time.Now().Add(time.Hour).Unix()})
 	if _, err := c2.open(sealed); err == nil {
 		t.Fatal("session sealed with a different key must not open")
 	}
@@ -55,7 +96,7 @@ func TestSessionCodec_WrongKeyFails(t *testing.T) {
 func TestSessionCodec_WriteReadCookie(t *testing.T) {
 	c, _ := newSessionCodec("secret", false, time.Hour)
 	rec := httptest.NewRecorder()
-	if err := c.write(rec, "alice", "tok"); err != nil {
+	if err := c.write(rec, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	// Feed the Set-Cookie back into a request.
@@ -67,7 +108,7 @@ func TestSessionCodec_WriteReadCookie(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if s.Login != "alice" || s.Token != "tok" {
+	if s.Login != "alice" {
 		t.Errorf("cookie session = %+v", s)
 	}
 	// The cookie must be httpOnly.
@@ -79,7 +120,7 @@ func TestSessionCodec_WriteReadCookie(t *testing.T) {
 func TestSessionCodec_SecureCookieAttributes(t *testing.T) {
 	c, _ := newSessionCodec("secret", true, time.Hour)
 	rec := httptest.NewRecorder()
-	if err := c.write(rec, "alice", "tok"); err != nil {
+	if err := c.write(rec, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	cookie := rec.Result().Cookies()[0]

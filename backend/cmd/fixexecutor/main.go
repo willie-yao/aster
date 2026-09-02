@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -68,6 +69,9 @@ func readRequest() (engineruntime.ExecutionRequest, error) {
 	var request engineruntime.ExecutionRequest
 	if err := decoder.Decode(&request); err != nil {
 		return request, fmt.Errorf("parse execution request: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return request, fmt.Errorf("parse execution request: trailing data")
 	}
 	if err := request.Validate(); err != nil {
 		return request, err

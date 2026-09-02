@@ -142,7 +142,7 @@ func TestOAuth_AuthenticateSessionAndAllowlist(t *testing.T) {
 	o := testOAuth(t, []string{"alice"})
 	// Admin session authenticates.
 	rec := httptest.NewRecorder()
-	if err := o.codec.write(rec, "alice", "user-tok"); err != nil {
+	if err := o.codec.write(rec, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("GET", "/api/auth/user", nil)
@@ -160,14 +160,11 @@ func TestOAuth_AuthenticateSessionAndAllowlist(t *testing.T) {
 	// The OAuth token in a legacy session is ignored in favor of the configured
 	// server-side bot credential.
 	botOAuth := testOAuthWithWriteToken(t, []string{"alice"}, false, "bot-token")
-	botRecorder := httptest.NewRecorder()
-	if err := botOAuth.codec.write(botRecorder, "alice", "legacy-user-token"); err != nil {
-		t.Fatal(err)
-	}
 	botRequest := httptest.NewRequest("GET", "/api/auth/user", nil)
-	for _, c := range botRecorder.Result().Cookies() {
-		botRequest.AddCookie(c)
-	}
+	botRequest.AddCookie(&http.Cookie{
+		Name:  sessionCookieName,
+		Value: sealLegacySession(t, botOAuth.codec, "alice", "legacy-user-token", time.Now().Add(time.Hour).Unix()),
+	})
 	botIdentity, err := botOAuth.Authenticate(context.Background(), botRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +175,7 @@ func TestOAuth_AuthenticateSessionAndAllowlist(t *testing.T) {
 
 	// A non-admin session is rejected even if the cookie is valid.
 	rec2 := httptest.NewRecorder()
-	o.codec.write(rec2, "mallory", "user-tok")
+	o.codec.write(rec2, "mallory")
 	req2 := httptest.NewRequest("GET", "/api/auth/user", nil)
 	for _, c := range rec2.Result().Cookies() {
 		req2.AddCookie(c)
@@ -326,7 +323,7 @@ func TestOAuthRejectsSessionFromDifferentPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	if err := old.write(recorder, "alice", "token"); err != nil {
+	if err := old.write(recorder, "alice"); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -345,7 +342,7 @@ func TestOAuthUserUsesPrivateCacheHeaders(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/api/auth/user", nil)
 		if authenticated {
 			cookieRecorder := httptest.NewRecorder()
-			if err := o.codec.write(cookieRecorder, "alice", "token"); err != nil {
+			if err := o.codec.write(cookieRecorder, "alice"); err != nil {
 				t.Fatal(err)
 			}
 			for _, cookie := range cookieRecorder.Result().Cookies() {

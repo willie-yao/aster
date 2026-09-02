@@ -1,7 +1,4 @@
-// Package auth guards the server's write actions. It authenticates a request to
-// a GitHub user and authorizes that user against an admin allowlist. The
-// Authenticator interface is the seam: a per-user PAT implementation ships
-// first, and an OAuth flow can replace it later without touching the handlers.
+// Package auth authenticates server requests and authorizes administrators.
 package auth
 
 import (

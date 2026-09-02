@@ -186,7 +186,7 @@ func (o *OAuth) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not an admin", http.StatusForbidden)
 		return
 	}
-	if err := o.codec.write(w, login, ""); err != nil {
+	if err := o.codec.write(w, login); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

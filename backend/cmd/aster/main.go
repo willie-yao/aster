@@ -37,22 +37,44 @@ var (
 	imageTag = "dev"
 )
 
+func signalRootContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	stop := func() {
+		signal.Stop(signals)
+		cancel()
+	}
+	go func() {
+		select {
+		case <-signals:
+			signal.Stop(signals)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, stop
+}
+
 func main() {
 	credentialenv.SanitizeAndReport()
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Printf("aster version=%s commit=%s image_tag=%s\n", version, commit, imageTag)
 		return
 	}
+	ctx, stop := signalRootContext()
+	defer stop()
+
 	if len(os.Args) > 1 && os.Args[1] == "kubernetes" {
-		runKubernetes(os.Args[2:])
+		runKubernetes(ctx, os.Args[2:])
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "onboard" {
-		runOnboard(os.Args[2:])
+		runOnboard(ctx, os.Args[2:])
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "notify-test" {
-		runNotifyTest(os.Args[2:])
+		runNotifyTest(ctx, os.Args[2:])
 		return
 	}
 
@@ -62,7 +84,6 @@ func main() {
 	flag.IntVar(&opts.BuildsPerJob, "builds", 10, "number of recent builds to fetch per job")
 	flag.IntVar(&opts.Workers, "workers", 5, "number of concurrent job fetchers")
 	flag.DurationVar(&opts.Timeout, "timeout", 10*time.Minute, "overall fetch timeout")
-	flag.BoolVar(&opts.IncludePresubmits, "include-presubmits", false, "include presubmit jobs in addition to project.yaml discovery policy")
 	flag.BoolVar(&opts.EnableAI, "ai", false, "enable AI-powered failure analysis")
 	flag.BoolVar(&opts.PrepareCauseFindings, "prepare-cause-findings", false, "prepare evidence-backed cause findings for analysis chat")
 	flag.BoolVar(&opts.SkipSideEffects, "skip-side-effects", false, "write data without notifications, issue recovery, or pull request comments")
@@ -72,19 +93,19 @@ func main() {
 	opts.Version = version
 	opts.TraceEngine = ai.TraceEngine{Version: version, Commit: commit, ImageTag: imageTag}
 
-	if err := fetcher.Run(context.Background(), opts); err != nil {
+	if err := fetcher.Run(ctx, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runKubernetes(args []string) {
+func runKubernetes(ctx context.Context, args []string) {
 	if len(args) == 0 || (args[0] != "doctor" && args[0] != "gitops" && args[0] != "install" && args[0] != "upgrade") {
 		fmt.Fprintln(os.Stderr, "error: usage: aster kubernetes <doctor|gitops|install|upgrade> [flags]")
 		os.Exit(2)
 	}
 	if args[0] == "doctor" {
-		runKubernetesDoctor(args[1:])
+		runKubernetesDoctor(ctx, args[1:])
 		return
 	}
 	if args[0] == "gitops" {
@@ -111,8 +132,6 @@ func runKubernetes(args []string) {
 		os.Exit(2)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := kubernetesdeploy.Run(ctx, opts, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -164,7 +183,7 @@ func runKubernetesGitOps(args []string) {
 	}
 }
 
-func runKubernetesDoctor(args []string) {
+func runKubernetesDoctor(ctx context.Context, args []string) {
 	opts := kubernetesdeploy.KubernetesDoctorOptions{}
 	fs := flag.NewFlagSet("kubernetes doctor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -184,8 +203,6 @@ func runKubernetesDoctor(args []string) {
 		os.Exit(2)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	report := kubernetesdeploy.KubernetesDoctor(ctx, opts)
 	if err := kubernetesdeploy.WriteKubernetesDoctorReport(os.Stdout, report); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -197,13 +214,13 @@ func runKubernetesDoctor(args []string) {
 }
 
 // runOnboard parses the onboard command and its read-only discover mode.
-func runOnboard(args []string) {
+func runOnboard(ctx context.Context, args []string) {
 	if len(args) > 0 && args[0] == "doctor" {
-		runOnboardDoctor(args[1:])
+		runOnboardDoctor(ctx, args[1:])
 		return
 	}
 	if len(args) > 0 && args[0] == "discover" {
-		runOnboardDiscover(args[1:])
+		runOnboardDiscover(ctx, args[1:])
 		return
 	}
 
@@ -240,7 +257,6 @@ func runOnboard(args []string) {
 	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "Aster ref the generated workflows pin")
 	fs.StringVar(&opts.OutDir, "out", "", "dashboard consumer directory for the scaffold")
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
-	fs.BoolVar(&opts.NoPrompt, "no-prompt", false, "skip prompt authoring and always write the prompts/system.md TODO template")
 	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: handoff or todo-template")
 	fs.DurationVar(&opts.PromptTimeout, "prompt-timeout", onboard.DefaultPromptDraftTimeout, "total timeout for prompt source resolution")
 	fs.BoolVar(&opts.OpenPR, "open-pr", false, "open a PR against the dashboard repo instead of writing locally; needs GITHUB_TOKEN write access")
@@ -285,7 +301,7 @@ func runOnboard(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		_, _, err = onboard.ApplyReviewed(context.Background(), plan, os.Getenv("GITHUB_TOKEN"), onboard.ReviewedApplyOptions{
+		_, _, err = onboard.ApplyReviewed(ctx, plan, os.Getenv("GITHUB_TOKEN"), onboard.ReviewedApplyOptions{
 			PlanDigest: applyPlanDigest, ResultOut: applyResultOut, HandoffOut: setupHandoffOut,
 			ArtifactSmokeBuilds: artifactSmokeBuilds,
 		})
@@ -320,13 +336,13 @@ func runOnboard(args []string) {
 	opts.AIModel = os.Getenv("AI_MODEL")
 	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")
 
-	if err := onboard.Run(context.Background(), opts); err != nil {
+	if err := onboard.Run(ctx, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runOnboardDiscover(args []string) {
+func runOnboardDiscover(rootCtx context.Context, args []string) {
 	fs := flag.NewFlagSet("onboard discover", flag.ExitOnError)
 	var sourceRepo string
 	var jsonOutput bool
@@ -334,9 +350,7 @@ func runOnboardDiscover(args []string) {
 	fs.BoolVar(&jsonOutput, "json", false, "write the discovery report as JSON")
 	_ = fs.Parse(args)
 
-	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithTimeout(signalCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(rootCtx, 5*time.Minute)
 	defer cancel()
 
 	report, err := onboard.Discover(ctx, sourceRepo, os.Getenv("GITHUB_TOKEN"))
@@ -350,15 +364,13 @@ func runOnboardDiscover(args []string) {
 	}
 }
 
-func runOnboardDoctor(args []string) {
+func runOnboardDoctor(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("onboard doctor", flag.ExitOnError)
 	var projectDir string
 	fs.StringVar(&projectDir, "project-dir", ".", "directory containing project.yaml and prompts/system.md")
 	_ = fs.Parse(args)
 
-	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	report := onboard.Doctor(signalCtx, onboard.DoctorOptions{ProjectDir: projectDir})
+	report := onboard.Doctor(ctx, onboard.DoctorOptions{ProjectDir: projectDir})
 	if err := onboard.WriteDoctorReport(os.Stdout, report); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -371,7 +383,7 @@ func runOnboardDoctor(args []string) {
 // runNotifyTest sends one test email through the consumer's configured relay.
 // It exercises the same sender the fetcher uses, which lets an operator confirm
 // deliverability from the deployment itself rather than waiting for an alert.
-func runNotifyTest(args []string) {
+func runNotifyTest(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("notify-test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var projectDir string
@@ -398,8 +410,6 @@ func runNotifyTest(args []string) {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	opts := notify.ProbeOptions{Config: cfg, Password: os.Getenv("EMAIL_SMTP_PASSWORD"), To: recipients}
 	if err := notify.Probe(ctx, opts, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
