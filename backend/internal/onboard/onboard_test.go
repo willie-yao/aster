@@ -660,6 +660,7 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 	}
 	for _, want := range []string{
 		"existingSecret: \"<existing-ai-secret>\"",
+		"githubReadTokenSecretName: \"<existing-github-read-secret>\"",
 		"This file records consumer-specific decisions", "No engine source checkout",
 		"verified-aster-path", "kubernetes doctor", "--chart-version \"$CHART_VERSION\"", "docs/kubernetes-platform.md",
 	} {

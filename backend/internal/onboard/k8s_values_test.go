@@ -17,7 +17,7 @@ var updateK8sValuesGolden = flag.Bool("update-k8s-values-golden", false, "update
 var chartEqualGeneratedPaths = []string{
 	"global.imageTag", "image.tag", "mode",
 	"persistence.enabled", "persistence.existingClaim", "persistence.accessMode", "persistence.size", "persistence.retain",
-	"ai.reasoningEffort", "ai.contextWindowTokens", "ai.tokenSecretKey", "ai.githubReadTokenSecretName", "ai.githubReadTokenSecretKey",
+	"ai.reasoningEffort", "ai.contextWindowTokens", "ai.tokenSecretKey", "ai.githubReadTokenSecretKey",
 	"fetcher.buildsPerJob", "fetcher.workers", "fetcher.watchInterval", "fetcher.reconcileInterval",
 	"server.chat.enabled", "server.actions.enabled", "server.service.type", "server.service.port",
 	"ingress.enabled", "networkPolicy.enabled", "networkPolicy.ingress",
@@ -49,14 +49,15 @@ func TestK8sValuesActiveConfiguration(t *testing.T) {
 	root := parseYAMLMap(t, values)
 
 	for path, want := range map[string]any{
-		"persistence.storageClass": "fixture-rwx",
-		"ai.enabled":               true,
-		"ai.api":                   project.AIAPIResponses,
-		"ai.endpoint":              "https://provider.example/v1/responses",
-		"ai.model":                 "fixture-model",
-		"ai.existingSecret":        "<existing-ai-secret>",
-		"fetcher.timeout":          "120m",
-		"fetcher.suspend":          true,
+		"persistence.storageClass":     "fixture-rwx",
+		"ai.enabled":                   true,
+		"ai.api":                       project.AIAPIResponses,
+		"ai.endpoint":                  "https://provider.example/v1/responses",
+		"ai.model":                     "fixture-model",
+		"ai.existingSecret":            "<existing-ai-secret>",
+		"ai.githubReadTokenSecretName": "<existing-github-read-secret>",
+		"fetcher.timeout":              "120m",
+		"fetcher.suspend":              true,
 	} {
 		assertYAMLValue(t, root, want, strings.Split(path, ".")...)
 	}
@@ -128,6 +129,7 @@ func TestK8sValuesDisabledAIStaysValid(t *testing.T) {
 	root := parseYAMLMap(t, values)
 	assertYAMLValue(t, root, false, "ai", "enabled")
 	assertYAMLValue(t, root, "", "ai", "existingSecret")
+	assertYAMLValue(t, root, "", "ai", "githubReadTokenSecretName")
 	assertYAMLAbsent(t, root, "ai", "tokenSecretKey")
 }
 
@@ -160,7 +162,7 @@ func TestK8sValuesChartDefaultClassification(t *testing.T) {
 		"ai.enabled": true, "ai.api": project.AIAPIResponses, "ai.endpoint": "https://provider.example/v1/responses",
 		"ai.model": "fixture-model", "ai.reasoningEffort": "", "ai.contextWindowTokens": 0,
 		"ai.existingSecret": "<existing-ai-secret>", "ai.tokenSecretKey": "AI_TOKEN",
-		"ai.githubReadTokenSecretName": "", "ai.githubReadTokenSecretKey": "GITHUB_READ_TOKEN",
+		"ai.githubReadTokenSecretName": "<existing-github-read-secret>", "ai.githubReadTokenSecretKey": "GITHUB_READ_TOKEN",
 		"fetcher.buildsPerJob": 10, "fetcher.workers": 5, "fetcher.timeout": "120m",
 		"fetcher.watchInterval": "5m", "fetcher.reconcileInterval": "1h", "fetcher.suspend": true,
 		"server.chat.enabled": false, "server.actions.enabled": false, "server.service.type": "ClusterIP",
@@ -182,6 +184,8 @@ func TestK8sValuesChartDefaultClassification(t *testing.T) {
 	intentionalDivergences := map[string]valuePair{
 		"fetcher.timeout": {"120m", "30m"},
 		"fetcher.suspend": {true, false},
+		// Secret references are scaffold placeholders the operator replaces or deletes before install.
+		"ai.githubReadTokenSecretName": {"<existing-github-read-secret>", ""},
 	}
 
 	counts := map[string]int{}
@@ -205,7 +209,7 @@ func TestK8sValuesChartDefaultClassification(t *testing.T) {
 			t.Errorf("unclassified generated value %s: generated=%#v chart=%#v", path, generatedValue, chartValue)
 		}
 	}
-	if len(originalGenerated) != 32 || counts["equal"] != 24 || counts["fixture"] != 6 || counts["divergent"] != 2 {
+	if len(originalGenerated) != 32 || counts["equal"] != 23 || counts["fixture"] != 6 || counts["divergent"] != 3 {
 		t.Fatalf("classification paths=%d equal=%d fixture=%d divergent=%d", len(originalGenerated), counts["equal"], counts["fixture"], counts["divergent"])
 	}
 

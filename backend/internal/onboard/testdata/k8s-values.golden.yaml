@@ -22,6 +22,7 @@ ai:
   endpoint: "https://provider.example/v1/responses"
   model: "fixture-model"
   existingSecret: "<existing-ai-secret>"
+  githubReadTokenSecretName: "<existing-github-read-secret>"
 
 fetcher:
   # Intentionally longer than the chart default for first-run artifact discovery.

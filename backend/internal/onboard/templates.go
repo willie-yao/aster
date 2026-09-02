@@ -172,6 +172,7 @@ ai:
   endpoint: {{quote .AIEndpoint}}
   model: {{quote .AIModel}}
   existingSecret: {{if .AIEnabled}}"<existing-ai-secret>"{{else}}""{{end}}
+  githubReadTokenSecretName: {{if .AIEnabled}}"<existing-github-read-secret>"{{else}}""{{end}}
 
 fetcher:
   # Intentionally longer than the chart default for first-run artifact discovery.
