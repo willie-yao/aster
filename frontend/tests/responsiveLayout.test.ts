@@ -133,6 +133,19 @@ test("mobile inputs clear the iOS zoom threshold and keep a 44px target", () => 
   assert.match(filters, /height: 44/);
 });
 
+test("analysis chat contains multiline composer growth inside the transcript", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  const content = chat.slice(chat.indexOf("id={chatContentId}"), chat.indexOf("<ChatFixDialog"));
+
+  assert.match(chat, /const clearComposer = useCallback\(\(\) => \{\s*setQuestion\(""\);\s*setDraftContentHeight\(null\);\s*\}, \[\]\)/);
+  assert.match(content, /display: "flex",\s*flexDirection: "column"/);
+  assert.match(content, /height: draftContentHeight \?\? "auto"/);
+  assert.match(content, /maxHeight: \{ xs: "min\(72vh, 680px\)", sm: "min\(80vh, 800px\)" \}/);
+  assert.match(content, /overflow: "hidden"/);
+  assert.match(content, /maxHeight: \{ xs: "min\(62vh, 560px\)", sm: "min\(70vh, 680px\)" \},\s*flex: "1 1 auto",\s*minHeight: 0,\s*overflowY: "auto"/);
+  assert.match(content, /setDraftContentHeight\(\(current\) =>\s*current \?\? chatContentRef\.current\?\.getBoundingClientRect\(\)\.height \?\? null\s*\)/);
+});
+
 test("truncated ledger text recovers by touch and keyboard, not hover alone", () => {
   const ledger = source("src/components/JobHealthTable.tsx");
 

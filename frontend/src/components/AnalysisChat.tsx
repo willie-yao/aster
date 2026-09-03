@@ -628,6 +628,7 @@ export function AnalysisChat({
   const chatContentId = useId();
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
+  const [draftContentHeight, setDraftContentHeight] = useState<number | null>(null);
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -644,6 +645,10 @@ export function AnalysisChat({
   const [fixOpen, setFixOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const clearComposer = useCallback(() => {
+    setQuestion("");
+    setDraftContentHeight(null);
+  }, []);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
   const preparedLookupIdentityRef = useRef("");
   const createPreparedSessionRef = useRef<() => void>(() => {});
@@ -654,6 +659,7 @@ export function AnalysisChat({
   const cancelControllerRef = useRef<AbortController | null>(null);
   const resetControllerRef = useRef<AbortController | null>(null);
   const identityRef = useRef("");
+  const chatContentRef = useRef<HTMLDivElement | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const turnLimitRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -718,7 +724,7 @@ export function AnalysisChat({
     cancelControllerRef.current?.abort();
     resetControllerRef.current?.abort();
     setExpanded(false);
-    setQuestion("");
+    clearComposer();
     setSession(null);
     setRestoring(false);
     setBusy(false);
@@ -736,7 +742,7 @@ export function AnalysisChat({
     setResetOpen(false);
     setResetting(false);
     createRequestIDRef.current = newAnalysisChatRequestID();
-  }, [identity]);
+  }, [clearComposer, identity]);
 
   useEffect(() => {
     if (!features.analysis_chat || authStatus !== "authenticated") {
@@ -791,7 +797,7 @@ export function AnalysisChat({
         setSession(updated);
         const restoredState = restoredTurn ? analysisChatRequestState(updated, restoredTurn.requestID) : "unresolved";
         if (restoredState === "answered" || restoredState === "succeeded") {
-          setQuestion("");
+          clearComposer();
           if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
           setPendingTurn(null);
           setContinueMode(false);
@@ -802,7 +808,7 @@ export function AnalysisChat({
           setError(null);
         } else if (restoredTurn?.requestRecorded === undefined) {
           setPendingTurn(null);
-          setQuestion("");
+          clearComposer();
           setContinueMode(false);
           setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
         } else {
@@ -843,7 +849,7 @@ export function AnalysisChat({
         }
         if (restoredTurn && reconciled) {
           if (reconciledState === "answered" || reconciledState === "succeeded") {
-            setQuestion("");
+            clearComposer();
             setPendingTurn(null);
             setError(null);
             return;
@@ -885,7 +891,7 @@ export function AnalysisChat({
       }
     })();
     return () => controller.abort();
-  }, [authMode, authStatus, features.analysis_chat, identity, recordProgress, signIn]);
+  }, [authMode, authStatus, clearComposer, features.analysis_chat, identity, recordProgress, signIn]);
 
   useEffect(() => {
     if (!features.analysis_chat || authStatus !== "authenticated" || !expanded || busy || restoring || resetting) return;
@@ -1060,14 +1066,14 @@ export function AnalysisChat({
         clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
         setPendingTurn(null);
         if (requestState === "answered" || requestState === "succeeded" || requestState === "terminal") {
-          setQuestion("");
+          clearComposer();
           return;
         }
-        setQuestion("");
+        clearComposer();
         setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
         return;
       }
-      setQuestion("");
+      clearComposer();
       clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
       setPendingTurn(null);
     } catch (requestError) {
@@ -1082,7 +1088,7 @@ export function AnalysisChat({
       }
       if (requestError instanceof AnalysisChatAPIError && requestError.message === analysisChatSessionBusyMessage) {
         setPendingTurn(null);
-        setQuestion("");
+        clearComposer();
         setContinueMode(false);
         if (activeSession) {
           try {
@@ -1110,7 +1116,7 @@ export function AnalysisChat({
           reconciledState = result.state;
           setSession(reconciled);
           if (reconciledState === "answered" || reconciledState === "succeeded") {
-            setQuestion("");
+            clearComposer();
             setPendingTurn(null);
             return;
           }
@@ -1230,7 +1236,7 @@ export function AnalysisChat({
       // is what keeps that create from being deduped against the discarded one.
       createRequestIDRef.current = newAnalysisChatRequestID();
       setSession(null);
-      setQuestion("");
+      clearComposer();
       setError(null);
       setPendingTurn(null);
       setContinueMode(false);
@@ -1321,6 +1327,7 @@ export function AnalysisChat({
     }
     if (expanded) {
       setExpanded(false);
+      setDraftContentHeight(null);
       preparedLookupIdentityRef.current = "";
       if (preparedRetryTimerRef.current !== null) window.clearTimeout(preparedRetryTimerRef.current);
       preparedRetryTimerRef.current = null;
@@ -1483,6 +1490,7 @@ export function AnalysisChat({
 
         <Collapse in={expanded} appear>
           <Box
+            ref={chatContentRef}
             id={chatContentId}
             onFocus={() => { panelHadFocus.current = true; }}
             onBlur={(event) => {
@@ -1490,6 +1498,13 @@ export function AnalysisChat({
               if (!event.currentTarget.contains(event.relatedTarget)) {
                 panelHadFocus.current = false;
               }
+            }}
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              height: draftContentHeight ?? "auto",
+              maxHeight: { xs: "min(72vh, 680px)", sm: "min(80vh, 800px)" },
+              overflow: "hidden",
             }}
           >
             <Stack
@@ -1509,6 +1524,7 @@ export function AnalysisChat({
                   sm: `max(0px, calc(12px - ${chatScrollbarGutter}px))`,
                 },
                 maxHeight: { xs: "min(62vh, 560px)", sm: "min(70vh, 680px)" },
+                flex: "1 1 auto",
                 minHeight: 0,
                 overflowY: "auto",
                 scrollbarGutter: "stable",
@@ -1685,6 +1701,9 @@ export function AnalysisChat({
                     inputRef={composerInputRef}
                     value={question}
                     onChange={(event) => {
+                      setDraftContentHeight((current) =>
+                        current ?? chatContentRef.current?.getBoundingClientRect().height ?? null
+                      );
                       setContinueMode(false);
                       setQuestion(limitAnalysisChatQuestion(event.target.value));
                     }}
