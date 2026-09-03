@@ -331,14 +331,14 @@ func analysisChatCauseSourceAddendum(turn analysischat.Turn, state analysisChatC
 	b.WriteString(" and historical revision ")
 	b.WriteString(state.HistoricalRevision)
 	b.WriteString(". ")
-	switch {
-	case state.CurrentRevision == "":
+	switch state.CurrentRevision {
+	case "":
 		if state.Branch == "" {
 			b.WriteString("The tested branch could not be established, so the current remediation revision is unavailable. ")
 		} else {
 			b.WriteString("Tested branch `" + state.Branch + "` was established, but its current immutable revision could not be resolved. ")
 		}
-	case state.CurrentRevision == state.HistoricalRevision:
+	case state.HistoricalRevision:
 		b.WriteString("Tested branch `" + state.Branch + "` currently resolves to the same revision, so source_id `primary` is both the historical cause source and the effective current remediation source. ")
 	default:
 		b.WriteString("source_id `current` is the same project repository at current revision " + state.CurrentRevision + " of tested branch `" + state.Branch + "`; use it to evaluate remediation against current code. ")
