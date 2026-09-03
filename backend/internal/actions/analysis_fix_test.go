@@ -2,6 +2,8 @@ package actions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -28,7 +30,7 @@ const (
 func exactJUnitDetail() models.JobDetail {
 	return models.JobDetail{Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{
-			BuildID: "123", JobName: "periodic-capz", RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": analysisFixRevision},
+			BuildID: "123", JobName: "periodic-capz", RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + analysisFixRevision},
 		},
 		TestCases: []models.TestCase{{
 			Name: "TestCluster", SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit_01.xml", Status: "failed",
@@ -194,7 +196,32 @@ func TestAnalysisSourceSnapshotIdentityDetectsDrift(t *testing.T) {
 	}
 }
 
-func TestAnalysisSourceCompatibilityExactHeadFastPath(t *testing.T) {
+func TestAnalysisSourceCompatibilityRejectsBranchlessExactHeadBeforeResolution(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
+	}
+	service.sourceRevisionClient = client
+	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
+		t.Fatal("branchless exact-head preflight read source")
+		return nil
+	}
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+
+	_, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
+	)
+	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
+		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
+	}
+	if len(client.branchRequests) != 0 || client.compareCalls != 0 {
+		t.Fatalf("branchless exact-head preflight reached revision client: branches=%v compares=%d", client.branchRequests, client.compareCalls)
+	}
+}
+
+func TestAnalysisSourceCompatibilityExactHeadUsesExplicitBranch(t *testing.T) {
 	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 	client := &fakeAnalysisSourceRevisionClient{
 		base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
@@ -208,38 +235,35 @@ func TestAnalysisSourceCompatibilityExactHeadFastPath(t *testing.T) {
 	}
 
 	compatibility, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
+		t.Context(), repo, "main", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if compatibility.GenerationBaseRevision != capzFailureRevision || client.compareCalls != 0 ||
-		len(compatibility.VerifiedSourceFileHashes) != 1 || compatibility.FindingVerification == "" {
+		len(compatibility.VerifiedSourceFileHashes) != 1 || compatibility.FindingVerification == "" || compatibility.SourceVerification == "" {
 		t.Fatalf("compatibility=%+v compare_calls=%d", compatibility, client.compareCalls)
 	}
 }
 
-func TestAnalysisSourceCompatibilityAcceptsPreservedCAPZAdvancement(t *testing.T) {
+func TestAnalysisSourceCompatibilityUsesChangedCurrentSourceWithoutHistoricalRead(t *testing.T) {
 	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 	client := &fakeAnalysisSourceRevisionClient{
 		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: true,
 	}
 	service.sourceRevisionClient = client
-	failureFiles := map[string]string{
-		"test/e2e/cni.go":           "package e2e\nfunc InstallCNIManifest() {}\n",
-		"test/e2e/azure_test.go":    "package e2e\nfunc TestAzure() { InstallCNIManifest() }\n",
-		"azure/services/machine.go": "failure revision unrelated content\n",
+	currentContent := "package e2e\nfunc InstallCNIManifest() { retry() }\n"
+	var requestedRevisions []string
+	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
+		requestedRevisions = append(requestedRevisions, repo.Revision)
+		if repo.Revision != capzGenerationBaseRevision {
+			t.Fatalf("read historical revision %s", repo.Revision)
+		}
+		return &mapSourceReader{files: map[string]string{
+			"test/e2e/cni.go":        currentContent,
+			"test/e2e/azure_test.go": "package e2e\nfunc TestAzure() { InstallCNIManifest() }\n",
+		}}
 	}
-	generationFiles := map[string]string{
-		"test/e2e/cni.go":           failureFiles["test/e2e/cni.go"],
-		"test/e2e/azure_test.go":    failureFiles["test/e2e/azure_test.go"],
-		"azure/services/machine.go": "generation base unrelated VMSS Flex content\n",
-	}
-	readers := map[string]sourceSnapshotReader{
-		capzFailureRevision:        &mapSourceReader{files: failureFiles},
-		capzGenerationBaseRevision: &mapSourceReader{files: generationFiles},
-	}
-	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
 	repo := sourceinvestigation.Repository{
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
@@ -251,43 +275,57 @@ func TestAnalysisSourceCompatibilityAcceptsPreservedCAPZAdvancement(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	currentHash := sha256.Sum256([]byte(currentContent))
+	generationRepo := repo
+	generationRepo.Revision = capzGenerationBaseRevision
+	normalizedFiles, err := normalizeAnalysisSourceFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVerification := analysisSourceVerificationForHashes(generationRepo, normalizedFiles, compatibility.VerifiedSourceFileHashes)
 	if compatibility.GenerationBaseRevision != capzGenerationBaseRevision || client.compareCalls != 1 ||
-		len(compatibility.VerifiedSourceFileHashes) != len(files) || compatibility.FindingVerification == "" {
-		t.Fatalf("compatibility=%+v compare_calls=%d", compatibility, client.compareCalls)
+		compatibility.VerifiedSourceFileHashes["test/e2e/cni.go"] != hex.EncodeToString(currentHash[:]) ||
+		compatibility.FindingVerification == "" || compatibility.SourceVerification != wantVerification ||
+		!slices.Equal(requestedRevisions, []string{capzGenerationBaseRevision}) {
+		t.Fatalf("compatibility=%+v compare_calls=%d revisions=%v", compatibility, client.compareCalls, requestedRevisions)
 	}
 }
 
-func TestAnalysisSourceCompatibilityRejectsRelevantDrift(t *testing.T) {
+func TestAnalysisSourceCompatibilityRejectsUnavailableOrIncompatibleCurrentSource(t *testing.T) {
 	baseFiles := map[string]string{"test/e2e/cni.go": "package e2e\nfunc InstallCNIManifest() {}\n"}
 	for _, testCase := range []struct {
 		name         string
 		generation   map[string]string
 		contains     bool
 		targetBranch string
-		finding      string
+		wantReason   ReasonCode
 	}{
-		{name: "changed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni.go": "package e2e\nfunc InstallCNIManifest() { retry() }\n"}, contains: true},
-		{name: "deleted or renamed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni_renamed.go": baseFiles["test/e2e/cni.go"]}, contains: true},
-		{name: "rewritten ancestry", targetBranch: "main", generation: baseFiles, contains: false},
+		{name: "deleted or renamed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni_renamed.go": baseFiles["test/e2e/cni.go"]}, contains: true, wantReason: ReasonSourceChanged},
+		{name: "rewritten ancestry", targetBranch: "main", generation: baseFiles, contains: false, wantReason: ReasonSourceRevisionDiverged},
 		{name: "wrong target branch", targetBranch: "release-1.2", generation: baseFiles, contains: true},
-		{name: "missing symbol", targetBranch: "main", generation: map[string]string{"test/e2e/cni.go": "package e2e\nfunc OtherSymbol() {}\n"}, contains: true, finding: "Update `InstallCNIManifest`."},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
 				base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: testCase.contains,
 			}
-			readers := map[string]sourceSnapshotReader{
-				capzFailureRevision:        &mapSourceReader{files: baseFiles},
-				capzGenerationBaseRevision: &mapSourceReader{files: testCase.generation},
+			service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
+				if repo.Revision != capzGenerationBaseRevision {
+					t.Fatalf("read historical revision %s", repo.Revision)
+				}
+				return &mapSourceReader{files: testCase.generation}
 			}
-			service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
 			repo := sourceinvestigation.Repository{
 				Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 			}
-			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, testCase.targetBranch, []string{"test/e2e/cni.go"}, testCase.finding)
+			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, testCase.targetBranch, []string{"test/e2e/cni.go"}, "")
 			if err == nil {
-				t.Fatal("relevant source drift was accepted")
+				t.Fatal("incompatible current source was accepted")
+			}
+			if testCase.wantReason != "" {
+				if code, ok := ReasonCodeFrom(err); !ok || code != testCase.wantReason {
+					t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
+				}
 			}
 		})
 	}
@@ -312,7 +350,7 @@ func TestAnalysisSourceCompatibilityWarnsOnSymbolGrounding(t *testing.T) {
 			reader := &mapSourceReader{files: testCase.files}
 			service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
 			repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-			compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "", testCase.paths, "Update `InstallCNIManifest`.")
+			compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", testCase.paths, "Update `InstallCNIManifest`.")
 			if err != nil || !strings.Contains(strings.Join(compatibility.Warnings, " "), testCase.want) {
 				t.Fatalf("compatibility=%+v err=%v", compatibility, err)
 			}
@@ -434,25 +472,26 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 		t.Fatal(err)
 	}
 	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	verification, err := service.verifyAnalysisSourceSnapshot(t.Context(), repo, []string{"controllers/cluster_controller.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	findingText := "Update `markReady` in the terminal branch."
-	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "", []string{"controllers/cluster_controller.go"}, findingText)
+	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, findingText)
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding := AnalysisPreviewBinding{
 		Identity: exactIdentity(), AnalysisID: subject.ID, AnalysisHash: subject.ContentHash, AnalysisContentHash: subject.AnalysisContentHash,
 		ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat", PreviewRequestHash: "preview",
-		SourceRepository: repo, SourceFiles: []string{"controllers/cluster_controller.go"}, SourceVerification: verification,
+		SourceRepository: repo, SourceFiles: []string{"controllers/cluster_controller.go"}, SourceVerification: compatibility.SourceVerification,
 		FailureRevision: repo.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
 		VerifiedSourceFileHashes: compatibility.VerifiedSourceFileHashes,
 		FindingText:              findingText, FindingVerification: compatibility.FindingVerification, VerificationVersion: analysisSourceVerificationVersion,
 	}
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); err != nil {
 		t.Fatalf("valid binding error = %v", err)
+	}
+	v1 := binding
+	v1.VerificationVersion = 1
+	if err := service.validateAnalysisPreview(t.Context(), "alice", v1); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("v1 binding error = %v", err)
 	}
 	changedFinding := binding
 	changedFinding.FindingVerification = "changed"
@@ -465,9 +504,18 @@ func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing
 	if err := service.validateAnalysisPreview(t.Context(), "alice", changedHashes); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("changed source hash error = %v", err)
 	}
+	changedVerification := binding
+	changedVerification.SourceVerification = "changed"
+	if err := service.validateAnalysisPreview(t.Context(), "alice", changedVerification); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed source verification error = %v", err)
+	}
 	client.base = ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("generation base drift error = %v", err)
+	}
+	client.base = ghpr.Base{Branch: "other", HeadSHA: analysisFixRevision, TreeSHA: "tree"}
+	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("generation branch drift error = %v", err)
 	}
 	client.base = ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}
 	reader.files["controllers/cluster_controller.go"] += "// drift\n"
@@ -755,7 +803,7 @@ func TestAnalysisSourceCompatibilityRejectsUnreadableSourceArchive(t *testing.T)
 	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
 	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return unreadableAnalysisSourceReader{} }
 	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	if _, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "", []string{"controllers/cluster_controller.go"}, "Update `reconcileDelete`."); err == nil {
+	if _, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, "Update `reconcileDelete`."); err == nil {
 		t.Fatal("unreadable source archive was accepted")
 	}
 }
@@ -797,7 +845,7 @@ func TestAnalysisSourceCompatibilityRejectsDependencyRepository(t *testing.T) {
 	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
 	dependency := sourceinvestigation.Repository{Owner: "kubernetes", Name: "kubernetes", Revision: analysisFixRevision}
 	_, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), dependency, "", []string{"pkg/kubelet/cm/devicemanager/manager.go"}, "Update `GetDeviceRunContainerOptions`.")
+		t.Context(), dependency, "main", []string{"pkg/kubelet/cm/devicemanager/manager.go"}, "Update `GetDeviceRunContainerOptions`.")
 	if err == nil {
 		t.Fatal("a dependency repository was accepted as a fix destination")
 	}
@@ -878,8 +926,8 @@ func TestAnalysisSourceCompatibilityRejectsUnknownBranch(t *testing.T) {
 	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
 		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
 	}
-	if client.compareCalls != 0 {
-		t.Errorf("compare calls = %d, want no ancestry check without a branch", client.compareCalls)
+	if len(client.branchRequests) != 0 || client.compareCalls != 0 {
+		t.Errorf("revision client calls = branches %v compares %d, want none without a branch", client.branchRequests, client.compareCalls)
 	}
 }
 
@@ -893,10 +941,10 @@ func TestPreflightAnalysisFixSourcePreservesReasonCode(t *testing.T) {
 		contains:    true,
 	}
 	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
-		if repo.Revision == capzFailureRevision {
-			return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\nfunc Reconcile() {}\n"}}
+		if repo.Revision != capzReleaseBaseRevision {
+			t.Fatalf("read historical revision %s", repo.Revision)
 		}
-		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n// rewritten\n"}}
+		return &mapSourceReader{files: map[string]string{}}
 	}
 	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
 
@@ -908,5 +956,26 @@ func TestPreflightAnalysisFixSourcePreservesReasonCode(t *testing.T) {
 	}
 	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceChanged {
 		t.Fatalf("code = %q ok = %t", code, ok)
+	}
+}
+
+func TestAnalysisSourceCompatibilityRejectsResolvedBranchMismatchAtExactHead(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		branchBases: map[string]ghpr.Base{
+			"main": {Branch: "other", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
+		},
+	}
+	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
+		t.Fatal("branch mismatch read source")
+		return nil
+	}
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+	if _, err := service.verifyAnalysisSourceCompatibility(
+		t.Context(), repo, "main", []string{"test/e2e/cni.go"}, "",
+	); err == nil || !strings.Contains(err.Error(), "branch does not match") {
+		t.Fatalf("resolved branch mismatch error = %v", err)
 	}
 }

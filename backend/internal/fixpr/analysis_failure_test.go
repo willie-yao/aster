@@ -23,7 +23,7 @@ func validAnalysisFailure() AnalysisFailure {
 		AssistantAnswer:  "The artifact shows the terminal branch never calls `markReady`.",
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		ArtifactCitations: []Evidence{{Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-		SourceRepository:  "up/stream", FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
+		SourceRepository:  "up/stream", SourceBranch: "main", FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
 		VerifiedSourceFileHashes: map[string]string{"controllers/cluster_controller.go": strings.Repeat("d", 64)},
 		SourceFiles:              []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash", FindingVerification: "finding-hash",
 	}
@@ -115,7 +115,7 @@ func TestGenerateAnalysisPreviewUsesCurrentGenerationBase(t *testing.T) {
 	if agent.spec.Repo.Ref == failure.FailureRevision {
 		t.Fatal("generation used the failure revision")
 	}
-	for _, want := range []string{failure.FailureRevision, failure.GenerationBaseRevision, "unchanged at the generation base"} {
+	for _, want := range []string{failure.FailureRevision, failure.GenerationBaseRevision, "historical failure revision", "current generation-base revision", "do not assume it still applies", "do not relocate the fix"} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}
@@ -147,6 +147,20 @@ func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *
 	}
 	if len(pr.opened) != 0 {
 		t.Fatalf("drifted confirmation wrote PR: %+v", pr.opened)
+	}
+}
+
+func TestAnalysisPreviewRequiresExplicitMatchingSourceBranch(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.SourceBranch = ""
+	manager := newManager(t, &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}, goodAgent(), Options{})
+	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); err == nil || !strings.Contains(err.Error(), "context is incomplete") {
+		t.Fatalf("missing branch error = %v", err)
+	}
+
+	failure.SourceBranch = "release-1.25"
+	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); !errors.Is(err, ErrPreviewBaseChanged) {
+		t.Fatalf("mismatched resolved branch error = %v", err)
 	}
 }
 

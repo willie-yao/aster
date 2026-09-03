@@ -230,16 +230,21 @@ func TestPreparePublishedAnalysisRequiresExactFlagGrounding(t *testing.T) {
 }
 
 func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
-	state := &agentState{sourceEvidenceByPath: map[string]*analysisChatEvidence{}}
-	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo"}}, map[string]interface{}{
+	repo := &fakeSourceRepo{files: map[string]string{}}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
+	})
+	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
+	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo", Arguments: `{"source_id":"primary"}`}}, map[string]interface{}{
+		"source_id": tools.PrimarySourceID,
 		"matches": []interface{}{map[string]interface{}{
 			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
 		}},
-	}, nil)
+	}, repotree.GrepObservation{Call: tools.GrepCallObservation{SelectorID: tools.PrimarySourceID}, Matches: []repotree.GrepMatchObservation{{SourceID: tools.PrimarySourceID, Path: "Makefile"}}})
 	if got := state.preparePublishedAnalysis(analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}).RootCause; !strings.Contains(got, "--supported") {
 		t.Fatalf("visible grep grounding was not recorded: %q", got)
 	}
-	if evidence := state.sourceEvidenceByPath["Makefile"]; evidence == nil || len(evidence.Segments) != 1 || len(evidence.Lines) != 0 {
+	if evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "Makefile"}]; evidence == nil || len(evidence.Segments) != 1 || len(evidence.Lines) != 0 {
 		t.Fatalf("grep citation evidence = %+v", evidence)
 	}
 }
@@ -252,16 +257,16 @@ func TestRecordSourceContentMapsOnlyObservedCompleteReadLines(t *testing.T) {
 	content := "partial\ncomplete one\ncomplete two\ntrailing"
 	byteStart := strings.Index(content, "complete one")
 	byteEnd := strings.Index(content, "trailing")
-	state := &agentState{sources: catalog, sourceEvidenceByPath: map[string]*analysisChatEvidence{}}
+	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
 	state.recordSourceContent(
 		modelToolCall{Function: modelFunction{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
-		map[string]interface{}{"content": content, "length": len(content)},
+		map[string]interface{}{"source_id": tools.PrimarySourceID, "content": content, "length": len(content)},
 		repotree.ReadObservation{
 			SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 11,
 			ByteStart: byteStart, ByteEnd: byteEnd,
 		},
 	)
-	evidence := state.sourceEvidenceByPath["pkg/controller.go"]
+	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "pkg/controller.go"}]
 	if evidence == nil || len(evidence.Segments) != 1 || evidence.Segments[0] != content {
 		t.Fatalf("read citation segments = %+v", evidence)
 	}
@@ -278,11 +283,11 @@ func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
 	full := "// café comment here\nabc\ndef\n\nafter\n"
 	raw := full[7:31]
 	state := &agentState{
-		sources: catalog, sourceEvidenceByPath: map[string]*analysisChatEvidence{},
+		sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 		startTime: time.Now(),
 	}
 	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, map[string]interface{}{
-		"content": raw, "length": len(raw),
+		"source_id": tools.PrimarySourceID, "content": raw, "length": len(raw),
 	}))
 	visibleContent, _ := visible["content"].(string)
 	if len(visibleContent) == len(raw) {
@@ -296,7 +301,7 @@ func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
 			ByteStart: 15, ByteEnd: 24,
 		},
 	)
-	evidence := state.sourceEvidenceByPath["path.go"]
+	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "path.go"}]
 	if evidence == nil || len(evidence.Segments) != 1 {
 		t.Fatalf("quote-only source evidence = %+v", evidence)
 	}

@@ -50,10 +50,15 @@ func (r *githubRepoReader) SourceIdentity() (string, string, string) {
 func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.ref != "HEAD" {
+	if revision, ok := buildsource.NormalizeRevision(r.ref); ok {
+		r.ref = revision
 		return nil
 	}
-	u := fmt.Sprintf("%s/repos/%s/%s/commits/HEAD", githubAPIBase, r.owner, r.repo)
+	ref := strings.TrimSpace(r.ref)
+	if ref == "" {
+		ref = "HEAD"
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/commits/%s", githubAPIBase, r.owner, r.repo, url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
@@ -68,7 +73,7 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("resolving %s/%s HEAD: %s", r.owner, r.repo, resp.Status)
+		return fmt.Errorf("resolving %s/%s ref %q: %s", r.owner, r.repo, ref, resp.Status)
 	}
 	var out struct {
 		SHA string `json:"sha"`
@@ -78,7 +83,7 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	}
 	revision, ok := buildsource.NormalizeRevision(out.SHA)
 	if !ok {
-		return fmt.Errorf("resolving %s/%s HEAD returned invalid commit", r.owner, r.repo)
+		return fmt.Errorf("resolving %s/%s ref %q returned invalid commit", r.owner, r.repo, ref)
 	}
 	r.ref = revision
 	return nil

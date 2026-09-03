@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strconv"
@@ -183,15 +185,12 @@ func TestAnalysisChatAgentAcceptsMixedReplyWithoutCorrectiveRound(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply.ValidationRetries != 0 || reply.Assessment != "challenges" || reply.ProposedRevision == nil {
+	if reply.ValidationRetries != 0 || reply.Assessment != "challenges" || reply.ProposedRevision != nil {
 		t.Fatalf("reply = %+v", reply)
 	}
-	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/123/build-log.txt" || len(reply.EvidenceWarnings) != 1 {
+	if len(reply.Citations) != 1 || reply.Citations[0].Path != "builds/123/build-log.txt" || len(reply.EvidenceWarnings) != 2 ||
+		!strings.Contains(strings.Join(reply.EvidenceWarnings, " "), "current tested-branch source revision was unavailable") {
 		t.Fatalf("reply evidence = %+v", reply)
-	}
-	if reply.ProposedRevision.RootCause != "The controller stopped before completing reconciliation." ||
-		reply.ProposedRevision.SuggestedFix != "Correct the controller failure and rerun." {
-		t.Fatalf("proposed revision = %+v", reply.ProposedRevision)
 	}
 	if len(server.requests) != 2 {
 		t.Fatalf("provider requests = %d, want 2", len(server.requests))
@@ -802,7 +801,7 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		sources:  testSourceCatalog(t, tools.PrimarySourceID, primary),
 		registry: registry, enabledTools: enabled, cache: tools.NewCache(),
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
-		sourceEvidenceByPath: map[string]*analysisChatEvidence{},
+		sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 	}
 	arguments, err := json.Marshal(map[string]interface{}{
 		"source_id": tools.PrimarySourceID, "path": path, "offset": offset, "length": length,
@@ -827,7 +826,7 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		t.Fatalf("visible line range = %v-%v, want 2-3", visible["line_start"], visible["line_end"])
 	}
 
-	evidence := state.sourceEvidenceByPath[path]
+	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: path}]
 	if evidence == nil {
 		t.Fatal("source evidence was not recorded")
 	}
@@ -845,7 +844,7 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		Repository: "example/project", Revision: revision, Path: path,
 		LineStart: int(lineStart), LineEnd: int(lineStart), Quote: evidence.Lines[int(lineStart)],
 	}
-	source := &analysisChatSourceCitationContext{Primary: primary, Evidence: state.sourceEvidenceByPath}
+	source := &analysisChatSourceCitationContext{Catalog: state.sources, Evidence: state.sourceEvidenceByPath}
 	if failure := validateAnalysisChatCitation(&citation, nil, source, 1); failure != nil {
 		t.Fatalf("published line citation did not validate: %+v", failure)
 	}
@@ -857,13 +856,14 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 func TestAnalysisChatSourceCitationValidatesRecordedCurrentTurnBytes(t *testing.T) {
 	reader := &countingSourceReader{}
 	revision := "0123456789abcdef0123456789abcdef01234567"
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure",
+		Revision: revision, Reader: reader,
+	})
 	source := &analysisChatSourceCitationContext{
-		Primary: tools.RepoSource{
-			ID: tools.PrimarySourceID, Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure",
-			Revision: revision, Reader: reader,
-		},
-		Evidence: map[string]*analysisChatEvidence{
-			"pkg/controller.go": {
+		Catalog: catalog,
+		Evidence: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+			{SourceID: tools.PrimarySourceID, Path: "pkg/controller.go"}: {
 				Segments: []string{"if err != nil {\nreturn err\n}"},
 				Lines:    map[int]string{10: "if err != nil {", 11: "return err"},
 			},
@@ -914,10 +914,13 @@ func TestAnalysisChatSourceCitationValidatesRecordedCurrentTurnBytes(t *testing.
 
 func TestAnalysisChatGrepSourceEvidenceIsQuoteOnly(t *testing.T) {
 	revision := strings.Repeat("1", 40)
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: revision, Reader: &countingSourceReader{},
+	})
 	source := &analysisChatSourceCitationContext{
-		Primary: tools.RepoSource{Owner: "example", Name: "project", Revision: revision},
-		Evidence: map[string]*analysisChatEvidence{
-			"pkg/controller.go": {Segments: []string{"func reconcile() error"}, Lines: map[int]string{}},
+		Catalog: catalog,
+		Evidence: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+			{SourceID: tools.PrimarySourceID, Path: "pkg/controller.go"}: {Segments: []string{"func reconcile() error"}, Lines: map[int]string{}},
 		},
 	}
 	quoteOnly := `{"answer":"The source declares reconcile.","citations":[{"repository":"example/project","revision":"` + revision + `","path":"pkg/controller.go","line_start":null,"line_end":null,"quote":"func reconcile"}],"assessment":"supports","proposed_revision":null}`
@@ -934,10 +937,13 @@ func TestAnalysisChatGrepSourceEvidenceIsQuoteOnly(t *testing.T) {
 
 func TestAnalysisChatSourceLineClaimsRequireMatchingVerifiedRange(t *testing.T) {
 	revision := strings.Repeat("2", 40)
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: revision, Reader: &countingSourceReader{},
+	})
 	source := &analysisChatSourceCitationContext{
-		Primary: tools.RepoSource{Owner: "example", Name: "project", Revision: revision},
-		Evidence: map[string]*analysisChatEvidence{
-			"pkg/controller.go": {Segments: []string{"return err"}, Lines: map[int]string{10: "return err"}},
+		Catalog: catalog,
+		Evidence: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+			{SourceID: tools.PrimarySourceID, Path: "pkg/controller.go"}: {Segments: []string{"return err"}, Lines: map[int]string{10: "return err"}},
 		},
 	}
 	citation := `{"repository":"example/project","revision":"` + revision + `","path":"pkg/controller.go","line_start":10,"line_end":10,"quote":"return err"}`
@@ -2786,5 +2792,388 @@ func TestAnalysisChatPromptStatesTheQuoteRules(t *testing.T) {
 		if !strings.Contains(analysisChatResponseFormat, want) {
 			t.Fatalf("prompt does not state %q", want)
 		}
+	}
+}
+
+func TestAnalysisChatCauseSourcesResolveHistoricalAndCurrent(t *testing.T) {
+	const historical = "0123456789abcdef0123456789abcdef01234567"
+	const current = "89abcdef0123456789abcdef0123456789abcdef"
+	for _, testCase := range []struct {
+		name            string
+		resolved        string
+		status          int
+		wantSources     int
+		wantCurrentID   bool
+		wantUnavailable bool
+	}{
+		{name: "distinct revisions", resolved: current, status: http.StatusOK, wantSources: 2, wantCurrentID: true},
+		{name: "equal revisions", resolved: historical, status: http.StatusOK, wantSources: 1},
+		{name: "current unavailable", status: http.StatusNotFound, wantSources: 1, wantUnavailable: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			calls := 0
+			github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/repos/kubernetes-sigs/cluster-api-provider-azure/commits/release-1.2" {
+					http.NotFound(w, r)
+					return
+				}
+				if testCase.status != http.StatusOK {
+					http.Error(w, "unavailable", testCase.status)
+					return
+				}
+				_, _ = w.Write([]byte(`{"sha":"` + testCase.resolved + `"}`))
+			}))
+			defer github.Close()
+			oldAPI := githubAPIBase
+			githubAPIBase = github.URL
+			defer func() { githubAPIBase = oldAPI }()
+
+			server := newScriptedChatServer(t)
+			server.push(200, chatRespFinal(`{"answer":"The artifact context is sufficient.","citations":[],"assessment":"explains","proposed_revision":null}`))
+			agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
+				MaxIters: 2, Timeout: time.Second,
+				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+			})
+			turn := causeAnalysisChatTurn()
+			turn.Build.RepoRefs = map[string]string{
+				"kubernetes-sigs/cluster-api-provider-azure": "release-1.2:" + historical,
+			}
+			turn.EvidenceBuilds[0].Build = turn.Build
+			if _, err := agent.Reply(t.Context(), turn); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("branch-tip lookups = %d, want 1", calls)
+			}
+			request := string(server.requests[0])
+			for _, want := range []string{"selected failed build 123", "release-1.2", historical, "comparison-build artifacts", "current source investigation"} {
+				if !strings.Contains(request, want) {
+					t.Fatalf("request missing %q: %s", want, request)
+				}
+			}
+			if got := strings.Count(request, "source_id `current`: "); (got == 1) != testCase.wantCurrentID {
+				t.Fatalf("current catalog entries = %d, wantCurrent=%t", got, testCase.wantCurrentID)
+			}
+			if testCase.wantCurrentID && !strings.Contains(request, current) {
+				t.Fatalf("request missing current revision: %s", request)
+			}
+			if got := strings.Contains(request, "current immutable revision could not be resolved"); got != testCase.wantUnavailable {
+				t.Fatalf("unavailable guidance present=%t want=%t: %s", got, testCase.wantUnavailable, request)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatPreparedCauseUsesHistoricalSourceWithoutCurrentLookup(t *testing.T) {
+	shrinkCallDelay(t)
+	const historicalRevision = "0123456789abcdef0123456789abcdef01234567"
+	apiCalls := 0
+	github := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { apiCalls++ }))
+	defer github.Close()
+	sourceReads := 0
+	raw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sourceReads++
+		want := "/kubernetes-sigs/cluster-api-provider-azure/" + historicalRevision + "/controllers/fix.go"
+		if r.URL.Path != want {
+			t.Fatalf("historical source path = %q, want %q", r.URL.Path, want)
+		}
+		_, _ = w.Write([]byte("historical fix target\n"))
+	}))
+	defer raw.Close()
+	oldAPI, oldRaw := githubAPIBase, rawContentBase
+	githubAPIBase, rawContentBase = github.URL, raw.URL
+	defer func() { githubAPIBase, rawContentBase = oldAPI, oldRaw }()
+
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("source-1", "read_repo_file", map[string]interface{}{
+		"source_id": tools.PrimarySourceID, "path": "controllers/fix.go", "offset": 0, "length": 1024,
+	}))
+	server.push(200, chatRespFinal(`{
+		"answer":"The historical source supports revising the diagnosis.",
+		"citations":[{"repository":"kubernetes-sigs/cluster-api-provider-azure","revision":"`+historicalRevision+`","path":"controllers/fix.go","line_start":1,"line_end":1,"quote":"historical fix target"}],
+		"assessment":"challenges",
+		"proposed_revision":{"root_cause":"The historical implementation used the wrong target.","suggested_fix":"Update the target after current investigation."}
+	}`))
+	agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
+		MaxIters: 3, Timeout: time.Second,
+		SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+	})
+	turn := causeAnalysisChatTurn()
+	turn.Build.RepoRefs = map[string]string{
+		"kubernetes-sigs/cluster-api-provider-azure": "main:" + historicalRevision,
+	}
+	turn.EvidenceBuilds[0].Build = turn.Build
+	turn.HistoricalSourceOnly = true
+	turn.Question = analysischat.PreparedCauseQuestion
+	reply, err := agent.Reply(t.Context(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apiCalls != 0 {
+		t.Fatalf("prepared cause performed %d branch-tip lookups", apiCalls)
+	}
+	if sourceReads != 1 {
+		t.Fatalf("historical source reads = %d, want 1", sourceReads)
+	}
+	if reply.ProposedRevision == nil || len(reply.EvidenceWarnings) != 0 || reply.Unverified || len(reply.Citations) != 1 {
+		t.Fatalf("prepared historical reply = %+v", reply)
+	}
+	citation := reply.Citations[0]
+	if citation.Repository != "kubernetes-sigs/cluster-api-provider-azure" || citation.Revision != historicalRevision ||
+		citation.Path != "controllers/fix.go" || citation.LineStart != 1 || citation.LineEnd != 1 || citation.Quote != "historical fix target" {
+		t.Fatalf("historical citation = %+v", citation)
+	}
+	request := string(server.requests[0])
+	for _, name := range []string{"list_repo_tree", "read_repo_file", "grep_repo"} {
+		if !strings.Contains(request, `"name":"`+name+`"`) {
+			t.Fatalf("prepared cause omitted %s: %s", name, request)
+		}
+	}
+	for _, want := range []string{
+		"source_id `primary`:", historicalRevision,
+		"newest later completed run", "evidence of recovery", "challenge it and propose a revision",
+		"Historical source evidence does not establish current remediation state.",
+	} {
+		if !strings.Contains(request, want) {
+			t.Fatalf("prepared request missing %q: %s", want, request)
+		}
+	}
+	if strings.Contains(request, "source_id `current`:") {
+		t.Fatalf("prepared cause received a current source entry: %s", request)
+	}
+}
+
+func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
+	primaryRevision := strings.Repeat("1", 40)
+	currentRevision := strings.Repeat("2", 40)
+	reader := &countingSourceReader{}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID,
+		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "Example", Name: "Project", Revision: primaryRevision, Reader: reader},
+		tools.RepoSource{ID: analysisChatCurrentSourceID, Owner: "Example", Name: "Project", Revision: currentRevision, Reader: reader},
+	)
+	context := &analysisChatSourceCitationContext{
+		Catalog: catalog, CurrentSourceID: analysisChatCurrentSourceID,
+		Evidence: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+			{SourceID: tools.PrimarySourceID, Path: "pkg/same.go"}: {
+				Segments: []string{"historical implementation"}, Lines: map[int]string{10: "historical implementation"},
+			},
+			{SourceID: analysisChatCurrentSourceID, Path: "pkg/same.go"}: {
+				Segments: []string{"current implementation"}, Lines: map[int]string{20: "current implementation"},
+			},
+		},
+	}
+	for _, testCase := range []struct {
+		name     string
+		revision string
+		line     int
+		quote    string
+	}{
+		{name: "primary", revision: strings.ToUpper(primaryRevision), line: 10, quote: "historical implementation"},
+		{name: "current", revision: strings.ToUpper(currentRevision), line: 20, quote: "current implementation"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			citation := analysischat.Citation{
+				Repository: " EXAMPLE/PROJECT ", Revision: testCase.revision, Path: "./pkg/same.go",
+				LineStart: testCase.line, LineEnd: testCase.line, Quote: testCase.quote,
+			}
+			if failure := validateAnalysisChatCitation(&citation, nil, context, 1); failure != nil {
+				t.Fatalf("citation failure = %+v", failure)
+			}
+			if citation.Repository != "Example/Project" || citation.Revision != strings.ToLower(testCase.revision) || citation.Path != "pkg/same.go" {
+				t.Fatalf("canonical citation = %+v", citation)
+			}
+		})
+	}
+
+	third := analysischat.Citation{Repository: "example/project", Revision: strings.Repeat("3", 40), Path: "pkg/same.go", Quote: "historical implementation"}
+	if failure := validateAnalysisChatCitation(&third, nil, context, 1); failure == nil || failure.Gate != analysischat.UnverifiedReference {
+		t.Fatalf("third-revision failure = %+v", failure)
+	}
+	crossSource := analysischat.Citation{
+		Repository: "example/project", Revision: currentRevision, Path: "pkg/same.go",
+		LineStart: 10, LineEnd: 10, Quote: "historical implementation",
+	}
+	if failure := validateAnalysisChatCitation(&crossSource, nil, context, 1); failure == nil {
+		t.Fatalf("cross-source citation verified: %+v", crossSource)
+	}
+	if reader.lists != 0 || reader.reads != 0 {
+		t.Fatalf("citation validation accessed source readers: lists=%d reads=%d", reader.lists, reader.reads)
+	}
+}
+
+func TestAnalysisChatProposedRevisionRequiresCurrentSourceCitation(t *testing.T) {
+	primaryRevision := strings.Repeat("1", 40)
+	currentRevision := strings.Repeat("2", 40)
+	reader := &countingSourceReader{}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID,
+		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: primaryRevision, Reader: reader},
+		tools.RepoSource{ID: analysisChatCurrentSourceID, Owner: "example", Name: "project", Revision: currentRevision, Reader: reader},
+	)
+	sourceEvidence := map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+		{SourceID: tools.PrimarySourceID, Path: "pkg/fix.go"}:       {Segments: []string{"historical code"}, Lines: map[int]string{}},
+		{SourceID: analysisChatCurrentSourceID, Path: "pkg/fix.go"}: {Segments: []string{"current code"}, Lines: map[int]string{}},
+	}
+	equalCatalog := testSourceCatalog(t, tools.PrimarySourceID,
+		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: primaryRevision, Reader: reader},
+	)
+	artifactEvidence := map[string]*analysisChatEvidence{
+		"builds/123/build-log.txt": {Segments: []string{"controller stopped"}, Lines: map[int]string{}},
+	}
+	proposal := `"proposed_revision":{"root_cause":"The controller stopped.","suggested_fix":"Update the controller."}`
+	for _, testCase := range []struct {
+		name              string
+		citation          string
+		context           *analysisChatSourceCitationContext
+		wantProposal      bool
+		wantWarning       string
+		wantEvidenceCount int
+	}{
+		{
+			name: "current citation", wantProposal: true, wantEvidenceCount: 1,
+			citation: `{"repository":"example/project","revision":"` + currentRevision + `","path":"pkg/fix.go","quote":"current code"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence, CurrentSourceID: analysisChatCurrentSourceID},
+		},
+		{
+			name: "equal revision primary citation", wantProposal: true, wantEvidenceCount: 1,
+			citation: `{"repository":"example/project","revision":"` + primaryRevision + `","path":"pkg/fix.go","quote":"historical code"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: equalCatalog, Evidence: sourceEvidence, CurrentSourceID: tools.PrimarySourceID},
+		},
+		{
+			name: "historical citation", wantWarning: "did not cite", wantEvidenceCount: 1,
+			citation: `{"repository":"example/project","revision":"` + primaryRevision + `","path":"pkg/fix.go","quote":"historical code"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence, CurrentSourceID: analysisChatCurrentSourceID},
+		},
+		{
+			name: "artifact only", wantWarning: "did not cite", wantEvidenceCount: 1,
+			citation: `{"repository":null,"revision":null,"path":"builds/123/build-log.txt","quote":"controller stopped"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence, CurrentSourceID: analysisChatCurrentSourceID},
+		},
+		{
+			name: "current unavailable", wantWarning: "was unavailable", wantEvidenceCount: 1,
+			citation: `{"repository":null,"revision":null,"path":"builds/123/build-log.txt","quote":"controller stopped"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence},
+		},
+		{
+			name: "prepared historical only", wantProposal: true, wantEvidenceCount: 1,
+			citation: `{"repository":null,"revision":null,"path":"builds/123/build-log.txt","quote":"controller stopped"}`,
+			context:  &analysisChatSourceCitationContext{HistoricalSourceOnly: true},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := `{"answer":"Keep this answer unchanged.","assessment":"challenges","citations":[` + testCase.citation + `],` + proposal + `}`
+			reply, stats, err := parseAnalysisChatReplyCandidatesWithSource(raw, artifactEvidence, testCase.context)
+			if err != nil || stats.EvidenceGate != "" {
+				t.Fatalf("reply=%+v stats=%+v err=%v", reply, stats, err)
+			}
+			if (reply.ProposedRevision != nil) != testCase.wantProposal || reply.Answer != "Keep this answer unchanged." || reply.Assessment != "challenges" || reply.Unverified {
+				t.Fatalf("reply = %+v", reply)
+			}
+			if len(reply.Citations) != testCase.wantEvidenceCount {
+				t.Fatalf("citations = %+v", reply.Citations)
+			}
+			warnings := strings.Join(reply.EvidenceWarnings, " ")
+			if (testCase.wantWarning == "") != (warnings == "") || testCase.wantWarning != "" && !strings.Contains(warnings, testCase.wantWarning) {
+				t.Fatalf("warnings = %v, want %q", reply.EvidenceWarnings, testCase.wantWarning)
+			}
+		})
+	}
+
+	warnings := make([]string, analysisChatMaxEvidenceWarnings)
+	for i := range warnings {
+		warnings[i] = fmt.Sprintf("warning-%d", i)
+	}
+	reply := analysischat.Reply{
+		Answer: "unchanged", Assessment: "challenges", EvidenceWarnings: warnings,
+		ProposedRevision: &analysischat.Revision{RootCause: "cause", SuggestedFix: "fix"},
+	}
+	qualifyAnalysisChatRemediationFreshness(&reply, &analysisChatSourceCitationContext{Catalog: catalog, CurrentSourceID: analysisChatCurrentSourceID})
+	if reply.ProposedRevision != nil || len(reply.EvidenceWarnings) != analysisChatMaxEvidenceWarnings || reply.EvidenceWarnings[len(reply.EvidenceWarnings)-1] != "warning-19" {
+		t.Fatalf("bounded warnings reply = %+v", reply)
+	}
+}
+
+func TestRecordSourceContentKeepsCurrentEvidenceSeparateFromPrimaryGrounding(t *testing.T) {
+	primaryRevision := strings.Repeat("1", 40)
+	currentRevision := strings.Repeat("2", 40)
+	reader := &fakeSourceRepo{files: map[string]string{}}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID,
+		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: primaryRevision, Reader: reader},
+		tools.RepoSource{ID: analysisChatCurrentSourceID, Owner: "example", Name: "project", Revision: currentRevision, Reader: reader},
+	)
+	state := &agentState{
+		sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
+		readSourceFull: map[string]bool{},
+	}
+	call := modelToolCall{Function: modelFunction{
+		Name: "read_repo_file", Arguments: `{"source_id":"current","path":"pkg/same.go"}`,
+	}}
+	payload := map[string]interface{}{
+		"source_id": analysisChatCurrentSourceID, "content": "current line\n", "length": len("current line\n"),
+	}
+	badObservation := repotree.ReadObservation{
+		SourceID: tools.PrimarySourceID, Path: "pkg/same.go", LineStart: 1, LineEnd: 1, ByteStart: 0, ByteEnd: len("current line\n"),
+	}
+	state.recordSourceContent(call, payload, badObservation)
+	key := analysisChatSourceEvidenceKey{SourceID: analysisChatCurrentSourceID, Path: "pkg/same.go"}
+	if evidence := state.sourceEvidenceByPath[key]; evidence != nil {
+		t.Fatalf("mismatched observation recorded evidence: %+v", evidence)
+	}
+	goodObservation := badObservation
+	goodObservation.SourceID = analysisChatCurrentSourceID
+	state.recordSourceContent(call, payload, goodObservation)
+	if evidence := state.sourceEvidenceByPath[key]; evidence == nil || evidence.Lines[1] != "current line" {
+		t.Fatalf("current source lines = %+v", evidence)
+	}
+	if len(state.sourceContentByPath) != 0 || len(state.readSourceFull) != 0 {
+		t.Fatalf("current source grounded primary-only state: content=%v reads=%v", state.sourceContentByPath, state.readSourceFull)
+	}
+}
+
+func TestAnalysisChatCauseSourceResolutionPropagatesCancellation(t *testing.T) {
+	oldAPI := githubAPIBase
+	githubAPIBase = "http://127.0.0.1:1"
+	defer func() { githubAPIBase = oldAPI }()
+	agent := &AnalysisChatAgent{opts: AnalysisChatOptions{
+		SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+	}}
+	turn := causeAnalysisChatTurn()
+	turn.Build.RepoRefs = map[string]string{
+		"kubernetes-sigs/cluster-api-provider-azure": "main:0123456789abcdef0123456789abcdef01234567",
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := agent.resolveCauseSources(ctx, turn); !errors.Is(err, context.Canceled) {
+		t.Fatalf("resolveCauseSources error = %v", err)
+	}
+}
+
+func TestAnalysisChatCauseSourceResolutionDoesNotCacheBranchTipsAcrossTurns(t *testing.T) {
+	const current = "89abcdef0123456789abcdef0123456789abcdef"
+	calls := 0
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"sha":"` + current + `"}`))
+	}))
+	defer github.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = github.URL
+	defer func() { githubAPIBase = oldAPI }()
+
+	agent := &AnalysisChatAgent{opts: AnalysisChatOptions{
+		SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+	}}
+	turn := causeAnalysisChatTurn()
+	turn.Build.RepoRefs = map[string]string{
+		"kubernetes-sigs/cluster-api-provider-azure": "main:0123456789abcdef0123456789abcdef01234567",
+	}
+	for range 2 {
+		_, state, err := agent.resolveCauseSources(t.Context(), turn)
+		if err != nil || state.CurrentRevision != current {
+			t.Fatalf("state=%+v err=%v", state, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("branch-tip lookups = %d, want one per turn", calls)
 	}
 }

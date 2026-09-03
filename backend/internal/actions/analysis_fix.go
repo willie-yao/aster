@@ -27,7 +27,7 @@ import (
 const (
 	maxAnalysisSourceFiles            = 16
 	maxAnalysisFixCitations           = 16
-	analysisSourceVerificationVersion = 1
+	analysisSourceVerificationVersion = 2
 )
 
 // AnalysisIdentity identifies one exact published JUnit analysis.
@@ -114,6 +114,7 @@ type analysisSourceRevisionClient interface {
 
 type analysisSourceCompatibility struct {
 	GenerationBaseRevision   string
+	SourceVerification       string
 	VerifiedSourceFileHashes map[string]string
 	FindingVerification      string
 	Warnings                 []string
@@ -232,6 +233,9 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 		return analysisSourceCompatibility{}, err
 	}
 	targetBranch = strings.TrimSpace(targetBranch)
+	if targetBranch == "" {
+		return analysisSourceCompatibility{}, withReason(ReasonSourceBranchUnknown, ErrPreviewRejected, "")
+	}
 	if s.cfg == nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("project configuration is unavailable")
 	}
@@ -256,17 +260,14 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if err != nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("resolving current generation base: %w", err)
 	}
+	if base.Branch != targetBranch {
+		return analysisSourceCompatibility{}, fmt.Errorf("resolved generation base branch does not match the failure branch")
+	}
 	generationBase, ok := buildsource.NormalizeRevision(base.HeadSHA)
 	if !ok {
 		return analysisSourceCompatibility{}, fmt.Errorf("generation base is not an immutable full commit")
 	}
 	if !strings.EqualFold(failureRevision, generationBase) {
-		if targetBranch == "" {
-			return analysisSourceCompatibility{}, withReason(ReasonSourceBranchUnknown, ErrPreviewRejected, "")
-		}
-		if base.Branch != targetBranch {
-			return analysisSourceCompatibility{}, fmt.Errorf("resolved generation base branch does not match the failure branch")
-		}
 		contains, _, err := client.CompareCommits(ctx, failureRepo.Owner, failureRepo.Name, failureRevision, generationBase)
 		if err != nil {
 			return analysisSourceCompatibility{}, fmt.Errorf("checking failure revision ancestry: %w", err)
@@ -279,42 +280,21 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if err != nil {
 		return analysisSourceCompatibility{}, err
 	}
-	failureRepo.Revision = failureRevision
 	generationRepo := failureRepo
 	generationRepo.Revision = generationBase
-	failureReader := s.analysisSourceReader(failureRepo)
-	if failureReader == nil {
-		return analysisSourceCompatibility{}, fmt.Errorf("failure source reader is unavailable")
-	}
-	sameRevision := strings.EqualFold(failureRevision, generationBase)
-	generationReader := failureReader
-	if !sameRevision {
-		generationReader = s.analysisSourceReader(generationRepo)
-		if generationReader == nil {
-			return analysisSourceCompatibility{}, fmt.Errorf("generation source reader is unavailable")
-		}
+	generationReader := s.analysisSourceReader(generationRepo)
+	if generationReader == nil {
+		return analysisSourceCompatibility{}, fmt.Errorf("generation source reader is unavailable")
 	}
 	hashes := make(map[string]string, len(files))
 	contents := make(map[string]string, len(files))
 	for _, file := range files {
-		failureContent, found, err := failureReader.ReadFile(ctx, file)
+		generationContent, found, err := generationReader.ReadFile(ctx, file)
 		if err != nil || !found {
 			return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
-				"a verified source path is unavailable at the failure revision")
+				"a candidate source path is unavailable at the generation base")
 		}
-		generationContent := failureContent
-		if !sameRevision {
-			generationContent, found, err = generationReader.ReadFile(ctx, file)
-			if err != nil || !found {
-				return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
-					"a verified source path is unavailable at the generation base")
-			}
-		}
-		if failureContent != generationContent {
-			return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
-				"a verified source path changed between the failure revision and the generation base")
-		}
-		sum := sha256.Sum256([]byte(failureContent))
+		sum := sha256.Sum256([]byte(generationContent))
 		hashes[file] = hex.EncodeToString(sum[:])
 		contents[file] = generationContent
 	}
@@ -327,8 +307,10 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 		}
 	}
 	return analysisSourceCompatibility{
-		GenerationBaseRevision: generationBase, VerifiedSourceFileHashes: hashes,
-		FindingVerification: findingVerification, Warnings: warnings,
+		GenerationBaseRevision:   generationBase,
+		SourceVerification:       analysisSourceVerificationForHashes(generationRepo, files, hashes),
+		VerifiedSourceFileHashes: hashes,
+		FindingVerification:      findingVerification, Warnings: warnings,
 	}, nil
 }
 
@@ -403,10 +385,6 @@ func (s *Service) PreviewAnalysisFix(
 		return PreviewResult{}, fmt.Errorf("%w: immutable source identity is unavailable", ErrPreviewRejected)
 	}
 	sourceFiles := slices.Clone(subject.SourceFiles)
-	verification, err := s.verifyAnalysisSourceSnapshot(ctx, repository, sourceFiles)
-	if err != nil {
-		return PreviewResult{}, fmt.Errorf("%w: immutable source verification failed", ErrPreviewRejected)
-	}
 	findingText := input.AssistantAnswer
 	if input.ProposedRevision != nil {
 		findingText += "\n" + input.ProposedRevision.RootCause + "\n" + input.ProposedRevision.SuggestedFix
@@ -433,6 +411,7 @@ func (s *Service) PreviewAnalysisFix(
 		}
 		return PreviewResult{}, fmt.Errorf("%w: relevant source or selected symbol changed", ErrPreviewRejected)
 	}
+	verification := compatibility.SourceVerification
 	if input.GenerationBaseRevision != "" &&
 		(!strings.EqualFold(input.FailureRevision, repository.Revision) ||
 			!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) ||
@@ -443,7 +422,7 @@ func (s *Service) PreviewAnalysisFix(
 	if err := s.setRequestWarning(ctx, warnings...); err != nil {
 		return PreviewResult{}, err
 	}
-	if input.GenerationBaseRevision != "" && !strings.EqualFold(input.GenerationBaseRevision, input.FailureRevision) &&
+	if input.GenerationBaseRevision != "" &&
 		(strings.TrimSpace(input.SourceBranch) == "" || input.SourceBranch != targetBranch) {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
@@ -606,13 +585,10 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 		return ErrPreviewTargetChanged
 	}
 	files := subject.SourceFiles
-	verification, err := s.verifyAnalysisSourceSnapshot(ctx, binding.SourceRepository, files)
-	if err != nil || verification != binding.SourceVerification {
-		return ErrPreviewTargetChanged
-	}
 	targetBranch, _ := buildsource.Branch(subject.Build, binding.SourceRepository.Owner, binding.SourceRepository.Name)
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, binding.SourceRepository, targetBranch, files, binding.FindingText)
 	if err != nil || !strings.EqualFold(compatibility.GenerationBaseRevision, binding.GenerationBaseRevision) ||
+		compatibility.SourceVerification != binding.SourceVerification ||
 		!stringMapsEqual(compatibility.VerifiedSourceFileHashes, binding.VerifiedSourceFileHashes) ||
 		compatibility.FindingVerification != binding.FindingVerification {
 		return ErrPreviewTargetChanged
@@ -677,17 +653,25 @@ func (s *Service) verifyAnalysisSourceSnapshot(ctx context.Context, repo sourcei
 	if reader == nil {
 		return "", fmt.Errorf("source reader is unavailable")
 	}
-	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "v%d\x00%s", analysisSourceVerificationVersion, strings.ToLower(repo.Owner+"/"+repo.Name+"@"+repo.Revision))
+	hashes := make(map[string]string, len(files))
 	for _, file := range files {
 		content, found, err := reader.ReadFile(ctx, file)
 		if err != nil || !found {
 			return "", fmt.Errorf("verified source path is unavailable")
 		}
 		contentHash := sha256.Sum256([]byte(content))
-		_, _ = hash.Write([]byte("\x00" + file + "\x00" + hex.EncodeToString(contentHash[:])))
+		hashes[file] = hex.EncodeToString(contentHash[:])
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return analysisSourceVerificationForHashes(repo, files, hashes), nil
+}
+
+func analysisSourceVerificationForHashes(repo sourceinvestigation.Repository, files []string, hashes map[string]string) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "v%d\x00%s", analysisSourceVerificationVersion, strings.ToLower(repo.Owner+"/"+repo.Name+"@"+repo.Revision))
+	for _, file := range files {
+		_, _ = hash.Write([]byte("\x00" + file + "\x00" + hashes[file]))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func (s *Service) analysisSourceReader(repo sourceinvestigation.Repository) sourceSnapshotReader {

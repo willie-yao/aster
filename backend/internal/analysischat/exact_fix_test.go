@@ -39,7 +39,7 @@ func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, a
 	t.Helper()
 	dir := t.TempDir()
 	detail := testDetail(analyzed)
-	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: reply, err: runnerErr}
 	service, err := NewService(t.Context(), dir, runner, Options{StateDir: filepath.Join(dir, ".chat"), PollInterval: time.Millisecond})
@@ -95,7 +95,7 @@ func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *t
 		Citations: []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 	}, nil)
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
-	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 	detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = map[string]string{"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go"}
 	writeJobDetail(t, service.dataDir, detail)
 	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
@@ -103,7 +103,7 @@ func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *t
 	}
 
 	detail = testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
-	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "fedcba9876543210fedcba9876543210fedcba98"}
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:fedcba9876543210fedcba9876543210fedcba98"}
 	writeJobDetail(t, service.dataDir, detail)
 	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("changed source revision error = %v", err)
@@ -267,7 +267,7 @@ func TestServiceAnalysisFixCandidateSurvivesRestartAndRejectsStaleAnalysis(t *te
 		t.Fatal("restart lost selected response identity")
 	}
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T02:00:00Z"))
-	detail.Runs[0].RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 	writeJobDetail(t, service.dataDir, detail)
 	if _, err := restarted.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("stale analysis error = %v", err)
@@ -650,7 +650,7 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 		detail := causalPatternDetail(published, "1", "2")
 		for i := range detail.Runs {
 			run := &detail.Runs[i]
-			run.RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+			run.RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 			testCase := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
 			testCase.AIAnalysis.FileLinks = map[string]string{
 				"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go",
@@ -715,7 +715,7 @@ func TestServiceCauseAnalysisFixCandidateUsesRepresentativeFailure(t *testing.T)
 	detail := causalPatternDetail(pattern, "1", "2")
 	for i := range detail.Runs {
 		run := &detail.Runs[i]
-		run.RepoRefs = map[string]string{"example/repo": exactFixSourceRevision}
+		run.RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 		testCase := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
 		testCase.AIAnalysis.FileLinks = map[string]string{
 			"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go",

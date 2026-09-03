@@ -92,6 +92,8 @@ const (
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
 
+const analysisChatCurrentSourceID = "current"
+
 const (
 	analysisChatEvidenceNoContent  = "artifact_no_content"
 	analysisChatEvidencePartial    = "partial"
@@ -178,6 +180,13 @@ func ComposeAnalysisChatSystemPrompt(consumerAddendum string) string {
 	return builder.String()
 }
 
+type analysisChatCauseSourceState struct {
+	Attempted          bool
+	HistoricalRevision string
+	Branch             string
+	CurrentRevision    string
+}
+
 // AnalysisChatOptions bounds one interactive model turn.
 type AnalysisChatOptions struct {
 	MaxIters          int
@@ -254,6 +263,90 @@ func hasAnalysisChatContentReader(enabledTools []string) bool {
 	return false
 }
 
+func (a *AnalysisChatAgent) resolveCauseSources(
+	ctx context.Context,
+	turn analysischat.Turn,
+) (*tools.SourceCatalog, analysisChatCauseSourceState, error) {
+	state := analysisChatCauseSourceState{}
+	if turn.Scope != analysischat.ScopeCause {
+		return nil, state, nil
+	}
+	state.Attempted = true
+	historical, ok := buildsource.Resolve(turn.Build, a.opts.SourceRepoOwner, a.opts.SourceRepoName)
+	if !ok {
+		return nil, state, nil
+	}
+	state.HistoricalRevision = historical.Revision
+	sources := []tools.RepoSource{{
+		ID: tools.PrimarySourceID, Owner: historical.Owner, Name: historical.Name, Revision: historical.Revision,
+		Reader: NewGitHubRepoReader(historical.Owner, historical.Name, historical.Revision, a.opts.GitHubReadToken),
+	}}
+	historicalCatalog := func() (*tools.SourceCatalog, error) {
+		return tools.NewSourceCatalog(tools.PrimarySourceID, sources)
+	}
+	if turn.HistoricalSourceOnly {
+		catalog, err := historicalCatalog()
+		return catalog, state, err
+	}
+	branch, ok := buildsource.Branch(turn.Build, historical.Owner, historical.Name)
+	if !ok {
+		catalog, err := historicalCatalog()
+		return catalog, state, err
+	}
+	state.Branch = branch
+	currentReader := NewGitHubRepoReader(historical.Owner, historical.Name, branch, a.opts.GitHubReadToken).(*githubRepoReader)
+	if err := currentReader.ResolveRef(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, state, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, state, err
+		}
+		catalog, catalogErr := historicalCatalog()
+		return catalog, state, catalogErr
+	}
+	_, _, currentRevision := currentReader.SourceIdentity()
+	state.CurrentRevision = currentRevision
+	if currentRevision != historical.Revision {
+		sources = append(sources, tools.RepoSource{
+			ID: analysisChatCurrentSourceID, Owner: historical.Owner, Name: historical.Name,
+			Revision: currentRevision, Reader: currentReader,
+		})
+	}
+	catalog, err := tools.NewSourceCatalog(tools.PrimarySourceID, sources)
+	return catalog, state, err
+}
+
+func analysisChatCauseSourceAddendum(turn analysischat.Turn, state analysisChatCauseSourceState) string {
+	if !state.Attempted || turn.HistoricalSourceOnly {
+		return ""
+	}
+	buildID := strings.TrimSpace(turn.Build.BuildID)
+	if state.HistoricalRevision == "" {
+		return "\n\nNo immutable configured-repository source was resolved for selected failed build " + buildID + ". Current remediation source is unavailable. Historical and comparison-build artifacts remain the only evidence scope. Current fix status is inconclusive and requires current source investigation."
+	}
+	var b strings.Builder
+	b.WriteString("\n\nFor this causal-group conversation, source_id `primary` is the configured project repository at selected failed build ")
+	b.WriteString(buildID)
+	b.WriteString(" and historical revision ")
+	b.WriteString(state.HistoricalRevision)
+	b.WriteString(". ")
+	switch {
+	case state.CurrentRevision == "":
+		if state.Branch == "" {
+			b.WriteString("The tested branch could not be established, so the current remediation revision is unavailable. ")
+		} else {
+			b.WriteString("Tested branch `" + state.Branch + "` was established, but its current immutable revision could not be resolved. ")
+		}
+	case state.CurrentRevision == state.HistoricalRevision:
+		b.WriteString("Tested branch `" + state.Branch + "` currently resolves to the same revision, so source_id `primary` is both the historical cause source and the effective current remediation source. ")
+	default:
+		b.WriteString("source_id `current` is the same project repository at current revision " + state.CurrentRevision + " of tested branch `" + state.Branch + "`; use it to evaluate remediation against current code. ")
+	}
+	b.WriteString("The source catalog does not expand artifact scope: failed member-build and comparison-build artifacts remain under their listed builds/<build-id>/ paths. Any current remediation recommendation or proposed revision requires a valid citation from the effective current source. Changed, absent, or unavailable current code is inconclusive and requires current source investigation; it is never automatic evidence that the cause is fixed.")
+	return b.String()
+}
+
 // Reply runs one bounded tool-calling turn.
 func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (analysischat.Reply, error) {
 	if turn.TestCase.AIAnalysis == nil {
@@ -264,6 +357,8 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		return analysischat.Reply{}, fmt.Errorf("analysis chat question must be 1-%d bytes", analysisChatMaxQuestionBytes)
 	}
 	start := time.Now()
+	loopCtx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
+	defer cancel()
 	var browser artifacts.Browser
 	enabledTools := slices.Clone(a.enabledTools)
 	if turn.Pattern != nil {
@@ -282,17 +377,12 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		browser = a.browserFactory.ForBuild(turn.BuildPrefix, turn.Build.JobName+"/"+turn.Build.BuildID)
 	}
 	enabledTools = slices.DeleteFunc(enabledTools, isRepoTool)
-	var sources *tools.SourceCatalog
-	if turn.Scope == analysischat.ScopeCause {
-		if source, ok := buildsource.Resolve(turn.Build, a.opts.SourceRepoOwner, a.opts.SourceRepoName); ok {
-			reader := NewGitHubRepoReader(source.Owner, source.Name, source.Revision, a.opts.GitHubReadToken)
-			var err error
-			sources, err = tools.NewPrimarySourceCatalog(source.Owner, source.Name, source.Revision, reader)
-			if err != nil {
-				return analysischat.Reply{}, fmt.Errorf("configuring analysis chat source: %w", err)
-			}
-			enabledTools = append(enabledTools, "list_repo_tree", "read_repo_file", "grep_repo")
-		}
+	sources, causeSourceState, err := a.resolveCauseSources(loopCtx, turn)
+	if err != nil {
+		return analysischat.Reply{}, fmt.Errorf("resolving analysis chat source: %w", err)
+	}
+	if sources != nil {
+		enabledTools = append(enabledTools, "list_repo_tree", "read_repo_file", "grep_repo")
 	}
 	state := &agentState{
 		browser: browser, opts: AgenticOptions{
@@ -304,10 +394,19 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		webURLBase: turn.Build.WebURL, startTime: start,
 	}
 	var sourceCitationContext *analysisChatSourceCitationContext
-	if sources != nil {
-		primary, _ := sources.Primary()
-		state.sourceEvidenceByPath = map[string]*analysisChatEvidence{}
-		sourceCitationContext = &analysisChatSourceCitationContext{Primary: primary, Evidence: state.sourceEvidenceByPath}
+	if turn.Scope == analysischat.ScopeCause {
+		sourceCitationContext = &analysisChatSourceCitationContext{
+			Catalog: sources, HistoricalSourceOnly: turn.HistoricalSourceOnly,
+		}
+		if sources != nil {
+			state.sourceEvidenceByPath = map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}
+			sourceCitationContext.Evidence = state.sourceEvidenceByPath
+			if causeSourceState.CurrentRevision == causeSourceState.HistoricalRevision && causeSourceState.CurrentRevision != "" {
+				sourceCitationContext.CurrentSourceID = tools.PrimarySourceID
+			} else if causeSourceState.CurrentRevision != "" {
+				sourceCitationContext.CurrentSourceID = analysisChatCurrentSourceID
+			}
+		}
 	}
 
 	contextMessage, err := analysisChatContext(turn)
@@ -315,18 +414,16 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		return analysischat.Reply{}, err
 	}
 	if sources != nil {
-		contextMessage += agenticSourceCatalogSection(sources) +
-			"\n\nThis immutable source catalog is for selected failed build " + turn.Build.BuildID + "."
+		contextMessage += agenticSourceCatalogSection(sources)
 	}
+	contextMessage += analysisChatCauseSourceAddendum(turn, causeSourceState)
+
 	schemas := state.registry.Schemas(state.enabledTools)
 	schemaBytes := schemaPayloadBytes(schemas)
 	messages, err := buildAnalysisChatMessages(a.systemPrompt, contextMessage, turn.History, turn.Question, schemaBytes, a.opts.ContextByteBudget)
 	if err != nil {
 		return analysischat.Reply{}, err
 	}
-	loopCtx, cancel := context.WithTimeout(ctx, a.opts.Timeout)
-	defer cancel()
-
 	evidence := seedAnalysisChatEvidence(turn.History, a.opts.ContextByteBudget)
 	evidenceBudget := analysisChatEvidenceBudget(a.opts.ContextByteBudget)
 	var fallback *analysisChatFallback
