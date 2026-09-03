@@ -320,7 +320,7 @@ func agenticSourceCatalogSection(catalog *tools.SourceCatalog) string {
 			b.WriteString(" (primary project source)")
 		}
 	}
-	b.WriteString("\nUse the matching source_id in every repository tool call. Only repository-relative paths read from the primary project source can be published as project-owned relevant_files. Other catalog entries are dependencies this project only consumes.")
+	b.WriteString("\nUse the matching source_id in every repository tool call. Only repository-relative paths read from the primary project source can be published as project-owned relevant_files. Follow the surrounding prompt for each non-primary source's role; when no other role is given, treat it as a dependency this project only consumes.")
 	return b.String()
 }
 
@@ -532,7 +532,7 @@ type agentState struct {
 	// sourceContentByPath retains bounded repo-tool snippets for CLI grounding.
 	// Neither map is copied into caches, traces, or public output.
 	sourceContentByPath  map[string][]string
-	sourceEvidenceByPath map[string]*analysisChatEvidence
+	sourceEvidenceByPath map[analysisChatSourceEvidenceKey]*analysisChatEvidence
 
 	// skillSet is the merged diagnostic recipe set. nil disables recipes
 	// or no recipes are configured. Held on state

@@ -12,6 +12,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -63,9 +64,16 @@ type analysisChatEvidenceFailure struct {
 	Detail string
 }
 
+type analysisChatSourceEvidenceKey struct {
+	SourceID string
+	Path     string
+}
+
 type analysisChatSourceCitationContext struct {
-	Primary  tools.RepoSource
-	Evidence map[string]*analysisChatEvidence
+	Catalog              *tools.SourceCatalog
+	Evidence             map[analysisChatSourceEvidenceKey]*analysisChatEvidence
+	CurrentSourceID      string
+	HistoricalSourceOnly bool
 }
 
 type analysisChatValidationError struct {
@@ -331,6 +339,7 @@ func decodeAnalysisChatReplyCandidate(
 		return analysischat.Reply{}, nil, err
 	}
 	failure := validateAnalysisChatCitations(&reply, evidence, source)
+	qualifyAnalysisChatRemediationFreshness(&reply, source)
 	return reply, failure, nil
 }
 
@@ -577,15 +586,35 @@ func validateAnalysisChatSourceCitation(
 			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d requires both repository and revision", index),
 		}
 	}
-	if source == nil || source.Primary.Owner == "" || source.Primary.Name == "" || source.Primary.Revision == "" {
+	if source == nil || source.Catalog == nil {
 		return &analysisChatEvidenceFailure{
 			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has no immutable source catalog", index),
 		}
 	}
-	repository := source.Primary.Owner + "/" + source.Primary.Name
-	if !strings.EqualFold(citation.Repository, repository) || citation.Revision != source.Primary.Revision {
+	repository, ok := normalizeAnalysisChatRepository(citation.Repository)
+	if !ok {
 		return &analysisChatEvidenceFailure{
-			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d does not match the active source revision", index),
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an invalid source repository", index),
+		}
+	}
+	revision, ok := normalizeAnalysisChatCitationRevision(citation.Revision)
+	if !ok {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d requires an immutable full source revision", index),
+		}
+	}
+	var matched tools.RepoSource
+	matches := 0
+	for _, candidate := range source.Catalog.Sources() {
+		candidateRepository, _ := normalizeAnalysisChatRepository(candidate.Owner + "/" + candidate.Name)
+		if repository == candidateRepository && revision == candidate.Revision {
+			matched = candidate
+			matches++
+		}
+	}
+	if matches != 1 {
+		return &analysisChatEvidenceFailure{
+			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d does not match exactly one active source revision", index),
 		}
 	}
 	safe, err := artifacts.SafePath(citation.Path)
@@ -594,17 +623,71 @@ func validateAnalysisChatSourceCitation(
 			Gate: analysischat.UnverifiedReference, Detail: fmt.Sprintf("citation %d has an unsafe source path", index),
 		}
 	}
-	recorded := source.Evidence[safe]
+	recorded := source.Evidence[analysisChatSourceEvidenceKey{SourceID: matched.ID, Path: safe}]
 	if recorded == nil {
 		return &analysisChatEvidenceFailure{
 			Gate:   analysischat.UnverifiedReference,
-			Detail: fmt.Sprintf("citation %d names source not read during this turn", index),
+			Detail: fmt.Sprintf("citation %d names source not read from the matched revision during this turn", index),
 		}
 	}
-	citation.Repository = repository
-	citation.Revision = source.Primary.Revision
+	citation.Repository = matched.Owner + "/" + matched.Name
+	citation.Revision = matched.Revision
 	citation.Path = safe
 	return validateAnalysisChatCitationEvidence(citation, recorded, index, "source")
+}
+
+func normalizeAnalysisChatRepository(value string) (string, bool) {
+	value = strings.Trim(strings.TrimSpace(value), "/")
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(parts[0]) + "/" + strings.TrimSpace(parts[1])), true
+}
+
+func normalizeAnalysisChatCitationRevision(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	revision, ok := buildsource.NormalizeRevision(value)
+	if !ok || len(value) != len(revision) {
+		return "", false
+	}
+	return revision, true
+}
+
+func qualifyAnalysisChatRemediationFreshness(reply *analysischat.Reply, source *analysisChatSourceCitationContext) {
+	if reply == nil || reply.ProposedRevision == nil || source == nil || source.HistoricalSourceOnly {
+		return
+	}
+	if source.Catalog == nil || source.CurrentSourceID == "" {
+		reply.ProposedRevision = nil
+		appendAnalysisChatEvidenceWarning(reply, "The current tested-branch source revision was unavailable, so current fix status is inconclusive and current source investigation is required before remediation.")
+		return
+	}
+	current, available := source.Catalog.Source(source.CurrentSourceID)
+	if !available {
+		reply.ProposedRevision = nil
+		appendAnalysisChatEvidenceWarning(reply, "The current tested-branch source revision was unavailable, so current fix status is inconclusive and current source investigation is required before remediation.")
+		return
+	}
+	currentRepository, _ := normalizeAnalysisChatRepository(current.Owner + "/" + current.Name)
+	for _, citation := range reply.Citations {
+		repository, ok := normalizeAnalysisChatRepository(citation.Repository)
+		if !ok {
+			continue
+		}
+		if repository == currentRepository && citation.Revision == current.Revision {
+			return
+		}
+	}
+	reply.ProposedRevision = nil
+	appendAnalysisChatEvidenceWarning(reply, "The proposed revision did not cite the current tested-branch source revision, so current fix status is inconclusive and current source investigation is required before remediation.")
+}
+
+func appendAnalysisChatEvidenceWarning(reply *analysischat.Reply, warning string) {
+	if len(reply.EvidenceWarnings) >= analysisChatMaxEvidenceWarnings || slices.Contains(reply.EvidenceWarnings, warning) {
+		return
+	}
+	reply.EvidenceWarnings = append(reply.EvidenceWarnings, warning)
 }
 
 func validateAnalysisChatCitationEvidence(

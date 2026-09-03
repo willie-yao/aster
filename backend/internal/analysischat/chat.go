@@ -283,18 +283,19 @@ const (
 
 // Turn is the immutable analysis snapshot and transcript for one model call.
 type Turn struct {
-	SessionID      string
-	Scope          string
-	JobID          string
-	BuildPrefix    string
-	Build          models.BuildInfo
-	TestCase       models.TestCase
-	Pattern        *models.PatternAnalysis
-	EvidenceBuilds []ArtifactBuild
-	Comparison     *CauseComparison
-	History        []Message
-	Question       string
-	Progress       func(string)
+	SessionID            string
+	Scope                string
+	JobID                string
+	BuildPrefix          string
+	Build                models.BuildInfo
+	TestCase             models.TestCase
+	Pattern              *models.PatternAnalysis
+	EvidenceBuilds       []ArtifactBuild
+	Comparison           *CauseComparison
+	History              []Message
+	Question             string
+	HistoricalSourceOnly bool
+	Progress             func(string)
 }
 
 // ArtifactBuild identifies one build root available to a pattern conversation.

@@ -110,11 +110,10 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc model
 	}
 	if !toolFailed && s.sources != nil {
 		emitSourceEvidenceObservations(s.sourceObserver, tc.Function.Name, result.Observation)
-		if extractToolSourceID(tc.Function.Arguments) == s.sources.PrimaryID() {
+		if s.recordSourceContent(tc, visiblePayload, result.Observation) && extractToolSourceID(tc.Function.Arguments) == s.sources.PrimaryID() {
 			for _, repoPath := range visibleRepoReadPaths(tc, visiblePayload) {
 				s.recordSourceRead(repoPath)
 			}
-			s.recordSourceContent(tc, visiblePayload, result.Observation)
 		}
 	}
 
@@ -522,14 +521,26 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 	return casePath, NormalizeArtifactCitation(casePath)
 }
 
-func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}, observation any) {
-	if payload == nil {
-		return
+func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}, observation any) bool {
+	if payload == nil || s.sources == nil {
+		return false
 	}
-	if s.sourceContentByPath == nil {
+	sourceID := extractToolSourceID(tc.Function.Arguments)
+	if _, ok := s.sources.Source(sourceID); !ok {
+		return false
+	}
+	observedSourceID, _ := payload["source_id"].(string)
+	if strings.TrimSpace(observedSourceID) != sourceID {
+		return false
+	}
+	primary := sourceID == s.sources.PrimaryID()
+	if primary && s.sourceContentByPath == nil {
 		s.sourceContentByPath = map[string][]string{}
 	}
 	add := func(rawPath, content string) {
+		if !primary {
+			return
+		}
 		_, norm := canonicalTrackedArtifactPath(rawPath)
 		if norm == "" || strings.TrimSpace(content) == "" {
 			return
@@ -544,10 +555,11 @@ func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]in
 		if err != nil || path == "" {
 			return nil
 		}
-		entry := s.sourceEvidenceByPath[path]
+		key := analysisChatSourceEvidenceKey{SourceID: sourceID, Path: path}
+		entry := s.sourceEvidenceByPath[key]
 		if entry == nil {
 			entry = &analysisChatEvidence{Lines: map[int]string{}}
-			s.sourceEvidenceByPath[path] = entry
+			s.sourceEvidenceByPath[key] = entry
 		}
 		appendAnalysisChatEvidenceCandidate(entry, content)
 		return entry
@@ -555,52 +567,81 @@ func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]in
 	switch tc.Function.Name {
 	case "read_repo_file":
 		path := extractToolPathArg(tc.Function.Arguments)
-		if content, _ := payload["content"].(string); content != "" {
-			add(path, content)
-			entry := addCitationEvidence(path, content)
-			if entry == nil {
-				return
-			}
-			visibleLengthMatches := false
-			switch length := payload["length"].(type) {
-			case int:
-				visibleLengthMatches = length == len(content)
-			case float64:
-				visibleLengthMatches = length == float64(len(content))
-			}
-			// JSON replaces invalid UTF-8, so raw byte offsets are valid only
-			// when the visible content kept the same byte length.
-			if !visibleLengthMatches {
-				return
-			}
-			var read repotree.ReadObservation
-			switch value := observation.(type) {
-			case repotree.ReadObservation:
-				read = value
-			case *repotree.ReadObservation:
-				if value != nil {
-					read = *value
-				}
-			}
-			safePath, err := artifacts.SafePath(strings.TrimSpace(path))
-			observationPath, observationErr := artifacts.SafePath(strings.TrimSpace(read.Path))
-			if err != nil || observationErr != nil || safePath == "" || observationPath != safePath ||
-				read.SourceID != s.sources.PrimaryID() || read.LineStart <= 0 || read.LineEnd < read.LineStart ||
-				read.ByteStart < 0 || read.ByteEnd <= read.ByteStart || read.ByteEnd > len(content) {
-				return
-			}
-			lines := strings.Split(content[read.ByteStart:read.ByteEnd], "\n")
-			if strings.HasSuffix(content[read.ByteStart:read.ByteEnd], "\n") {
-				lines = lines[:len(lines)-1]
-			}
-			if len(lines) != read.LineEnd-read.LineStart+1 {
-				return
-			}
-			for i, line := range lines {
-				entry.Lines[read.LineStart+i] = line
+		var read repotree.ReadObservation
+		switch value := observation.(type) {
+		case repotree.ReadObservation:
+			read = value
+		case *repotree.ReadObservation:
+			if value != nil {
+				read = *value
 			}
 		}
+		if read.SourceID != "" && read.SourceID != sourceID {
+			return false
+		}
+		if read.Path != "" {
+			safePath, err := artifacts.SafePath(strings.TrimSpace(path))
+			observationPath, observationErr := artifacts.SafePath(strings.TrimSpace(read.Path))
+			if err != nil || observationErr != nil || safePath == "" || observationPath != safePath {
+				return false
+			}
+		}
+		content, _ := payload["content"].(string)
+		if content == "" {
+			return true
+		}
+		add(path, content)
+		entry := addCitationEvidence(path, content)
+		if entry == nil {
+			return true
+		}
+		visibleLengthMatches := false
+		switch length := payload["length"].(type) {
+		case int:
+			visibleLengthMatches = length == len(content)
+		case float64:
+			visibleLengthMatches = length == float64(len(content))
+		}
+		// JSON replaces invalid UTF-8, so raw byte offsets are valid only
+		// when the visible content kept the same byte length.
+		if !visibleLengthMatches {
+			return true
+		}
+		safePath, err := artifacts.SafePath(strings.TrimSpace(path))
+		observationPath, observationErr := artifacts.SafePath(strings.TrimSpace(read.Path))
+		if err != nil || observationErr != nil || safePath == "" || observationPath != safePath ||
+			read.SourceID != sourceID || read.LineStart <= 0 || read.LineEnd < read.LineStart ||
+			read.ByteStart < 0 || read.ByteEnd <= read.ByteStart || read.ByteEnd > len(content) {
+			return true
+		}
+		lines := strings.Split(content[read.ByteStart:read.ByteEnd], "\n")
+		if strings.HasSuffix(content[read.ByteStart:read.ByteEnd], "\n") {
+			lines = lines[:len(lines)-1]
+		}
+		if len(lines) != read.LineEnd-read.LineStart+1 {
+			return true
+		}
+		for i, line := range lines {
+			entry.Lines[read.LineStart+i] = line
+		}
 	case "grep_repo":
+		var grep repotree.GrepObservation
+		switch value := observation.(type) {
+		case repotree.GrepObservation:
+			grep = value
+		case *repotree.GrepObservation:
+			if value != nil {
+				grep = *value
+			}
+		}
+		if grep.Call.SelectorID != sourceID {
+			return false
+		}
+		for _, match := range grep.Matches {
+			if match.SourceID != sourceID {
+				return false
+			}
+		}
 		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
 			path, _ := match["path"].(string)
 			content := flattenGrepContext(match["context"])
@@ -608,6 +649,7 @@ func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]in
 			addCitationEvidence(path, content)
 		}
 	}
+	return true
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {

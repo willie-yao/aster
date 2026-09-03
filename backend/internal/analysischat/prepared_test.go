@@ -67,8 +67,12 @@ func TestPreparedCauseTurnWithoutFixTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if turn.Scope != ScopeCause || turn.Question != PreparedCauseQuestion || turn.Pattern == nil || len(turn.EvidenceBuilds) == 0 {
+	if turn.Scope != ScopeCause || turn.Question != PreparedCauseQuestion || turn.Pattern == nil || len(turn.EvidenceBuilds) == 0 || !turn.HistoricalSourceOnly {
 		t.Fatalf("turn = %+v", turn)
+	}
+	const original = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision."
+	if PreparedCauseQuestion != original+" Historical source evidence does not establish current remediation state." {
+		t.Fatalf("prepared question changed unexpectedly: %q", PreparedCauseQuestion)
 	}
 }
 

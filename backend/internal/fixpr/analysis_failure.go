@@ -60,7 +60,7 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
-	if !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
+	if base.Branch != failure.SourceBranch || !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
 		return nil, fmt.Errorf("%w: generation base is no longer the current fix base", ErrPreviewBaseChanged)
 	}
 	fix, err := generateAnalysisWithAgent(ctx, genParams{
@@ -102,7 +102,7 @@ func validateAnalysisFailure(failure AnalysisFailure) error {
 		strings.TrimSpace(failure.BuildID) == "" || strings.TrimSpace(failure.TestName) == "" || strings.TrimSpace(failure.AnalysisGeneratedAt) == "" ||
 		strings.TrimSpace(failure.AnalysisHash) == "" || strings.TrimSpace(failure.ChatResponseHash) == "" || strings.TrimSpace(failure.PreviewRequestHash) == "" ||
 		strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
-		strings.TrimSpace(failure.SourceVerification) == "" || strings.TrimSpace(failure.FindingVerification) == "" {
+		strings.TrimSpace(failure.SourceBranch) == "" || strings.TrimSpace(failure.SourceVerification) == "" || strings.TrimSpace(failure.FindingVerification) == "" {
 		return fmt.Errorf("exact analysis fix context is incomplete")
 	}
 	fullSHA := regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
@@ -222,7 +222,7 @@ func analysisFailureInstruction(failure AnalysisFailure, maintainer, reviewFeedb
 	if len(failure.EvidenceWarnings) > 0 {
 		b.WriteString("The selected chat answer is partially verified. Treat warned claims and its proposed revision as hypotheses; only the retained artifact citations are verified evidence.\n")
 	}
-	b.WriteString("Failure artifacts came from the failure revision. The verified source files are unchanged at the generation base. Make the change directly against the generation base.\n")
+	b.WriteString("Failure artifacts and the published diagnosis came from the historical failure revision. The verified source files were read from the current generation-base revision on the explicit tested branch. Re-evaluate the historical remediation against current source and do not assume it still applies. Make the change directly against the generation base. If candidate code is absent there, do not relocate the fix to unrelated code.\n")
 	if maxFiles > 0 {
 		fmt.Fprintf(&b, "Change at most %d files.\n", maxFiles)
 	}

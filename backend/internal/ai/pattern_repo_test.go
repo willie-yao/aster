@@ -248,3 +248,58 @@ func TestGitHubRepoReaderRejectsTruncatedTree(t *testing.T) {
 		t.Fatalf("ListTree error = %v", err)
 	}
 }
+
+func TestGitHubRepoReaderResolveRef(t *testing.T) {
+	const resolved = "0123456789abcdef0123456789abcdef01234567"
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.URL.EscapedPath())
+		if r.Header.Get("Authorization") != "Bearer read-token" {
+			t.Fatalf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.EscapedPath() {
+		case "/repos/owner/repo/commits/main", "/repos/owner/repo/commits/HEAD":
+			_, _ = w.Write([]byte(`{"sha":"` + resolved + `"}`))
+		case "/repos/owner/repo/commits/missing":
+			http.Error(w, "missing", http.StatusNotFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = oldAPI })
+
+	for _, testCase := range []struct {
+		name    string
+		ref     string
+		want    string
+		wantErr bool
+		calls   int
+	}{
+		{name: "branch", ref: "main", want: resolved, calls: 1},
+		{name: "HEAD", ref: "", want: resolved, calls: 1},
+		{name: "full SHA", ref: strings.ToUpper(resolved), want: resolved},
+		{name: "request error", ref: "missing", wantErr: true, calls: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			before := len(calls)
+			reader := NewGitHubRepoReader("owner", "repo", testCase.ref, "read-token").(*githubRepoReader)
+			reader.client = srv.Client()
+			err := reader.ResolveRef(t.Context())
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("ResolveRef error = %v, wantErr=%t", err, testCase.wantErr)
+			}
+			if got := len(calls) - before; got != testCase.calls {
+				t.Fatalf("network calls = %d, want %d", got, testCase.calls)
+			}
+			if !testCase.wantErr {
+				_, _, got := reader.SourceIdentity()
+				if got != testCase.want {
+					t.Fatalf("resolved ref = %q, want %q", got, testCase.want)
+				}
+			}
+		})
+	}
+}

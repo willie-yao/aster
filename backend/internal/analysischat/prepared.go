@@ -18,7 +18,7 @@ const (
 	// PreparedCauseFindingsFilename is the private fetcher-owned cause finding cache.
 	PreparedCauseFindingsFilename = "prepared_cause_findings.json"
 	preparedCauseFindingsVersion  = 1
-	PreparedCauseQuestion         = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision."
+	PreparedCauseQuestion         = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision. Historical source evidence does not establish current remediation state."
 )
 
 // PreparedCauseFinding is one engine-generated first answer for a cause chat.
@@ -101,10 +101,8 @@ func SavePreparedCauseFindings(path string, state PreparedCauseFindings) error {
 	return statefile.WritePrivateJSONDurable(path, state)
 }
 
-// PreparedCauseTurn builds the stateless first turn for one cause. It resolves
-// exactly what an interactive cause conversation resolves: a prepared finding is
-// a read-only evidence answer, and whether the cause can later start a Fix is
-// decided by the Fix path against fresher state.
+// PreparedCauseTurn builds the stateless historical-only first turn for one
+// cause. Interactive turns resolve current source separately.
 func PreparedCauseTurn(ref AnalysisRef, detail models.JobDetail) (Turn, error) {
 	ref, err := normalizeAnalysisRef(ref)
 	if err != nil || ref.Scope != ScopeCause {
@@ -118,7 +116,7 @@ func PreparedCauseTurn(ref AnalysisRef, detail models.JobDetail) (Turn, error) {
 		Scope: resolved.ref.Scope, JobID: resolved.jobID, BuildPrefix: resolved.buildPrefix,
 		Build: cloneBuildInfo(resolved.build), TestCase: cloneTestCase(resolved.testCase),
 		Pattern: clonePattern(resolved.pattern), EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),
-		Comparison: cloneCauseComparison(resolved.comparison), Question: PreparedCauseQuestion,
+		Comparison: cloneCauseComparison(resolved.comparison), Question: PreparedCauseQuestion, HistoricalSourceOnly: true,
 	}, nil
 }
 
