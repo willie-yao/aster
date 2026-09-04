@@ -124,11 +124,10 @@ const patternSuggestedQuestions = [
 ] as const;
 
 const causeSuggestedQuestions = [
-  "Has this cause been resolved in the latest completed run?",
   "What evidence supports this cause across its builds?",
-  "How do the member builds differ?",
+  "Has this cause been resolved in the latest completed run?",
   "What concrete change follows from this cause?",
-  "What evidence would disprove this cause?",
+  "Is there a section of code that caused this failure?",
 ] as const;
 
 const assessmentConfig: Record<
