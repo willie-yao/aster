@@ -10,7 +10,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: build the Go binaries.
-FROM golang:1.25.12-bookworm AS build
+FROM golang:1.26.8-bookworm AS build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=$
  && CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.imageTag=${IMAGE_TAG}" -o /out/fixexecutor ./cmd/fixexecutor
 
 # Pinned Go toolchain copied into the Agent Sandbox Fix executor.
-FROM golang:1.25.12-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS agent-sandbox-fix-go
+FROM golang:1.26.8-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS agent-sandbox-fix-go
 
 # OpenCode executor for consumer-installed Agent Sandbox.
 # OpenCode is inherited from its official image pinned by release and OCI digest.
@@ -36,8 +36,9 @@ USER root
 COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:${PATH} \
     GOTOOLCHAIN=local
-RUN apk add --no-cache ca-certificates git=2.54.0-r0 \
- && test "$(go env GOVERSION)" = "go1.25.12" \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates git=2.54.0-r0 \
+ && test "$(go env GOVERSION)" = "go1.26.8" \
  && test "$(git --version)" = "git version 2.54.0" \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
@@ -58,8 +59,9 @@ ENTRYPOINT ["/usr/local/bin/fixexecutor"]
 
 # Minimal git-capable engine for reconstructing patches returned by remote fix
 # runtimes such as Agent Sandbox. It intentionally omits any coding-agent harness.
-FROM golang:1.25.12-alpine AS remote-fixer-runtime
-RUN apk add --no-cache ca-certificates git=2.54.0-r0 \
+FROM golang:1.26.8-alpine AS remote-fixer-runtime
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates git=2.54.0-r0 \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
  && test "$(git --version)" = "git version 2.54.0"

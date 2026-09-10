@@ -92,6 +92,36 @@ test("the escalation control is gated on the advertised capability", () => {
   assert.match(panel, /if \(!enabled\) return null;/);
 });
 
+test("escalation reads and controls require an authenticated operator", () => {
+  const panel = source("src/components/EscalationPanel.tsx");
+  const authProvider = source("src/components/AuthProvider.tsx");
+
+  assert.match(authProvider, /Boolean\(features\.pull_request_escalation\)/);
+  assert.match(authProvider, /Boolean\(features\.shared_failure_escalation\)/);
+  assert.match(panel, /if \(!enabled \|\| !authenticated\) \{/);
+  assert.match(panel, /if \(!authenticated \|\| startingRef\.current\) return;/);
+});
+
+test("anonymous escalation panels offer sign-in without protected reads", () => {
+  const panel = source("src/components/EscalationPanel.tsx");
+
+  assert.match(panel, /auth\.status === "loading"/);
+  assert.match(panel, /Checking operator sign-in/);
+  assert.match(panel, /auth\.status === "anonymous"/);
+  assert.match(panel, /onClick=\{auth\.signIn\}/);
+  assert.match(panel, /Sign in to view or start deeper analysis/);
+});
+
+test("sign-out invalidates in-flight escalation state", () => {
+  const panel = source("src/components/EscalationPanel.tsx");
+
+  assert.match(panel, /\+\+generation\.current;/);
+  assert.match(panel, /requestKey\.current = null;/);
+  assert.match(panel, /requestKey\.current === key && issued === generation\.current/);
+  assert.match(panel, /setView\(null\);/);
+  assert.match(panel, /setError\(null\);/);
+});
+
 test("escalation is offered only for failures the baseline could not explain", () => {
   const page = source("src/pages/PullRequestDetailPage.tsx");
 
@@ -116,13 +146,13 @@ test("a slow poll cannot regress state behind a newer start", () => {
   // cannot overwrite a newer POST result and re-enable Investigate.
   assert.match(panel, /const generation = useRef\(0\)/);
   assert.match(panel, /const issued = \+\+generation\.current/);
-  assert.equal(panel.match(/issued === generation\.current/g)?.length, 4);
+  assert.equal(panel.match(/issued === generation\.current/g)?.length, 5);
 });
 
 test("polling stops once the escalation reaches a terminal state", () => {
   const panel = source("src/components/EscalationPanel.tsx");
 
-  assert.match(panel, /if \(!enabled \|\| !escalationActive\(view\?\.state\)\) return;/);
+  assert.match(panel, /if \(!enabled \|\| !authenticated \|\| !escalationActive\(view\?\.state\)\) return;/);
   assert.match(panel, /return \(\) => clearInterval\(timer\)/);
 });
 

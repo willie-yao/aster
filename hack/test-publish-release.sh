@@ -73,7 +73,7 @@ cat > "$tmp/bin/go" <<'GO'
 set -euo pipefail
 printf 'go %s\n' "$*" >> "$RELEASE_TEST_LOG"
 if [[ ${1:-} == env && ${2:-} == GOVERSION ]]; then
-  printf 'go1.25.12\n'
+  printf 'go1.26.8\n'
   exit 0
 fi
 if [[ ${1:-} != build ]]; then exit 2; fi

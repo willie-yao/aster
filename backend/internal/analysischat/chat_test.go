@@ -1170,14 +1170,21 @@ func TestServiceTurnContinuesAfterWaiterDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	waitCtx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.Send(waitCtx, created.ID, "alice", "turn-disconnect", "question")
 		done <- err
 	}()
-	<-runner.started
+	select {
+	case <-runner.started:
+		cancel()
+	case err := <-done:
+		t.Fatalf("send stopped before runner started: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not start")
+	}
 	if err := <-done; !errors.Is(err, ErrRequestPending) {
 		t.Fatalf("disconnected waiter error = %v", err)
 	}

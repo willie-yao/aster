@@ -14,7 +14,7 @@ The final August 8, 2026 structured-command productionization fixture completed 
 
 ## Executor image contract
 
-The engine workflow publishes a generic Linux/amd64 executor containing OpenCode, Git, CA certificates, and Go 1.25.12 with `GOTOOLCHAIN=local`. It does not contain `make` or arbitrary repository toolchains. The retained README fixture validates patch generation and `git diff --cached --check`; it is not CAPZ validation.
+The engine workflow publishes a generic Linux/amd64 executor containing OpenCode, Git, CA certificates, and Go 1.26.8 with `GOTOOLCHAIN=local`. It does not contain `make` or arbitrary repository toolchains. The retained README fixture validates patch generation and `git diff --cached --check`; it is not CAPZ validation.
 
 A consumer that needs repository-specific validators must derive its own image from the engine executor stage, install only the required tools, and publish it independently. The derived image must preserve UID/GID 65532, the `/usr/local/bin/fixexecutor` entrypoint, the credential-free OpenCode config, read-only-root compatibility, and the same runtime security contract. Deployment must use the resulting OCI digest. A mutable tag is discovery metadata only.
 

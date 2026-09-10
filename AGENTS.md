@@ -34,7 +34,7 @@ Consumer workflow (cron)
 Grouped by role rather than alphabetically. Every `backend/cmd` and `backend/internal` package appears here; `make check-repo-map` fails if this list and the tree diverge.
 
 ```
-backend/                         Go 1.25
+backend/                         Go 1.26
   cmd/
     aster/                      Public CLI and one-shot pipeline; Pages and the k8s CronJob
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
@@ -154,7 +154,7 @@ The many small packages are deliberate: several exist to break shared dependenci
 ## Setup commands
 
 ```bash
-# Backend (Go 1.25)
+# Backend (Go 1.26)
 make build           # cd backend && go build -o ../bin/aster ./cmd/aster/
 make test            # main module only: cd backend && go test ./... -count=1
 make tidy            # go mod tidy
@@ -166,7 +166,7 @@ make fe-install      # npm ci in frontend/
 make fe-check        # tsc -b across the referenced projects
 make fe-build        # production build into frontend/dist/
 
-# Kubernetes-native mode (Go 1.25)
+# Kubernetes-native mode (Go 1.26)
 make build-server    # cd backend && go build -o ../bin/server ./cmd/server/
 make serve           # serve frontend/public/data over HTTP
 make dev-actions     # serve SPA + API with admin actions enabled (local auth)

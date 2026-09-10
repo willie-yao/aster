@@ -1,4 +1,4 @@
-FROM golang:1.25.12-alpine AS build
+FROM golang:1.26.8-alpine AS build
 WORKDIR /src
 COPY backend/internal/fixexecutor/testdata/fakegateway/main.go ./main.go
 RUN CGO_ENABLED=0 go build -trimpath -o /out/fake-model-gateway ./main.go
