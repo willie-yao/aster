@@ -32,8 +32,8 @@ Pages scaffolds also include `CHECKLIST.md`. Kubernetes scaffolds include `deplo
 From the source repository whose jobs you want to monitor, run the current release exactly:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard \
-  -engine-ref v0.9.0-rc.10
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 onboard \
+  -engine-ref v0.10.0-rc.1
 ```
 
 The wizard discovers matching Prow and TestGrid jobs, asks for the deployment and AI coordinates, renders every file in memory, validates the result, and shows the complete plan. The final confirmation defaults to no. Cancellation leaves the filesystem unchanged.
@@ -79,8 +79,8 @@ Review skill changes before using them in an automated or write-enabled flow.
 Use the flagged CLI when all required inputs are known. This example creates a Pages consumer:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard \
-  -engine-ref v0.9.0-rc.10 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 onboard \
+  -engine-ref v0.10.0-rc.1 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<dashboard-repo>" \
@@ -129,7 +129,7 @@ Do not copy engine code into the consumer repository.
 Run the read-only validator after generation and after meaningful edits:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 \
   onboard doctor \
   -project-dir ./my-dashboard
 ```

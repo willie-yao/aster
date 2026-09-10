@@ -19,8 +19,8 @@ Aster is for maintainers and platform teams that already operate Prow jobs, or p
 From a checkout of the repository whose jobs you want to monitor, run the guided wizard at an exact released version:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard \
-  -engine-ref v0.9.0-rc.10
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 onboard \
+  -engine-ref v0.10.0-rc.1
 ```
 
 The wizard discovers matching Prow jobs, reviews deployment and AI choices, validates the complete plan, and writes a small consumer repository only after confirmation. The explicit engine ref pins a generated Pages workflow to the same exact release. It does not require an Aster source checkout.

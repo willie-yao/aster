@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.1
     with:
       ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
@@ -90,7 +90,7 @@ The workflow ref controls both the reusable workflow and the engine checkout. Pi
 
 ```yaml
 # Current prerelease, pinned exactly.
-uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
+uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.1
 ```
 
 After a stable release is published, pin its exact `vMAJOR.MINOR.PATCH` tag. Commit SHAs are appropriate for engine development. Do not use `@main`, `@latest`, or a moving major alias as a production version.
@@ -176,7 +176,7 @@ Enable `notifications.email` in `project.yaml`, then pass the SMTP password when
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.9.0-rc.10
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.1
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
