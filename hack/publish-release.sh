@@ -5,6 +5,7 @@ set -euo pipefail
 
 release_dry_run=${RELEASE_DRY_RUN:-false}
 release_tags_only=${RELEASE_TAGS_ONLY:-false}
+release_allow_backward=${RELEASE_ALLOW_BACKWARD:-false}
 case $release_dry_run:$release_tags_only in
   true:true | true:false | false:true | false:false) ;;
   *)
@@ -12,6 +13,19 @@ case $release_dry_run:$release_tags_only in
     exit 1
     ;;
 esac
+case $release_allow_backward in
+  true | false) ;;
+  *)
+    echo "RELEASE_ALLOW_BACKWARD must be true or false" >&2
+    exit 1
+    ;;
+esac
+# The override exists only to recover a module tag on an already-published older
+# release. Pairing it with tags-only keeps it away from artifact publication.
+if [[ $release_allow_backward == true && $release_tags_only != true ]]; then
+  echo "RELEASE_ALLOW_BACKWARD requires RELEASE_TAGS_ONLY=true" >&2
+  exit 1
+fi
 if [[ ! $TAG =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-(beta|rc)[.](0|[1-9][0-9]*))?$ ]]; then
   echo "invalid release tag: $TAG" >&2
   exit 1
@@ -132,6 +146,58 @@ ensure_release_tag_pair() {
 }
 
 reviewed_commit=$(git rev-parse 'HEAD^{commit}')
+
+# A release must be the newest version in the repository. Nothing else rejects a
+# tag that moves the line backward, which is how a v1.0.0-beta line was once
+# followed by v0.9.0-rc.1. The stable alias guard below only covers vMAJOR, and
+# only for stable tags. This runs before tag-pair repair and before the
+# tags-only exit, so a backward tag creates no module tag and never satisfies
+# the gate the image workflow uses to authorize version-tagged image pushes.
+# Set RELEASE_ALLOW_BACKWARD=true to recover a module tag on an older published
+# release.
+if [[ $release_allow_backward != true ]]; then
+  if ! existing_tags=$(git ls-remote --refs --tags origin 'refs/tags/v*' | sed 's|.*refs/tags/||'); then
+    echo "failed to enumerate existing release tags" >&2
+    exit 1
+  fi
+  if ! EXISTING_TAGS="$existing_tags" python3 - "$TAG" <<'PY_MONOTONIC'
+import os
+import re
+import sys
+
+RELEASE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(beta|rc)\.(0|[1-9][0-9]*))?$")
+
+
+def precedence(value):
+    match = RELEASE.fullmatch(value)
+    if not match:
+        return None
+    major, minor, patch, phase, number = match.groups()
+    # A prerelease sorts below the release it leads to, and beta below rc.
+    stage = (0, phase, int(number)) if phase else (1, "", 0)
+    return (int(major), int(minor), int(patch), stage)
+
+
+requested = sys.argv[1]
+requested_precedence = precedence(requested)
+newest = None
+for line in os.environ.get("EXISTING_TAGS", "").splitlines():
+    tag = line.strip()
+    if not tag or tag == requested:
+        continue
+    parsed = precedence(tag)
+    if parsed is None:
+        continue
+    if newest is None or parsed > newest[0]:
+        newest = (parsed, tag)
+if newest is not None and requested_precedence <= newest[0]:
+    raise SystemExit(f"refusing to publish {requested}: {newest[1]} is already released")
+PY_MONOTONIC
+  then
+    exit 1
+  fi
+fi
+
 ensure_release_tag_pair
 if [[ $release_dry_run == true || $release_tags_only == true ]]; then
   exit 0

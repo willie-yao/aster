@@ -15,7 +15,14 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release-test.XXXXXX")
 # it. Only files this run reserved are removed, and index lines carry a per-run
 # marker, so concurrent runs never strip each other's entries.
 changelog=$root/CHANGELOG.md
-notes_fixtures=("$root/changelog/v1.9.5.md" "$root/changelog/v1.2.3-rc.1.md" "$root/changelog/v1.2.3.md")
+notes_fixtures=(
+  "$root/changelog/v1.9.5.md"
+  "$root/changelog/v1.2.3-rc.1.md"
+  "$root/changelog/v1.2.3-beta.2.md"
+  "$root/changelog/v0.9.0-rc.1.md"
+  "$root/changelog/v2.0.0.md"
+  "$root/changelog/v1.2.3.md"
+)
 fixture_marker=" - release-test fixture $$"
 created_fixtures=()
 write_fixtures() {
@@ -154,6 +161,14 @@ printf '\n' >> "$RELEASE_TEST_LOG"
 case ${1:-} in
   ls-remote)
     ref=${*: -1}
+    if [[ $ref == 'refs/tags/v*' ]]; then
+      # Enumeration of every release tag, used by the monotonicity guard.
+      printf '%b\n' "${EXISTING_RELEASE_TAGS:-}" | while read -r release_tag; do
+        [[ -n $release_tag ]] || continue
+        printf '3333333333333333333333333333333333333333\trefs/tags/%s\n' "$release_tag"
+      done
+      exit 0
+    fi
     if [[ $ref == refs/tags/v1 ]]; then
       if [[ -n ${EXISTING_STABLE_VERSION:-} ]]; then
         printf '1111111111111111111111111111111111111111\trefs/tags/v1\n'
@@ -480,6 +495,120 @@ if grep -Eq '^(helm push|gh release create|go build|git tag -f|git push origin)'
   echo 'unindexed release notes published charts, assets, or a release' >&2
   exit 1
 fi
+
+# A tag that is not the newest version in the repository must be rejected.
+# Semantic precedence, not string order, decides: beta sorts below rc, and both
+# sort below the stable release they lead to.
+#
+# Repair what the notes-validation tests changed, without releasing the
+# reservation that provides mutual exclusion for the whole run.
+printf 'Fixture release notes.\n' > "$root/changelog/v1.2.3.md"
+grep -v -- "$fixture_marker\$" "$changelog" > "$tmp/CHANGELOG.base"
+cat "$tmp/CHANGELOG.base" > "$changelog"
+for notes in "${notes_fixtures[@]}"; do
+  printf -- '- [%s](changelog/%s)%s\n' \
+    "$(basename "$notes" .md)" "$(basename "$notes")" "$fixture_marker" >> "$changelog"
+done
+
+assert_backward() {
+  local requested=$1 tags=$2 newest=$3
+  : > "$log"
+  if (cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS="$tags" PATH="$tmp/bin:$PATH" \
+    TAG="$requested" REPOSITORY_OWNER=example "$script") >"$tmp/backward-version.out" 2>&1; then
+    echo "backward release $requested was accepted against $newest" >&2
+    exit 1
+  fi
+  grep -Fq "refusing to publish $requested: $newest is already released" "$tmp/backward-version.out"
+  if grep -Eq '^(helm push|gh release create|go build|git tag -f|git push origin)' "$log"; then
+    echo "backward release $requested published charts, assets, or a release" >&2
+    exit 1
+  fi
+}
+
+assert_forward() {
+  local requested=$1 tags=$2
+  : > "$log"
+  (cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS="$tags" PATH="$tmp/bin:$PATH" \
+    TAG="$requested" REPOSITORY_OWNER=example "$script") >"$tmp/forward-version.out" 2>&1
+  grep -Fq 'gh release create ' "$log"
+}
+
+# The exact regression that produced this guard: a v1.0.0 prerelease line
+# followed by a v0.9.0 prerelease.
+assert_backward v0.9.0-rc.1 'v1.0.0-beta.6\nv0.9.0-rc.1' v1.0.0-beta.6
+# An older stable line, and a stable tag already superseded by a newer one.
+assert_backward v1.2.3 'v1.2.3\nv1.9.5' v1.9.5
+# Re-releasing a version that already exists.
+assert_backward v1.2.3 'v1.2.3\nv2.0.0' v2.0.0
+# A prerelease of a version whose stable release already shipped.
+assert_backward v1.2.3-rc.1 'v1.2.3-rc.1\nv1.2.3' v1.2.3
+# An earlier prerelease number within the same phase.
+assert_backward v1.2.3-rc.1 'v1.2.3-rc.1\nv1.2.3-rc.2' v1.2.3-rc.2
+# Phase ordering, not string order: beta sorts below rc, so a beta after an rc
+# of the same version moves backward even though "beta.2" > "rc.1" lexically on
+# the number alone.
+assert_backward v1.2.3-beta.2 'v1.2.3-beta.2\nv1.2.3-rc.1' v1.2.3-rc.1
+# Forward moves stay accepted: a first release, a later stable line, the stable
+# release of a version the repository only has a prerelease of, and an rc that
+# follows a beta of the same version.
+assert_forward v1.2.3 ''
+assert_forward v1.9.5 'v1.9.5\nv1.2.3'
+assert_forward v1.2.3 'v1.2.3\nv1.2.3-rc.1'
+assert_forward v1.2.3-rc.1 'v1.2.3-rc.1\nv1.2.3-beta.2'
+
+# The image workflow uses tags-only mode as the gate that authorizes pushing
+# version-tagged images, so a backward tag must be rejected there too.
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS='v1.2.3\nv2.0.0' PATH="$tmp/bin:$PATH" \
+  TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/tags-only-backward.out" 2>&1; then
+  echo 'backward tag passed the tags-only image gate' >&2
+  exit 1
+fi
+grep -Fq 'refusing to publish v1.2.3: v2.0.0 is already released' "$tmp/tags-only-backward.out"
+
+# A backward tag must not even create its missing module tag.
+: > "$log"
+rm -f "$MODULE_TAG_STATE_FILE"
+if (cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS='v1.2.3\nv2.0.0' MODULE_TAG_STATE=missing \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") >"$tmp/tags-only-missing.out" 2>&1; then
+  echo 'backward tag with a missing module tag was accepted' >&2
+  exit 1
+fi
+grep -Fq 'refusing to publish v1.2.3: v2.0.0 is already released' "$tmp/tags-only-missing.out"
+if grep -Eq '^git (-c )?tag |^git push' "$log"; then
+  echo 'backward tag created or pushed a module tag' >&2
+  exit 1
+fi
+
+# Recovering a module tag on an older published release needs the explicit
+# override, and actually creates the missing tag.
+: > "$log"
+rm -f "$MODULE_TAG_STATE_FILE"
+(cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS='v1.2.3\nv2.0.0' MODULE_TAG_STATE=missing \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true RELEASE_ALLOW_BACKWARD=true "$script") >"$tmp/tags-only-override.out"
+grep -Fq 'created module tag backend/v1.2.3' "$tmp/tags-only-override.out"
+grep -Fq 'git -c tag.gpgSign=false tag backend/v1.2.3' "$log"
+
+# The override must not open the full publication path.
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" EXISTING_RELEASE_TAGS='v1.2.3\nv2.0.0' PATH="$tmp/bin:$PATH" \
+  TAG=v1.2.3 RELEASE_ALLOW_BACKWARD=true REPOSITORY_OWNER=example "$script") >"$tmp/override-publish.out" 2>&1; then
+  echo 'backward override was accepted outside tags-only mode' >&2
+  exit 1
+fi
+grep -Fq 'RELEASE_ALLOW_BACKWARD requires RELEASE_TAGS_ONLY=true' "$tmp/override-publish.out"
+if grep -Eq '^(helm push|gh release create|go build|git tag|git push)' "$log"; then
+  echo 'backward override published artifacts or mutated tags' >&2
+  exit 1
+fi
+
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 \
+  RELEASE_ALLOW_BACKWARD=yes REPOSITORY_OWNER=example "$script") >"$tmp/bad-override.out" 2>&1; then
+  echo 'invalid RELEASE_ALLOW_BACKWARD was accepted' >&2
+  exit 1
+fi
+grep -Fq 'RELEASE_ALLOW_BACKWARD must be true or false' "$tmp/bad-override.out"
 
 for workflow in "$root/.github/workflows/release.yml" "$root/.github/workflows/image.yml"; do
   grep -Fq -- '- "v*.*.*"' "$workflow"
