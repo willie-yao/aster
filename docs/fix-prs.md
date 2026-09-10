@@ -2,15 +2,15 @@
 
 > **Status: experimental and disabled by default.** Agent Sandbox is the only supported coding-agent runtime. Fix generation is not part of standard onboarding, only ever starts from an explicit maintainer request, and never merges a pull request.
 
-Aster can generate a minimal patch for an eligible recurring failure, exact failed build analysis, or exact-JUnit chat finding, then present a draft pull request for explicit human confirmation. It is the highest-risk optional feature because it writes source code.
+Aster can investigate a published failure or selected chat finding, attempt a minimal repository patch, and present a draft pull request for explicit human confirmation. Transient severity, low confidence, incomplete remediation, and missing citations or source links do not prevent a maintainer from requesting an attempt. It is the highest-risk optional feature because it writes source code.
 
-Causal-group patterns remain analysis-only. A cause-scoped chat can inspect the member builds, but Fix PR generation starts from the representative exact JUnit failure linked from that cause. Resolving a failure is a maintainer acknowledgement rather than a remediation-contract action, so it stays available for causal groups, and is offered per cause so acknowledging one cause leaves the others active.
+Causal-group parents do not produce one combined fix across unrelated causes. A cause-scoped chat can start a proposal tied to that cause's representative exact JUnit failure, or the maintainer can open the linked failure. Recovery and resolution status remain visible but do not prevent another investigation while the failed target is still available. Resolving a failure is a separate maintainer acknowledgement, offered per cause so acknowledging one cause leaves the others active.
 
 ## Supported workflow
 
-The engine accepts only a current action-eligible subject with immutable source identity and verified remediation scope. The flow is:
+The engine requires a current, unambiguous supported subject and an accessible configured repository, not an implementation-ready diagnosis. The flow is:
 
-1. Run deterministic eligibility, destination, policy, and pinned-source checks.
+1. Resolve the selected subject, authorize the destination, and pin the generation base. Keep analysis-quality concerns as warnings.
 2. Start one Agent Sandbox executor against a public source repository at the exact approved revision.
 3. Run OpenCode once with Bash, web access, delegation, and external skills disabled.
 4. Stage the patch and run the configured exact validators inside the executor.
@@ -23,21 +23,22 @@ A preview is a review artifact, not proof that the patch fixes the failure. Agen
 
 ## Exact JUnit analysis handoff
 
-Authenticated server deployments can turn one exact failed JUnit analysis into a fix proposal from the analysis chat. There is one conversation: ask questions, and any answer with verified citations can start a proposal. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable source revision and verified paths when the proposal is requested.
+Authenticated server deployments can turn one exact failed JUnit analysis into a fix proposal from the analysis chat. There is one conversation: ask questions, and any completed nonempty answer can start a proposal, including an uncited or unverified answer. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable repository and generation base when the proposal is requested.
 
-After a successful cited response, **Use this finding in a fix proposal** admits a separate persistent asynchronous preview request. The selected finding must name an explicit backticked source symbol and satisfy all of these requirements:
+After a completed response, **Use this finding in a fix proposal** admits a separate persistent asynchronous preview request. It requires:
 
-- the failed JUnit case still has a current accepted published analysis;
-- the shared conversation contains validated artifact evidence;
+- the exact failed JUnit case and its published analysis remain available and unchanged;
+- the selected conversation request completed with a nonempty answer;
 - build metadata resolves the exact repository and full commit;
-- the published analysis has verified source links for that repository and revision;
-- deterministic source verification can check the selected symbol and source snapshot;
 - the configured Fix destination matches the analyzed repository;
-- the pinned revision is still the head of the failure's own branch when generation starts, or an ancestor of it with every verified path unchanged.
+- the failure revision is the head of its own tested branch or an ancestor of that head;
+- the pinned generation base remains current through preview generation and confirmation.
 
-The generation base is resolved for the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. A failure whose commit has diverged from its branch head, or whose build reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged`, `source_branch_unknown`, or `source_changed`) returned in `X-Analysis-Chat-Reason` and recorded in the server log.
+The coding agent receives the available failure details, selected answer, retained citations, and optional source hints. It investigates the repository before editing. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified; they are not relabeled as verified because a proposal was requested.
 
-Evidence is conversation-scoped. A later answer may reuse evidence validated by an earlier turn in the same conversation, but turns after the promoted answer do not alter an admitted request. Any change to the authoritative analysis content, source revision, verified paths, or source snapshot requires a new session or preview.
+The generation base is resolved for the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. A failure whose commit has diverged from its branch head, or whose build reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged` or `source_branch_unknown`) returned in `X-Analysis-Chat-Reason` and recorded in the server log. Repository-access and generation-base errors remain failures, not analysis warnings.
+
+Evidence is conversation-scoped. A later answer may reuse evidence validated by an earlier turn in the same conversation, but turns after the promoted answer do not alter an admitted request. Only retained validated citations are carried as verified artifact evidence. Any change to the bound analysis, selected answer or its qualification, source revision, or generation base requires a new session or preview.
 
 Closing the browser or losing the HTTP connection does not cancel an admitted Sandbox. Reopening the dialog restores the initiating operator's request, and repeating the same admission input reconnects instead of creating another Sandbox.
 
@@ -47,7 +48,7 @@ The ready preview shows the exact source revision, changed files, canonical diff
 
 If the reviewer changes the instruction or asks for regeneration, the server creates a replacement request and cancels or supersedes the older active draft. The replacement receives a new identity and must be reviewed from the beginning. The old preview cannot be confirmed after it is superseded.
 
-Confirmation is a separate authenticated POST bound to the owner and exact preview. It rechecks the analysis or pattern identity, source revision and branch head, source snapshot, destination policy, selected symbol or target, canonical patch, ordered executor results, warning state, and GitHub deduplication marker. Any drift fails closed. The dashboard does not rerun target commands during confirmation and never silently regenerates content.
+Confirmation is a separate authenticated POST bound to the owner and exact preview. It rechecks the analysis or pattern identity, selected chat context when applicable, pinned source/base, destination policy, canonical patch, ordered executor results, warning state, and GitHub deduplication marker. Exact-JUnit confirmation also rechecks the tested branch head. Any bound identity or patch drift fails closed. The dashboard does not rerun target commands during confirmation and never silently regenerates content.
 
 ## Command execution and credential boundary
 
@@ -126,7 +127,7 @@ The generic executor image contains the pinned Go toolchain, OpenCode, git, and 
 
 ## Freshness, deduplication, and private state
 
-Fix generation requires current evidence. A retained last-known-good pattern is readable but cannot start a new preview or remediation attempt. An individual failed build can use the same preview and confirmation flow when its accepted analysis, immutable source, and verified repository paths remain current.
+Fix generation requires a currently addressable published subject. A retained pattern can start a manual attempt while its supporting evidence remains available. An individual failed build can use the preview and confirmation flow without accepted critique or preidentified source files. Issue drafting retains its separate, stricter remediation eligibility rules.
 
 Hidden GitHub markers and private state deduplicate the same job and root-cause identity. Different causes on the same job may produce separate drafts. Persistent preview and audit files are private operational state and are never served under `/data/*` or published to Pages.
 

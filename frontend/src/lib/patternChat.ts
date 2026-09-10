@@ -29,6 +29,6 @@ export function patternChatAvailability(
   hasEvidenceBuild: boolean,
   chatEnabled: boolean,
 ): PatternChatAvailability {
-  if (!chatEnabled || !pattern.systemic || !pattern.id || !jobID || !hasEvidenceBuild) return "unavailable";
+  if (!chatEnabled || !pattern.id || !jobID || !hasEvidenceBuild) return "unavailable";
   return pattern.content_hash ? "ready" : "stale";
 }

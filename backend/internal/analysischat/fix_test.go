@@ -88,7 +88,7 @@ func TestServiceFixCandidateSelectsBoundedAnswer(t *testing.T) {
 	}
 }
 
-func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
+func TestServiceFixCandidateAcceptsUncitedButRejectsStaleAnswers(t *testing.T) {
 	service, session, chatRequestID := fixCandidateReadyService(t)
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
 	detail.Runs[0].TestCases[0].AIAnalysis.RootCause = "a replacement analysis"
@@ -97,6 +97,9 @@ func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
 	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("stale analysis error = %v", err)
 	}
+	detail = testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
+	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
+	writeJobDetail(t, service.dataDir, detail)
 
 	ctx, cancel := service.store.context()
 	err := service.store.update(ctx, func(state *persistedState) (bool, error) {
@@ -112,7 +115,7 @@ func TestServiceFixCandidateRejectsUngroundedAndStaleAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash); !errors.Is(err, ErrInvalidRequest) {
+	if candidate, err := service.FixCandidate(session.ID, "Alice", chatRequestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash); err != nil || len(candidate.ArtifactCitations) != 0 {
 		t.Fatalf("ungrounded answer error = %v", err)
 	}
 }
@@ -276,6 +279,38 @@ func TestServicePatternFixCandidateUsesBoundPattern(t *testing.T) {
 	}
 }
 
+func TestServicePatternFixCandidateAllowsNonSystemicInvestigation(t *testing.T) {
+	dir := t.TempDir()
+	detail := patternDetail()
+	pattern := &detail.PatternAnalyses[0]
+	pattern.Systemic = false
+	pattern.Confidence = "low"
+	pattern.SuggestedFix = ""
+	pattern.ContentHash = models.PatternHash(*pattern)
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{
+		Answer: "Investigate the shared retry code.", Assessment: "inconclusive",
+	}}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopePattern, JobID: detail.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "What could be improved?"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash)
+	if err != nil || candidate.Pattern.Systemic || candidate.Pattern.Confidence != "low" ||
+		candidate.Pattern.SuggestedFix != "" || len(candidate.ArtifactCitations) != 0 {
+		t.Fatalf("candidate=%+v err=%v", candidate, err)
+	}
+}
+
 func TestServiceCauseFixCandidateIsRejected(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{
@@ -338,8 +373,7 @@ func TestServicePatternFixCandidateRejectsDifferentPattern(t *testing.T) {
 	}
 }
 
-// An unverified answer carries no citations, so it can never start a fix.
-func TestServiceFixCandidateRejectsUnverifiedOnlyConversation(t *testing.T) {
+func TestServiceFixCandidatePreservesUnverifiedQualification(t *testing.T) {
 	dir := t.TempDir()
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z"))
 	detail.PatternAnalyses = []models.PatternAnalysis{fixCandidatePattern()}
@@ -370,8 +404,10 @@ func TestServiceFixCandidateRejectsUnverifiedOnlyConversation(t *testing.T) {
 		t.Fatalf("persisted answer = %+v", answer)
 	}
 	pattern := fixCandidatePattern()
-	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("unverified fix candidate error = %v", err)
+	candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash)
+	if err != nil || !candidate.AssistantUnverified || candidate.AssistantUnverifiedReason != UnverifiedCitation ||
+		len(candidate.ArtifactCitations) != 0 {
+		t.Fatalf("unverified fix candidate=%+v error=%v", candidate, err)
 	}
 }
 
@@ -412,7 +448,7 @@ func TestConversationCitationsExcludeSourceEvidenceFromFixEligibility(t *testing
 	}
 }
 
-func TestServiceFixCandidateRequiresArtifactCitationWhenSourceCitationExists(t *testing.T) {
+func TestServiceFixCandidateKeepsSourceCitationsSeparateFromArtifacts(t *testing.T) {
 	service, session, requestID := fixCandidateReadyService(t)
 	source := Citation{
 		Repository: "example/repo", Revision: "0123456789abcdef0123456789abcdef01234567",
@@ -433,7 +469,7 @@ func TestServiceFixCandidateRequiresArtifactCitationWhenSourceCitationExists(t *
 	}
 	pattern := fixCandidatePattern()
 	setCitations([]Citation{source})
-	if _, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
+	if candidate, err := service.FixCandidate(session.ID, "Alice", requestID, pattern.ID, pattern.ContentHash); err != nil || len(candidate.ArtifactCitations) != 0 {
 		t.Fatalf("source-only fix candidate error = %v", err)
 	}
 	artifact := Citation{Path: "build-log.txt", LineStart: 42, LineEnd: 44, Quote: "terminal bootstrap failure"}
@@ -480,8 +516,7 @@ func TestServiceFixCandidateAccumulatesEarlierEvidenceWarnings(t *testing.T) {
 	}
 }
 
-// Conversation-scoped citations must not launder an unverified answer into a fix.
-func TestServiceFixCandidateRejectsUnverifiedAnswerAfterCitedTurn(t *testing.T) {
+func TestServiceFixCandidateKeepsLaterAnswerUnverifiedAfterCitedTurn(t *testing.T) {
 	service, session, _ := fixCandidateReadyService(t)
 	runner, ok := service.runner.(*fakeRunner)
 	if !ok {
@@ -500,7 +535,9 @@ func TestServiceFixCandidateRejectsUnverifiedAnswerAfterCitedTurn(t *testing.T) 
 		t.Fatal(err)
 	}
 	pattern := fixCandidatePattern()
-	if _, err := service.FixCandidate(session.ID, "Alice", secondRequestID, pattern.ID, pattern.ContentHash); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("unverified answer fix error = %v", err)
+	candidate, err := service.FixCandidate(session.ID, "Alice", secondRequestID, pattern.ID, pattern.ContentHash)
+	if err != nil || !candidate.AssistantUnverified || candidate.AssistantUnverifiedReason != UnverifiedReference ||
+		len(candidate.ArtifactCitations) == 0 {
+		t.Fatalf("unverified answer candidate=%+v error=%v", candidate, err)
 	}
 }

@@ -12,10 +12,13 @@ import type { BuildResult, TestCase } from "../src/types/dashboard.js";
 import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetchStatus.js";
 import type { AIUsageDaily } from "../src/types/usage.js";
 import type { RuntimeSummary } from "../src/lib/runtimeTrend.js";
+import type { AuthState } from "../src/hooks/useAuth.js";
+import type { Capabilities } from "../src/types/capabilities.js";
 
 const {
   DetailSectionBand, RunHistory, MetricStrip, RuntimeTrend, DaySummaryButton, HistoricalTable,
   JobDetailPrimaryLayout, BuildFailurePanel, TestCaseTable, EvidenceSourceLink, defaultTheme, RichText,
+  AuthContext, CapabilitiesContext,
 } = await withSSR(async (vite) => {
   const { DetailSectionBand } = (await vite.ssrLoadModule("/src/components/DetailSectionBand.tsx")) as {
     DetailSectionBand: (props: {
@@ -95,9 +98,16 @@ const {
   const { RichText } = (await vite.ssrLoadModule("/src/components/RichText.tsx")) as {
     RichText: (props: { text: string; steps?: boolean }) => ReturnType<typeof createElement>;
   };
+  const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
+    AuthContext: React.Context<AuthState>;
+  };
+  const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
+    CapabilitiesContext: React.Context<Capabilities>;
+  };
   return {
     DetailSectionBand, RunHistory, MetricStrip, RuntimeTrend, DaySummaryButton, HistoricalTable,
     JobDetailPrimaryLayout, BuildFailurePanel, TestCaseTable, EvidenceSourceLink, defaultTheme, RichText,
+    AuthContext, CapabilitiesContext,
   };
 });
 
@@ -792,6 +802,43 @@ test("standalone non-success build states avoid empty mobile diagnosis and actio
     assert.doesNotMatch(html, /Full diagnosis/, state.name);
     assert.doesNotMatch(html, /<hr/, state.name);
     assert.doesNotMatch(html, /aria-label="Build failure actions"/, state.name);
+  }
+});
+
+test("manual build fixes require a published analysis but not analysis quality", () => {
+  const capabilities: Capabilities = {
+    mode: "server",
+    features: { actions: true, action_requests: true, fix_prs: true },
+  };
+  const admin: AuthState = {
+    status: "authenticated", login: "maintainer", mode: "oauth",
+    signIn: () => {}, signOut: async () => {},
+  };
+  const analysis: TestCase["ai_analysis"] = {
+    generated_at: "2026-09-10T00:00:00Z", root_cause: "", suggested_fix: "",
+    severity: "Transient-Ignore", disposition: "preliminary", critique_passed: false,
+  };
+  for (const fixture of [
+    { name: "analysis unavailable", analysis: undefined, passed: false, available: false },
+    { name: "transient hypothesis", analysis, passed: false, available: true },
+    { name: "passed build", analysis, passed: true, available: false },
+  ]) {
+    const html = render(createElement(MemoryRouter, null,
+      createElement(CapabilitiesContext.Provider, { value: capabilities },
+        createElement(AuthContext.Provider, { value: admin },
+          createElement(BuildFailurePanel, {
+            jobID: "job", run: run({ passed: fixture.passed }),
+            failure: {
+              name: "Prow job execution", source: "build", status: "failed",
+              duration_seconds: 1, ai_analysis: fixture.analysis,
+            },
+            fetchStatus: null,
+          }),
+        ),
+      ),
+    ));
+    assert.equal(html.includes("Draft fix PR"), fixture.available, fixture.name);
+    assert.doesNotMatch(html, /Draft issue/, fixture.name);
   }
 });
 

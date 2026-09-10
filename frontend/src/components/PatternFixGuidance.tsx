@@ -41,8 +41,7 @@ export function PatternFixGuidance({
   jobID: string;
   buildID: string;
   externalCause?: AnalysisCauseLocation | null;
-  // Pattern chat needs a systemic pattern, which this panel does not, so the
-  // chat sentence is only rendered where a chat is actually on the page.
+  // The chat sentence is only rendered where a chat is actually on the page.
   chatAvailable?: boolean;
 }) {
   const location = useLocation();
@@ -85,7 +84,7 @@ export function PatternFixGuidance({
           ) : (
             <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
               This result is grouped by cause, so it cannot produce one shared issue or Fix PR.
-              No failed JUnit test in the affected builds meets the Fix eligibility requirements yet, so no cause can start one either.
+              No representative failed JUnit analysis for its causes is reachable in the current builds.
             </Typography>
           )}
           <Button
@@ -101,7 +100,7 @@ export function PatternFixGuidance({
             {chatAvailable && (externalCause
               ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence. "
               : "The pattern chat below helps compare causes across builds. ")}
-            {!externalCause && "A fix proposal becomes available once an individual failed JUnit test meets every Fix eligibility requirement."}
+            {!externalCause && "A fix investigation becomes available from an individual cause when its representative failed JUnit analysis is reachable."}
           </Typography>
         </Box>
       </Stack>

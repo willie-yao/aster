@@ -152,12 +152,27 @@ test("action eligibility explanations use a polite status surface", async () => 
   const source = await import("node:fs/promises").then((fs) => fs.readFile("src/components/FailureActions.tsx", "utf8"));
   assert.match(source, /<Alert role="status" severity=\{eligibility\.state/);
   assert.match(source, /actionEligibilityTitle\(eligibility/);
+  assert.match(source, /const canStartIssue = issueDrafting && eligibility\?\.state === "actionable"/);
+  assert.match(source, /const canStartFix = fixDrafting/);
   assert.match(source, />\s*Draft issue\s*</);
   assert.match(source, />\s*Draft fix PR\s*</);
   assert.match(source, />\s*Resolve pattern\s*</);
   assert.match(source, />\s*Reopen pattern\s*</);
   assert.match(source, /Review issue draft/);
   assert.doesNotMatch(source, />\s*Mark resolved\s*</);
+});
+
+test("manual fix availability is independent across every action-request entry point", async () => {
+  const source = await import("node:fs/promises").then((fs) => fs.readFile("src/components/FailureActions.tsx", "utf8"));
+
+  assert.match(source, /requestedLinkedAction === "propose-fix" && fixDrafting/);
+  assert.match(source, /\.\.\.\(issueDrafting \? \["create-issue" as const\] : \[\]\)/);
+  assert.match(source, /\.\.\.\(fixDrafting \? \["propose-fix" as const\] : \[\]\)/);
+  assert.match(source, /if \(!canStartAction\(requested\)\)/);
+  assert.match(source, /void startRequest\(requested, "", activeRequest\?\.id\)/);
+  assert.match(source, /void startRequest\(action, instruction, request\.id\)/);
+  assert.match(source, /\{canStartIssue && \([\s\S]*Draft issue/);
+  assert.match(source, /\{canStartFix && \([\s\S]*Draft fix PR/);
 });
 
 

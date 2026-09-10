@@ -26,7 +26,7 @@ test("old recurring patterns show an explicit stale state", () => {
 test("pattern chat still requires identity and current evidence", () => {
   assert.equal(patternChatAvailability({ ...pattern, id: undefined }, "job", true, true), "unavailable");
   assert.equal(patternChatAvailability(pattern, "job", false, true), "unavailable");
-  assert.equal(patternChatAvailability({ ...pattern, systemic: false }, "job", true, true), "unavailable");
+  assert.equal(patternChatAvailability({ ...pattern, systemic: false, content_hash: "hash" }, "job", true, true), "ready");
   assert.equal(patternChatAvailability(pattern, "job", true, false), "unavailable");
 });
 

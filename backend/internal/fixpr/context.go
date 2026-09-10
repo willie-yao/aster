@@ -22,7 +22,7 @@ type Evidence struct {
 	Quote     string `json:"quote"`
 }
 
-// RevisionContext is one evidence-backed replacement proposed by analysis chat.
+// RevisionContext is one replacement proposed by analysis chat.
 type RevisionContext struct {
 	RootCause    string `json:"root_cause"`
 	SuggestedFix string `json:"suggested_fix"`
@@ -30,9 +30,12 @@ type RevisionContext struct {
 
 // GenerationContext is the selected bounded context added to one fix request.
 type GenerationContext struct {
-	AssistantAnswer   string           `json:"assistant_answer"`
-	ProposedRevision  *RevisionContext `json:"proposed_revision,omitempty"`
-	ArtifactCitations []Evidence       `json:"artifact_citations"`
+	AssistantAnswer           string           `json:"assistant_answer"`
+	AssistantUnverified       bool             `json:"assistant_unverified,omitempty"`
+	AssistantUnverifiedReason string           `json:"assistant_unverified_reason,omitempty"`
+	ProposedRevision          *RevisionContext `json:"proposed_revision,omitempty"`
+	ArtifactCitations         []Evidence       `json:"artifact_citations"`
+	EvidenceWarnings          []string         `json:"evidence_warnings,omitempty"`
 }
 
 // Validate rejects incomplete or oversized fix context.
@@ -40,16 +43,23 @@ func (c GenerationContext) Validate() error {
 	if strings.TrimSpace(c.AssistantAnswer) == "" || len(c.AssistantAnswer) > maxContextTextBytes {
 		return fmt.Errorf("assistant answer must be 1-%d bytes", maxContextTextBytes)
 	}
-	if len(c.ArtifactCitations) == 0 || len(c.ArtifactCitations) > maxContextCitations {
-		return fmt.Errorf("artifact citations must contain 1-%d entries", maxContextCitations)
+	if len(c.ArtifactCitations) > maxContextCitations {
+		return fmt.Errorf("artifact citations must contain at most %d entries", maxContextCitations)
 	}
 	if err := validateEvidence(c.ArtifactCitations); err != nil {
 		return fmt.Errorf("artifact citations: %w", err)
 	}
 	if c.ProposedRevision != nil {
-		if strings.TrimSpace(c.ProposedRevision.RootCause) == "" || strings.TrimSpace(c.ProposedRevision.SuggestedFix) == "" ||
-			len(c.ProposedRevision.RootCause) > maxContextTextBytes || len(c.ProposedRevision.SuggestedFix) > maxContextTextBytes {
-			return fmt.Errorf("proposed revision fields must be 1-%d bytes", maxContextTextBytes)
+		if len(c.ProposedRevision.RootCause) > maxContextTextBytes || len(c.ProposedRevision.SuggestedFix) > maxContextTextBytes {
+			return fmt.Errorf("proposed revision fields must be at most %d bytes", maxContextTextBytes)
+		}
+	}
+	if len(c.AssistantUnverifiedReason) > 512 || len(c.EvidenceWarnings) > 20 {
+		return fmt.Errorf("evidence qualification exceeds its size limit")
+	}
+	for _, warning := range c.EvidenceWarnings {
+		if strings.TrimSpace(warning) == "" || len(warning) > 512 {
+			return fmt.Errorf("evidence warning must be 1-512 bytes")
 		}
 	}
 	encoded, err := json.Marshal(c)

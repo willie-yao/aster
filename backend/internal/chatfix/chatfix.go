@@ -73,8 +73,11 @@ func (s *Service) PreviewChatFix(
 		return actions.PreviewResult{}, fmt.Errorf("%w: causal-group results are analysis-only", analysischat.ErrInvalidRequest)
 	}
 	generationContext := fixpr.GenerationContext{
-		AssistantAnswer:   candidate.AssistantAnswer,
-		ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		AssistantAnswer:           candidate.AssistantAnswer,
+		AssistantUnverified:       candidate.AssistantUnverified,
+		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
+		ArtifactCitations:         artifactEvidence(candidate.ArtifactCitations),
+		EvidenceWarnings:          append([]string(nil), candidate.EvidenceWarnings...),
 	}
 	if candidate.ProposedRevision != nil {
 		generationContext.ProposedRevision = &fixpr.RevisionContext{
@@ -153,38 +156,16 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 		PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
 		SourceRepository: candidate.SourceRepositorySnapshot,
 		FailureRevision:  candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
-		VerifiedSourceFileHashes: cloneStringMap(candidate.VerifiedSourceFileHashes),
-		SourceBranch:             candidate.SourceBranch,
-		AssistantAnswer:          candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
-		EvidenceWarnings: append([]string(nil), candidate.EvidenceWarnings...),
+		SourceBranch:    candidate.SourceBranch,
+		AssistantAnswer: candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		AssistantUnverified:       candidate.AssistantUnverified,
+		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
+		EvidenceWarnings:          append([]string(nil), candidate.EvidenceWarnings...),
 	}
 	if candidate.ProposedRevision != nil {
 		input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
 	}
 	return input
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}
-
-func stringMapsEqual(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-	return true
 }
 
 func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction string) string {
@@ -213,8 +194,7 @@ func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, bindi
 	}
 	if candidate.GenerationBaseRevision != "" &&
 		(!strings.EqualFold(candidate.FailureRevision, binding.FailureRevision) ||
-			!strings.EqualFold(candidate.GenerationBaseRevision, binding.GenerationBaseRevision) ||
-			!stringMapsEqual(candidate.VerifiedSourceFileHashes, binding.VerifiedSourceFileHashes)) {
+			!strings.EqualFold(candidate.GenerationBaseRevision, binding.GenerationBaseRevision)) {
 		return analysischat.ErrAnalysisChanged
 	}
 	return nil

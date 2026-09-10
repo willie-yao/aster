@@ -418,10 +418,10 @@ export function ChatFixDialog({
             )}
             <Alert role="status" severity="info" variant="outlined">
               {causeScope
-                ? "Only the representative failed JUnit target for this cause, this cause-scoped response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
+                ? "Only the representative failed JUnit target for this cause, this cause-scoped response, retained validated artifact evidence, immutable repository and generation-base identity, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."
                 : exactAnalysis
-                  ? "Only this exact failed JUnit analysis, this response, its validated artifact evidence, server-verified immutable source identity, and your optional instruction are sent. The complete conversation is excluded."
-                  : "Only this response, its verified evidence, the selected recurring pattern, any enabled verified source finding, and your optional instruction are sent. The complete conversation is excluded."}
+                  ? "Only this exact failed JUnit analysis, this response, retained validated artifact evidence, immutable repository and generation-base identity, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."
+                  : "Only this response, retained validated evidence, the selected recurring pattern, available source hints, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."}
             </Alert>
 
             {!exactAnalysis && <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>
@@ -484,7 +484,27 @@ export function ChatFixDialog({
               )}
             </ContextSection>}
 
-            <ContextSection title="Selected chat finding" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "success.main" }} />}>
+            <ContextSection title="Selected chat finding" icon={<BuildOutlined sx={{ fontSize: 17, color: "primary.main" }} />}>
+              {message.unverified && (
+                <Alert severity="warning" variant="outlined" sx={{ mb: 1.2 }}>
+                  This finding is unverified. It is supplied as an investigation hypothesis, not as proven evidence.
+                </Alert>
+              )}
+              {!message.citations?.length && (
+                <Alert severity="info" variant="outlined" sx={{ mb: 1.2 }}>
+                  No validated artifact citations accompany this finding. The coding agent must investigate the available failure and repository context.
+                </Alert>
+              )}
+              {message.evidence_warnings?.length ? (
+                <Alert severity="warning" variant="outlined" sx={{ mb: 1.2 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    Some evidence claims were not validated.
+                  </Typography>
+                  {message.evidence_warnings.map((warning) => (
+                    <Typography key={warning} variant="body2">{warning}</Typography>
+                  ))}
+                </Alert>
+              ) : null}
               <Box sx={{ borderLeft: "1px solid", borderColor: "primary.main", pl: 1.5, py: 0.2 }}>
                 <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
                   <RichText text={message.content} steps />
@@ -492,7 +512,7 @@ export function ChatFixDialog({
               </Box>
               {message.proposed_revision && (
                 <Box sx={{ mt: 1.2, borderRadius: 1, bgcolor: "action.selected", p: 1.25 }}>
-                  <Typography variant="caption" color="warning" sx={{ fontWeight: 750 }}>Evidence-backed revision</Typography>
+                  <Typography variant="caption" color="warning" sx={{ fontWeight: 750 }}>Proposed revision from this finding</Typography>
                   <Typography variant="body2" sx={{ mt: 0.45 }}>{message.proposed_revision.root_cause}</Typography>
                   <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45 }}>{message.proposed_revision.suggested_fix}</Typography>
                 </Box>
@@ -500,7 +520,7 @@ export function ChatFixDialog({
               {message.citations && message.citations.length > 0 && (
                 <Box sx={{ mt: 1.2 }}>
                   <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mb: 0.65 }}>
-                    Verified artifact evidence
+                    Validated evidence
                   </Typography>
                   <EvidenceList citations={message.citations} />
                 </Box>
@@ -508,7 +528,7 @@ export function ChatFixDialog({
               {request?.warning && !preview && (
                 <Alert severity="warning" variant="outlined" sx={{ mt: 1.2 }}>
                   <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                    Source verification warning
+                    Investigation warning
                   </Typography>
                   <Typography variant="body2">{request.warning}</Typography>
                 </Alert>
@@ -516,9 +536,9 @@ export function ChatFixDialog({
             </ContextSection>
 
             {exactAnalysis && (
-              <ContextSection title="Immutable source verification" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
+              <ContextSection title="Immutable repository and generation base" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
                 <Alert role="status" severity="info" variant="outlined">
-                  The server resolves the exact repository revision from build metadata, verifies the published source paths at that revision, and rejects the preview if the target branch has moved.
+                  The server resolves the repository and tested branch from build metadata, pins the generation base, and rejects the preview if that identity changes. Source paths from the analysis are optional investigation hints.
                 </Alert>
               </ContextSection>
             )}
@@ -593,7 +613,7 @@ export function ChatFixDialog({
             {request?.warning && (
               <Alert severity="warning" variant="outlined">
                 <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                  Source verification warning
+                  Investigation warning
                 </Typography>
                 <Typography variant="body2">{request.warning}</Typography>
               </Alert>
@@ -670,7 +690,7 @@ export function ChatFixDialog({
           >
             {busy === "confirm"
               ? "Opening draft PR"
-              : request?.warning
+              : request?.warning || preview.warning
                 ? "Open draft PR with warnings"
                 : "Open draft PR"}
           </Button>

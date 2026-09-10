@@ -49,7 +49,7 @@ export function causalGroupFixTarget(
     ? [...runs].sort((a, b) => Number(b.build_id === preferred) - Number(a.build_id === preferred))
     : runs;
   for (const run of ordered) {
-    if (!affectedBuilds.has(run.build_id)) continue;
+    if (!affectedBuilds.has(run.build_id) || run.passed) continue;
     const occurrences = run.test_cases;
     const representative = representativeAnalyzedFailure(occurrences);
     if (!representative || !fixInvestigationEligible(representative)) continue;
@@ -97,15 +97,13 @@ function analysisHasUsableDiagnosis(
   return analysis.disposition === "citations_verified" || analysis.disposition === "preliminary";
 }
 
-// fixInvestigationEligible applies the part of the server Fix gate that is
-// decidable from published data. An analysis with no file links has no verified
-// source path, which is conclusive before a chat session resolves the source
-// repository.
+// fixInvestigationEligible keeps the exact-JUnit structural boundary. Analysis
+// quality and source hints are context for the coding agent, not admission
+// requirements for a maintainer-requested investigation.
 function fixInvestigationEligible(testCase: TestCase): boolean {
   return testCase.status === "failed" &&
     testCase.source !== "build" &&
-    Boolean(testCase.junit_file) &&
-    Object.keys(testCase.ai_analysis?.file_links ?? {}).length > 0;
+    Boolean(testCase.junit_file);
 }
 
 // externalCause returns a cause location only when it names a dependency. A

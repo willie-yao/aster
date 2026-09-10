@@ -23,20 +23,17 @@ import {
 } from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
 import { useJobDetail } from "../hooks/useData";
-import { useCapabilities } from "../hooks/useCapabilities";
 import { useManifest } from "../hooks/useManifest";
 import { persistentAfter } from "../lib/attention";
 import { jobPath, jobRunPath, testRunPath } from "../lib/routes";
 import {
   formatDuration,
   highlightStackTrace,
-  meetsConfidenceFloor,
   shortJobName,
 } from "../lib/utils";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
 import { summarizeTestHistory } from "../lib/testDetail";
-import { patternLifecycleActive } from "../lib/actionEligibility";
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
 import { DetailSectionBand } from "../components/DetailSectionBand";
@@ -121,7 +118,6 @@ const evidenceLinkSx = {
 
 export function TestDetailPage() {
   const theme = useTheme();
-  const { features } = useCapabilities();
   const manifest = useManifest();
   const { jobName: jobID, testName: encodedTestName } = useParams<{
     jobName: string;
@@ -289,16 +285,9 @@ export function TestDetailPage() {
   const fixPatterns: PatternAnalysis[] = selectedRun
     ? (data.pattern_analyses ?? []).filter(
         (pattern) =>
-          (!data.pattern_refresh || data.pattern_refresh.state === "current") &&
-          patternLifecycleActive(pattern.lifecycle) &&
-          pattern.systemic &&
+          !pattern.recurrence_classification &&
           Boolean(pattern.id) &&
           Boolean(pattern.content_hash) &&
-          Boolean(pattern.suggested_fix) &&
-          meetsConfidenceFloor(
-            pattern.confidence,
-            features.chat_fix_min_confidence ?? "high",
-          ) &&
           Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),
       )
     : [];
@@ -490,7 +479,7 @@ export function TestDetailPage() {
       metadata={`${selectedTestCase.ai_analysis.severity} severity · ${matchingFailures} ${matchingFailures === 1 ? "matching failure" : "matching failures"}`}
       mobileNotice={selectedTestCase.ai_analysis.disposition !== "citations_verified" ? (
         <Alert severity="warning" variant="outlined">
-          Preliminary analysis. Evidence or quality checks remain unresolved. Review only.
+          Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
         </Alert>
       ) : undefined}
       summary={(

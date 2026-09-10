@@ -104,36 +104,6 @@ func (s *previewStore) stash(owner string, entry *previewEntry) (string, error) 
 	return token, nil
 }
 
-func (s *previewStore) stashIdempotent(owner, requestHash string, entry *previewEntry) (string, error) {
-	owner = normalizeActionOwner(owner)
-	requestHash = strings.TrimSpace(requestHash)
-	if owner == "" || requestHash == "" {
-		return "", fmt.Errorf("preview owner and idempotency identity are required")
-	}
-	token := idempotentPreviewToken(owner, requestHash)
-	key := tokenHash(token)
-	record, err := persistPreview(entry, owner, time.Now().UTC())
-	if err != nil {
-		return "", err
-	}
-	record.IdempotencyKey = requestHash
-	err = s.updateProtected(key, func(state *previewState, now time.Time) (bool, error) {
-		if existing := state.Previews[key]; existing != nil {
-			if existing.Owner != record.Owner || existing.IdempotencyKey != requestHash || !samePreviewAction(existing, record) {
-				return false, ErrPreviewTargetChanged
-			}
-			return false, nil
-		}
-		record.CreatedAt = now.Format(time.RFC3339Nano)
-		state.Previews[key] = record
-		return true, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return token, nil
-}
-
 func (s *previewStore) reserveIdempotent(owner, requestHash, generationHash string, lease time.Duration) (string, *previewEntry, bool, error) {
 	owner = normalizeActionOwner(owner)
 	requestHash = strings.TrimSpace(requestHash)

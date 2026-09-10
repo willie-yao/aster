@@ -79,8 +79,8 @@ func TestPreflightAnalysisFixSurvivesFlakyLinkVerification(t *testing.T) {
 	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.ConfigureTestFixPreflight(func(_ context.Context, _ sourceinvestigation.Repository, _ string, _ []string) (string, map[string]string, error) {
-		return revision, map[string]string{"pkg/controller.go": strings.Repeat("a", 64)}, nil
+	if err := service.ConfigureTestFixPreflight(func(_ context.Context, _ sourceinvestigation.Repository, _ string) (string, error) {
+		return revision, nil
 	}); err != nil {
 		t.Fatal(err)
 	}

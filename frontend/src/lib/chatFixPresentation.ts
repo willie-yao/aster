@@ -42,7 +42,7 @@ function failureMessage(request: ChatFixRequest): string {
     case "safety_integrity":
       return "Fix preview generation was blocked by a safety or integrity check.";
     case "source_changed":
-      return "The verified source or generation base changed before the preview completed.";
+      return "The source repository or generation base changed before the preview completed.";
     case "cancelled":
       return "Fix preview generation was cancelled.";
     case "timed_out":

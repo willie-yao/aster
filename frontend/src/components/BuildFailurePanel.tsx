@@ -178,6 +178,7 @@ export function BuildFailurePanel({
     <FailureActions
       failureID={buildFailureActionID(jobID, run.build_id)}
       resolvable={false}
+      fixable={Boolean(failure.ai_analysis) && failure.status === "failed" && !run.passed}
       eligibilityHint={actionEligibility}
       appearance="detail"
     />

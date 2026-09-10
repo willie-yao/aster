@@ -86,7 +86,6 @@ import { RichText } from "./RichText";
 import type { PatternAnalysis } from "../types/dashboard";
 import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
 import { ChatFixDialog } from "./ChatFixDialog";
-import { chatFixVerifiedCitationRequestIDs, chatFixVerifiedSourcePaths } from "../lib/chatFixEligibility";
 
 interface PendingTurn {
   sessionID: string;
@@ -274,14 +273,12 @@ function AssistantMessage({
   fileCtx,
   chatFixEnabled,
   fixEligible,
-  fixIneligibleReason,
   onUseForFix,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
   chatFixEnabled: boolean;
   fixEligible: boolean;
-  fixIneligibleReason?: string;
   onUseForFix: () => void;
 }) {
   const assessment = message.assessment
@@ -491,7 +488,7 @@ function AssistantMessage({
         )}
 
 
-        {chatFixEnabled && !unverified && fixEligible && message.request_id && (
+        {chatFixEnabled && fixEligible && message.request_id && (
           <Chip
             label="Use this finding in a fix proposal"
             onClick={onUseForFix}
@@ -508,13 +505,6 @@ function AssistantMessage({
               "& .MuiChip-icon": { fontSize: 15 },
             }}
           />
-        )}
-        {chatFixEnabled && !unverified && !fixEligible && fixIneligibleReason && message.request_id && (
-          // role="note": an eligibility explanation is not urgent, and the
-          // conversation log already announces it when the answer arrives.
-          <Alert severity="info" variant="outlined" role="note" sx={{ py: 0.25 }}>
-            {fixIneligibleReason}
-          </Alert>
         )}
       </Stack>
     </Box>
@@ -675,7 +665,6 @@ export function AnalysisChat({
   const chatTitle = causeScope ? "Investigate cause" : "Investigate and fix";
   const chatToggleLabel = `${expanded ? "Collapse" : "Expand"} ${chatTitle.toLowerCase()}`;
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
-  const verifiedCitationRequestIDs = useMemo(() => chatFixVerifiedCitationRequestIDs(session?.messages), [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {
     setProgressPhase(progress.phase);
     if (progress.started_at) setProgressStartedAt(progress.started_at);
@@ -989,11 +978,6 @@ export function AnalysisChat({
   const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
   const causeFixEnabled = causeScope && Boolean(fixTarget);
   const exactFixEnabled = Boolean(features.junit_chat_fix) && (exactJUnitAnalysis || causeFixEnabled);
-  const hasVerifiedSourcePaths = chatFixVerifiedSourcePaths(fileCtx.fileLinks, session?.source_repository).length > 0;
-  // No published file link means no verified source path can exist, which is
-  // conclusive before a session resolves the source repository.
-  const fixSourceUnavailable = Boolean(features.junit_chat_fix) && exactJUnitAnalysis &&
-    (session ? !hasVerifiedSourcePaths : Object.keys(fileCtx.fileLinks ?? {}).length === 0);
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
@@ -1544,12 +1528,6 @@ export function AnalysisChat({
                   Restoring conversation...
                 </Typography>
               )}
-              {fixSourceUnavailable && (
-                <Alert severity="info" variant="outlined" role="note">
-                  Fix preview is not possible for this analysis: it has no verified immutable source path pinned to
-                  the failing build's repository and commit. Questions still work, but no answer here can start a fix preview.
-                </Alert>
-              )}
               {!restoring && history.length === 0 && !busy && !pendingTurn && !session?.active && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
@@ -1595,18 +1573,10 @@ export function AnalysisChat({
                 if (message.role === "user") {
                   return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
                 }
-                const hasArtifactEvidence = message.request_id
-                  ? verifiedCitationRequestIDs.has(message.request_id)
-                  : Boolean(message.citations?.length);
-                const exactFixEligible = exactFixEnabled && hasArtifactEvidence &&
-                  (causeFixEnabled || hasVerifiedSourcePaths);
-                const legacyFixEligible = patternScope && Boolean(features.chat_fix) && hasArtifactEvidence &&
-                  Boolean(fixPatterns.length);
-                let fixIneligibleReason: string | undefined;
-                if (exactFixEnabled && (causeFixEnabled || hasVerifiedSourcePaths) && !hasArtifactEvidence) {
-                  fixIneligibleReason = "Fix preview is not possible yet: no answer in this conversation carries a validated artifact citation. " +
-                    "Ask something that requires reading an artifact, for example what the build log or JUnit file shows at the failure.";
-                }
+                const completedFinding = Boolean(message.request_id && message.content.trim());
+                const exactFixEligible = exactFixEnabled && completedFinding;
+                const legacyFixEligible = patternScope && Boolean(features.chat_fix) &&
+                  Boolean(fixPatterns.length) && completedFinding;
                 return (
                   <AssistantMessage
                     key={entry.key}
@@ -1614,7 +1584,6 @@ export function AnalysisChat({
                     fileCtx={fileCtx}
                     chatFixEnabled={!session?.active && (exactFixEnabled || Boolean(features.chat_fix && patternScope))}
                     fixEligible={exactFixEligible || legacyFixEligible}
-                    fixIneligibleReason={fixIneligibleReason}
                     onUseForFix={() => openFix(message)}
                   />
                 );

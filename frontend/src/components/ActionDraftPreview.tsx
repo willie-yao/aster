@@ -1,3 +1,4 @@
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
@@ -91,6 +92,15 @@ function VerifyBadge({
 export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
   return (
     <Stack spacing={2.5}>
+      {preview.warning && (
+        <Alert severity="warning" variant="outlined">
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            Investigation warning
+          </Typography>
+          <Typography variant="body2">{preview.warning}</Typography>
+        </Alert>
+      )}
+
       <Box>
         <Typography sx={sectionLabelSx}>Title</Typography>
         <Box

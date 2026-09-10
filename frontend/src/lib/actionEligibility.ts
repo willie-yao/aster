@@ -152,8 +152,8 @@ export function patternResolutionCovered(
   return groups.length > 0 && groups.every((group) => causeResolvable(pattern, group, refreshStatus));
 }
 
-// patternDraftable reports whether pattern-level issue and fix-PR drafting
-// applies. Causal-group results publish per-cause remediation instead of a
+// patternDraftable reports whether pattern-level issue drafting applies.
+// Causal-group results publish per-cause remediation instead of a
 // pattern-level remediation contract, so they never qualify. This is
 // independent of patternResolvable: a pattern can be draftable but not
 // dismissible, or the reverse.

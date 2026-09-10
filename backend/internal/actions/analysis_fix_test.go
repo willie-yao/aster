@@ -2,8 +2,6 @@ package actions
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/actionverify"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/fixpr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
@@ -25,21 +22,27 @@ const analysisFixRevision = "0123456789abcdef0123456789abcdef01234567"
 const (
 	capzFailureRevision        = "a866aca055bcaa205648e81d15c67668179fdfab"
 	capzGenerationBaseRevision = "c83d69ab8c572a4c00816076222d65262ee690cc"
+	capzReleaseBaseRevision    = "8caa35df8680f64693a3f76ea3d35c2349ab4828"
 )
 
 func exactJUnitDetail() models.JobDetail {
 	return models.JobDetail{Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{
-			BuildID: "123", JobName: "periodic-capz", RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + analysisFixRevision},
+			BuildID: "123", JobName: "periodic-capz",
+			RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + analysisFixRevision},
 		},
 		TestCases: []models.TestCase{{
 			Name: "TestCluster", SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit_01.xml", Status: "failed",
 			FailureMessage: "cluster failed", FailureBody: "expected Ready",
 			AIAnalysis: &models.AIAnalysis{
-				GeneratedAt: "2026-08-13T01:00:00Z", Mode: ai.AgenticMode, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
-				RootCause: "The reconciler omitted the terminal state.", Severity: "High", SuggestedFix: "Update the reconciler branch.",
-				RelevantFiles:     []string{"controllers/cluster_controller.go"},
-				EvidenceCitations: []models.EvidenceCitation{{Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+				GeneratedAt: "2026-08-13T01:00:00Z", Mode: ai.AgenticMode,
+				CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
+				RootCause: "The reconciler omitted the terminal state.", Severity: "High",
+				SuggestedFix:  "Update the reconciler branch.",
+				RelevantFiles: []string{"controllers/cluster_controller.go"},
+				EvidenceCitations: []models.EvidenceCitation{{
+					Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready",
+				}},
 				FileLinks: map[string]string{
 					"controllers/cluster_controller.go": "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + analysisFixRevision + "/controllers/cluster_controller.go",
 				},
@@ -50,10 +53,15 @@ func exactJUnitDetail() models.JobDetail {
 
 func exactAnalysisConfig() *project.Config {
 	return &project.Config{
-		Name: "capz", Branding: project.Branding{SourceRepo: project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"}},
+		Name: "capz",
+		Branding: project.Branding{
+			SourceRepo: project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"},
+		},
 		AI: &project.AI{FixPRs: &project.FixPRs{
-			Enabled:      true,
-			Repo:         &project.SourceRepo{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure"},
+			Enabled: true,
+			Repo: &project.SourceRepo{
+				Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure",
+			},
 			AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
 		}},
 	}
@@ -61,31 +69,82 @@ func exactAnalysisConfig() *project.Config {
 
 func exactIdentity() AnalysisIdentity {
 	return AnalysisIdentity{
-		Project: "capz", JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster", SuiteName: "CAPZ", ClassName: "e2e",
-		JUnitFile: "junit_01.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+		Project: "capz", JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
+		SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit_01.xml",
+		AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
 	}
 }
 
-func TestResolveAnalysisActionSubjectEligibility(t *testing.T) {
+type fakeAnalysisSourceRevisionClient struct {
+	base           ghpr.Base
+	branchBases    map[string]ghpr.Base
+	resolveErr     error
+	contains       bool
+	compareErr     error
+	compareCalls   int
+	branchRequests []string
+}
+
+func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
+	f.branchRequests = append(f.branchRequests, branch)
+	if f.resolveErr != nil {
+		return ghpr.Base{}, f.resolveErr
+	}
+	if base, ok := f.branchBases[branch]; ok {
+		return base, nil
+	}
+	if branch == "" || branch == f.base.Branch {
+		return f.base, nil
+	}
+	return ghpr.Base{}, fmt.Errorf("branch %s not found", branch)
+}
+
+func (f *fakeAnalysisSourceRevisionClient) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
+	f.compareCalls++
+	if f.compareErr != nil {
+		return false, "", f.compareErr
+	}
+	if f.contains {
+		return true, "ahead", nil
+	}
+	return false, "diverged", nil
+}
+
+func TestResolveAnalysisActionSubjectUsesOnlyStructuralEligibility(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
 		mutate func(*models.JobDetail)
 		ok     bool
 	}{
-		{name: "strict critique pass", ok: true},
-		{name: "passing", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Status = "passed" }},
-		{name: "skipped", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Status = "skipped" }},
-		{name: "unavailable", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis = nil }},
-		{name: "published without strict critique pass", mutate: func(d *models.JobDetail) {
+		{name: "published analysis", ok: true},
+		{name: "unverified model mode", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis.Mode = "legacy"
+		}, ok: true},
+		{name: "critique failed", mutate: func(d *models.JobDetail) {
 			d.Runs[0].TestCases[0].AIAnalysis.CritiquePassed = false
 		}, ok: true},
-		{name: "empty suggested fix", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = "" }, ok: true},
-		{name: "non-agentic", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.Mode = "legacy" }},
-		{name: "empty root cause", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.RootCause = "" }, ok: true},
-		{name: "transient", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.Severity = "Transient-Ignore" }, ok: true},
-		{name: "build failure", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].Source = models.TestCaseSourceBuild }},
-		{name: "missing junit", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].JUnitFile = "" }},
-		{name: "missing verified source paths", mutate: func(d *models.JobDetail) { d.Runs[0].TestCases[0].AIAnalysis.FileLinks = nil }},
+		{name: "empty diagnosis", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis.RootCause = ""
+			d.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = ""
+		}, ok: true},
+		{name: "transient", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis.Severity = "Transient-Ignore"
+		}, ok: true},
+		{name: "missing source hints", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis.FileLinks = nil
+		}, ok: true},
+		{name: "passing", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].Status = "passed"
+		}},
+		{name: "missing analysis", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].AIAnalysis = nil
+		}},
+		{name: "build failure", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].Source = models.TestCaseSourceBuild
+		}},
+		{name: "missing junit", mutate: func(d *models.JobDetail) {
+			d.Runs[0].TestCases[0].JUnitFile = ""
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -96,8 +155,11 @@ func TestResolveAnalysisActionSubjectEligibility(t *testing.T) {
 			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 			subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
 			if testCase.ok {
-				if err != nil || !strings.HasPrefix(subject.ID, "analysis::") || subject.ContentHash == "" || subject.Identity.Project != "capz" {
+				if err != nil || subject == nil || subject.ContentHash == "" {
 					t.Fatalf("subject=%+v err=%v", subject, err)
+				}
+				if testCase.name == "missing source hints" && len(subject.SourceHints) != 0 {
+					t.Fatalf("source hints = %v", subject.SourceHints)
 				}
 				return
 			}
@@ -105,6 +167,26 @@ func TestResolveAnalysisActionSubjectEligibility(t *testing.T) {
 				t.Fatalf("ineligible subject = %+v", subject)
 			}
 		})
+	}
+}
+
+func TestResolveAnalysisActionSubjectCapsSortedSourceHints(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactJUnitDetail()
+	detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = map[string]string{}
+	for i := 19; i >= 0; i-- {
+		file := fmt.Sprintf("controllers/file-%02d.go", i)
+		detail.Runs[0].TestCases[0].AIAnalysis.FileLinks[file] =
+			"https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + analysisFixRevision + "/" + file
+	}
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+
+	subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subject.SourceHints) != maxAnalysisSourceFiles || !slices.IsSorted(subject.SourceHints) {
+		t.Fatalf("source hints = %v", subject.SourceHints)
 	}
 }
 
@@ -125,237 +207,149 @@ func TestResolveAnalysisActionSubjectRejectsStaleAndAmbiguousIdentity(t *testing
 	}
 }
 
-type mapSourceReader struct {
-	files map[string]string
-}
-
-func (r *mapSourceReader) ReadFile(_ context.Context, file string) (string, bool, error) {
-	content, ok := r.files[file]
-	return content, ok, nil
-}
-
-func (r *mapSourceReader) ReadSourceArchive(context.Context) (actionverify.Archive, error) {
-	archive := actionverify.Archive{Paths: map[string]bool{}, GoFiles: map[string]string{}, Files: map[string]string{}}
-	for file, content := range r.files {
-		archive.Paths[file] = true
-		if strings.HasSuffix(file, ".go") {
-			archive.GoFiles[file] = content
-		} else {
-			archive.Files[file] = content
-		}
-	}
-	return archive, nil
-}
-
-type fakeAnalysisSourceRevisionClient struct {
-	base           ghpr.Base
-	branchBases    map[string]ghpr.Base
-	contains       bool
-	compareCalls   int
-	branchRequests []string
-}
-
-func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
-	f.branchRequests = append(f.branchRequests, branch)
-	if base, ok := f.branchBases[branch]; ok {
-		return base, nil
-	}
-	if branch == "" || branch == f.base.Branch {
-		return f.base, nil
-	}
-	return ghpr.Base{}, fmt.Errorf("branch %s not found", branch)
-}
-
-func (f *fakeAnalysisSourceRevisionClient) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
-	f.compareCalls++
-	if f.contains {
-		return true, "ahead", nil
-	}
-	return false, "diverged", nil
-}
-
-func TestAnalysisSourceSnapshotIdentityDetectsDrift(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	reader := &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": "package controllers\nfunc reconcile() { markReady() }\n"}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	first, err := service.verifyAnalysisSourceSnapshot(t.Context(), repo, []string{"controllers/cluster_controller.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader.files["controllers/cluster_controller.go"] = "package controllers\n// changed\n"
-	second, err := service.verifyAnalysisSourceSnapshot(t.Context(), repo, []string{"controllers/cluster_controller.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first == second {
-		t.Fatal("source verification identity did not change")
-	}
-	if _, err := service.verifyAnalysisSourceSnapshot(t.Context(), repo, []string{"../secret"}); err == nil {
-		t.Fatal("unsafe source path was accepted")
-	}
-}
-
-func TestAnalysisSourceCompatibilityRejectsBranchlessExactHeadBeforeResolution(t *testing.T) {
+func TestAnalysisSourceCompatibilityRequiresExplicitBranch(t *testing.T) {
 	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 	client := &fakeAnalysisSourceRevisionClient{
 		base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
 	}
 	service.sourceRevisionClient = client
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
-		t.Fatal("branchless exact-head preflight read source")
-		return nil
-	}
 	repo := sourceinvestigation.Repository{
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
 
-	_, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
-	)
+	_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "")
 	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
-		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
+		t.Fatalf("err=%v code=%q ok=%t", err, code, ok)
 	}
 	if len(client.branchRequests) != 0 || client.compareCalls != 0 {
-		t.Fatalf("branchless exact-head preflight reached revision client: branches=%v compares=%d", client.branchRequests, client.compareCalls)
+		t.Fatalf("unexpected revision calls: branches=%v compares=%d", client.branchRequests, client.compareCalls)
 	}
 }
 
-func TestAnalysisSourceCompatibilityExactHeadUsesExplicitBranch(t *testing.T) {
+func TestAnalysisSourceCompatibilityBindsCurrentBaseWithoutReadingHints(t *testing.T) {
 	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 	client := &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
+		base:     ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"},
+		contains: true,
 	}
 	service.sourceRevisionClient = client
-	content := "package e2e\nfunc InstallCNIManifest() {}\n"
-	reader := &mapSourceReader{files: map[string]string{"test/e2e/cni.go": content}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
 	repo := sourceinvestigation.Repository{
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
 
-	compatibility, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "main", []string{"test/e2e/cni.go"}, "Update `InstallCNIManifest`.",
-	)
+	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compatibility.GenerationBaseRevision != capzFailureRevision || client.compareCalls != 0 ||
-		len(compatibility.VerifiedSourceFileHashes) != 1 || compatibility.FindingVerification == "" || compatibility.SourceVerification == "" {
-		t.Fatalf("compatibility=%+v compare_calls=%d", compatibility, client.compareCalls)
+	if compatibility.GenerationBaseRevision != capzGenerationBaseRevision || client.compareCalls != 1 {
+		t.Fatalf("compatibility=%+v compares=%d", compatibility, client.compareCalls)
 	}
 }
 
-func TestAnalysisSourceCompatibilityUsesChangedCurrentSourceWithoutHistoricalRead(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	client := &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: true,
-	}
-	service.sourceRevisionClient = client
-	currentContent := "package e2e\nfunc InstallCNIManifest() { retry() }\n"
-	var requestedRevisions []string
-	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
-		requestedRevisions = append(requestedRevisions, repo.Revision)
-		if repo.Revision != capzGenerationBaseRevision {
-			t.Fatalf("read historical revision %s", repo.Revision)
-		}
-		return &mapSourceReader{files: map[string]string{
-			"test/e2e/cni.go":        currentContent,
-			"test/e2e/azure_test.go": "package e2e\nfunc TestAzure() { InstallCNIManifest() }\n",
-		}}
-	}
+func TestAnalysisSourceCompatibilityPreservesRepositoryBranchAndAncestryChecks(t *testing.T) {
 	repo := sourceinvestigation.Repository{
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
-	files := []string{"test/e2e/cni.go", "test/e2e/azure_test.go"}
-
-	compatibility, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "main", files, "Update `InstallCNIManifest` to handle the conflict.",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	currentHash := sha256.Sum256([]byte(currentContent))
-	generationRepo := repo
-	generationRepo.Revision = capzGenerationBaseRevision
-	normalizedFiles, err := normalizeAnalysisSourceFiles(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantVerification := analysisSourceVerificationForHashes(generationRepo, normalizedFiles, compatibility.VerifiedSourceFileHashes)
-	if compatibility.GenerationBaseRevision != capzGenerationBaseRevision || client.compareCalls != 1 ||
-		compatibility.VerifiedSourceFileHashes["test/e2e/cni.go"] != hex.EncodeToString(currentHash[:]) ||
-		compatibility.FindingVerification == "" || compatibility.SourceVerification != wantVerification ||
-		!slices.Equal(requestedRevisions, []string{capzGenerationBaseRevision}) {
-		t.Fatalf("compatibility=%+v compare_calls=%d revisions=%v", compatibility, client.compareCalls, requestedRevisions)
-	}
-}
-
-func TestAnalysisSourceCompatibilityRejectsUnavailableOrIncompatibleCurrentSource(t *testing.T) {
-	baseFiles := map[string]string{"test/e2e/cni.go": "package e2e\nfunc InstallCNIManifest() {}\n"}
 	for _, testCase := range []struct {
-		name         string
-		generation   map[string]string
-		contains     bool
-		targetBranch string
-		wantReason   ReasonCode
+		name       string
+		repository sourceinvestigation.Repository
+		base       ghpr.Base
+		contains   bool
+		wantReason ReasonCode
+		wantText   string
 	}{
-		{name: "deleted or renamed file", targetBranch: "main", generation: map[string]string{"test/e2e/cni_renamed.go": baseFiles["test/e2e/cni.go"]}, contains: true, wantReason: ReasonSourceChanged},
-		{name: "rewritten ancestry", targetBranch: "main", generation: baseFiles, contains: false, wantReason: ReasonSourceRevisionDiverged},
-		{name: "wrong target branch", targetBranch: "release-1.2", generation: baseFiles, contains: true},
+		{
+			name: "diverged", repository: repo,
+			base:       ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision},
+			wantReason: ReasonSourceRevisionDiverged,
+		},
+		{
+			name: "wrong branch", repository: repo,
+			base:     ghpr.Base{Branch: "release", HeadSHA: capzFailureRevision},
+			wantText: "branch does not match",
+		},
+		{
+			name: "wrong repository",
+			repository: sourceinvestigation.Repository{
+				Owner: "kubernetes", Name: "kubernetes", Revision: capzFailureRevision,
+			},
+			base:     ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision},
+			wantText: "repositories do not match",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
-				base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: testCase.contains,
+				base: testCase.base, branchBases: map[string]ghpr.Base{"main": testCase.base},
+				contains: testCase.contains,
 			}
-			service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
-				if repo.Revision != capzGenerationBaseRevision {
-					t.Fatalf("read historical revision %s", repo.Revision)
-				}
-				return &mapSourceReader{files: testCase.generation}
-			}
-			repo := sourceinvestigation.Repository{
-				Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
-			}
-			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, testCase.targetBranch, []string{"test/e2e/cni.go"}, "")
+			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), testCase.repository, "main")
 			if err == nil {
-				t.Fatal("incompatible current source was accepted")
+				t.Fatal("incompatible source was accepted")
 			}
-			if testCase.wantReason != "" {
-				if code, ok := ReasonCodeFrom(err); !ok || code != testCase.wantReason {
-					t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
-				}
+			if testCase.wantReason != "" && ReasonCodeOf(err) != testCase.wantReason {
+				t.Fatalf("err=%v code=%q", err, ReasonCodeOf(err))
+			}
+			if testCase.wantText != "" && !strings.Contains(err.Error(), testCase.wantText) {
+				t.Fatalf("error = %v", err)
 			}
 		})
 	}
 }
 
-func TestAnalysisSourceCompatibilityWarnsOnSymbolGrounding(t *testing.T) {
-	for _, testCase := range []struct {
-		name  string
-		files map[string]string
-		paths []string
-		want  string
-	}{
-		{name: "missing", files: map[string]string{"test/e2e/cni.go": "package e2e\nfunc OtherSymbol() {}\n"}, paths: []string{"test/e2e/cni.go"}, want: "No uniquely declared"},
-		{name: "ambiguous", files: map[string]string{
-			"test/e2e/cni.go":        "package e2e\nfunc InstallCNIManifest() {}\n",
-			"test/e2e/azure_test.go": "package e2e\nfunc InstallCNIManifest() {}\n",
-		}, paths: []string{"test/e2e/cni.go", "test/e2e/azure_test.go"}, want: "Multiple plausible"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: capzFailureRevision, TreeSHA: "tree"}}
-			reader := &mapSourceReader{files: testCase.files}
-			service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
-			repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-			compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", testCase.paths, "Update `InstallCNIManifest`.")
-			if err != nil || !strings.Contains(strings.Join(compatibility.Warnings, " "), testCase.want) {
-				t.Fatalf("compatibility=%+v err=%v", compatibility, err)
-			}
-		})
+func TestAnalysisSourceCompatibilityResolvesFailureBranchBase(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision},
+		branchBases: map[string]ghpr.Base{
+			"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision},
+		},
+		contains: true,
 	}
+	service.sourceRevisionClient = client
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+
+	got, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "release-1.25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GenerationBaseRevision != capzReleaseBaseRevision ||
+		!slices.Equal(client.branchRequests, []string{"release-1.25"}) {
+		t.Fatalf("compatibility=%+v branches=%v", got, client.branchRequests)
+	}
+}
+
+func TestPreflightAnalysisFixSourcePropagatesAccessAndAncestryErrors(t *testing.T) {
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+	t.Run("access", func(t *testing.T) {
+		accessErr := errors.New("repository access denied")
+		service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+		service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{resolveErr: accessErr}
+		_, err := service.PreflightAnalysisFixSource(t.Context(), repo, "main")
+		if !errors.Is(err, ErrPreviewRejected) || !errors.Is(err, accessErr) {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("ancestry", func(t *testing.T) {
+		service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+		service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+			base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision},
+		}
+		_, err := service.PreflightAnalysisFixSource(t.Context(), repo, "main")
+		if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonSourceRevisionDiverged {
+			t.Fatalf("error = %v code=%q", err, ReasonCodeOf(err))
+		}
+	})
+}
+
+type acceptingAnalysisPreviewValidator struct{}
+
+func (acceptingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error {
+	return nil
 }
 
 type rejectingAnalysisPreviewValidator struct{}
@@ -364,48 +358,192 @@ func (rejectingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context
 	return errors.New("chat response changed")
 }
 
+func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactJUnitDetail()
+	failure := &detail.Runs[0].TestCases[0]
+	failure.FailureMessage = strings.Repeat("message-", maxAnalysisFailureTextBytes)
+	failure.FailureBody = strings.Repeat("body-", maxAnalysisFailureTextBytes)
+	failure.AIAnalysis.FileLinks = nil
+	failure.AIAnalysis.Severity = "Transient-Ignore"
+	failure.AIAnalysis.CritiquePassed = false
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+
+	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+	}
+	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := make(chan fixpr.AnalysisFailure, 1)
+	service.analysisRequestGenerator = func(
+		ctx context.Context, input AnalysisFixInput, owner, _, _ string,
+	) (PreviewResult, error) {
+		current, err := service.ResolveAnalysisActionSubject(input.Identity)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		generation := analysisFailureForGeneration(current, input, "main", analysisFixRevision)
+		generated <- generation
+		if err := service.setRequestWarning(ctx, analysisQualityWarnings(current.Failure.AIAnalysis, input, current.SourceHints)...); err != nil {
+			return PreviewResult{}, err
+		}
+		fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
+			Subject: current.Identity.TestName, Rationale: input.AssistantAnswer,
+			Diff:   "--- a/controllers/cluster_controller.go\n+++ b/controllers/cluster_controller.go\n+func retryConflict() {}\n",
+			Files:  map[string]string{"controllers/cluster_controller.go": "package controllers\nfunc retryConflict() {}\n"},
+			Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed},
+			Title:  "fix: investigate transient failure", Description: "safe description", Body: "safe body",
+			Key:                "fix-analysis::unverified",
+			Base:               ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+			RequireBaseCurrent: true,
+		})
+		binding := &AnalysisPreviewBinding{
+			Identity: current.Identity, AnalysisID: current.ID, AnalysisHash: current.ContentHash,
+			AnalysisContentHash: current.AnalysisContentHash,
+			ChatSessionID:       input.ChatSessionID, ChatRequestID: input.ChatRequestID,
+			ChatResponseHash: input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
+			SourceRepository: current.SourceRepository, SourceBranch: "main",
+			FailureRevision: current.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
+			VerificationVersion: analysisSourceVerificationVersion,
+		}
+		entry := &previewEntry{
+			failureID: current.ID, patternHash: current.ContentHash, kind: gfKind,
+			targetRepo:          current.SourceRepository.Owner + "/" + current.SourceRepository.Name,
+			targetConfig:        fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()),
+			verificationVersion: sourceVerificationVersion, fix: fix, analysisBinding: binding,
+		}
+		preview, err := validatedPreviewEntry(entry)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		token, err := service.stash(owner, entry)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		preview.Token = token
+		return preview, nil
+	}
+
+	input := AnalysisFixInput{
+		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
+		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
+		AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: subject.SourceRepository,
+		FailureRevision: subject.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
+		SourceBranch: "main", AssistantAnswer: "Investigate whether reconciliation skips the terminal update.",
+		AssistantUnverified: true, AssistantUnverifiedReason: "artifact access ended before verification",
+	}
+	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if ready.Preview == nil || ready.Preview.Token == "" {
+		t.Fatalf("ready request = %+v", ready)
+	}
+	for _, warning := range []string{
+		analysisWarningCritique, analysisWarningTransient, analysisWarningAssistantUnverified,
+		analysisWarningNoCitations, analysisWarningNoSourceHints,
+	} {
+		if !strings.Contains(ready.Warning, warning) {
+			t.Fatalf("warning %q missing from %q", warning, ready.Warning)
+		}
+	}
+	select {
+	case got := <-generated:
+		if len(got.ArtifactCitations) != 0 || len(got.SourceHints) != 0 || !got.AssistantUnverified ||
+			got.AssistantUnverifiedReason != input.AssistantUnverifiedReason {
+			t.Fatalf("generation context = %+v", got)
+		}
+		if len(got.FailureMessage) > maxAnalysisFailureTextBytes || len(got.FailureBody) > maxAnalysisFailureTextBytes ||
+			!strings.HasSuffix(got.FailureMessage, "…") || !strings.HasSuffix(got.FailureBody, "…") {
+			t.Fatalf("raw failure bounds: message=%d body=%d", len(got.FailureMessage), len(got.FailureBody))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake exact-fix generator was not invoked")
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	restored, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || restored.Status != RequestReady || restored.Preview == nil || restored.Preview.Token != ready.Preview.Token {
+		t.Fatalf("restored request=%+v err=%v", restored, err)
+	}
+	entry, err := reloaded.previewStore.take("alice", restored.Preview.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validatedPreviewEntry(entry); err != nil {
+		t.Fatalf("restored preview contract error = %v", err)
+	}
+	reloaded.analysisPreviewValidator = acceptingAnalysisPreviewValidator{}
+	reloaded.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+	}
+	if entry.analysisBinding == nil {
+		t.Fatal("restored preview lost exact analysis binding")
+	}
+	if err := reloaded.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); err != nil {
+		t.Fatalf("restored preview is not confirmable: %v", err)
+	}
+}
+
 func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
 	dir := t.TempDir()
-	first := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	binding := &AnalysisPreviewBinding{
 		Identity: exactIdentity(), AnalysisID: "analysis::id", AnalysisHash: "analysis-hash",
-		ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash", VerificationVersion: analysisSourceVerificationVersion,
-		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
-		SourceFiles:      []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash",
-		FailureRevision: analysisFixRevision, GenerationBaseRevision: analysisFixRevision,
-		VerifiedSourceFileHashes: map[string]string{"controllers/cluster_controller.go": strings.Repeat("d", 64)},
+		AnalysisContentHash: "content-hash",
+		ChatSessionID:       "session", ChatRequestID: "request", ChatResponseHash: "chat",
+		PreviewRequestHash: "preview",
+		SourceRepository: sourceinvestigation.Repository{
+			Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision,
+		},
+		SourceBranch: "main", FailureRevision: analysisFixRevision,
+		GenerationBaseRevision: analysisFixRevision,
+		VerificationVersion:    analysisSourceVerificationVersion,
 	}
 	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
-		Subject: "TestCluster", Rationale: "fix", Diff: "diff", Files: map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
-		Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed}, Title: "fix: test", Description: "safe description", Body: "body",
-		Key: "fix-analysis::id", Base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
+		Subject: "TestCluster", Rationale: "fix", Diff: "diff",
+		Files:  map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
+		Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed},
+		Title:  "fix: test", Description: "safe description", Body: "body",
+		Key:                "fix-analysis::id",
+		Base:               ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+		RequireBaseCurrent: true,
 	})
+	first := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	token, err := first.stash("alice", &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind, targetRepo: "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig: fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()), verificationVersion: sourceVerificationVersion,
-		fix: fix, analysisBinding: binding,
+		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind,
+		targetRepo:          "kubernetes-sigs/cluster-api-provider-azure",
+		targetConfig:        fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()),
+		verificationVersion: sourceVerificationVersion, fix: fix, analysisBinding: binding,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	second := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	entry, err := second.previewStore.take("alice", token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.analysisBinding == nil || entry.analysisBinding.ChatResponseHash != "chat-hash" ||
-		entry.analysisBinding.FailureRevision != analysisFixRevision || entry.analysisBinding.GenerationBaseRevision != analysisFixRevision ||
-		entry.analysisBinding.VerifiedSourceFileHashes["controllers/cluster_controller.go"] != strings.Repeat("d", 64) ||
-		!slices.Equal(entry.analysisBinding.SourceFiles, []string{"controllers/cluster_controller.go"}) {
+	if entry.analysisBinding == nil || entry.analysisBinding.SourceBranch != "main" ||
+		entry.analysisBinding.VerificationVersion != analysisSourceVerificationVersion {
 		t.Fatalf("restored binding = %+v", entry.analysisBinding)
 	}
 
 	third := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	third.analysisPreviewValidator = rejectingAnalysisPreviewValidator{}
 	token, err = third.stash("alice", &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind, targetRepo: "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig: fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()), verificationVersion: sourceVerificationVersion,
-		fix: fix, analysisBinding: binding,
+		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind,
+		targetRepo:          "kubernetes-sigs/cluster-api-provider-azure",
+		targetConfig:        fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()),
+		verificationVersion: sourceVerificationVersion, fix: fix, analysisBinding: binding,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -415,329 +553,104 @@ func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
 	}
 }
 
-func TestAnalysisPreviewIdempotencyDoesNotDuplicatePersistedPreview(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
-		Subject: "TestCluster", Rationale: "fix", Diff: "diff", Files: map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
-		Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed}, Title: "fix: test", Description: "safe description", Body: "body",
-		Key: "fix-analysis::id", Base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
-	})
-	entry := &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind, targetRepo: "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig: fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()), verificationVersion: sourceVerificationVersion,
-		fix: fix, analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request-hash"},
-	}
-	first, err := service.previewStore.stashIdempotent("alice", "request-hash", entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := service.previewStore.stashIdempotent("alice", "request-hash", entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second {
-		t.Fatalf("idempotent tokens differ: %q != %q", first, second)
-	}
-	state, _, err := service.previewStore.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Previews) != 1 {
-		t.Fatalf("persisted previews = %d", len(state.Previews))
-	}
-}
-
-type acceptingAnalysisPreviewValidator struct{}
-
-func (acceptingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error {
-	return nil
-}
-
-func TestValidateAnalysisPreviewRejectsWrongOrAmbiguousSourceIdentity(t *testing.T) {
+func TestValidateAnalysisPreviewBindsIdentityRepositoryBranchAndCurrentBase(t *testing.T) {
 	dir := t.TempDir()
 	detail := exactJUnitDetail()
 	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
 	service.analysisPreviewValidator = acceptingAnalysisPreviewValidator{}
 	client := &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, contains: true,
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
 	}
 	service.sourceRevisionClient = client
-	reader := &mapSourceReader{files: map[string]string{
-		"controllers/cluster_controller.go": "package controllers\nfunc markReady() {}\nfunc reconcile() {}\n",
-	}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
 	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	findingText := "Update `markReady` in the terminal branch."
-	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, findingText)
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding := AnalysisPreviewBinding{
-		Identity: exactIdentity(), AnalysisID: subject.ID, AnalysisHash: subject.ContentHash, AnalysisContentHash: subject.AnalysisContentHash,
-		ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat", PreviewRequestHash: "preview",
-		SourceRepository: repo, SourceFiles: []string{"controllers/cluster_controller.go"}, SourceVerification: compatibility.SourceVerification,
-		FailureRevision: repo.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
-		VerifiedSourceFileHashes: compatibility.VerifiedSourceFileHashes,
-		FindingText:              findingText, FindingVerification: compatibility.FindingVerification, VerificationVersion: analysisSourceVerificationVersion,
+		Identity: exactIdentity(), AnalysisID: subject.ID, AnalysisHash: subject.ContentHash,
+		AnalysisContentHash: subject.AnalysisContentHash,
+		ChatSessionID:       "session", ChatRequestID: "request", ChatResponseHash: "chat",
+		PreviewRequestHash: "preview",
+		SourceRepository:   subject.SourceRepository, SourceBranch: "main",
+		FailureRevision: subject.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
+		VerificationVersion: analysisSourceVerificationVersion,
 	}
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); err != nil {
 		t.Fatalf("valid binding error = %v", err)
 	}
-	v1 := binding
-	v1.VerificationVersion = 1
-	if err := service.validateAnalysisPreview(t.Context(), "alice", v1); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("v1 binding error = %v", err)
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*AnalysisPreviewBinding)
+	}{
+		{name: "stale contract", mutate: func(b *AnalysisPreviewBinding) { b.VerificationVersion = 2 }},
+		{name: "wrong source branch", mutate: func(b *AnalysisPreviewBinding) { b.SourceBranch = "release" }},
+		{name: "wrong failure revision", mutate: func(b *AnalysisPreviewBinding) { b.FailureRevision = strings.Repeat("f", 40) }},
+		{name: "wrong repository", mutate: func(b *AnalysisPreviewBinding) { b.SourceRepository.Name = "other" }},
+		{name: "changed analysis", mutate: func(b *AnalysisPreviewBinding) { b.AnalysisContentHash = "changed" }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			changed := binding
+			testCase.mutate(&changed)
+			if err := service.validateAnalysisPreview(t.Context(), "alice", changed); !errors.Is(err, ErrPreviewTargetChanged) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
-	changedFinding := binding
-	changedFinding.FindingVerification = "changed"
-	if err := service.validateAnalysisPreview(t.Context(), "alice", changedFinding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("changed finding verification error = %v", err)
-	}
-	changedHashes := binding
-	changedHashes.VerifiedSourceFileHashes = cloneStringMap(binding.VerifiedSourceFileHashes)
-	changedHashes.VerifiedSourceFileHashes["controllers/cluster_controller.go"] = strings.Repeat("e", 64)
-	if err := service.validateAnalysisPreview(t.Context(), "alice", changedHashes); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("changed source hash error = %v", err)
-	}
-	changedVerification := binding
-	changedVerification.SourceVerification = "changed"
-	if err := service.validateAnalysisPreview(t.Context(), "alice", changedVerification); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("changed source verification error = %v", err)
-	}
-	client.base = ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
+	client.base.HeadSHA = capzGenerationBaseRevision
 	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("generation base drift error = %v", err)
-	}
-	client.base = ghpr.Base{Branch: "other", HeadSHA: analysisFixRevision, TreeSHA: "tree"}
-	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("generation branch drift error = %v", err)
-	}
-	client.base = ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}
-	reader.files["controllers/cluster_controller.go"] += "// drift\n"
-	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("source drift error = %v", err)
-	}
-	reader.files["controllers/cluster_controller.go"] = "package controllers\nfunc markReady() {}\nfunc reconcile() {}\n"
-	wrongRepo := binding
-	wrongRepo.SourceRepository.Name = "wrong-repo"
-	if err := service.validateAnalysisPreview(t.Context(), "alice", wrongRepo); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("wrong repository error = %v", err)
-	}
-	wrongRevision := binding
-	wrongRevision.SourceRepository.Revision = strings.Repeat("f", 40)
-	if err := service.validateAnalysisPreview(t.Context(), "alice", wrongRevision); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("wrong revision error = %v", err)
-	}
-	detail.Runs[0].RepoRefs["kubernetes-sigs/cluster-api-provider-azure"] = "main:" + analysisFixRevision + ",pull:" + strings.Repeat("e", 40)
-	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("ambiguous source error = %v", err)
+		t.Fatalf("advanced base error = %v", err)
 	}
 }
 
-func TestVerifyAnalysisFindingHashesTextSymbolsAndWarnings(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	reader := &mapSourceReader{files: map[string]string{
-		"controllers/cluster_controller.go": "package controllers\nfunc markReady() {}\nfunc reconcile() {}\n",
-	}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
-	withoutSymbol, warnings, err := service.verifyAnalysisFinding(repo, []string{"controllers/cluster_controller.go"}, "Change the terminal branch.", reader.files)
-	if err != nil || len(warnings) == 0 {
-		t.Fatalf("finding without local symbol hash=%q warnings=%v err=%v", withoutSymbol, warnings, err)
+func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
+	input := AnalysisFixInput{
+		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
+		ChatResponseHash: "response", PreviewRequestHash: "preview", AnalysisContentHash: "analysis",
+		SourceRepository: sourceinvestigation.Repository{
+			Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision,
+		},
+		AssistantAnswer:     "Investigate whether reconciliation skips the terminal update.",
+		AssistantUnverified: true, AssistantUnverifiedReason: "no artifact access",
 	}
-	first, firstWarnings, err := service.verifyAnalysisFinding(repo, []string{"controllers/cluster_controller.go"}, "Update `markReady` in the terminal branch.", reader.files)
-	if err != nil {
+	if err := validateAnalysisFixInput(input); err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := service.verifyAnalysisFinding(repo, []string{"controllers/cluster_controller.go"}, "Update `markReady` before returning.", reader.files)
-	if err != nil {
-		t.Fatal(err)
+	input.FailureRevision = analysisFixRevision
+	if err := validateAnalysisFixInput(input); err == nil {
+		t.Fatal("partial source binding was accepted")
 	}
-	if first == second || first == withoutSymbol {
-		t.Fatal("finding text or grounded-symbol change retained the same verification identity")
-	}
-	reader.files["controllers/cluster_controller.go"] = "package controllers\nfunc reconcile() {}\n"
-	warningHash, changedWarnings, err := service.verifyAnalysisFinding(repo, []string{"controllers/cluster_controller.go"}, "Update `markReady` in the terminal branch.", reader.files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if warningHash == first || slices.Equal(firstWarnings, changedWarnings) {
-		t.Fatal("grounding warning change retained the same verification identity")
+	input.GenerationBaseRevision = analysisFixRevision
+	input.SourceBranch = "main"
+	if err := validateAnalysisFixInput(input); err != nil {
+		t.Fatalf("complete source binding error = %v", err)
 	}
 }
 
-func TestAnalysisQualityWarnings(t *testing.T) {
+func TestAnalysisQualityWarningsPreserveWeakEvidenceSignals(t *testing.T) {
 	analysis := &models.AIAnalysis{Severity: "Transient-Ignore"}
 	warnings := analysisQualityWarnings(analysis, AnalysisFixInput{
-		AssistantAnswer:  "The cited finding is nonempty.",
-		ProposedRevision: &fixpr.RevisionContext{RootCause: "", SuggestedFix: ""},
-		EvidenceWarnings: []string{"citation 2 was omitted"},
-	})
+		AssistantAnswer:     "The selected hypothesis is nonempty.",
+		AssistantUnverified: true, AssistantUnverifiedReason: "tool budget ended",
+		ProposedRevision: &fixpr.RevisionContext{},
+		EvidenceWarnings: []string{"citation line range was unavailable"},
+	}, nil)
 	for _, warning := range []string{
 		analysisWarningCritique, analysisWarningSuggestedFix, analysisWarningRootCause,
-		analysisWarningTransient, analysisWarningProse, analysisWarningPartialEvidence,
+		analysisWarningTransient, analysisWarningProse, analysisWarningEvidenceQualified,
+		analysisWarningAssistantUnverified, analysisWarningNoCitations, analysisWarningNoSourceHints,
 	} {
 		if !slices.Contains(warnings, warning) {
-			t.Fatalf("warnings = %v, missing %q", warnings, warning)
+			t.Fatalf("warnings=%v missing=%q", warnings, warning)
 		}
 	}
 }
 
-func TestPreviewAnalysisFixRejectsPreflightGenerationBaseDriftBeforeSandbox(t *testing.T) {
-	dir := t.TempDir()
-	detail := exactJUnitDetail()
-	detail.Runs[0].RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
-	detail.Runs[0].Commit = analysisFixRevision
-	detail.Runs[0].RepoVersion = analysisFixRevision
-	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"}, contains: true,
-	}
-	content := "package controllers\nfunc reconcileDelete() {}\n"
-	readers := map[string]sourceSnapshotReader{
-		analysisFixRevision:        &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": content}},
-		capzGenerationBaseRevision: &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": content}},
-	}
-	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	compatibility, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, "Update `reconcileDelete`.",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
-		PreviewRequestHash: "preview-hash", AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: repo,
-		FailureRevision: repo.Revision, GenerationBaseRevision: strings.Repeat("b", 40),
-		VerifiedSourceFileHashes: compatibility.VerifiedSourceFileHashes,
-		SourceBranch:             "main",
-		AssistantAnswer:          "Update `reconcileDelete`.",
-		ArtifactCitations:        []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-	}, "alice", "github-write-token", "")
-	if !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("generation base drift error = %v", err)
-	}
-	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "normal-session", ChatRequestID: "normal-request", ChatResponseHash: "normal-chat-hash",
-		PreviewRequestHash: "normal-preview-hash", AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: repo,
-		AssistantAnswer:   "Update `reconcileDelete`.",
-		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-	}, "alice", "github-write-token", "")
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "fix-request source preflight") {
-		t.Fatalf("unbound advancement error = %v", err)
-	}
-}
-
-func TestAnalysisPreviewReservationPreventsDuplicateGeneration(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	firstToken, existing, acquired, err := service.previewStore.reserveIdempotent("alice", "request-hash", "generation-hash", time.Minute)
-	if err != nil || !acquired || existing != nil {
-		t.Fatalf("first reservation token=%q existing=%+v acquired=%t err=%v", firstToken, existing, acquired, err)
-	}
-	if _, _, _, err := service.previewStore.reserveIdempotent("alice", "request-hash", "generation-hash", time.Minute); !errors.Is(err, ErrPreviewPending) {
-		t.Fatalf("concurrent reservation error = %v", err)
-	}
-	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
-		Subject: "TestCluster", Rationale: "fix", Diff: "diff", Files: map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
-		Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed}, Title: "fix: test", Description: "safe description", Body: "body",
-		Key: "fix-analysis::id", Base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
-	})
-	entry := &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind, targetRepo: "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig: fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()), verificationVersion: sourceVerificationVersion,
-		fix: fix, analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request-hash"},
-	}
-	if err := service.previewStore.completeIdempotent("alice", firstToken, "request-hash", "generation-hash", entry); err != nil {
-		t.Fatal(err)
-	}
-	secondToken, existing, acquired, err := service.previewStore.reserveIdempotent("alice", "request-hash", "generation-hash", time.Minute)
-	if err != nil || acquired || existing == nil || secondToken != firstToken {
-		t.Fatalf("completed reservation token=%q existing=%+v acquired=%t err=%v", secondToken, existing, acquired, err)
-	}
-	if _, _, _, err := service.previewStore.reserveIdempotent("alice", "request-hash", "changed-generation", time.Minute); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("changed generation identity error = %v", err)
-	}
-}
-
-func TestPreviewAnalysisFixRequiresEnabledFixPRFeature(t *testing.T) {
-	dir := t.TempDir()
-	detail := exactJUnitDetail()
-	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-	cfg := exactAnalysisConfig()
-	cfg.AI.FixPRs.Enabled = false
-	service := NewService(cfg, dir, AIConfig{})
-	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := exactIdentity()
-	identity.Project = "caller-project"
-	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: identity, ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
-		PreviewRequestHash: "preview-hash", AnalysisContentHash: subject.AnalysisContentHash,
-		SourceRepository:  sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
-		AssistantAnswer:   "Update `reconcileDelete`.",
-		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-	}, "alice", "github-write-token", "")
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "Agent Sandbox") {
-		t.Fatalf("disabled fix feature error = %v", err)
-	}
-}
-
-func TestResolveAnalysisActionSubjectUsesSharedMutableBuildSource(t *testing.T) {
-	sha := "a866aca055bcaa205648e81d15c67668179fdfab"
-	for _, tc := range []struct {
-		name     string
-		mutate   func(*models.BuildInfo)
-		eligible bool
-	}{
-		{name: "matching checkout", eligible: true, mutate: func(build *models.BuildInfo) {
-			build.RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
-			build.Commit, build.RepoVersion = sha, sha
-		}},
-		{name: "mismatched checkout", mutate: func(build *models.BuildInfo) {
-			build.RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main"}
-			build.Commit, build.RepoVersion = sha, strings.Repeat("b", 40)
-		}},
-		{name: "multiple repositories", mutate: func(build *models.BuildInfo) {
-			build.RepoRefs = map[string]string{
-				"kubernetes-sigs/cluster-api-provider-azure": "main",
-				"kubernetes-sigs/cloud-provider-azure":       "main",
-			}
-			build.Commit, build.RepoVersion = sha, sha
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			detail := exactJUnitDetail()
-			tc.mutate(&detail.Runs[0].BuildInfo)
-			detail.Runs[0].TestCases[0].AIAnalysis.FileLinks = map[string]string{
-				"controllers/cluster_controller.go": "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/" + sha + "/controllers/cluster_controller.go",
-			}
-			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-			subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
-			if tc.eligible {
-				if err != nil || subject.SourceRepository.Revision != sha || len(subject.SourceFiles) != 1 {
-					t.Fatalf("subject=%+v err=%v", subject, err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("ineligible subject = %+v", subject)
-			}
-		})
+func TestBoundedAnalysisFailureText(t *testing.T) {
+	value := strings.Repeat("界", maxAnalysisFailureTextBytes)
+	got := boundedAnalysisFailureText(value)
+	if len(got) > maxAnalysisFailureTextBytes || !strings.HasSuffix(got, "…") {
+		t.Fatalf("bounded failure text length=%d suffix=%q", len(got), got[len(got)-3:])
 	}
 }
 
@@ -746,19 +659,18 @@ func TestPreviewAnalysisFixRejectsUnsafeMaintainerInstruction(t *testing.T) {
 	detail := exactJUnitDetail()
 	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
-	reader := &mapSourceReader{files: map[string]string{"controllers/cluster_controller.go": "package controllers\nfunc reconcileDelete() {}\n"}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return reader }
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+	}
 	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request", ChatResponseHash: "chat-hash",
-		PreviewRequestHash: "preview-hash", AnalysisContentHash: subject.AnalysisContentHash,
-		SourceRepository:  sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
-		AssistantAnswer:   "Update `reconcileDelete`.",
-		ArtifactCitations: []fixpr.Evidence{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
+		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
+		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
+		AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: subject.SourceRepository,
+		AssistantAnswer: "Investigate the reconciliation path.",
 	}, "alice", "github-write-token", "Remove the conversion webhook before upgrade.")
 	if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonUnsafeRemediation {
 		t.Fatalf("unsafe instruction error = %v", err)
@@ -768,214 +680,19 @@ func TestPreviewAnalysisFixRejectsUnsafeMaintainerInstruction(t *testing.T) {
 func TestValidatedAnalysisPreviewRejectsDestructiveGeneratedPatch(t *testing.T) {
 	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
 		Subject: "TestCluster", Rationale: "fix",
-		Diff:  "--- a/controller.go\n+++ b/controller.go\n+Remove the conversion webhook before upgrade.\n",
-		Files: map[string]string{"controller.go": "package controllers\n"}, Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped},
-		Title: "fix: test", Description: "safe description", Body: "safe body",
-		Key: "fix-analysis::id", Base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
+		Diff:   "--- a/controller.go\n+++ b/controller.go\n+Remove the conversion webhook before upgrade.\n",
+		Files:  map[string]string{"controller.go": "package controllers\n"},
+		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped},
+		Title:  "fix: test", Description: "safe description", Body: "safe body",
+		Key:                "fix-analysis::id",
+		Base:               ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+		RequireBaseCurrent: true,
 	})
-	_, err := validatedPreviewEntry(&previewEntry{kind: gfKind, fix: fix, analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request"}})
+	_, err := validatedPreviewEntry(&previewEntry{
+		kind: gfKind, fix: fix,
+		analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request"},
+	})
 	if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonUnsafeRemediation {
 		t.Fatalf("destructive patch error = %v", err)
-	}
-}
-
-func TestValidatedAnalysisPreviewAllowsDestructiveModelProseWithSafePatch(t *testing.T) {
-	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
-		Subject: "TestCluster", Rationale: "fix", Diff: "--- a/controller.go\n+++ b/controller.go\n+func retryConflict() {}\n",
-		Files: map[string]string{"controller.go": "package controllers\nfunc retryConflict() {}\n"}, Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped},
-		Title: "fix: test", Description: "Delete the conversion webhook before upgrade.", Body: "safe body",
-		Key: "fix-analysis::id", Base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
-	})
-	preview, err := validatedPreviewEntry(&previewEntry{kind: gfKind, fix: fix, analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request"}})
-	if err != nil || preview.Diff != fix.Preview.Diff {
-		t.Fatalf("preview=%+v err=%v", preview, err)
-	}
-}
-
-type unreadableAnalysisSourceReader struct{}
-
-func (unreadableAnalysisSourceReader) ReadFile(context.Context, string) (string, bool, error) {
-	return "", false, errors.New("source archive unavailable")
-}
-
-func TestAnalysisSourceCompatibilityRejectsUnreadableSourceArchive(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader { return unreadableAnalysisSourceReader{} }
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision}
-	if _, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", []string{"controllers/cluster_controller.go"}, "Update `reconcileDelete`."); err == nil {
-		t.Fatal("unreadable source archive was accepted")
-	}
-}
-
-// TestAnalysisActionSubjectIgnoresDependencyCauseOwnership proves that naming
-// an upstream cause never widens a write path. The action's source repository
-// is derived from the configured project and the build's pinned revision, and
-// its verified files come from the verified link map, so a dependency the
-// analysis blames cannot become a fix destination or contribute a file. This is
-// the production shape: the caller never supplies the repository.
-func TestAnalysisActionSubjectIgnoresDependencyCauseOwnership(t *testing.T) {
-	dir := t.TempDir()
-	detail := exactJUnitDetail()
-	detail.Runs[0].TestCases[0].AIAnalysis.CauseLocation = &models.AnalysisCauseLocation{
-		Repository: "kubernetes/kubernetes", External: true,
-		Files: []string{"pkg/kubelet/cm/devicemanager/manager.go"},
-	}
-	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-
-	subject, err := NewService(exactAnalysisConfig(), dir, AIConfig{}).ResolveAnalysisActionSubject(exactIdentity())
-	if err != nil {
-		t.Fatalf("resolve = %v", err)
-	}
-	if subject.SourceRepository.Owner != "kubernetes-sigs" || subject.SourceRepository.Name != "cluster-api-provider-azure" {
-		t.Fatalf("dependency ownership changed the fix destination: %+v", subject.SourceRepository)
-	}
-	for _, file := range subject.SourceFiles {
-		if file == "pkg/kubelet/cm/devicemanager/manager.go" {
-			t.Fatalf("unverified dependency hint became a verified source file: %v", subject.SourceFiles)
-		}
-	}
-}
-
-// TestAnalysisSourceCompatibilityRejectsDependencyRepository covers the gate
-// itself: even asked directly, a repository other than the configured project's
-// is never an acceptable analysis source or fix destination.
-func TestAnalysisSourceCompatibilityRejectsDependencyRepository(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"}}
-	dependency := sourceinvestigation.Repository{Owner: "kubernetes", Name: "kubernetes", Revision: analysisFixRevision}
-	_, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), dependency, "main", []string{"pkg/kubelet/cm/devicemanager/manager.go"}, "Update `GetDeviceRunContainerOptions`.")
-	if err == nil {
-		t.Fatal("a dependency repository was accepted as a fix destination")
-	}
-	if !strings.Contains(err.Error(), "do not match") {
-		t.Fatalf("rejection reason = %v", err)
-	}
-}
-
-const capzReleaseBaseRevision = "8caa35df8680f64693a3f76ea3d35c2349ab4828"
-
-// A release-branch failure has to resolve its own branch head. Resolving the
-// default branch instead compares a diverged commit and rejects every fix.
-func TestAnalysisSourceCompatibilityResolvesReleaseBranchBase(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	client := &fakeAnalysisSourceRevisionClient{
-		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
-		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
-		contains:    true,
-	}
-	service.sourceRevisionClient = client
-	content := "package securitygroups\nfunc Reconcile() {}\n"
-	readers := map[string]sourceSnapshotReader{
-		capzFailureRevision:     &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": content}},
-		capzReleaseBaseRevision: &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": content}},
-	}
-	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader { return readers[repo.Revision] }
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-
-	compatibility, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"}, "Update `Reconcile`.",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if compatibility.GenerationBaseRevision != capzReleaseBaseRevision {
-		t.Fatalf("generation base = %s, want the release branch head", compatibility.GenerationBaseRevision)
-	}
-	if !slices.Equal(client.branchRequests, []string{"release-1.25"}) {
-		t.Errorf("resolved branches = %v, want only the failure branch", client.branchRequests)
-	}
-}
-
-// The ancestry guard is what makes the resolved base safe, so it has to keep
-// rejecting a revision the branch has genuinely moved away from.
-func TestAnalysisSourceCompatibilityRejectsDivergedReleaseRevision(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
-		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
-		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
-	}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
-		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n"}}
-	}
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-
-	_, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"}, "",
-	)
-	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceRevisionDiverged {
-		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
-	}
-}
-
-func TestAnalysisSourceCompatibilityRejectsUnknownBranch(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	client := &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"}, contains: true,
-	}
-	service.sourceRevisionClient = client
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
-		return &mapSourceReader{files: map[string]string{"azure/services/securitygroups/spec.go": "package securitygroups\n"}}
-	}
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-
-	_, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "", []string{"azure/services/securitygroups/spec.go"}, "",
-	)
-	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
-		t.Fatalf("err = %v code = %q ok = %t", err, code, ok)
-	}
-	if len(client.branchRequests) != 0 || client.compareCalls != 0 {
-		t.Errorf("revision client calls = branches %v compares %d, want none without a branch", client.branchRequests, client.compareCalls)
-	}
-}
-
-// The chat preflight is the only caller that reports a rejection to an
-// operator, so it must not collapse a classified cause into one message.
-func TestPreflightAnalysisFixSourcePreservesReasonCode(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
-		base:        ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "maintree"},
-		branchBases: map[string]ghpr.Base{"release-1.25": {Branch: "release-1.25", HeadSHA: capzReleaseBaseRevision, TreeSHA: "releasetree"}},
-		contains:    true,
-	}
-	service.sourceReaderFactory = func(repo sourceinvestigation.Repository) sourceSnapshotReader {
-		if repo.Revision != capzReleaseBaseRevision {
-			t.Fatalf("read historical revision %s", repo.Revision)
-		}
-		return &mapSourceReader{files: map[string]string{}}
-	}
-	repo := sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision}
-
-	_, _, err := service.PreflightAnalysisFixSource(
-		t.Context(), repo, "release-1.25", []string{"azure/services/securitygroups/spec.go"},
-	)
-	if !errors.Is(err, ErrPreviewRejected) {
-		t.Fatalf("err = %v, want a preview rejection", err)
-	}
-	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceChanged {
-		t.Fatalf("code = %q ok = %t", code, ok)
-	}
-}
-
-func TestAnalysisSourceCompatibilityRejectsResolvedBranchMismatchAtExactHead(t *testing.T) {
-	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
-	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
-		branchBases: map[string]ghpr.Base{
-			"main": {Branch: "other", HeadSHA: capzFailureRevision, TreeSHA: "tree"},
-		},
-	}
-	service.sourceReaderFactory = func(sourceinvestigation.Repository) sourceSnapshotReader {
-		t.Fatal("branch mismatch read source")
-		return nil
-	}
-	repo := sourceinvestigation.Repository{
-		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
-	}
-	if _, err := service.verifyAnalysisSourceCompatibility(
-		t.Context(), repo, "main", []string{"test/e2e/cni.go"}, "",
-	); err == nil || !strings.Contains(err.Error(), "branch does not match") {
-		t.Fatalf("resolved branch mismatch error = %v", err)
 	}
 }

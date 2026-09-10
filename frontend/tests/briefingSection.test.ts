@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
 import type { AIAnalysis } from "../src/types/dashboard.js";
+import type { AnalysisChatReference } from "../src/types/analysisChat.js";
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
@@ -14,6 +15,7 @@ const { AiAnalysisPanel, CapabilitiesContext, AuthContext, defaultTheme } = awai
     AiAnalysisPanel: (props: {
       analysis: AIAnalysis;
       fileCtx: Record<string, unknown>;
+      chatRef?: AnalysisChatReference;
       appearance?: "default" | "detail";
       severityInHeader?: boolean;
     }) => ReturnType<typeof createElement>;
@@ -144,4 +146,54 @@ test("severity is not repeated when the surrounding header already states it", (
   assert.match(render(false), /Severity: High/u);
 
   assert.doesNotMatch(render(true), /Severity: High/u);
+});
+
+test("preliminary upstream analysis keeps its supported chat investigation", () => {
+  const serverCapabilities: Capabilities = {
+    mode: "server",
+    features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+  };
+  const preliminary: AIAnalysis = {
+    ...analysis,
+    disposition: "preliminary",
+    cause_location: {
+      repository: "kubernetes/kubernetes",
+      external: true,
+      files: ["pkg/controller/controller.go"],
+    },
+  };
+  const html = renderToStaticMarkup(
+    createElement(
+      ThemeProvider,
+      { theme: defaultTheme },
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(
+          CapabilitiesContext.Provider,
+          { value: serverCapabilities },
+          createElement(
+            AuthContext.Provider,
+            { value: anonymous },
+            createElement(AiAnalysisPanel, {
+              analysis: preliminary,
+              fileCtx: {},
+              appearance: "detail",
+              chatRef: {
+                job_id: "job",
+                build_id: "100",
+                test_name: "fails",
+                junit_file: "artifacts/junit.xml",
+                analysis_generated_at: preliminary.generated_at,
+              },
+            }) as ReactNode,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  assert.match(html, /Treat the diagnosis as a hypothesis/);
+  assert.match(html, /Cause is in a dependency/);
+  assert.match(html, /Expand investigate and fix/);
 });

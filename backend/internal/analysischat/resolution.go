@@ -149,7 +149,7 @@ func resolvePatternAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedA
 			break
 		}
 	}
-	if selected == nil || !selected.Systemic {
+	if selected == nil {
 		return resolvedAnalysis{}, ErrPatternNotFound
 	}
 	if models.PatternHash(*selected) != ref.PatternHash {
@@ -274,10 +274,7 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 	causePattern.RemediationTargets = nil
 	causePattern.Lifecycle = models.CausalGroupLifecycle(detail, group.Builds)
 	causePattern.Summary = group.RootCause
-	var fixTarget *resolvedFixTarget
-	if models.PatternIsActive(pattern) {
-		fixTarget = selectCauseFixTarget(ref.JobID, group, detail.Runs)
-	}
+	fixTarget := selectCauseFixTarget(ref.JobID, group, detail.Runs)
 	testCase := models.TestCase{
 		Name: pattern.Subject,
 		AIAnalysis: &models.AIAnalysis{
@@ -302,11 +299,11 @@ func selectCauseFixTarget(jobID string, group models.PatternCausalGroup, runs []
 		}
 	}
 	selectRun := func(run models.BuildResult) *resolvedFixTarget {
-		if _, ok := affected[run.BuildID]; !ok {
+		if _, ok := affected[run.BuildID]; !ok || run.Passed {
 			return nil
 		}
 		testCase := representativeCauseFailure(run.TestCases)
-		if testCase == nil || testCase.Source == models.TestCaseSourceBuild || strings.TrimSpace(testCase.JUnitFile) == "" || len(testCase.AIAnalysis.FileLinks) == 0 {
+		if testCase == nil || testCase.Source == models.TestCaseSourceBuild || strings.TrimSpace(testCase.JUnitFile) == "" {
 			return nil
 		}
 		for i := range run.TestCases {

@@ -399,25 +399,13 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		if err := entry.fix.ValidateExecutionVerification(); err != nil {
 			return PreviewResult{}, err
 		}
-		snapshot := entry.fix.Snapshot()
-		policyParts := []string{
-			snapshot.Pattern.SuggestedFix, snapshot.Pattern.SharedRootCause, snapshot.Pattern.Summary,
-			entry.fix.Title, entry.fix.Description,
-		}
-		if entry.analysisBinding != nil {
-			policyParts = append(policyParts, entry.fix.Preview.Diff)
-		}
-		policyText := strings.Join(policyParts, "\n")
-		unsafe := remediationpolicy.Reason(policyText, snapshot.Pattern.RemediationTargets) != ""
-		if entry.analysisBinding != nil {
-			unsafe = remediationpolicy.RelationshipTextWarning(entry.fix.Preview.Diff) != ""
-		}
-		if unsafe {
+		if remediationpolicy.RelationshipTextWarning(entry.fix.Preview.Diff) != "" {
 			return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 		}
 		return PreviewResult{
 			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
 			VerifyStatus: string(entry.fix.Preview.Verify.Status), VerifySummary: entry.fix.Preview.Verify.Summary, VerifyOutput: entry.fix.Preview.Verify.Output,
+			Warning: boundedWarningSummary(entry.fix.Warnings...),
 		}, nil
 	default:
 		return PreviewResult{}, fmt.Errorf("preview kind %q is unsupported", entry.kind)
@@ -517,19 +505,19 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 }
 
 func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ...string) error {
-	subject, err := s.resolveSubject(failureID)
+	fix := len(kind) > 0 && (kind[0] == gfKind || kind[0] == "propose-fix")
+	var subject *ActionSubject
+	var err error
+	if fix {
+		subject, err = s.resolveSubjectForManualFix(failureID)
+	} else {
+		subject, err = s.resolveSubject(failureID)
+	}
 	if err != nil {
 		return err
 	}
 	if patternHash == "" || subject.ContentHash != patternHash {
 		return ErrPreviewTargetChanged
-	}
-	fix := len(kind) > 0 && (kind[0] == gfKind || kind[0] == "propose-fix")
-	if fix && subject.Kind == actionSubjectBuild {
-		eff := s.cfg.EffectiveFixPRs()
-		if eff.Repo == nil || len(verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)) == 0 {
-			return ErrPreviewTargetChanged
-		}
 	}
 	return nil
 }

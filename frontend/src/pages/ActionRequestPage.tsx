@@ -426,7 +426,7 @@ export function ActionRequestPage() {
                     {actionRequestProgressTitle(request, isFix)}
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
-                    {actionRequestProgressDetail(request)}
+                    {actionRequestProgressDetail(request, isFix)}
                   </Typography>
                 </Box>
               </Stack>
@@ -564,7 +564,9 @@ export function ActionRequestPage() {
                 : request.status === "unknown"
                   ? "Check GitHub result"
                   : isFix
-                  ? "Open draft PR"
+                  ? request.warning || preview?.warning
+                    ? "Open draft PR with warnings"
+                    : "Open draft PR"
                   : "File issue"}
             </Button>
           )}

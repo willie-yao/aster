@@ -149,7 +149,6 @@ func TestHandlerChatFixPreview(t *testing.T) {
 	runner := &fakeChatFixRunner{}
 	capabilities := DefaultCapabilities()
 	capabilities.Features.JUnitChatFix = true
-	capabilities.Features.ChatFixMinConfidence = "medium"
 	handler, err := Handler(Options{
 		DataDir: t.TempDir(), Capabilities: capabilities, Auth: fakeAuth{}, AuthMode: "dev",
 		Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
@@ -165,7 +164,7 @@ func TestHandlerChatFixPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := readBody(t, capabilitiesResponse)
-	if !strings.Contains(body, `"chat_fix":true`) || !strings.Contains(body, `"junit_chat_fix":true`) || !strings.Contains(body, `"chat_fix_min_confidence":"medium"`) {
+	if !strings.Contains(body, `"chat_fix":true`) || !strings.Contains(body, `"junit_chat_fix":true`) || strings.Contains(body, `"chat_fix_min_confidence"`) {
 		t.Fatalf("capabilities = %s", body)
 	}
 
