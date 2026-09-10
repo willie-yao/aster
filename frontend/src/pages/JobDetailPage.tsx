@@ -489,14 +489,10 @@ export function JobDetailPage() {
       <Box
         sx={{
           display: "grid",
-          // From md up the status sits beside the title it describes. A
-          // trailing `auto` column would strand it against the far page edge.
           gridTemplateColumns: {
             xs: "minmax(0, 1fr)",
             sm: "minmax(0, 1fr) auto",
-            md: "auto auto",
           },
-          justifyContent: { md: "start" },
           alignItems: { xs: "start", md: "center" },
           gap: { xs: 1, sm: 2, md: 3 },
         }}
