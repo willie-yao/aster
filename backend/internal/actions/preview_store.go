@@ -416,7 +416,8 @@ func (s *previewStore) load() (*previewState, bool, error) {
 		}
 		invalidVersion := preview.Kind == gfKind && preview.VerificationVersion != sourceVerificationVersion
 		missingFixIdentity := preview.Kind == gfKind && (preview.FailureID == "" || preview.PatternHash == "")
-		if invalidVersion || missingFixIdentity {
+		invalidHandoff := (preview.AnalysisBinding != nil || strings.HasPrefix(preview.FailureID, "analysis::")) && validateAnalysisPreviewBinding(preview.AnalysisBinding) != nil
+		if invalidVersion || missingFixIdentity || invalidHandoff {
 			delete(state.Previews, key)
 			changed = true
 		}
@@ -535,6 +536,9 @@ func evictPersistedPreviews(state *previewState, now time.Time) bool {
 				delete(state.Previews, key)
 				changed = true
 			} else if created.Before(cutoff) {
+				if (record.AnalysisBinding != nil || strings.HasPrefix(record.FailureID, "analysis::")) && validateAnalysisPreviewBinding(record.AnalysisBinding) != nil {
+					continue
+				}
 				record.Status = previewStatusReady
 				record.CreatedAt = now.Format(time.RFC3339Nano)
 				changed = true

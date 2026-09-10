@@ -3,10 +3,6 @@ package chatfix
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -19,10 +15,6 @@ import (
 type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error)
 	AnalysisFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
-	PreflightAnalysisFix(ctx context.Context, sessionID, owner, requestID string) error
-	ReserveAnalysisFix(sessionID, owner, requestID, reservationID string) error
-	CommitAnalysisFix(sessionID, owner, requestID, reservationID, referenceID string) error
-	ReleaseAnalysisFix(sessionID, owner, requestID, reservationID string) error
 }
 
 type fixPreviewer interface {
@@ -32,7 +24,8 @@ type fixPreviewer interface {
 }
 
 type analysisFixRequester interface {
-	CreateAnalysisFixRequest(actions.AnalysisFixInput, string, string, string, ...string) (actions.ActionRequestView, error)
+	FindAnalysisFixRequest(string, string, string, string) (actions.ActionRequestView, bool, error)
+	CreateAnalysisFixRequest(context.Context, actions.AnalysisFixInput, string, string, string, ...string) (actions.ActionRequestView, error)
 }
 
 // Service validates shared chat context before fix generation.
@@ -107,46 +100,19 @@ func (s *Service) CreateAnalysisFixRequest(
 	if s.requests == nil {
 		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact JUnit fix previews are unavailable", analysischat.ErrInvalidRequest)
 	}
-	// Pin the source the patch will be generated against. Chat turns do not do
-	// this, so that asking a question never depends on source verification.
-	if err := s.chat.PreflightAnalysisFix(ctx, sessionID, owner, requestID); err != nil {
-		return actions.ActionRequestView{}, err
+	if request, found, err := s.requests.FindAnalysisFixRequest(sessionID, requestID, owner, instruction); err != nil || found {
+		return request, err
 	}
 	candidate, err := s.chat.AnalysisFixCandidate(sessionID, owner, requestID)
 	if err != nil {
 		return actions.ActionRequestView{}, err
 	}
-	input := exactAnalysisFixInput(candidate, instruction)
-	reservationID, err := newFixReservationID()
-	if err != nil {
-		return actions.ActionRequestView{}, err
-	}
-	if err := s.chat.ReserveAnalysisFix(sessionID, owner, requestID, reservationID); err != nil {
-		return actions.ActionRequestView{}, err
-	}
-	request, err := s.requests.CreateAnalysisFixRequest(input, owner, userToken, instruction, replacesRequestIDs...)
-	if err != nil {
-		if releaseErr := s.chat.ReleaseAnalysisFix(sessionID, owner, requestID, reservationID); releaseErr != nil {
-			err = errors.Join(err, fmt.Errorf("releasing analysis Fix reservation: %w", releaseErr))
-		}
-		return actions.ActionRequestView{}, err
-	}
-	if err := s.chat.CommitAnalysisFix(sessionID, owner, requestID, reservationID, request.ID); err != nil {
-		return actions.ActionRequestView{}, fmt.Errorf("committing analysis Fix reference: %w", err)
-	}
-	return request, nil
-}
-
-func newFixReservationID() (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", fmt.Errorf("creating analysis Fix reservation: %w", err)
-	}
-	return hex.EncodeToString(value[:]), nil
+	return s.requests.CreateAnalysisFixRequest(ctx, exactAnalysisFixInput(candidate, instruction), owner, userToken, instruction, replacesRequestIDs...)
 }
 
 func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {
 	input := actions.AnalysisFixInput{
+		Origin: analysischat.FixOrigin{Analysis: candidate.Analysis, Original: candidate.Original, FixTarget: candidate.FixTarget},
 		Identity: actions.AnalysisIdentity{
 			JobID: candidate.FixTarget.JobID, BuildID: candidate.FixTarget.BuildID, TestName: candidate.FixTarget.TestName,
 			Source: candidate.FixTarget.Source, SuiteName: candidate.FixTarget.SuiteName, ClassName: candidate.FixTarget.ClassName,
@@ -155,9 +121,8 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 		ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
 		PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
 		SourceRepository: candidate.SourceRepositorySnapshot,
-		FailureRevision:  candidate.FailureRevision, GenerationBaseRevision: candidate.GenerationBaseRevision,
-		SourceBranch:    candidate.SourceBranch,
-		AssistantAnswer: candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		SourceBranch:     candidate.SourceBranch,
+		AssistantAnswer:  candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
 		AssistantUnverified:       candidate.AssistantUnverified,
 		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
 		EvidenceWarnings:          append([]string(nil), candidate.EvidenceWarnings...),
@@ -169,35 +134,7 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 }
 
 func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction string) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{
-		candidate.SessionID, candidate.RequestID, candidate.ResponseHash, strings.TrimSpace(instruction),
-	}, "\x00")))
-	return hex.EncodeToString(sum[:])
-}
-
-// ValidateAnalysisPreview rechecks the exact shared chat response.
-func (s *Service) ValidateAnalysisPreview(_ context.Context, owner string, binding actions.AnalysisPreviewBinding) error {
-	candidate, err := s.chat.AnalysisFixCandidate(binding.ChatSessionID, owner, binding.ChatRequestID)
-	if err != nil {
-		return err
-	}
-	ref := candidate.FixTarget
-	identity := binding.Identity
-	if candidate.ResponseHash != binding.ChatResponseHash ||
-		(candidate.Analysis.Scope != analysischat.ScopeTest && candidate.Analysis.Scope != analysischat.ScopeCause) || ref.Scope != analysischat.ScopeTest ||
-		candidate.AnalysisContentHash == "" || candidate.AnalysisContentHash != binding.AnalysisContentHash ||
-		candidate.SourceRepositorySnapshot != binding.SourceRepository ||
-		ref.JobID != identity.JobID || ref.BuildID != identity.BuildID || ref.TestName != identity.TestName ||
-		ref.Source != identity.Source || ref.SuiteName != identity.SuiteName || ref.ClassName != identity.ClassName ||
-		ref.JUnitFile != identity.JUnitFile || ref.AnalysisGeneratedAt != identity.AnalysisGeneratedAt {
-		return analysischat.ErrAnalysisChanged
-	}
-	if candidate.GenerationBaseRevision != "" &&
-		(!strings.EqualFold(candidate.FailureRevision, binding.FailureRevision) ||
-			!strings.EqualFold(candidate.GenerationBaseRevision, binding.GenerationBaseRevision)) {
-		return analysischat.ErrAnalysisChanged
-	}
-	return nil
+	return actions.AnalysisFixRequestHash(candidate.SessionID, candidate.RequestID, instruction)
 }
 
 func artifactEvidence(citations []analysischat.Citation) []fixpr.Evidence {

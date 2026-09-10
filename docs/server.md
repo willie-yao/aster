@@ -20,7 +20,7 @@ The server reads data written by the authoritative in-process fetcher or worker.
 | `POST /api/analysis-chat/sessions/lookup` | Restore the shared non-expired conversation for one current analysis. |
 | `POST /api/analysis-chat/prepared/lookup` | Read-only batch check of which causes already have a prepared finding waiting, so a collapsed cause control can say so without opening a shared session. |
 | `GET /api/analysis-chat/sessions/{id}` | Read a shared conversation and its current active turn. |
-| `DELETE /api/analysis-chat/sessions/{id}` | Remove an idle shared conversation unless a Fix proposal depends on it, so the next question starts a new one. |
+| `DELETE /api/analysis-chat/sessions/{id}` | Remove an idle shared conversation. This does not cancel an admitted Fix proposal. |
 | `POST /api/analysis-chat/sessions/{id}/messages` | Run one bounded follow-up and return the final transcript. |
 | `POST /api/analysis-chat/sessions/{id}/messages/stream` | Start or reconnect to a turn through SSE progress. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/cancel` | Cancel one active turn. Only the operator who started it may cancel it. |
@@ -100,7 +100,7 @@ After each initial or reconciliation AI publication, the fetcher prepares up to 
 
 A proposed revision or Fix finding is still inert model output. Source compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
-Sessions are stored in private shared state and have bounded admitted turns. They normally expire after inactivity; a session referenced by an admitted Fix request is retained through that request's confirmation window. The Helm chart uses a `Recreate` server rollout when chat is enabled so old and new binaries never write different chat-state schemas at the same time. Equivalent manual deployments must stop old server replicas before starting the new version. User questions and attempts retain the initiating operator for attribution. The state contains transcripts and selected failure context, so the RWX volume and backups are operator-private. Replicas require advisory locking, atomic rename, and file and directory synchronization.
+Sessions are stored in private shared state, have bounded admitted turns, and expire after inactivity. Fix requests retain their own bounded evidence snapshot, so deleting or expiring a conversation does not cancel an admitted Fix. Use the separate action cancellation endpoint to cancel a pending or ready proposal. The Helm chart uses a `Recreate` server rollout when chat is enabled so old and new binaries never write different chat-state schemas at the same time. Equivalent manual deployments must stop old server replicas before starting the new version. User questions and attempts retain the initiating operator for attribution. The state contains transcripts and selected failure context, so the RWX volume and backups are operator-private. Replicas require advisory locking, atomic rename, and file and directory synchronization.
 
 ## Admin-gated actions
 

@@ -206,7 +206,6 @@ type Service struct {
 	requestStateWriter       func(string, any) error
 	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
 	sourceRevisionClient     analysisSourceRevisionClient
-	analysisPreviewValidator AnalysisPreviewValidator
 	analysisRequestGenerator func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error)
 	fixActionsEnabled        bool
 }
@@ -1177,7 +1176,11 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 			return "", withReason(previewValidationReasonCode(validateErr), ErrPreviewRejected, "")
 		}
 	}
-	if !reconcile && entry.analysisBinding != nil {
+	if !reconcile && isAnalysisPreview(entry) {
+		if err := validateAnalysisPreviewEntry(entry); err != nil {
+			_ = s.previewStore.discard(owner, token, attemptID)
+			return "", ErrPreviewTargetChanged
+		}
 		if err := s.validateAnalysisPreview(ctx, owner, *entry.analysisBinding); err != nil {
 			_ = s.previewStore.discard(owner, token, attemptID)
 			return "", ErrPreviewTargetChanged
@@ -1277,7 +1280,7 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 		}
 		key := entry.fix.Snapshot().Key
 		client := fixpr.NewClients(userToken)
-		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+		if strings.HasPrefix(entry.failureID, "build::") || isAnalysisPreview(entry) {
 			_, url, found, err := client.SearchAnyPR(ctx, destination.Repo.Owner, destination.Repo.Name, fixpr.MarkerToken(key), fixpr.MarkerFor(key))
 			return url, found, err
 		}
@@ -1299,7 +1302,14 @@ func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userTok
 }
 
 func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
-	if entry != nil && entry.failureID != "" && entry.analysisBinding == nil {
+	if isAnalysisPreview(entry) {
+		if err := validateAnalysisPreviewEntry(entry); err != nil {
+			return "", err
+		}
+		if err := s.validateAnalysisPreview(ctx, entry.initiatedBy, *entry.analysisBinding); err != nil {
+			return "", err
+		}
+	} else if entry != nil && entry.failureID != "" {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
 			return "", err
 		}
@@ -1341,7 +1351,7 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 				return fmt.Errorf("issue was not filed")
 			}
 			url = filed
-			if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+			if strings.HasPrefix(entry.failureID, "build::") || isAnalysisPreview(entry) {
 				mgr.Forget(entry.spec.Key)
 			}
 			if err := mgr.SaveState(); err != nil {
@@ -1382,11 +1392,11 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 			}
 			return "", fmt.Errorf("%s", safeReason(err.Error()))
 		}
-		if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+		if strings.HasPrefix(entry.failureID, "build::") || isAnalysisPreview(entry) {
 			mgr.Forget(entry.fix.Snapshot().Key)
 		}
 		if err := mgr.SaveState(); err != nil {
-			if strings.HasPrefix(entry.failureID, "build::") || entry.analysisBinding != nil {
+			if strings.HasPrefix(entry.failureID, "build::") || isAnalysisPreview(entry) {
 				log.Printf("Warning: single-analysis fix state cleanup failed after opening %s: %v", url, err)
 				return url, nil
 			}

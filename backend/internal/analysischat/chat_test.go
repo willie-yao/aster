@@ -607,14 +607,7 @@ func TestServiceDeleteRemovesSharedConversationAndReleasesCapacity(t *testing.T)
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "question"); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := service.store.context()
-	if err := service.store.update(ctx, func(state *persistedState) (bool, error) {
-		state.Sessions[created.ID].FixSources = map[string]persistedTestFixSource{"preflight-only": {}}
-		return true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	cancel()
+
 	if err := service.Delete(created.ID, "bob"); err != nil {
 		t.Fatalf("shared delete error = %v", err)
 	}

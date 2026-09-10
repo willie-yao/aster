@@ -14,6 +14,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/fixpr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
@@ -24,10 +25,10 @@ import (
 )
 
 const (
-	maxAnalysisSourceFiles            = 16
-	maxAnalysisFixCitations           = 16
-	maxAnalysisFailureTextBytes       = 8 << 10
-	analysisSourceVerificationVersion = 3
+	maxAnalysisSourceFiles      = 16
+	maxAnalysisFixCitations     = 16
+	maxAnalysisFailureTextBytes = 8 << 10
+	analysisFixHandoffVersion   = 4
 )
 
 // AnalysisIdentity identifies one exact published JUnit analysis.
@@ -58,6 +59,12 @@ type AnalysisActionSubject struct {
 
 // AnalysisFixInput is one owner-bound chat finding selected for fix generation.
 type AnalysisFixInput struct {
+	Origin                    analysischat.FixOrigin
+	Version                   int
+	Owner                     string
+	Instruction               string
+	TargetConfig              string
+	HandoffHash               string
 	Identity                  AnalysisIdentity
 	ChatSessionID             string
 	ChatRequestID             string
@@ -76,26 +83,9 @@ type AnalysisFixInput struct {
 	EvidenceWarnings          []string
 }
 
-// AnalysisPreviewBinding preserves the exact analysis, chat, and source identities.
+// AnalysisPreviewBinding retains the immutable action-owned finding.
 type AnalysisPreviewBinding struct {
-	Identity               AnalysisIdentity               `json:"identity"`
-	AnalysisID             string                         `json:"analysis_id"`
-	AnalysisHash           string                         `json:"analysis_hash"`
-	AnalysisContentHash    string                         `json:"analysis_content_hash"`
-	ChatSessionID          string                         `json:"chat_session_id"`
-	ChatRequestID          string                         `json:"chat_request_id"`
-	ChatResponseHash       string                         `json:"chat_response_hash"`
-	PreviewRequestHash     string                         `json:"preview_request_hash"`
-	SourceRepository       sourceinvestigation.Repository `json:"source_repository"`
-	SourceBranch           string                         `json:"source_branch"`
-	FailureRevision        string                         `json:"failure_revision"`
-	GenerationBaseRevision string                         `json:"generation_base_revision"`
-	VerificationVersion    int                            `json:"verification_version"`
-}
-
-// AnalysisPreviewValidator revalidates an owner-bound chat response before confirmation.
-type AnalysisPreviewValidator interface {
-	ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error
+	Handoff *AnalysisFixInput `json:"handoff"`
 }
 
 type analysisSourceRevisionClient interface {
@@ -119,11 +109,6 @@ const (
 	analysisWarningNoCitations         = "The selected chat answer has no retained artifact citations; treat it as an investigation hypothesis."
 	analysisWarningNoSourceHints       = "The published analysis has no source hints; the coding agent must investigate the repository."
 )
-
-// ConfigureAnalysisPreviewValidator binds exact chat state to later confirmation.
-func (s *Service) ConfigureAnalysisPreviewValidator(validator AnalysisPreviewValidator) {
-	s.analysisPreviewValidator = validator
-}
 
 // ResolveAnalysisActionSubject resolves and validates one current failed JUnit analysis.
 func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*AnalysisActionSubject, error) {
@@ -283,10 +268,13 @@ func (s *Service) PreviewAnalysisFix(
 	if s.cfg != nil {
 		input.Identity.Project = strings.TrimSpace(s.cfg.Name)
 	}
-	if err := validateAnalysisFixInput(input); err != nil {
+	if err := validateAnalysisFixHandoff(input); err != nil {
 		return PreviewResult{}, err
 	}
-	subject, err := s.ResolveAnalysisActionSubject(input.Identity)
+	if owner != input.Owner || strings.TrimSpace(instruction) != input.Instruction {
+		return PreviewResult{}, ErrPreviewTargetChanged
+	}
+	subject, err := s.resolveAnalysisFixTarget(input)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -350,27 +338,23 @@ func (s *Service) PreviewAnalysisFix(
 		}
 		return PreviewResult{}, fmt.Errorf("%w: checking exact JUnit Fix repository/base: %w", ErrPreviewRejected, err)
 	}
-	if input.GenerationBaseRevision != "" &&
-		(!strings.EqualFold(input.FailureRevision, repository.Revision) ||
-			!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision)) {
+	if !strings.EqualFold(input.FailureRevision, repository.Revision) ||
+		!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
 	if err := s.setRequestWarning(ctx, warnings...); err != nil {
 		return PreviewResult{}, err
 	}
-	if input.GenerationBaseRevision != "" &&
-		(strings.TrimSpace(input.SourceBranch) == "" || input.SourceBranch != targetBranch) {
-		return PreviewResult{}, ErrPreviewTargetChanged
-	}
-	if input.GenerationBaseRevision == "" && !strings.EqualFold(repository.Revision, compatibility.GenerationBaseRevision) {
-		return PreviewResult{}, fmt.Errorf("%w: branch advancement requires a fix-request source preflight", ErrPreviewRejected)
-	}
+
 	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
 		return PreviewResult{}, err
 	}
 	targetConfig := fixDestinationFingerprint(eff, destination)
+	if targetConfig != input.TargetConfig {
+		return PreviewResult{}, ErrPreviewTargetChanged
+	}
 	generationHash := analysisPreviewGenerationHash(
-		subject, input.PreviewRequestHash, repository, targetBranch, compatibility.GenerationBaseRevision, targetConfig,
+		subject, input.HandoffHash, repository, targetBranch, compatibility.GenerationBaseRevision, targetConfig,
 	)
 	token, existing, acquired, err := s.previewStore.reserveIdempotent(
 		owner, input.PreviewRequestHash, generationHash, s.requestTimeout+30*time.Second,
@@ -418,19 +402,14 @@ func (s *Service) PreviewAnalysisFix(
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind,
 		targetRepo: destination.Repo.Owner + "/" + destination.Repo.Name, targetConfig: targetConfig,
 		verificationVersion: sourceVerificationVersion, fix: gf,
-		analysisBinding: &AnalysisPreviewBinding{
-			Identity: subject.Identity, AnalysisID: subject.ID, AnalysisHash: subject.ContentHash,
-			AnalysisContentHash: subject.AnalysisContentHash,
-			ChatSessionID:       input.ChatSessionID, ChatRequestID: input.ChatRequestID, ChatResponseHash: input.ChatResponseHash,
-			PreviewRequestHash: input.PreviewRequestHash,
-			SourceRepository:   repository, SourceBranch: targetBranch,
-			FailureRevision: repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
-			VerificationVersion: analysisSourceVerificationVersion,
-		},
+		analysisBinding: &AnalysisPreviewBinding{Handoff: cloneAnalysisFixInput(input)},
 	}
 	preview, err := validatedPreviewEntry(entry)
 	if err != nil {
 		return PreviewResult{}, classifiedAnalysisPreviewValidationError(err)
+	}
+	if err := s.validateAnalysisPreview(ctx, owner, *entry.analysisBinding); err != nil {
+		return PreviewResult{}, err
 	}
 	if err := s.previewStore.completeIdempotent(owner, token, input.PreviewRequestHash, generationHash, entry); err != nil {
 		return PreviewResult{}, err
@@ -483,58 +462,8 @@ func analysisPreviewGenerationHash(
 }
 
 func analysisFixReplacementHash(input AnalysisFixInput) string {
-	payload, _ := json.Marshal(struct {
-		Identity                  AnalysisIdentity
-		ChatSessionID             string
-		ChatRequestID             string
-		ChatResponseHash          string
-		AnalysisContentHash       string
-		SourceRepository          sourceinvestigation.Repository
-		FailureRevision           string
-		GenerationBaseRevision    string
-		SourceBranch              string
-		AssistantUnverified       bool
-		AssistantUnverifiedReason string
-	}{
-		input.Identity, input.ChatSessionID, input.ChatRequestID, input.ChatResponseHash,
-		input.AnalysisContentHash, input.SourceRepository, input.FailureRevision,
-		input.GenerationBaseRevision, input.SourceBranch, input.AssistantUnverified, input.AssistantUnverifiedReason,
-	})
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
-}
-
-func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, binding AnalysisPreviewBinding) error {
-	if s.analysisPreviewValidator == nil {
-		return ErrPreviewTargetChanged
-	}
-	if binding.VerificationVersion != analysisSourceVerificationVersion {
-		return ErrPreviewTargetChanged
-	}
-	if err := s.analysisPreviewValidator.ValidateAnalysisPreview(ctx, owner, binding); err != nil {
-		return err
-	}
-	subject, err := s.ResolveAnalysisActionSubject(binding.Identity)
-	if err != nil || subject.ID != binding.AnalysisID || subject.ContentHash != binding.AnalysisHash ||
-		subject.AnalysisContentHash != binding.AnalysisContentHash {
-		return ErrPreviewTargetChanged
-	}
-	if subject.SourceRepository != binding.SourceRepository {
-		return ErrPreviewTargetChanged
-	}
-	if !strings.EqualFold(binding.FailureRevision, binding.SourceRepository.Revision) ||
-		strings.TrimSpace(binding.GenerationBaseRevision) == "" || strings.TrimSpace(binding.SourceBranch) == "" {
-		return ErrPreviewTargetChanged
-	}
-	targetBranch, _ := buildsource.Branch(subject.Build, binding.SourceRepository.Owner, binding.SourceRepository.Name)
-	if targetBranch != binding.SourceBranch {
-		return ErrPreviewTargetChanged
-	}
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, binding.SourceRepository, targetBranch)
-	if err != nil || !strings.EqualFold(compatibility.GenerationBaseRevision, binding.GenerationBaseRevision) {
-		return ErrPreviewTargetChanged
-	}
-	return nil
+	input.Instruction, input.PreviewRequestHash = "", ""
+	return analysisFixHandoffHash(input)
 }
 
 func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput, sourceHints []string) []string {
@@ -609,19 +538,7 @@ func validateAnalysisFixInput(input AnalysisFixInput) error {
 			return fmt.Errorf("invalid exact analysis Fix evidence warning")
 		}
 	}
-	hasPreflight := strings.TrimSpace(input.FailureRevision) != "" || strings.TrimSpace(input.GenerationBaseRevision) != "" || strings.TrimSpace(input.SourceBranch) != ""
-	if hasPreflight && (strings.TrimSpace(input.FailureRevision) == "" || strings.TrimSpace(input.GenerationBaseRevision) == "" || strings.TrimSpace(input.SourceBranch) == "") {
-		return fmt.Errorf("invalid exact analysis Fix source binding")
-	}
-	if hasPreflight {
-		failureRevision, failureOK := buildsource.NormalizeRevision(input.FailureRevision)
-		generationBase, baseOK := buildsource.NormalizeRevision(input.GenerationBaseRevision)
-		if !failureOK || !baseOK || !strings.EqualFold(failureRevision, input.SourceRepository.Revision) ||
-			failureRevision == "" || generationBase == "" {
-			return fmt.Errorf("invalid exact analysis Fix source binding")
-		}
-	}
-	return nil
+	return analysisFixContext(input).Validate()
 }
 
 func boundedAnalysisFailureText(value string) string {
@@ -651,5 +568,8 @@ func cloneAnalysisPreviewBinding(binding *AnalysisPreviewBinding) *AnalysisPrevi
 		return nil
 	}
 	copy := *binding
+	if binding.Handoff != nil {
+		copy.Handoff = cloneAnalysisFixInput(*binding.Handoff)
+	}
 	return &copy
 }

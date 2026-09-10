@@ -15,42 +15,14 @@ import (
 )
 
 type fakeChatStore struct {
-	candidate             analysischat.FixCandidate
-	candidateErr          error
-	preflightErr          error
-	reserveErr            error
-	releaseErr            error
-	preflighted           bool
-	reserveCalled         bool
-	commitCalled          bool
-	releaseCalled         bool
-	reservations          map[string]bool
-	references            map[string]bool
-	pinnedFailureRevision string
-	pinnedGenerationBase  string
-	onReturn              func()
-	sessionID             string
-	owner                 string
-	requestID             string
-	patternID             string
-	patternHash           string
-}
-
-func (f *fakeChatStore) PreflightAnalysisFix(_ context.Context, sessionID, owner, requestID string) error {
-	f.preflighted = true
-	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	if f.preflightErr != nil {
-		return f.preflightErr
-	}
-	// Pinning the source is what produces the binding the candidate carries, so
-	// the fake supplies it only once preflight has run.
-	if f.pinnedFailureRevision != "" {
-		f.candidate.FailureRevision = f.pinnedFailureRevision
-	}
-	if f.pinnedGenerationBase != "" {
-		f.candidate.GenerationBaseRevision = f.pinnedGenerationBase
-	}
-	return nil
+	candidate    analysischat.FixCandidate
+	candidateErr error
+	onReturn     func()
+	sessionID    string
+	owner        string
+	requestID    string
+	patternID    string
+	patternHash  string
 }
 
 func (f *fakeChatStore) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error) {
@@ -70,41 +42,9 @@ func (f *fakeChatStore) AnalysisFixCandidate(sessionID, owner, requestID string)
 	return f.candidate, f.candidateErr
 }
 
-func (f *fakeChatStore) ReserveAnalysisFix(sessionID, owner, requestID, reservationID string) error {
-	f.reserveCalled = true
-	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	if f.reserveErr != nil {
-		return f.reserveErr
-	}
-	if f.reservations == nil {
-		f.reservations = map[string]bool{}
-	}
-	f.reservations[reservationID] = true
-	return nil
-}
-
-func (f *fakeChatStore) CommitAnalysisFix(sessionID, owner, requestID, reservationID, referenceID string) error {
-	f.commitCalled = true
-	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	delete(f.reservations, reservationID)
-	if f.references == nil {
-		f.references = map[string]bool{}
-	}
-	f.references[referenceID] = true
-	return nil
-}
-
-func (f *fakeChatStore) ReleaseAnalysisFix(sessionID, owner, requestID, reservationID string) error {
-	f.releaseCalled = true
-	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	if f.releaseErr != nil {
-		return f.releaseErr
-	}
-	delete(f.reservations, reservationID)
-	return nil
-}
-
 type fakeFixPreviewer struct {
+	existingRequest   *actions.ActionRequestView
+	lookupErr         error
 	pattern           models.PatternAnalysis
 	owner             string
 	userToken         string
@@ -117,6 +57,13 @@ type fakeFixPreviewer struct {
 	requestErr        error
 }
 
+func (f *fakeFixPreviewer) FindAnalysisFixRequest(_, _, _, _ string) (actions.ActionRequestView, bool, error) {
+	if f.existingRequest != nil {
+		return *f.existingRequest, true, f.lookupErr
+	}
+	return actions.ActionRequestView{}, false, f.lookupErr
+}
+
 func (f *fakeFixPreviewer) PreviewFixWithContext(
 	_ context.Context, pattern models.PatternAnalysis, owner, userToken, instruction string, target actions.FixTarget, generationContext fixpr.GenerationContext,
 ) (actions.PreviewResult, error) {
@@ -126,7 +73,7 @@ func (f *fakeFixPreviewer) PreviewFixWithContext(
 }
 
 func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
-	input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
+	_ context.Context, input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	f.analysisInput, f.owner, f.userToken, f.instruction, f.requestCalled = input, owner, userToken, instruction, true
 	if f.requestErr != nil {
@@ -265,8 +212,6 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		SessionID: "session", RequestID: "request", ResponseHash: "response-hash",
 		AnalysisContentHash:      "analysis-hash",
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
-		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
 		SourceBranch:             "main", SourceBranchKnown: true,
 		Analysis: analysischat.AnalysisRef{
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
@@ -286,16 +231,15 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.ID != "async-request" || !fixes.requestCalled || fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" ||
-		!chat.reserveCalled || !chat.commitCalled || len(chat.references) != 1 || len(chat.reservations) != 0 || chat.releaseCalled {
+	if request.ID != "async-request" || !fixes.requestCalled || fixes.called || fixes.pattern.ID != "" || fixes.analysisInput.ChatResponseHash != "response-hash" {
 		t.Fatalf("request=%+v fixes=%+v", request, fixes)
 	}
 	input := fixes.analysisInput
 	if input.Identity.Project != "" || input.Identity.JobID != "periodic-capz" || input.Identity.BuildID != "123" || input.Identity.TestName != "TestCluster" ||
 		input.Identity.JUnitFile != "junit.xml" || input.ChatSessionID != "session" || input.ChatRequestID != "request" ||
 		input.AnalysisContentHash != "analysis-hash" || input.SourceRepository.Name != "repo" ||
-		input.FailureRevision != "0123456789abcdef0123456789abcdef01234567" ||
-		input.GenerationBaseRevision != "fedcba9876543210fedcba9876543210fedcba98" ||
+		input.FailureRevision != "" ||
+		input.GenerationBaseRevision != "" ||
 		input.SourceBranch != "main" ||
 		len(input.ArtifactCitations) != 1 || !slices.Equal(input.EvidenceWarnings, []string{"citation 2 was omitted"}) ||
 		input.ProposedRevision == nil || fixes.userToken != "write-token" {
@@ -318,7 +262,7 @@ func TestCreateAnalysisFixRequestCarriesUnverifiedUncitedFinding(t *testing.T) {
 	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(
 		t.Context(), "session", "Alice", "request", "token", "",
 	)
-	if err != nil || request.ID != "async-request" || !chat.preflighted || !chat.commitCalled {
+	if err != nil || request.ID != "async-request" {
 		t.Fatalf("request=%+v err=%v", request, err)
 	}
 	if !fixes.analysisInput.AssistantUnverified || fixes.analysisInput.AssistantUnverifiedReason != analysischat.UnverifiedCitation ||
@@ -327,7 +271,7 @@ func TestCreateAnalysisFixRequestCarriesUnverifiedUncitedFinding(t *testing.T) {
 	}
 }
 
-func TestCreateAnalysisFixRequestRollsBackReservationWhenAdmissionFails(t *testing.T) {
+func TestCreateAnalysisFixRequestReturnsAdmissionFailure(t *testing.T) {
 	admissionErr := errors.New("action request admission failed")
 	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
 		SessionID: "session", RequestID: "request", ResponseHash: "response",
@@ -338,7 +282,7 @@ func TestCreateAnalysisFixRequestRollsBackReservationWhenAdmissionFails(t *testi
 	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
 		t.Context(), "session", "Alice", "request", "token", "",
 	)
-	if !errors.Is(err, admissionErr) || !chat.reserveCalled || chat.commitCalled || !chat.releaseCalled || len(chat.reservations) != 0 || len(chat.references) != 0 {
+	if !errors.Is(err, admissionErr) || !fixes.requestCalled {
 		t.Fatalf("error=%v chat=%+v", err, chat)
 	}
 }
@@ -353,39 +297,6 @@ func TestPreviewChatFixRejectsSynchronousExactJUnitGeneration(t *testing.T) {
 	}
 }
 
-func TestValidateAnalysisPreviewRejectsChangedChatIdentity(t *testing.T) {
-	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
-		SessionID: "session", RequestID: "request", ResponseHash: "new-response",
-		AnalysisContentHash:      "analysis-hash",
-		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-		Analysis: analysischat.AnalysisRef{
-			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
-			JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
-		},
-		FixTarget: analysischat.AnalysisRef{
-			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
-			JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
-		},
-	}}
-	service := NewService(chat, &fakeFixPreviewer{})
-	binding := actions.AnalysisPreviewBinding{
-		Identity: actions.AnalysisIdentity{
-			JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
-			AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
-		},
-		AnalysisHash: "action-hash", AnalysisContentHash: "analysis-hash",
-		SourceRepository: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-		ChatSessionID:    "session", ChatRequestID: "request", ChatResponseHash: "old-response",
-	}
-	if err := service.ValidateAnalysisPreview(t.Context(), "Alice", binding); !errors.Is(err, analysischat.ErrAnalysisChanged) {
-		t.Fatalf("changed chat validation error = %v", err)
-	}
-	chat.candidate.ResponseHash = "old-response"
-	if err := service.ValidateAnalysisPreview(t.Context(), "Alice", binding); err != nil {
-		t.Fatalf("unchanged chat validation error = %v", err)
-	}
-}
-
 func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
 	candidate := analysischat.FixCandidate{SessionID: "session", RequestID: "request", ResponseHash: "response"}
 	first := exactPreviewRequestHash(candidate, "keep compatibility")
@@ -395,35 +306,8 @@ func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
 	}
 }
 
-// The chat turn no longer pins the source, so the fix request must, and it must
-// do so BEFORE building the candidate. Pinning afterwards would rebuild the
-// weaker path this change removed, so the pin has to reach the action input.
-func TestCreateAnalysisFixRequestPinsSourceBeforeBuildingCandidate(t *testing.T) {
-	chat := &fakeChatStore{
-		pinnedFailureRevision: "0123456789abcdef0123456789abcdef01234567",
-		pinnedGenerationBase:  "fedcba9876543210fedcba9876543210fedcba98",
-		candidate: analysischat.FixCandidate{
-			SessionID: "session-1", RequestID: "request-1",
-			Analysis: analysischat.AnalysisRef{Scope: analysischat.ScopeTest, JobID: "job", BuildID: "1", TestName: "Test"},
-		},
-	}
-	fixes := &fakeFixPreviewer{}
-	if _, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-		context.Background(), "session-1", "Alice", "request-1", "token", "make it retry",
-	); err != nil {
-		t.Fatalf("CreateAnalysisFixRequest error = %v", err)
-	}
-	if !chat.preflighted {
-		t.Fatal("fix request did not pin the source")
-	}
-	if fixes.analysisInput.FailureRevision != chat.pinnedFailureRevision ||
-		fixes.analysisInput.GenerationBaseRevision != chat.pinnedGenerationBase {
-		t.Fatalf("pinned source did not reach the fix request: %+v", fixes.analysisInput)
-	}
-}
-
 func TestCreateAnalysisFixRequestRejectsIneligibleSource(t *testing.T) {
-	chat := &fakeChatStore{preflightErr: analysischat.ErrAnalysisChanged}
+	chat := &fakeChatStore{candidateErr: analysischat.ErrAnalysisChanged}
 	fixes := &fakeFixPreviewer{}
 	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
 		context.Background(), "session-1", "Alice", "request-1", "token", "make it retry",
@@ -449,8 +333,6 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 		},
 		FixTarget: target, AnalysisContentHash: "analysis-hash",
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
-		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
-		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
 		AssistantAnswer:          "The two cause builds support changing the controller.",
 		ArtifactCitations:        []analysischat.Citation{{Path: "builds/209/build-log.txt", Quote: "resource not found"}},
 	}}
@@ -465,13 +347,16 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 		fixes.analysisInput.Identity.TestName != target.TestName || fixes.analysisInput.Identity.JUnitFile != target.JUnitFile {
 		t.Fatalf("request=%+v input=%+v", request, fixes.analysisInput)
 	}
-	binding := actions.AnalysisPreviewBinding{
-		Identity: fixes.analysisInput.Identity, AnalysisContentHash: "analysis-hash",
-		SourceRepository: chat.candidate.SourceRepositorySnapshot,
-		ChatSessionID:    "session", ChatRequestID: "request", ChatResponseHash: "response-hash",
-		FailureRevision: chat.candidate.FailureRevision, GenerationBaseRevision: chat.candidate.GenerationBaseRevision,
+	if fixes.analysisInput.Origin.Analysis != chat.candidate.Analysis || fixes.analysisInput.Origin.FixTarget != target {
+		t.Fatalf("origin = %+v", fixes.analysisInput.Origin)
 	}
-	if err := NewService(chat, fixes).ValidateAnalysisPreview(t.Context(), "Alice", binding); err != nil {
-		t.Fatalf("cause preview validation error = %v", err)
+}
+
+func TestCreateAnalysisFixRequestReconnectsWithoutChat(t *testing.T) {
+	chat := &fakeChatStore{candidateErr: analysischat.ErrSessionNotFound}
+	fixes := &fakeFixPreviewer{existingRequest: &actions.ActionRequestView{ID: "admitted", Owner: "alice", Status: actions.RequestReady}}
+	view, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "deleted", "Alice", "answer", "token", "")
+	if err != nil || view.ID != "admitted" || fixes.requestCalled || chat.sessionID != "" {
+		t.Fatalf("view=%+v err=%v chat=%+v", view, err, chat)
 	}
 }

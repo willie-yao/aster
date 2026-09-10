@@ -117,7 +117,6 @@ func TestSessionStoreRejectsUnsupportedVersions(t *testing.T) {
 				state.Sessions = map[string]*persistedSession{
 					"first": {
 						Owner: "alice", View: SessionView{ID: "first"},
-						FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}},
 					},
 					"second": {Owner: "Bob", View: SessionView{ID: "second"}},
 				}

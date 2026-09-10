@@ -74,22 +74,19 @@ func waitRequest(t *testing.T, service *Service, id, owner string, want ...strin
 }
 
 func exactAnalysisRequestInput() AnalysisFixInput {
+	testCase := exactJUnitDetail().Runs[0].TestCases[0]
 	return AnalysisFixInput{
-		Identity: AnalysisIdentity{
-			Project: "CAPZ", JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster", Source: "test",
-			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
-		},
+		Identity: exactIdentity(), Origin: testFixOrigin(exactIdentity(), testCase.AIAnalysis),
 		ChatSessionID: "session", ChatRequestID: "chat-request", ChatResponseHash: strings.Repeat("a", 64),
-		PreviewRequestHash: strings.Repeat("b", 64), AnalysisContentHash: strings.Repeat("c", 64),
-		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: strings.Repeat("d", 40)},
-		FailureRevision:  strings.Repeat("d", 40), GenerationBaseRevision: strings.Repeat("e", 40), SourceBranch: "main",
-		AssistantAnswer:   "The cited conflict is handled by `InstallCNIManifest`.",
+		PreviewRequestHash: AnalysisFixRequestHash("session", "chat-request", ""), AnalysisContentHash: models.TestAnalysisContentHash(testCase),
+		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
+		SourceBranch:     "main", AssistantAnswer: "The cited conflict is handled by `InstallCNIManifest`.",
 		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 10, Quote: "Conflict"}},
 	}
 }
 
 func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -118,7 +115,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 
 	input := exactAnalysisRequestInput()
 	input.Identity.Project = ""
-	created, err := service.CreateAnalysisFixRequest(input, "Alice", "write-token", "keep compatibility")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "Alice", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +128,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	}
 	duplicateInput := input
 	duplicateInput.Identity.Project = "caller-project"
-	duplicate, err := service.CreateAnalysisFixRequest(duplicateInput, "alice", "write-token", "keep compatibility")
+	duplicate, err := service.CreateAnalysisFixRequest(t.Context(), duplicateInput, "alice", "write-token", "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +158,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 	if ready.Preview == nil || ready.Preview.Token != "preview-token" || ready.Preview.Diff == "" {
 		t.Fatalf("ready = %+v", ready)
 	}
-	recovered, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "keep compatibility")
+	recovered, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "keep compatibility")
 	if err != nil || recovered.ID != created.ID || recovered.Status != RequestReady || calls.Load() != 1 {
 		t.Fatalf("recovered=%+v calls=%d err=%v", recovered, calls.Load(), err)
 	}
@@ -179,7 +176,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := persisted.Requests[created.ID]
-	if record == nil || record.AnalysisFix != nil || record.Instruction != "" || record.RequestHash != input.PreviewRequestHash {
+	if record == nil || record.AnalysisFix == nil || record.Instruction != "" || record.RequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, "keep compatibility") {
 		t.Fatalf("persisted request = %+v", record)
 	}
 	if err := service.Wait(context.Background()); err != nil {
@@ -188,7 +185,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 }
 
 func TestCreateAnalysisFixRequestOverridesCallerProject(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.cfg.Name = " capz "
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	started := make(chan AnalysisFixInput, 1)
@@ -206,7 +203,7 @@ func TestCreateAnalysisFixRequestOverridesCallerProject(t *testing.T) {
 	}
 	input := exactAnalysisRequestInput()
 	input.Identity.Project = "caller-project"
-	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +234,7 @@ func TestCreateAnalysisFixRequestOverridesCallerProject(t *testing.T) {
 }
 
 func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	var writes atomic.Int32
 	var calls atomic.Int32
@@ -252,7 +249,7 @@ func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing
 	input := exactAnalysisRequestInput()
 	input.Identity.Project = "caller-project"
 	input.Identity.JobID = ""
-	if _, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", ""); err == nil {
+	if _, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", ""); err == nil {
 		t.Fatal("invalid exact analysis fix request was admitted")
 	}
 	service.rmu.Lock()
@@ -296,14 +293,18 @@ func TestActionRequestStateNoncurrentVersionsResetToV7(t *testing.T) {
 	}
 }
 func TestReadyAnalysisFixRequestReloads(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
+	input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"analysis-fix": {ActionRequestView: ActionRequestView{
 			ID: "analysis-fix", FailureID: "analysis::id", Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			Preview: &PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"},
-		}, RequestHash: strings.Repeat("a", 64)},
+		}, RequestHash: input.PreviewRequestHash, AnalysisFix: &input},
 	}}
 	if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
 		t.Fatal(err)
@@ -316,7 +317,7 @@ func TestReadyAnalysisFixRequestReloads(t *testing.T) {
 }
 
 func TestPendingAnalysisFixRequestFailsClosedAfterRestart(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"analysis-fix": {
@@ -342,7 +343,7 @@ func TestPendingAnalysisFixRequestFailsClosedAfterRestart(t *testing.T) {
 }
 
 func TestAnalysisFixRequestCancellationCleansObservedRuntime(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	fake := &fakeManagedAgentRuntime{}
 	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
@@ -363,7 +364,7 @@ func TestAnalysisFixRequestCancellationCleansObservedRuntime(t *testing.T) {
 		<-ctx.Done()
 		return PreviewResult{}, ctx.Err()
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +400,7 @@ func TestAnalysisFixRequestCancellationCleansObservedRuntime(t *testing.T) {
 }
 
 func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	requestHash := strings.Repeat("a", 64)
 	token := idempotentPreviewToken("alice", requestHash)
 	if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
@@ -430,7 +431,7 @@ func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
 }
 
 func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(50*time.Millisecond, nil)
 	fake := &fakeManagedAgentRuntime{}
 	service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
@@ -448,7 +449,7 @@ func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 		close(cancelled)
 		return PreviewResult{}, ctx.Err()
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +494,7 @@ func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
 		{name: "forbidden", statusCode: 403, detail: AnalysisFixFailureDetailProviderForbidden, statusText: "request refused"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			service, _ := requestTestService(t)
+			service, _ := analysisRequestTestService(t)
 			service.ConfigureAsyncRequests(time.Minute, nil)
 			var logs bytes.Buffer
 			log.SetOutput(&logs)
@@ -515,7 +516,7 @@ func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
 					),
 				}
 			}
-			created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+			created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -557,7 +558,7 @@ func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
 }
 
 func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	service.ConfigureAsyncRequestsWithContext(serverCtx, time.Minute, nil)
 	fake := &fakeManagedAgentRuntime{}
@@ -574,7 +575,7 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 		close(cancelled)
 		return PreviewResult{}, ctx.Err()
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +609,7 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 }
 
 func TestAnalysisFixRequestOwnerIsolation(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	var calls atomic.Int32
 	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
@@ -616,11 +617,11 @@ func TestAnalysisFixRequestOwnerIsolation(t *testing.T) {
 		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix conflict", Body: "## Summary\nRetry conflict.\n", Diff: "diff --git a/a b/a"}, nil
 	}
 	input := exactAnalysisRequestInput()
-	alice, err := service.CreateAnalysisFixRequest(input, "alice", "alice-token", "")
+	alice, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "alice-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	bob, err := service.CreateAnalysisFixRequest(input, "bob", "bob-token", "")
+	bob, err := service.CreateAnalysisFixRequest(t.Context(), input, "bob", "bob-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,11 +636,11 @@ func TestAnalysisFixRequestOwnerIsolation(t *testing.T) {
 	if _, err := service.CancelRequest(context.Background(), alice.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("cross-owner cancel err=%v", err)
 	}
-	aliceDuplicate, err := service.CreateAnalysisFixRequest(input, "alice", "alice-token", "")
+	aliceDuplicate, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "alice-token", "")
 	if err != nil || aliceDuplicate.ID != alice.ID {
 		t.Fatalf("alice duplicate=%+v err=%v", aliceDuplicate, err)
 	}
-	bobDuplicate, err := service.CreateAnalysisFixRequest(input, "bob", "bob-token", "")
+	bobDuplicate, err := service.CreateAnalysisFixRequest(t.Context(), input, "bob", "bob-token", "")
 	if err != nil || bobDuplicate.ID != bob.ID {
 		t.Fatalf("bob duplicate=%+v err=%v", bobDuplicate, err)
 	}
@@ -2068,7 +2069,7 @@ func TestCurrentFailedRequestReasonCodesAreRepaired(t *testing.T) {
 }
 
 func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -2084,7 +2085,7 @@ func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
 		<-release
 		return PreviewResult{Token: "preview-token", Kind: gfKind, Title: "Fix CNI", Body: "Safe body", Diff: "safe diff"}, nil
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2107,7 +2108,7 @@ func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
 }
 
 func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
 		if err := service.setRequestWarning(ctx, analysisWarningCritique, analysisWarningSuggestedFix); err != nil {
@@ -2122,7 +2123,7 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 			cause: withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "The coding agent completed, but no repository change was generated."),
 		}
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2148,12 +2149,12 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 }
 
 func TestAnalysisFixOverlyBroadFailureIsRecoverable(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
 		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
 	}
-	created, err := service.CreateAnalysisFixRequest(exactAnalysisRequestInput(), "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2164,7 +2165,7 @@ func TestAnalysisFixOverlyBroadFailureIsRecoverable(t *testing.T) {
 }
 
 func TestFrozenCAPZFindingReachesAsyncGeneratorWithoutProvider(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	const finding = "The artifact evidence is entirely in build-log.txt. Here is the exact chain:\n\n" +
 		"1. **First CNI install** (line 2205): `STEP: Installing a CNI plugin to the workload cluster @ 08/12/26 08:51:19.322` — this step runs during `EnsureCloudProviderAzure` and succeeds, creating the `azure-cni` DaemonSet on the workload cluster.\n\n" +
@@ -2180,7 +2181,7 @@ func TestFrozenCAPZFindingReachesAsyncGeneratorWithoutProvider(t *testing.T) {
 	}
 	input := exactAnalysisRequestInput()
 	input.AssistantAnswer = finding
-	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2199,7 +2200,7 @@ func TestFrozenCAPZFindingReachesAsyncGeneratorWithoutProvider(t *testing.T) {
 }
 
 func TestAnalysisFixRecoverableReplacementIsExplicitAndImmutable(t *testing.T) {
-	service, _ := requestTestService(t)
+	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	var calls atomic.Int32
 	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
@@ -2207,7 +2208,7 @@ func TestAnalysisFixRecoverableReplacementIsExplicitAndImmutable(t *testing.T) {
 		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
 	}
 	input := exactAnalysisRequestInput()
-	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2229,13 +2230,13 @@ func TestAnalysisFixRecoverableReplacementIsExplicitAndImmutable(t *testing.T) {
 	}
 	changed := input
 	changed.PreviewRequestHash = "replacement-preview-hash"
-	if _, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "bounded feedback"); err == nil {
+	if _, err := service.CreateAnalysisFixRequest(t.Context(), changed, "alice", "write-token", "bounded feedback"); err == nil {
 		t.Fatal("implicit replacement was accepted")
 	}
-	if _, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "", created.ID); err == nil {
+	if _, err := service.CreateAnalysisFixRequest(t.Context(), changed, "alice", "write-token", "", created.ID); err == nil {
 		t.Fatal("unchanged empty feedback was accepted")
 	}
-	replacement, err := service.CreateAnalysisFixRequest(changed, "alice", "write-token", "bounded feedback", created.ID)
+	replacement, err := service.CreateAnalysisFixRequest(t.Context(), changed, "alice", "write-token", "bounded feedback", created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

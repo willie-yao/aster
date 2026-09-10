@@ -47,7 +47,11 @@ func (s *Service) resolve(ref AnalysisRef) (resolvedAnalysis, error) {
 }
 
 func (s *Service) loadJobDetail(jobID string) (models.JobDetail, error) {
-	file, err := os.Open(filepath.Join(s.dataDir, "jobs", models.JobDataFilename(jobID)))
+	return loadJobDetail(s.dataDir, jobID)
+}
+
+func loadJobDetail(dataDir, jobID string) (models.JobDetail, error) {
+	file, err := os.Open(filepath.Join(dataDir, "jobs", models.JobDataFilename(jobID)))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return models.JobDetail{}, ErrAnalysisNotFound

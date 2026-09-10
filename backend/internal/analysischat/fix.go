@@ -31,6 +31,38 @@ type AnalysisSnapshot struct {
 	RelevantFiles []string
 }
 
+// FixOrigin binds a finding to its published analysis and exact failed-test target.
+type FixOrigin struct {
+	Analysis  AnalysisRef
+	Original  AnalysisSnapshot
+	FixTarget AnalysisRef
+}
+
+// ValidateFixOrigin checks current publication without accessing a chat session.
+func ValidateFixOrigin(dataDir string, origin FixOrigin) error {
+	ref, err := normalizeAnalysisRef(origin.Analysis)
+	if err != nil {
+		return err
+	}
+	if ref.Scope != ScopeTest && ref.Scope != ScopeCause {
+		return ErrAnalysisChanged
+	}
+	detail, err := loadJobDetail(dataDir, ref.JobID)
+	if err != nil {
+		return err
+	}
+	resolved, err := resolveFromDetail(ref, detail)
+	if err != nil {
+		return err
+	}
+	target := resolvedAnalysisFixTarget(resolved)
+	if target == nil || target.ref != origin.FixTarget || target.testCase.Status != "failed" || target.build.Passed ||
+		resolved.testCase.AIAnalysis == nil || !sameBoundAnalysisSnapshot(ref.Scope, origin.Original, analysisSnapshot(resolved.testCase.AIAnalysis)) {
+		return ErrAnalysisChanged
+	}
+	return nil
+}
+
 // FixCandidate is one selected successful answer.
 type FixCandidate struct {
 	SessionID                 string
@@ -48,8 +80,6 @@ type FixCandidate struct {
 	ResponseHash              string
 	AnalysisContentHash       string
 	SourceRepositorySnapshot  sourceinvestigation.Repository
-	FailureRevision           string
-	GenerationBaseRevision    string
 	SourceBranch              string
 	SourceBranchKnown         bool
 }
@@ -102,13 +132,9 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 			EvidenceWarnings:    conversationEvidenceWarnings(current.View.Messages, requestID),
 			AnalysisContentHash: target.AnalysisHash, SourceRepositorySnapshot: target.Source,
 		}
-		if binding, ok := current.FixSources[requestID]; ok {
-			candidate.FailureRevision = binding.FailureRevision
-			candidate.GenerationBaseRevision = binding.GenerationBaseRevision
-			candidate.SourceBranch, candidate.SourceBranchKnown = buildsource.Branch(
-				target.Build, target.Source.Owner, target.Source.Name,
-			)
-		}
+		candidate.SourceBranch, candidate.SourceBranchKnown = buildsource.Branch(
+			target.Build, target.Source.Owner, target.Source.Name,
+		)
 		return changed, nil
 	})
 	if err != nil {
@@ -131,19 +157,11 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
-	if candidate.GenerationBaseRevision != "" {
-		currentBranch, currentBranchKnown := buildsource.Branch(
-			target.build, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name,
-		)
-		if currentBranchKnown != candidate.SourceBranchKnown || candidate.SourceBranchKnown && currentBranch != candidate.SourceBranch {
-			return FixCandidate{}, ErrAnalysisChanged
-		}
-		if !validTestFixSource(persistedTestFixSource{
-			TargetRef: candidate.FixTarget, FailureRevision: candidate.FailureRevision,
-			GenerationBaseRevision: candidate.GenerationBaseRevision,
-		}, candidate.FixTarget, candidate.SourceRepositorySnapshot.Revision) {
-			return FixCandidate{}, ErrAnalysisChanged
-		}
+	currentBranch, currentBranchKnown := buildsource.Branch(
+		target.build, candidate.SourceRepositorySnapshot.Owner, candidate.SourceRepositorySnapshot.Name,
+	)
+	if currentBranchKnown != candidate.SourceBranchKnown || candidate.SourceBranchKnown && currentBranch != candidate.SourceBranch {
+		return FixCandidate{}, ErrAnalysisChanged
 	}
 	candidate.ResponseHash, err = fixCandidateResponseHash(candidate)
 	if err != nil {
@@ -179,26 +197,24 @@ func resolvedAnalysisFixTarget(resolved resolvedAnalysis) *resolvedFixTarget {
 
 func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 	payload, err := json.Marshal(struct {
-		SessionID, RequestID                    string
-		Analysis                                AnalysisRef
-		FixTarget                               AnalysisRef
-		Original                                AnalysisSnapshot
-		AssistantAnswer                         string
-		AssistantUnverified                     bool
-		AssistantUnverifiedReason               string
-		ProposedRevision                        *Revision
-		ArtifactCitations                       []Citation
-		EvidenceWarnings                        []string
-		AnalysisContentHash                     string
-		SourceRepository                        sourceinvestigation.Repository
-		FailureRevision, GenerationBaseRevision string
-		SourceBranch                            string
-		SourceBranchKnown                       bool
+		SessionID, RequestID      string
+		Analysis                  AnalysisRef
+		FixTarget                 AnalysisRef
+		Original                  AnalysisSnapshot
+		AssistantAnswer           string
+		AssistantUnverified       bool
+		AssistantUnverifiedReason string
+		ProposedRevision          *Revision
+		ArtifactCitations         []Citation
+		EvidenceWarnings          []string
+		AnalysisContentHash       string
+		SourceRepository          sourceinvestigation.Repository
+		SourceBranch              string
+		SourceBranchKnown         bool
 	}{
 		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.FixTarget, candidate.Original, candidate.AssistantAnswer,
 		candidate.AssistantUnverified, candidate.AssistantUnverifiedReason,
 		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.EvidenceWarnings, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
-		candidate.FailureRevision, candidate.GenerationBaseRevision,
 		candidate.SourceBranch, candidate.SourceBranchKnown,
 	})
 	if err != nil {
