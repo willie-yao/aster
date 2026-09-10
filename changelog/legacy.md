@@ -1,6 +1,6 @@
 # Legacy releases
 
-Release notes carried over from `prow-ai-dashboard`, the repository Aster was migrated from. The migration restarted the version line at `v0.9.0`, so every entry below predates every `v0.9.0-rc.*` release in the index despite the higher version numbers.
+Release notes carried over from `prow-ai-dashboard`, the repository Aster was migrated from. Every entry below predates the current version line despite the higher version numbers.
 
 `v1.0.0-beta.2` through `v1.0.0-beta.6` were released by the predecessor repository; `v1.0.0-beta.7` was written but never tagged. None of these tags exist in this repository, so none of them can be pinned by a consumer. The notes are kept for reference only.
 

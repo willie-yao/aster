@@ -15,17 +15,5 @@ See [the release guide](docs/releasing.md#versioning) for the release process an
 Each release has its own notes file, named for its tag. See [the release guide](docs/releasing.md#release-notes) for how those notes are assembled.
 
 - [v0.10.0-rc.1](changelog/v0.10.0-rc.1.md) - 2026-09-10
-- [v0.9.0-rc.13](changelog/v0.9.0-rc.13.md) - 2026-09-02
-- [v0.9.0-rc.12](changelog/v0.9.0-rc.12.md) - 2026-08-27
-- [v0.9.0-rc.11](changelog/v0.9.0-rc.11.md) - 2026-08-27
-- [v0.9.0-rc.10](changelog/v0.9.0-rc.10.md) - 2026-08-26
-- [v0.9.0-rc.9](changelog/v0.9.0-rc.9.md) - 2026-08-20
-- [v0.9.0-rc.8](changelog/v0.9.0-rc.8.md) - 2026-08-19
-- [v0.9.0-rc.7](changelog/v0.9.0-rc.7.md) - 2026-08-19
-- [v0.9.0-rc.6](changelog/v0.9.0-rc.6.md) - 2026-08-19
-- [v0.9.0-rc.5](changelog/v0.9.0-rc.5.md) - 2026-08-18
-- [v0.9.0-rc.4](changelog/v0.9.0-rc.4.md) - 2026-08-18
-- [v0.9.0-rc.3](changelog/v0.9.0-rc.3.md) - 2026-08-17
-- [v0.9.0-rc.2](changelog/v0.9.0-rc.2.md) - 2026-08-15
 
-Release notes carried over from `prow-ai-dashboard`, the repository Aster was migrated from, are archived in [changelog/legacy.md](changelog/legacy.md). The migration restarted the version line at `v0.9.0`, and none of those tags exist in this repository.
+Release notes carried over from `prow-ai-dashboard`, the repository Aster was migrated from, are archived in [changelog/legacy.md](changelog/legacy.md). None of those tags exist in this repository.

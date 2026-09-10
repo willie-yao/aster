@@ -19,7 +19,7 @@ deploy/platform-values.yaml  # required only when Agent Sandbox Fix is enabled
 Set the release coordinates from the intended deployment:
 
 ```bash
-export ASTER_VERSION="0.9.0"
+export ASTER_VERSION="<chart-version>"
 export RELEASE="<application-release>"
 export NAMESPACE="<application-namespace>"
 export EXECUTION_NAMESPACE="<execution-namespace>" # Fix-enabled deployments only
