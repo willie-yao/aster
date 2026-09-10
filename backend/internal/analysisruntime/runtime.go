@@ -355,17 +355,6 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
 		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
 	}
-	var patternRepo tools.RepoReader
-	if sourceRepo.Owner != "" && sourceRepo.Name != "" {
-		patternRepo = ai.NewGitHubRepoReader(sourceRepo.Owner, sourceRepo.Name, "", opts.GitHubReadToken)
-		mode := "anonymous"
-		if opts.GitHubReadToken != "" {
-			mode = "authenticated"
-		}
-		log.Printf("🔎 Pattern source grounding configured (repo=%s/%s mode=%s ref=default-branch)",
-			sourceRepo.Owner, sourceRepo.Name, mode)
-	}
-
 	eff := cfg.AI.EffectiveAgentic()
 	service := ai.NewService(ai.ServiceConfig{
 		Client:              r.Client,
@@ -387,17 +376,16 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
 			SingleToolCall:      eff.SingleToolCall,
 		},
-		BrowserFactory:    artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket),
-		ToolRegistry:      r.Registry,
-		EnabledTools:      r.EnabledTools,
-		Skills:            r.Project.SkillSet,
-		SourceRepoOwner:   sourceRepo.Owner,
-		SourceRepoName:    sourceRepo.Name,
-		GitHubReadToken:   opts.GitHubReadToken,
-		PatternRepoReader: patternRepo,
-		TraceStore:        opts.TraceStore,
-		UsageRecorder:     r.UsageRecorder,
-		UsageOrigin:       r.UsageOrigin,
+		BrowserFactory:  artifacts.NewBackendFactory(opts.Backend, cfg.Storage.Bucket),
+		ToolRegistry:    r.Registry,
+		EnabledTools:    r.EnabledTools,
+		Skills:          r.Project.SkillSet,
+		SourceRepoOwner: sourceRepo.Owner,
+		SourceRepoName:  sourceRepo.Name,
+		GitHubReadToken: opts.GitHubReadToken,
+		TraceStore:      opts.TraceStore,
+		UsageRecorder:   r.UsageRecorder,
+		UsageOrigin:     r.UsageOrigin,
 	})
 	return service, nil
 }

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -344,6 +347,68 @@ func TestAnalyzeReportsPatternCacheHits(t *testing.T) {
 	}
 	if len(attempts) != 1 || !attempts[0].CacheHit || !attempts[0].Succeeded {
 		t.Fatalf("attempts = %+v", attempts)
+	}
+}
+
+type patternOrchestrationModule struct{}
+
+func (patternOrchestrationModule) Name() string { return "patterns-test" }
+
+func (patternOrchestrationModule) AnalysisPrompt(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) string {
+	return ""
+}
+
+func TestAnalyzePublishesRealServiceFreshAndCachedCausalGroups(t *testing.T) {
+	arguments, err := json.Marshal(map[string]any{
+		"groups": []map[string]any{
+			{"builds": []string{"3", "2"}, "root_cause": "shared cause", "confidence": "high"},
+			{"builds": []string{"1"}, "root_cause": "independent cause", "confidence": "medium"},
+		},
+		"unclassified_builds": []string{},
+		"summary":             "Two builds share one cause.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedArguments, err := json.Marshal(string(arguments))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := fmt.Sprintf(`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"pattern","type":"function","function":{"name":"submit_causal_groups","arguments":%s}}]}}]}`, encodedArguments)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(response))
+	}))
+	t.Cleanup(server.Close)
+
+	client := ai.NewClientWithOptions(ai.Options{Token: "test-token", CacheDir: t.TempDir(), Endpoint: server.URL, Model: "test-model"})
+	service := ai.NewService(ai.ServiceConfig{Client: client, Module: patternOrchestrationModule{}, SystemPrompt: "system"})
+	var published []models.PatternAnalysis
+	for attempt := range 2 {
+		details := []models.JobDetail{eligibleJob("job")}
+		stats, err := Analyze(t.Context(), service, details)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+		if stats.Completed != 1 || stats.Failed != 0 || stats.CacheHits != attempt {
+			t.Fatalf("attempt %d stats=%+v", attempt+1, stats)
+		}
+		if len(details[0].PatternAnalyses) != 1 {
+			t.Fatalf("attempt %d patterns=%+v", attempt+1, details[0].PatternAnalyses)
+		}
+		pattern := details[0].PatternAnalyses[0]
+		if pattern.Recurrence != models.PatternRecurrenceSharedCause || !pattern.Systemic || len(pattern.CausalGroups) != 2 || pattern.RemediationVerification != nil {
+			t.Fatalf("attempt %d pattern=%+v", attempt+1, pattern)
+		}
+		published = append(published, pattern)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("provider calls=%d, want 1", calls.Load())
+	}
+	if published[1].GeneratedAt != published[0].GeneratedAt || models.PatternHash(published[1]) != models.PatternHash(published[0]) {
+		t.Fatalf("cached publication changed: fresh=%+v cached=%+v", published[0], published[1])
 	}
 }
 

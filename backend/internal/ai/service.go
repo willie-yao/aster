@@ -40,7 +40,6 @@ type ServiceConfig struct {
 	SourceRepoName        string
 	GitHubReadToken       string
 	AnalysisSourceCatalog *tools.SourceCatalog
-	PatternRepoReader     tools.RepoReader
 	LinkVerificationStore LinkVerificationStore
 
 	TraceStore             *TraceStore
@@ -82,7 +81,6 @@ type Service struct {
 	sourceRepoName        string
 	githubReadToken       string
 	analysisSourceCatalog *tools.SourceCatalog
-	patternRepo           tools.RepoReader
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
 	// analyses in a run, keyed by the probe URL.
@@ -123,7 +121,6 @@ func NewService(config ServiceConfig) *Service {
 		sourceRepoName:         config.SourceRepoName,
 		githubReadToken:        config.GitHubReadToken,
 		analysisSourceCatalog:  config.AnalysisSourceCatalog,
-		patternRepo:            config.PatternRepoReader,
 		linkVerifyStore:        config.LinkVerificationStore,
 		traceStore:             config.TraceStore,
 		usageRecorder:          config.UsageRecorder,

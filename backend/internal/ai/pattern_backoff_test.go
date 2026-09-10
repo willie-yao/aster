@@ -105,7 +105,6 @@ func TestPatternFailureBackoffSourceIdentityDoesNotChangeAnalysisContract(t *tes
 	srv.push(200, patternToolResponse(sharedPatternResponse()))
 	service := newPatternBackoffService(t, srv.URL, t.TempDir(), "claude-test")
 	service.sourceRepoOwner, service.sourceRepoName = "owner", "repo"
-	service.patternRepo = &unusedPatternRepo{}
 	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {
 		t.Fatal(err)
 	}
