@@ -151,12 +151,20 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			return ActionRequestView{}, err
 		}
 	}
-	subject, err := s.resolveSubject(failureID)
+	var subject *ActionSubject
+	var err error
+	if kind == "propose-fix" {
+		subject, err = s.resolveSubjectForManualFix(failureID)
+	} else {
+		subject, err = s.resolveSubject(failureID)
+	}
 	if err != nil {
 		return ActionRequestView{}, err
 	}
-	if code, reason := subjectEligibilityReason(subject); code != "" {
-		return ActionRequestView{}, reasonErrorForCode(code, reason)
+	if kind == "create-issue" {
+		if code, reason := subjectEligibilityReason(subject); code != "" {
+			return ActionRequestView{}, reasonErrorForCode(code, reason)
+		}
 	}
 
 	id, err := newToken()
@@ -424,7 +432,6 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 
 func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 	clone := input
-	clone.VerifiedSourceFileHashes = cloneStringMap(input.VerifiedSourceFileHashes)
 	clone.ArtifactCitations = slices.Clone(input.ArtifactCitations)
 	clone.EvidenceWarnings = slices.Clone(input.EvidenceWarnings)
 	if input.ProposedRevision != nil {

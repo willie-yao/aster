@@ -11,7 +11,7 @@ import { overviewTypography } from "../theme/overview";
 //
 // The wording stays accurate wherever this renders: Aster never opens a pull
 // request in a dependency, but a project-side mitigation can still be
-// investigated when a failure has verified project source.
+// investigated from the existing analysis-backed failure.
 export function UpstreamCauseNotice({ location }: { location: AnalysisCauseLocation }) {
   return (
     <Box sx={{ mt: 1 }}>

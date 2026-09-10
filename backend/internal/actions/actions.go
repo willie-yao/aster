@@ -110,6 +110,7 @@ type PreviewResult struct {
 	// VerifyOutput is the tail of the failing command's output, set only when
 	// verification failed, so the reviewer sees why before confirming.
 	VerifyOutput string `json:"verify_output,omitempty"`
+	Warning      string `json:"warning,omitempty"`
 }
 
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
@@ -204,7 +205,6 @@ type Service struct {
 	managedRuntime           func() (runtime.ManagedAgentRuntime, error)
 	requestStateWriter       func(string, any) error
 	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
-	sourceReaderFactory      sourceSnapshotReaderFactory
 	sourceRevisionClient     analysisSourceRevisionClient
 	analysisPreviewValidator AnalysisPreviewValidator
 	analysisRequestGenerator func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error)
@@ -364,6 +364,30 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 		}
 		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, PatternRefresh: refresh}, nil
 	}
+	return s.resolveBuildSubject(id, true)
+}
+
+func (s *Service) resolveSubjectForManualFix(id string) (*ActionSubject, error) {
+	if !strings.HasPrefix(id, "build::") {
+		pattern, refresh, err := s.findPatternRecord(id)
+		if err != nil {
+			return nil, err
+		}
+		if code := patternRefreshReasonCode(refresh); code != "" {
+			return nil, withReason(code, ErrRemediationInconclusive, "")
+		}
+		if !models.PatternAllowsActions(*pattern) {
+			return nil, withReason(ReasonContractGenerationFailed, ErrRemediationInconclusive, "causal-group parent results cannot start a fix")
+		}
+		if strings.TrimSpace(pattern.ID) == "" || strings.TrimSpace(pattern.ContentHash) == "" {
+			return nil, withReason(ReasonEvidenceUnavailable, ErrRemediationInconclusive, "published pattern identity is incomplete")
+		}
+		return &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: pattern, PatternRefresh: refresh}, nil
+	}
+	return s.resolveBuildSubject(id, false)
+}
+
+func (s *Service) resolveBuildSubject(id string, requireActionQuality bool) (*ActionSubject, error) {
 	parts := strings.Split(id, "::")
 	if len(parts) != 3 || parts[0] != "build" {
 		return nil, ErrNotFound
@@ -399,7 +423,7 @@ func (s *Service) resolveSubject(id string) (*ActionSubject, error) {
 				continue
 			}
 			analysis := testCase.AIAnalysis
-			if !ai.MeetsCurrentCritiqueContract(analysis) || strings.TrimSpace(analysis.GeneratedAt) == "" || strings.TrimSpace(analysis.RootCause) == "" || strings.TrimSpace(analysis.SuggestedFix) == "" {
+			if requireActionQuality && (!ai.MeetsCurrentCritiqueContract(analysis) || strings.TrimSpace(analysis.GeneratedAt) == "" || strings.TrimSpace(analysis.RootCause) == "" || strings.TrimSpace(analysis.SuggestedFix) == "") {
 				return nil, fmt.Errorf("build analysis does not pass current action quality gates")
 			}
 			relevant := slices.Clone(analysis.RelevantFiles)
@@ -423,16 +447,14 @@ func (s *Service) resolveSubjectForEligibility(id string) (*ActionSubject, error
 }
 
 func buildSubjectHash(subject *BuildActionSubject) string {
-	analysis := subject.Failure.AIAnalysis
-	fileLinks := make([]string, 0, len(analysis.FileLinks))
-	for file, link := range analysis.FileLinks {
-		fileLinks = append(fileLinks, file+"\x00"+link)
-	}
-	slices.Sort(fileLinks)
 	payload, _ := json.Marshal(struct {
-		JobID, BuildID, Source, Suite, Class, Name, GeneratedAt, RootCause, SuggestedFix string
-		RelevantFiles, FileLinks                                                         []string
-	}{subject.JobID, subject.Build.BuildID, subject.Failure.Source, subject.Failure.SuiteName, subject.Failure.ClassName, subject.Failure.Name, analysis.GeneratedAt, analysis.RootCause, analysis.SuggestedFix, subject.RelevantFiles, fileLinks})
+		JobID, JobName, AnalysisHash string
+		Build                        models.BuildInfo
+		RelevantFiles                []string
+	}{
+		JobID: subject.JobID, JobName: subject.JobName, AnalysisHash: models.TestAnalysisContentHash(subject.Failure),
+		Build: subject.Build, RelevantFiles: subject.RelevantFiles,
+	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }
@@ -944,14 +966,15 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 		LogicalID: logicalID, Origin: aiusage.OriginServer, Feature: aiusage.FeatureFixPreview,
 	})
 	defer func() { usageOperation.Finish(actionUsageOutcome(resultErr)) }()
-	subject, err := s.resolveSubject(failureID)
+	subject, err := s.resolveSubjectForManualFix(failureID)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	if err := s.verifyRemediation(ctx, subject); err != nil {
-		return PreviewResult{}, nil, err
+	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
+		return PreviewResult{}, nil, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 	}
-	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+	warnings := manualFixWarnings(subject, s.cfg.EffectiveFixPRs().MinConfidence)
+	if err := s.setRequestWarning(ctx, warnings...); err != nil {
 		return PreviewResult{}, nil, err
 	}
 	if subject.Kind == actionSubjectPattern {
@@ -965,9 +988,6 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 		return PreviewResult{}, nil, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
 	}
 	sourceFiles := verifiedBuildSourceFiles(subject.Build, eff.Repo.Owner, eff.Repo.Name)
-	if len(sourceFiles) == 0 {
-		return PreviewResult{}, nil, fmt.Errorf("%w: repository source verification did not identify a verified local path; create an issue or investigate source before proposing a fix", ErrPreviewRejected)
-	}
 	destination, err := s.cfg.ResolveFixDestination("", "")
 	if err != nil {
 		return PreviewResult{}, nil, err
@@ -987,11 +1007,10 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
 		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
-	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
-		return PreviewResult{}, nil, err
-	}
+	gf.SetWarnings(warnings)
 	return PreviewResult{Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
-			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output},
+			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output,
+			Warning: boundedWarningSummary(gf.Warnings...)},
 		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), verificationVersion: sourceVerificationVersion, fix: gf}, nil
 }
 
@@ -999,34 +1018,25 @@ func (s *Service) generateFixPreviewForPattern(
 	ctx context.Context, pattern models.PatternAnalysis, userToken, instruction string,
 	generationContext *fixpr.GenerationContext,
 ) (PreviewResult, *previewEntry, error) {
+	if !models.PatternAllowsActions(pattern) {
+		return PreviewResult{}, nil, withReason(ReasonContractGenerationFailed, ErrPreviewRejected, "causal-group parent results cannot start a fix")
+	}
 	verificationPattern := pattern
 	if generationContext != nil {
 		if generationContext.ProposedRevision != nil {
 			verificationPattern.SuggestedFix = generationContext.ProposedRevision.SuggestedFix
-			if strings.TrimSpace(verificationPattern.SuggestedFix) != strings.TrimSpace(pattern.SuggestedFix) {
-				verificationPattern.RemediationTargets = []models.RemediationTarget{{Intent: models.RemediationIntentInvestigate}}
-			}
 		}
 	}
 	destination, targetRevision, err := s.fixDestinationForPattern(verificationPattern)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
-	policyText := ""
-	if generationContext != nil {
-		parts := []string{generationContext.AssistantAnswer}
-		if generationContext.ProposedRevision != nil {
-			parts = append(parts, generationContext.ProposedRevision.RootCause, generationContext.ProposedRevision.SuggestedFix)
-		}
-		policyText = strings.Join(parts, "\n")
+	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
+		return PreviewResult{}, nil, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 	}
-	subject := &ActionSubject{
-		Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern, PolicyText: policyText,
-	}
-	if err := s.verifyRemediation(ctx, subject); err != nil {
-		return PreviewResult{}, nil, err
-	}
-	if err := s.verifyOptionalRemediation(ctx, subject, instruction); err != nil {
+	subject := &ActionSubject{Kind: actionSubjectPattern, ID: pattern.ID, ContentHash: pattern.ContentHash, Pattern: &verificationPattern}
+	warnings := manualFixWarnings(subject, s.cfg.EffectiveFixPRs().MinConfidence)
+	if err := s.setRequestWarning(ctx, warnings...); err != nil {
 		return PreviewResult{}, nil, err
 	}
 	if err := s.setRequestStage(ctx, RequestStageDrafting); err != nil {
@@ -1040,9 +1050,6 @@ func (s *Service) generateFixPreviewForPattern(
 		for _, target := range verificationPattern.RemediationTargets {
 			generationPattern.RelevantFiles = append(generationPattern.RelevantFiles, target.Path)
 		}
-	}
-	if !fixpr.Eligible(generationPattern, s.cfg.EffectiveFixPRs().MinConfidence) {
-		return PreviewResult{}, nil, fmt.Errorf("%w: this failure is not auto-fixable (needs a systemic pattern with a suggested fix)", ErrPreviewRejected)
 	}
 	mgr, err := s.buildFixManagerFor(ctx, userToken, destination)
 	if err != nil {
@@ -1060,13 +1067,11 @@ func (s *Service) generateFixPreviewForPattern(
 	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
 		return PreviewResult{}, nil, fmt.Errorf("%w: %v", ErrPreviewRejected, err)
 	}
-	if err := s.verifyOptionalRemediation(ctx, subject, gf.Title+"\n"+gf.Description); err != nil {
-		return PreviewResult{}, nil, err
-	}
+	gf.SetWarnings(warnings)
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
-		VerifyOutput: gf.Preview.Verify.Output,
+		VerifyOutput: gf.Preview.Verify.Output, Warning: boundedWarningSummary(gf.Warnings...),
 	}, s.patternFixPreviewEntry(pattern, gf, destination), nil
 }
 
@@ -1116,7 +1121,7 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, 
 	return preview, nil
 }
 
-// PreviewFixWithContext generates a fix from one validated selected chat response.
+// PreviewFixWithContext investigates one completed selected chat response.
 func (s *Service) PreviewFixWithContext(
 	ctx context.Context, pattern models.PatternAnalysis, owner, writeToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
 ) (_ PreviewResult, resultErr error) {

@@ -25,8 +25,10 @@ func TestGenerationContextValidate(t *testing.T) {
 		mutate func(*GenerationContext)
 	}{
 		{name: "answer", mutate: func(c *GenerationContext) { c.AssistantAnswer = "" }},
-		{name: "artifact evidence", mutate: func(c *GenerationContext) { c.ArtifactCitations = nil }},
-		{name: "revision", mutate: func(c *GenerationContext) { c.ProposedRevision.SuggestedFix = "" }},
+		{name: "oversized revision", mutate: func(c *GenerationContext) {
+			c.ProposedRevision.SuggestedFix = strings.Repeat("x", maxContextTextBytes+1)
+		}},
+		{name: "empty warning", mutate: func(c *GenerationContext) { c.EvidenceWarnings = []string{""} }},
 		{name: "line range", mutate: func(c *GenerationContext) { c.ArtifactCitations[0].LineStart = 12; c.ArtifactCitations[0].LineEnd = 10 }},
 		{name: "oversized", mutate: func(c *GenerationContext) { c.AssistantAnswer = strings.Repeat("x", maxContextTextBytes+1) }},
 	} {
@@ -37,6 +39,18 @@ func TestGenerationContextValidate(t *testing.T) {
 				t.Fatal("invalid context was accepted")
 			}
 		})
+	}
+}
+
+func TestGenerationContextAllowsInvestigativeHypotheses(t *testing.T) {
+	candidate := validGenerationContext()
+	candidate.ArtifactCitations = nil
+	candidate.ProposedRevision.SuggestedFix = ""
+	candidate.AssistantUnverified = true
+	candidate.AssistantUnverifiedReason = "citation"
+	candidate.EvidenceWarnings = []string{"No artifact citation was validated."}
+	if err := candidate.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

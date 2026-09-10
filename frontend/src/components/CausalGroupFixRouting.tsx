@@ -29,8 +29,8 @@ export function CausalGroupFixNotice({
   target: CausalGroupFixTarget | null;
   externalCause?: AnalysisCauseLocation | null;
   // False when this cause's builds have left the analysis window, which is a
-  // different dead end from builds that are present but carry no eligible
-  // failure, and the only one no rerun of the eligibility rules can change.
+  // different dead end from builds that are present but have no reachable
+  // representative failed JUnit analysis.
   evidencePresent?: boolean;
 }) {
   if (!jobID) return null;
@@ -41,7 +41,7 @@ export function CausalGroupFixNotice({
   return (
     <Typography color="textSecondary" sx={{ mt: 1.5, ...overviewTypography.description }}>
       {evidencePresent
-        ? "No failed JUnit test in these builds meets the Fix eligibility requirements, so no fix proposal can start from this cause."
+        ? "No representative failed JUnit analysis for this cause is reachable in the current builds, so no fix investigation can start from it."
         : "The builds this cause was correlated from have left the analysis window, so no fix proposal can start from it. A later failure of the same cause will produce a fresh, fixable one."}
     </Typography>
   );

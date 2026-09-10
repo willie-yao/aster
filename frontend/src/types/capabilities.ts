@@ -19,7 +19,6 @@ export interface CapabilityFeatures {
   junit_chat_fix?: boolean;
   pull_request_escalation?: boolean;
   shared_failure_escalation?: boolean;
-  chat_fix_min_confidence?: string;
 }
 
 // AuthInfo tells the frontend how admins sign in for operator features.

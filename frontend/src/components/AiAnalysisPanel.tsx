@@ -88,8 +88,8 @@ export function AiAnalysisPanel({
   const dispositionPanel = analysis.disposition !== "citations_verified" ? (
     <Alert severity="warning" variant="outlined">
       Preliminary analysis. The structured result is safe to review, but evidence or
-      quality checks remain unresolved. It cannot directly authorize an action, although
-      evidence-backed follow-up may still use its diagnosis.
+      quality checks remain unresolved. Treat the diagnosis as a hypothesis; an authenticated
+      maintainer can still investigate it before deciding whether to propose a fix.
     </Alert>
   ) : null;
 
@@ -206,8 +206,8 @@ export function AiAnalysisPanel({
     />
   ) : null;
 
-  // An external cause explains why this analysis has no verified project file
-  // and cannot start a fix proposal, so it belongs beside the remediation.
+  // External ownership qualifies the remediation without suppressing an
+  // available project-side investigation.
   const upstreamCause = externalCause(analysis.cause_location);
   const upstream = upstreamCause ? (
     detailAppearance ? (

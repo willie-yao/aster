@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/actionverify"
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/fixpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
 )
@@ -106,4 +108,75 @@ func subjectEligibilityReason(subject *ActionSubject) (ReasonCode, string) {
 		return ReasonUnsafeRemediation, ""
 	}
 	return "", ""
+}
+
+func manualFixWarnings(subject *ActionSubject, minConfidence string) []string {
+	if subject == nil {
+		return nil
+	}
+	var warnings []string
+	if subject.Kind == actionSubjectBuild && subject.Build != nil {
+		analysis := subject.Build.Failure.AIAnalysis
+		if analysis == nil {
+			return nil
+		}
+		if !ai.MeetsCurrentCritiqueContract(analysis) {
+			warnings = append(warnings, "The original analysis does not pass the current critique quality contract.")
+		}
+		if strings.TrimSpace(analysis.GeneratedAt) == "" {
+			warnings = append(warnings, "The original analysis has no generation timestamp.")
+		}
+		if strings.TrimSpace(analysis.RootCause) == "" {
+			warnings = append(warnings, "The original analysis has no root-cause hypothesis.")
+		}
+		if strings.TrimSpace(analysis.SuggestedFix) == "" {
+			warnings = append(warnings, "The original analysis has no suggested fix.")
+		}
+		if strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
+			warnings = append(warnings, "The original analysis classifies this failure as transient.")
+		}
+		if len(analysis.RelevantFiles) == 0 && len(analysis.FileLinks) == 0 {
+			warnings = append(warnings, "The original analysis has no source hints; the coding agent must investigate the repository.")
+		}
+		if remediationpolicy.RelationshipTextWarning(strings.Join([]string{analysis.RootCause, analysis.SuggestedFix}, "\n")) != "" {
+			warnings = append(warnings, "The original analysis triggered a text-only remediation-policy concern.")
+		}
+		return warnings
+	}
+	if subject.Kind != actionSubjectPattern || subject.Pattern == nil {
+		return warnings
+	}
+	pattern := subject.Pattern
+	if !fixpr.Eligible(*pattern, minConfidence) {
+		warnings = append(warnings, "The published pattern does not meet automatic Fix eligibility; this manual attempt will investigate.")
+	}
+	if strings.TrimSpace(pattern.SharedRootCause) == "" {
+		warnings = append(warnings, "The published pattern has no shared root-cause hypothesis.")
+	}
+	if strings.TrimSpace(pattern.SuggestedFix) == "" {
+		warnings = append(warnings, "The published pattern has no suggested fix.")
+	}
+	if pattern.Lifecycle != nil && pattern.Lifecycle.State != models.PatternLifecycleActive {
+		warnings = append(warnings, "The published pattern lifecycle is not active.")
+	}
+	completeTarget := false
+	sourceHint := len(pattern.RelevantFiles) > 0 || len(pattern.FileLinks) > 0
+	for _, target := range pattern.RemediationTargets {
+		if strings.TrimSpace(target.Path) != "" {
+			sourceHint = true
+		}
+		if target.Intent != models.RemediationIntentInvestigate && actionverify.PatternTargetReason(target) == "" {
+			completeTarget = true
+		}
+	}
+	if !completeTarget {
+		warnings = append(warnings, "The published remediation contract is incomplete or investigative.")
+	}
+	if !sourceHint {
+		warnings = append(warnings, "The published pattern has no source hints; the coding agent must investigate the repository.")
+	}
+	if remediationpolicy.RelationshipTextWarning(strings.Join([]string{pattern.SharedRootCause, pattern.SuggestedFix, pattern.Summary}, "\n")) != "" {
+		warnings = append(warnings, "The published analysis triggered a text-only remediation-policy concern.")
+	}
+	return warnings
 }

@@ -7,13 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/actionverify"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
@@ -22,12 +20,14 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/remediationpolicy"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 const (
 	maxAnalysisSourceFiles            = 16
 	maxAnalysisFixCitations           = 16
-	analysisSourceVerificationVersion = 2
+	maxAnalysisFailureTextBytes       = 8 << 10
+	analysisSourceVerificationVersion = 3
 )
 
 // AnalysisIdentity identifies one exact published JUnit analysis.
@@ -43,7 +43,7 @@ type AnalysisIdentity struct {
 	AnalysisGeneratedAt string `json:"analysis_generated_at"`
 }
 
-// AnalysisActionSubject is one currently eligible failed JUnit analysis.
+// AnalysisActionSubject is one current failed JUnit analysis.
 type AnalysisActionSubject struct {
 	ID                  string
 	ContentHash         string
@@ -53,47 +53,44 @@ type AnalysisActionSubject struct {
 	Build               models.BuildInfo
 	Failure             models.TestCase
 	SourceRepository    sourceinvestigation.Repository
-	SourceFiles         []string
+	SourceHints         []string
 }
 
 // AnalysisFixInput is one owner-bound chat finding selected for fix generation.
 type AnalysisFixInput struct {
-	Identity                 AnalysisIdentity
-	ChatSessionID            string
-	ChatRequestID            string
-	ChatResponseHash         string
-	PreviewRequestHash       string
-	AnalysisContentHash      string
-	SourceRepository         sourceinvestigation.Repository
-	FailureRevision          string
-	GenerationBaseRevision   string
-	VerifiedSourceFileHashes map[string]string
-	SourceBranch             string
-	AssistantAnswer          string
-	ProposedRevision         *fixpr.RevisionContext
-	ArtifactCitations        []fixpr.Evidence
-	EvidenceWarnings         []string
+	Identity                  AnalysisIdentity
+	ChatSessionID             string
+	ChatRequestID             string
+	ChatResponseHash          string
+	PreviewRequestHash        string
+	AnalysisContentHash       string
+	SourceRepository          sourceinvestigation.Repository
+	FailureRevision           string
+	GenerationBaseRevision    string
+	SourceBranch              string
+	AssistantAnswer           string
+	AssistantUnverified       bool
+	AssistantUnverifiedReason string
+	ProposedRevision          *fixpr.RevisionContext
+	ArtifactCitations         []fixpr.Evidence
+	EvidenceWarnings          []string
 }
 
 // AnalysisPreviewBinding preserves the exact analysis, chat, and source identities.
 type AnalysisPreviewBinding struct {
-	Identity                 AnalysisIdentity               `json:"identity"`
-	AnalysisID               string                         `json:"analysis_id"`
-	AnalysisHash             string                         `json:"analysis_hash"`
-	AnalysisContentHash      string                         `json:"analysis_content_hash"`
-	ChatSessionID            string                         `json:"chat_session_id"`
-	ChatRequestID            string                         `json:"chat_request_id"`
-	ChatResponseHash         string                         `json:"chat_response_hash"`
-	PreviewRequestHash       string                         `json:"preview_request_hash"`
-	SourceRepository         sourceinvestigation.Repository `json:"source_repository"`
-	SourceFiles              []string                       `json:"source_files"`
-	SourceVerification       string                         `json:"source_verification"`
-	FailureRevision          string                         `json:"failure_revision"`
-	GenerationBaseRevision   string                         `json:"generation_base_revision"`
-	VerifiedSourceFileHashes map[string]string              `json:"verified_source_file_hashes"`
-	FindingText              string                         `json:"finding_text"`
-	FindingVerification      string                         `json:"finding_verification"`
-	VerificationVersion      int                            `json:"verification_version"`
+	Identity               AnalysisIdentity               `json:"identity"`
+	AnalysisID             string                         `json:"analysis_id"`
+	AnalysisHash           string                         `json:"analysis_hash"`
+	AnalysisContentHash    string                         `json:"analysis_content_hash"`
+	ChatSessionID          string                         `json:"chat_session_id"`
+	ChatRequestID          string                         `json:"chat_request_id"`
+	ChatResponseHash       string                         `json:"chat_response_hash"`
+	PreviewRequestHash     string                         `json:"preview_request_hash"`
+	SourceRepository       sourceinvestigation.Repository `json:"source_repository"`
+	SourceBranch           string                         `json:"source_branch"`
+	FailureRevision        string                         `json:"failure_revision"`
+	GenerationBaseRevision string                         `json:"generation_base_revision"`
+	VerificationVersion    int                            `json:"verification_version"`
 }
 
 // AnalysisPreviewValidator revalidates an owner-bound chat response before confirmation.
@@ -101,33 +98,26 @@ type AnalysisPreviewValidator interface {
 	ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error
 }
 
-type sourceSnapshotReader interface {
-	ReadFile(context.Context, string) (string, bool, error)
-}
-
-type sourceSnapshotReaderFactory func(sourceinvestigation.Repository) sourceSnapshotReader
-
 type analysisSourceRevisionClient interface {
 	ResolveBase(context.Context, string, string, string) (ghpr.Base, error)
 	CompareCommits(context.Context, string, string, string, string) (bool, string, error)
 }
 
 type analysisSourceCompatibility struct {
-	GenerationBaseRevision   string
-	SourceVerification       string
-	VerifiedSourceFileHashes map[string]string
-	FindingVerification      string
-	Warnings                 []string
+	GenerationBaseRevision string
 }
 
 const (
-	analysisWarningCritique        = "The original analysis critique did not pass."
-	analysisWarningSuggestedFix    = "The original analysis has no suggested fix."
-	analysisWarningRootCause       = "The original analysis root cause is incomplete."
-	analysisWarningTransient       = "The original analysis is marked transient."
-	analysisWarningProse           = "The model-authored remediation prose is incomplete."
-	analysisWarningPolicy          = "The model-authored prose triggered a text-only remediation-policy concern."
-	analysisWarningPartialEvidence = "The selected chat finding is partially verified; only retained artifact citations are authoritative."
+	analysisWarningCritique            = "The original analysis critique did not pass."
+	analysisWarningSuggestedFix        = "The original analysis has no suggested fix."
+	analysisWarningRootCause           = "The original analysis root cause is incomplete."
+	analysisWarningTransient           = "The original analysis is marked transient."
+	analysisWarningProse               = "The model-authored remediation prose is incomplete."
+	analysisWarningPolicy              = "The model-authored prose triggered a text-only remediation-policy concern."
+	analysisWarningEvidenceQualified   = "The selected chat finding has evidence qualification warnings; treat warned claims as hypotheses."
+	analysisWarningAssistantUnverified = "The selected chat answer is unverified; treat it as an investigation hypothesis."
+	analysisWarningNoCitations         = "The selected chat answer has no retained artifact citations; treat it as an investigation hypothesis."
+	analysisWarningNoSourceHints       = "The published analysis has no source hints; the coding agent must investigate the repository."
 )
 
 // ConfigureAnalysisPreviewValidator binds exact chat state to later confirmation.
@@ -180,8 +170,8 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	match := matches[0]
 	analysis := match.testCase.AIAnalysis
 	if match.run.Passed || match.testCase.Status != "failed" || match.testCase.Source == models.TestCaseSourceBuild || match.testCase.JUnitFile == "" ||
-		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt || analysis.Mode != ai.AgenticMode {
-		return nil, fmt.Errorf("JUnit analysis does not pass current action quality gates")
+		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt {
+		return nil, fmt.Errorf("JUnit analysis is not a current failed-test action target")
 	}
 	analysisRepo := s.cfg.EffectiveAnalysisSourceRepo()
 	source, ok := ai.ResolveBuildSource(match.run, analysisRepo.Owner, analysisRepo.Name)
@@ -192,13 +182,15 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
 		return nil, fmt.Errorf("%w: JUnit analysis immutable source identity is unavailable", ErrPreviewRejected)
 	}
-	sourceFiles := verifiedSourceFiles(analysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
-	if len(sourceFiles) == 0 || len(sourceFiles) > maxAnalysisSourceFiles {
-		return nil, fmt.Errorf("%w: JUnit analysis has no bounded verified source paths", ErrPreviewRejected)
+	sourceHints := verifiedSourceFiles(analysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
+	slices.Sort(sourceHints)
+	sourceHints = slices.Compact(sourceHints)
+	if len(sourceHints) > maxAnalysisSourceFiles {
+		sourceHints = sourceHints[:maxAnalysisSourceFiles]
 	}
 	subject := &AnalysisActionSubject{
 		Identity: identity, JobName: match.jobName, Build: match.run, Failure: match.testCase,
-		SourceRepository: repository, SourceFiles: sourceFiles,
+		SourceRepository: repository, SourceHints: sourceHints,
 	}
 	subject.AnalysisContentHash = models.TestAnalysisContentHash(match.testCase)
 	subject.ID = analysisActionID(identity)
@@ -210,24 +202,22 @@ func osReadFile(dataDir, jobID string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename(jobID)))
 }
 
-// PreflightAnalysisFixSource checks relevant source drift when a fix request pins its source.
+// PreflightAnalysisFixSource binds a fix request to the current branch base.
 func (s *Service) PreflightAnalysisFixSource(
-	ctx context.Context, repo sourceinvestigation.Repository, targetBranch string, files []string,
-) (string, map[string]string, error) {
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, targetBranch, files, "")
+	ctx context.Context, repo sourceinvestigation.Repository, targetBranch string,
+) (string, error) {
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, targetBranch)
 	if err != nil {
-		// Keep an explicitly classified rejection so the caller can tell the
-		// operator why, instead of collapsing every cause into one message.
 		if code, ok := ReasonCodeFrom(err); ok {
-			return "", nil, withReason(code, ErrPreviewRejected, err.Error())
+			return "", withReason(code, ErrPreviewRejected, err.Error())
 		}
-		return "", nil, fmt.Errorf("%w: exact JUnit Fix relevant source changed", ErrPreviewRejected)
+		return "", fmt.Errorf("%w: exact JUnit Fix repository/base preflight: %w", ErrPreviewRejected, err)
 	}
-	return compatibility.GenerationBaseRevision, cloneStringMap(compatibility.VerifiedSourceFileHashes), nil
+	return compatibility.GenerationBaseRevision, nil
 }
 
 func (s *Service) verifyAnalysisSourceCompatibility(
-	ctx context.Context, failureRepo sourceinvestigation.Repository, targetBranch string, files []string, finding string,
+	ctx context.Context, failureRepo sourceinvestigation.Repository, targetBranch string,
 ) (analysisSourceCompatibility, error) {
 	if err := sourceinvestigation.ValidateRepository(failureRepo); err != nil {
 		return analysisSourceCompatibility{}, err
@@ -276,58 +266,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 			return analysisSourceCompatibility{}, withReason(ReasonSourceRevisionDiverged, ErrPreviewRejected, "")
 		}
 	}
-	files, err = normalizeAnalysisSourceFiles(files)
-	if err != nil {
-		return analysisSourceCompatibility{}, err
-	}
-	generationRepo := failureRepo
-	generationRepo.Revision = generationBase
-	generationReader := s.analysisSourceReader(generationRepo)
-	if generationReader == nil {
-		return analysisSourceCompatibility{}, fmt.Errorf("generation source reader is unavailable")
-	}
-	hashes := make(map[string]string, len(files))
-	contents := make(map[string]string, len(files))
-	for _, file := range files {
-		generationContent, found, err := generationReader.ReadFile(ctx, file)
-		if err != nil || !found {
-			return analysisSourceCompatibility{}, withReason(ReasonSourceChanged, ErrPreviewRejected,
-				"a candidate source path is unavailable at the generation base")
-		}
-		sum := sha256.Sum256([]byte(generationContent))
-		hashes[file] = hex.EncodeToString(sum[:])
-		contents[file] = generationContent
-	}
-	findingVerification := ""
-	var warnings []string
-	if strings.TrimSpace(finding) != "" {
-		findingVerification, warnings, err = s.verifyAnalysisFinding(generationRepo, files, finding, contents)
-		if err != nil {
-			return analysisSourceCompatibility{}, err
-		}
-	}
-	return analysisSourceCompatibility{
-		GenerationBaseRevision:   generationBase,
-		SourceVerification:       analysisSourceVerificationForHashes(generationRepo, files, hashes),
-		VerifiedSourceFileHashes: hashes,
-		FindingVerification:      findingVerification, Warnings: warnings,
-	}, nil
-}
-
-func normalizeAnalysisSourceFiles(files []string) ([]string, error) {
-	if len(files) == 0 || len(files) > maxAnalysisSourceFiles {
-		return nil, fmt.Errorf("verified source paths must contain 1-%d entries", maxAnalysisSourceFiles)
-	}
-	files = slices.Clone(files)
-	slices.Sort(files)
-	files = slices.Compact(files)
-	for _, file := range files {
-		clean := path.Clean(strings.TrimSpace(file))
-		if clean == "." || clean == ".." || clean != file || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, "\\") {
-			return nil, fmt.Errorf("source path is unsafe")
-		}
-	}
-	return files, nil
+	return analysisSourceCompatibility{GenerationBaseRevision: generationBase}, nil
 }
 
 // PreviewAnalysisFix creates a confirmable preview for one exact selected chat answer.
@@ -384,7 +323,7 @@ func (s *Service) PreviewAnalysisFix(
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: immutable source identity is unavailable", ErrPreviewRejected)
 	}
-	sourceFiles := slices.Clone(subject.SourceFiles)
+	sourceHints := slices.Clone(subject.SourceHints)
 	findingText := input.AssistantAnswer
 	if input.ProposedRevision != nil {
 		findingText += "\n" + input.ProposedRevision.RootCause + "\n" + input.ProposedRevision.SuggestedFix
@@ -392,7 +331,7 @@ func (s *Service) PreviewAnalysisFix(
 	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
 		return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 	}
-	warnings := analysisQualityWarnings(subject.Failure.AIAnalysis, input)
+	warnings := analysisQualityWarnings(subject.Failure.AIAnalysis, input, sourceHints)
 	if remediationpolicy.RelationshipTextWarning(findingText) != "" {
 		warnings = append(warnings, analysisWarningPolicy)
 	}
@@ -401,24 +340,21 @@ func (s *Service) PreviewAnalysisFix(
 		return PreviewResult{}, err
 	}
 	if !strings.EqualFold(destination.Repo.Owner, repository.Owner) || !strings.EqualFold(destination.Repo.Name, repository.Name) {
-		return PreviewResult{}, fmt.Errorf("%w: verified source does not match the configured fix destination", ErrPreviewRejected)
+		return PreviewResult{}, fmt.Errorf("%w: failure source does not match the configured fix destination", ErrPreviewRejected)
 	}
 	targetBranch, _ := buildsource.Branch(subject.Build, repository.Owner, repository.Name)
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, targetBranch, sourceFiles, findingText)
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, targetBranch)
 	if err != nil {
 		if code, ok := ReasonCodeFrom(err); ok {
 			return PreviewResult{}, withReason(code, ErrPreviewRejected, err.Error())
 		}
-		return PreviewResult{}, fmt.Errorf("%w: relevant source or selected symbol changed", ErrPreviewRejected)
+		return PreviewResult{}, fmt.Errorf("%w: checking exact JUnit Fix repository/base: %w", ErrPreviewRejected, err)
 	}
-	verification := compatibility.SourceVerification
 	if input.GenerationBaseRevision != "" &&
 		(!strings.EqualFold(input.FailureRevision, repository.Revision) ||
-			!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) ||
-			!stringMapsEqual(input.VerifiedSourceFileHashes, compatibility.VerifiedSourceFileHashes)) {
+			!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision)) {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
-	warnings = append(warnings, compatibility.Warnings...)
 	if err := s.setRequestWarning(ctx, warnings...); err != nil {
 		return PreviewResult{}, err
 	}
@@ -434,7 +370,7 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	targetConfig := fixDestinationFingerprint(eff, destination)
 	generationHash := analysisPreviewGenerationHash(
-		subject, input.PreviewRequestHash, repository, verification, compatibility, targetConfig,
+		subject, input.PreviewRequestHash, repository, targetBranch, compatibility.GenerationBaseRevision, targetConfig,
 	)
 	token, existing, acquired, err := s.previewStore.reserveIdempotent(
 		owner, input.PreviewRequestHash, generationHash, s.requestTimeout+30*time.Second,
@@ -465,21 +401,8 @@ func (s *Service) PreviewAnalysisFix(
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	analysis := subject.Failure.AIAnalysis
-	gf, err := mgr.GenerateAnalysisPreview(ctx, fixpr.AnalysisFailure{
-		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
-		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, AnalysisGeneratedAt: subject.Identity.AnalysisGeneratedAt,
-		AnalysisHash: subject.ContentHash, RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix,
-		AssistantAnswer: input.AssistantAnswer, ChatResponseHash: input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
-		ProposedRevision:  input.ProposedRevision,
-		ArtifactCitations: slices.Clone(input.ArtifactCitations), EvidenceWarnings: slices.Clone(input.EvidenceWarnings),
-		SourceRepository: repository.Owner + "/" + repository.Name,
-		SourceBranch:     targetBranch,
-		FailureRevision:  repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
-		VerifiedSourceFileHashes: cloneStringMap(compatibility.VerifiedSourceFileHashes),
-		SourceFiles:              slices.Clone(sourceFiles), SourceVerification: verification,
-		FindingVerification: compatibility.FindingVerification,
-	}, instruction)
+	failure := analysisFailureForGeneration(subject, input, targetBranch, compatibility.GenerationBaseRevision)
+	gf, err := mgr.GenerateAnalysisPreview(ctx, failure, instruction)
 	if err != nil {
 		return PreviewResult{}, safeAnalysisFixPreviewError(err)
 	}
@@ -500,10 +423,8 @@ func (s *Service) PreviewAnalysisFix(
 			AnalysisContentHash: subject.AnalysisContentHash,
 			ChatSessionID:       input.ChatSessionID, ChatRequestID: input.ChatRequestID, ChatResponseHash: input.ChatResponseHash,
 			PreviewRequestHash: input.PreviewRequestHash,
-			SourceRepository:   repository, SourceFiles: slices.Clone(sourceFiles), SourceVerification: verification,
+			SourceRepository:   repository, SourceBranch: targetBranch,
 			FailureRevision: repository.Revision, GenerationBaseRevision: compatibility.GenerationBaseRevision,
-			VerifiedSourceFileHashes: cloneStringMap(compatibility.VerifiedSourceFileHashes),
-			FindingText:              findingText, FindingVerification: compatibility.FindingVerification,
 			VerificationVersion: analysisSourceVerificationVersion,
 		},
 	}
@@ -519,24 +440,43 @@ func (s *Service) PreviewAnalysisFix(
 	return preview, nil
 }
 
+func analysisFailureForGeneration(
+	subject *AnalysisActionSubject, input AnalysisFixInput, targetBranch, generationBaseRevision string,
+) fixpr.AnalysisFailure {
+	analysis := subject.Failure.AIAnalysis
+	return fixpr.AnalysisFailure{
+		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
+		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, AnalysisGeneratedAt: subject.Identity.AnalysisGeneratedAt,
+		AnalysisHash: subject.ContentHash, RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix,
+		FailureMessage:  boundedAnalysisFailureText(subject.Failure.FailureMessage),
+		FailureBody:     boundedAnalysisFailureText(subject.Failure.FailureBody),
+		AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
+		AssistantUnverifiedReason: input.AssistantUnverifiedReason,
+		ChatResponseHash:          input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
+		ProposedRevision:  input.ProposedRevision,
+		ArtifactCitations: slices.Clone(input.ArtifactCitations), EvidenceWarnings: slices.Clone(input.EvidenceWarnings),
+		SourceRepository: subject.SourceRepository.Owner + "/" + subject.SourceRepository.Name,
+		SourceBranch:     targetBranch,
+		FailureRevision:  subject.SourceRepository.Revision, GenerationBaseRevision: generationBaseRevision,
+		SourceHints: slices.Clone(subject.SourceHints),
+	}
+}
+
 func analysisPreviewGenerationHash(
 	subject *AnalysisActionSubject,
 	requestHash string,
 	repo sourceinvestigation.Repository,
-	sourceVerification string,
-	compatibility analysisSourceCompatibility,
+	sourceBranch string,
+	generationBaseRevision string,
 	targetConfig string,
 ) string {
 	payload, _ := json.Marshal(struct {
-		AnalysisID, AnalysisHash, AnalysisContentHash, RequestHash      string
-		Repository                                                      sourceinvestigation.Repository
-		SourceVerification, FindingVerification, GenerationBaseRevision string
-		VerifiedSourceFileHashes                                        map[string]string
-		TargetConfig                                                    string
+		AnalysisID, AnalysisHash, AnalysisContentHash, RequestHash string
+		Repository                                                 sourceinvestigation.Repository
+		SourceBranch, GenerationBaseRevision, TargetConfig         string
 	}{
 		subject.ID, subject.ContentHash, subject.AnalysisContentHash, requestHash,
-		repo, sourceVerification, compatibility.FindingVerification, compatibility.GenerationBaseRevision,
-		compatibility.VerifiedSourceFileHashes, targetConfig,
+		repo, sourceBranch, generationBaseRevision, targetConfig,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -544,20 +484,21 @@ func analysisPreviewGenerationHash(
 
 func analysisFixReplacementHash(input AnalysisFixInput) string {
 	payload, _ := json.Marshal(struct {
-		Identity                 AnalysisIdentity
-		ChatSessionID            string
-		ChatRequestID            string
-		ChatResponseHash         string
-		AnalysisContentHash      string
-		SourceRepository         sourceinvestigation.Repository
-		FailureRevision          string
-		GenerationBaseRevision   string
-		VerifiedSourceFileHashes map[string]string
-		SourceBranch             string
+		Identity                  AnalysisIdentity
+		ChatSessionID             string
+		ChatRequestID             string
+		ChatResponseHash          string
+		AnalysisContentHash       string
+		SourceRepository          sourceinvestigation.Repository
+		FailureRevision           string
+		GenerationBaseRevision    string
+		SourceBranch              string
+		AssistantUnverified       bool
+		AssistantUnverifiedReason string
 	}{
 		input.Identity, input.ChatSessionID, input.ChatRequestID, input.ChatResponseHash,
 		input.AnalysisContentHash, input.SourceRepository, input.FailureRevision,
-		input.GenerationBaseRevision, input.VerifiedSourceFileHashes, input.SourceBranch,
+		input.GenerationBaseRevision, input.SourceBranch, input.AssistantUnverified, input.AssistantUnverifiedReason,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -578,43 +519,25 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 		subject.AnalysisContentHash != binding.AnalysisContentHash {
 		return ErrPreviewTargetChanged
 	}
-	if subject.SourceRepository != binding.SourceRepository || !slices.Equal(subject.SourceFiles, binding.SourceFiles) {
+	if subject.SourceRepository != binding.SourceRepository {
 		return ErrPreviewTargetChanged
 	}
-	if !strings.EqualFold(binding.FailureRevision, binding.SourceRepository.Revision) || binding.GenerationBaseRevision == "" || len(binding.VerifiedSourceFileHashes) == 0 {
+	if !strings.EqualFold(binding.FailureRevision, binding.SourceRepository.Revision) ||
+		strings.TrimSpace(binding.GenerationBaseRevision) == "" || strings.TrimSpace(binding.SourceBranch) == "" {
 		return ErrPreviewTargetChanged
 	}
-	files := subject.SourceFiles
 	targetBranch, _ := buildsource.Branch(subject.Build, binding.SourceRepository.Owner, binding.SourceRepository.Name)
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, binding.SourceRepository, targetBranch, files, binding.FindingText)
-	if err != nil || !strings.EqualFold(compatibility.GenerationBaseRevision, binding.GenerationBaseRevision) ||
-		compatibility.SourceVerification != binding.SourceVerification ||
-		!stringMapsEqual(compatibility.VerifiedSourceFileHashes, binding.VerifiedSourceFileHashes) ||
-		compatibility.FindingVerification != binding.FindingVerification {
+	if targetBranch != binding.SourceBranch {
+		return ErrPreviewTargetChanged
+	}
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, binding.SourceRepository, targetBranch)
+	if err != nil || !strings.EqualFold(compatibility.GenerationBaseRevision, binding.GenerationBaseRevision) {
 		return ErrPreviewTargetChanged
 	}
 	return nil
 }
 
-func (s *Service) verifyAnalysisFinding(
-	repo sourceinvestigation.Repository, files []string, finding string, contents map[string]string,
-) (string, []string, error) {
-	result, err := actionverify.VerifyFindingSource(finding, files, contents)
-	if err != nil {
-		return "", nil, err
-	}
-	payload, _ := json.Marshal(struct {
-		Version    int
-		Repository sourceinvestigation.Repository
-		Files      []string
-		Finding    string
-		Result     actionverify.FindingResult
-	}{analysisSourceVerificationVersion, repo, slices.Clone(files), finding, result})
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), slices.Clone(result.Warnings), nil
-}
-
-func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput) []string {
+func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput, sourceHints []string) []string {
 	if analysis == nil {
 		return nil
 	}
@@ -635,51 +558,18 @@ func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput
 		warnings = append(warnings, analysisWarningProse)
 	}
 	if len(input.EvidenceWarnings) > 0 {
-		warnings = append(warnings, analysisWarningPartialEvidence)
+		warnings = append(warnings, analysisWarningEvidenceQualified)
+	}
+	if input.AssistantUnverified {
+		warnings = append(warnings, analysisWarningAssistantUnverified)
+	}
+	if len(input.ArtifactCitations) == 0 {
+		warnings = append(warnings, analysisWarningNoCitations)
+	}
+	if len(sourceHints) == 0 {
+		warnings = append(warnings, analysisWarningNoSourceHints)
 	}
 	return warnings
-}
-
-func (s *Service) verifyAnalysisSourceSnapshot(ctx context.Context, repo sourceinvestigation.Repository, files []string) (string, error) {
-	if err := sourceinvestigation.ValidateRepository(repo); err != nil {
-		return "", err
-	}
-	var err error
-	files, err = normalizeAnalysisSourceFiles(files)
-	if err != nil {
-		return "", err
-	}
-	reader := s.analysisSourceReader(repo)
-	if reader == nil {
-		return "", fmt.Errorf("source reader is unavailable")
-	}
-	hashes := make(map[string]string, len(files))
-	for _, file := range files {
-		content, found, err := reader.ReadFile(ctx, file)
-		if err != nil || !found {
-			return "", fmt.Errorf("verified source path is unavailable")
-		}
-		contentHash := sha256.Sum256([]byte(content))
-		hashes[file] = hex.EncodeToString(contentHash[:])
-	}
-	return analysisSourceVerificationForHashes(repo, files, hashes), nil
-}
-
-func analysisSourceVerificationForHashes(repo sourceinvestigation.Repository, files []string, hashes map[string]string) string {
-	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "v%d\x00%s", analysisSourceVerificationVersion, strings.ToLower(repo.Owner+"/"+repo.Name+"@"+repo.Revision))
-	for _, file := range files {
-		_, _ = hash.Write([]byte("\x00" + file + "\x00" + hashes[file]))
-	}
-	return hex.EncodeToString(hash.Sum(nil))
-}
-
-func (s *Service) analysisSourceReader(repo sourceinvestigation.Repository) sourceSnapshotReader {
-	if s.sourceReaderFactory != nil {
-		return s.sourceReaderFactory(repo)
-	}
-	reader, _ := ai.NewGitHubRepoReader(repo.Owner, repo.Name, repo.Revision, s.ai.SourceToken).(sourceSnapshotReader)
-	return reader
 }
 
 func normalizeAnalysisIdentity(identity AnalysisIdentity) AnalysisIdentity {
@@ -711,7 +601,7 @@ func validateAnalysisFixInput(input AnalysisFixInput) error {
 	if strings.TrimSpace(input.ChatSessionID) == "" || strings.TrimSpace(input.ChatRequestID) == "" ||
 		strings.TrimSpace(input.ChatResponseHash) == "" || strings.TrimSpace(input.PreviewRequestHash) == "" || strings.TrimSpace(input.AnalysisContentHash) == "" ||
 		strings.TrimSpace(input.AssistantAnswer) == "" || sourceinvestigation.ValidateRepository(input.SourceRepository) != nil ||
-		len(input.ArtifactCitations) == 0 || len(input.ArtifactCitations) > maxAnalysisFixCitations || len(input.EvidenceWarnings) > 20 {
+		len(input.ArtifactCitations) > maxAnalysisFixCitations || len(input.AssistantUnverifiedReason) > 512 || len(input.EvidenceWarnings) > 20 {
 		return fmt.Errorf("invalid exact analysis fix request")
 	}
 	for _, warning := range input.EvidenceWarnings {
@@ -719,11 +609,26 @@ func validateAnalysisFixInput(input AnalysisFixInput) error {
 			return fmt.Errorf("invalid exact analysis Fix evidence warning")
 		}
 	}
-	hasPreflight := strings.TrimSpace(input.FailureRevision) != "" || strings.TrimSpace(input.GenerationBaseRevision) != "" || len(input.VerifiedSourceFileHashes) != 0
-	if hasPreflight && (strings.TrimSpace(input.FailureRevision) == "" || strings.TrimSpace(input.GenerationBaseRevision) == "" || len(input.VerifiedSourceFileHashes) == 0) {
+	hasPreflight := strings.TrimSpace(input.FailureRevision) != "" || strings.TrimSpace(input.GenerationBaseRevision) != "" || strings.TrimSpace(input.SourceBranch) != ""
+	if hasPreflight && (strings.TrimSpace(input.FailureRevision) == "" || strings.TrimSpace(input.GenerationBaseRevision) == "" || strings.TrimSpace(input.SourceBranch) == "") {
 		return fmt.Errorf("invalid exact analysis Fix source binding")
 	}
+	if hasPreflight {
+		failureRevision, failureOK := buildsource.NormalizeRevision(input.FailureRevision)
+		generationBase, baseOK := buildsource.NormalizeRevision(input.GenerationBaseRevision)
+		if !failureOK || !baseOK || !strings.EqualFold(failureRevision, input.SourceRepository.Revision) ||
+			failureRevision == "" || generationBase == "" {
+			return fmt.Errorf("invalid exact analysis Fix source binding")
+		}
+	}
 	return nil
+}
+
+func boundedAnalysisFailureText(value string) string {
+	if len(value) <= maxAnalysisFailureTextBytes {
+		return value
+	}
+	return textutil.Truncate(value, maxAnalysisFailureTextBytes-len("…"))
 }
 
 func analysisActionID(identity AnalysisIdentity) string {
@@ -741,35 +646,10 @@ func analysisActionHash(subject *AnalysisActionSubject) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
-}
-
-func stringMapsEqual(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
 func cloneAnalysisPreviewBinding(binding *AnalysisPreviewBinding) *AnalysisPreviewBinding {
 	if binding == nil {
 		return nil
 	}
 	copy := *binding
-	copy.SourceFiles = slices.Clone(binding.SourceFiles)
-	copy.VerifiedSourceFileHashes = cloneStringMap(binding.VerifiedSourceFileHashes)
 	return &copy
 }

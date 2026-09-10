@@ -85,6 +85,7 @@ export interface ActionPreview {
   kind: "issue" | "fix";
   title: string;
   body: string;
+  warning?: string;
   diff?: string;
   verify_status?: string;
   verify_summary?: string;

@@ -221,8 +221,7 @@ func (m *Manager) SaveState() error {
 // an optional maintainer directive that steers the edit; empty for the batch
 // path.
 func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, instruction string, generationContext *GenerationContext) (*proposedFix, error) {
-	policyText := strings.Join([]string{p.SuggestedFix, p.SharedRootCause, p.Summary, instruction}, "\n")
-	if remediationpolicy.Reason(policyText, p.RemediationTargets) != "" {
+	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
 		return nil, fmt.Errorf("remediation safety policy requires investigation")
 	}
 	if m.opts.Agent != nil && m.opts.Agent.ModelProvider.CredentialMode == modelprovider.CredentialModeGateway {
@@ -298,6 +297,47 @@ type GeneratedFix struct {
 	requireBaseCurrent    bool
 }
 
+// SetWarnings binds server-authored investigation warnings to the preview and PR.
+func (gf *GeneratedFix) SetWarnings(warnings []string) {
+	if gf == nil {
+		return
+	}
+	oldBanner := generatedFixWarningBanner(gf.Warnings)
+	if oldBanner != "" && strings.HasPrefix(gf.Description, oldBanner) {
+		gf.Description = strings.TrimPrefix(gf.Description, oldBanner)
+		gf.Body = strings.Replace(gf.Body, oldBanner, "", 1)
+	}
+	seen := map[string]bool{}
+	retained := make([]string, 0, len(gf.Warnings)+len(warnings))
+	for _, warning := range append(slices.Clone(gf.Warnings), warnings...) {
+		warning = oneLine(warning)
+		if warning == "" || seen[warning] {
+			continue
+		}
+		seen[warning] = true
+		retained = append(retained, warning)
+	}
+	gf.Warnings = retained
+	if len(retained) == 0 {
+		return
+	}
+	oldDescription := gf.Description
+	banner := generatedFixWarningBanner(retained)
+	gf.Description = banner + oldDescription
+	if oldDescription != "" && strings.Contains(gf.Body, oldDescription) {
+		gf.Body = strings.Replace(gf.Body, oldDescription, gf.Description, 1)
+	} else {
+		gf.Body = banner + gf.Body
+	}
+}
+
+func generatedFixWarningBanner(warnings []string) string {
+	if len(warnings) == 0 {
+		return ""
+	}
+	return "> [!WARNING]\n> This draft came from a manual investigation request. " + strings.Join(warnings, " ") + "\n\n"
+}
+
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
 // the exact files and pinned base needed to open the reviewed draft later.
 type GeneratedFixSnapshot struct {
@@ -370,12 +410,6 @@ func (m *Manager) GeneratePreviewWithContext(ctx context.Context, p models.Patte
 }
 
 func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis, instruction string, generationContext *GenerationContext) (*GeneratedFix, error) {
-	// Apply the same eligibility gate as the batch path so an on-demand preview
-	// cannot draft a fix for a failure the engine would not consider actionable
-	// (non-systemic or without a suggested fix).
-	if len(eligible([]models.PatternAnalysis{p}, m.opts.MinConfidence)) == 0 {
-		return nil, fmt.Errorf("this failure is not auto-fixable (needs a systemic pattern with a suggested fix)")
-	}
 	if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
 		return nil, fmt.Errorf("remediation targets do not match fix repository %s/%s", m.opts.SourceOwner, m.opts.SourceName)
 	}
@@ -387,10 +421,13 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 	if err != nil {
 		return nil, err
 	}
-	key := KeyFor(p)
+	key, err := manualKeyFor(p)
+	if err != nil {
+		return nil, err
+	}
 	v := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description, body := m.renderBody(ctx, p, fix, v, key)
-	return &GeneratedFix{
+	generated := &GeneratedFix{
 		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
 		Title:                 prTitle(p),
 		Description:           description,
@@ -399,7 +436,26 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		pattern:               p,
 		key:                   key,
 		base:                  base,
-	}, nil
+	}
+	generated.SetWarnings(generationContextWarnings(generationContext))
+	return generated, nil
+}
+
+func generationContextWarnings(generationContext *GenerationContext) []string {
+	if generationContext == nil {
+		return nil
+	}
+	var warnings []string
+	if generationContext.AssistantUnverified {
+		warnings = append(warnings, "The selected chat answer is explicitly unverified and remains an investigation hypothesis.")
+	}
+	if len(generationContext.ArtifactCitations) == 0 {
+		warnings = append(warnings, "The selected chat answer has no retained artifact citations and remains an investigation hypothesis.")
+	}
+	if len(generationContext.EvidenceWarnings) > 0 {
+		warnings = append(warnings, "The selected chat answer has evidence qualification warnings; warned claims remain hypotheses.")
+	}
+	return warnings
 }
 
 func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string) bool {
@@ -554,6 +610,23 @@ func KeyFor(p models.PatternAnalysis) string {
 	return keyPrefix + job + "::" + hex.EncodeToString(sum[:6])
 }
 
+func manualKeyFor(p models.PatternAnalysis) (string, error) {
+	if strings.TrimSpace(p.SharedRootCause) != "" {
+		return KeyFor(p), nil
+	}
+	id := strings.TrimSpace(p.ID)
+	contentHash := strings.TrimSpace(p.ContentHash)
+	if id == "" || contentHash == "" {
+		return "", fmt.Errorf("rootless pattern identity is incomplete")
+	}
+	job := strings.TrimSpace(p.JobID)
+	if job == "" {
+		job = strings.TrimSpace(p.Subject)
+	}
+	sum := sha256.Sum256([]byte(id + "\x00" + contentHash))
+	return keyPrefix + job + "::manual-rootless::" + hex.EncodeToString(sum[:6]), nil
+}
+
 func markerFor(key string) string {
 	return fmt.Sprintf("<!-- %s:%s -->", markerPrefix, markerToken(key))
 }
@@ -577,14 +650,14 @@ func markerToken(key string) string {
 func prTitle(p models.PatternAnalysis) string {
 	subj := strings.TrimSpace(p.Subject)
 	if subj == "" {
-		subj = "a recurring CI failure"
+		subj = "a CI failure"
 	}
-	return "fix: address recurring failure in " + subj
+	return "fix: address CI failure in " + subj
 }
 
 func prBody(p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key, dashboardURL, description string) string {
 	var sb strings.Builder
-	sb.WriteString("> [!WARNING]\n> Draft PR auto-proposed by a CI failure-analysis dashboard. Review carefully before use; the change is a starting point, not a merge-ready fix.\n\n")
+	sb.WriteString("> [!WARNING]\n> Draft PR proposed from a CI failure investigation. Review carefully before use; the change is a starting point, not a merge-ready fix.\n\n")
 	sb.WriteString(verifyBanner(v))
 	sb.WriteString(strings.TrimSpace(description))
 	sb.WriteString("\n\n")
@@ -624,11 +697,11 @@ func prDescription(p models.PatternAnalysis, fix *proposedFix) string {
 	if r := strings.TrimSpace(fix.rationale); r != "" {
 		fmt.Fprintf(&sb, "**Proposed change:** %s\n\n", oneLine(r))
 	}
-	fmt.Fprintf(&sb, "**Recurring failure:** %s\n", p.Subject)
+	fmt.Fprintf(&sb, "**Analyzed CI failure:** %s\n", p.Subject)
 	if c := strings.TrimSpace(p.SharedRootCause); c != "" {
-		fmt.Fprintf(&sb, "**Shared root cause:** %s\n", oneLine(c))
+		fmt.Fprintf(&sb, "**Published root-cause hypothesis:** %s\n", oneLine(c))
 	}
-	fmt.Fprintf(&sb, "**Builds analyzed:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
+	fmt.Fprintf(&sb, "**Builds in published context:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
 	sb.WriteString("**Before merging, a human must:**\n")
 	sb.WriteString("- Verify the change actually fixes the root cause (run the affected job).\n")
 	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.")

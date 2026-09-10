@@ -289,7 +289,7 @@ func TestPreviewFixWithContextRejectsMismatchedPatternTarget(t *testing.T) {
 	}
 }
 
-func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
+func TestPreviewFixWithContextIgnoresAutomaticMinConfidence(t *testing.T) {
 	pattern := systemicPattern()
 	pattern.Confidence = "medium"
 	pattern.SuggestedFix = "bound retries"
@@ -313,7 +313,7 @@ func TestPreviewFixWithContextHonorsMinConfidence(t *testing.T) {
 			}},
 		},
 	)
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "not auto-fixable") {
+	if err == nil || strings.Contains(err.Error(), "not auto-fixable") {
 		t.Fatalf("error = %v", err)
 	}
 	snapshot := usage.Snapshot()
@@ -942,14 +942,14 @@ func TestBuildIssuePreviewUsesSingleRunLanguage(t *testing.T) {
 	}
 }
 
-func TestBuildFixPreviewRejectsMissingRepositoryEvidence(t *testing.T) {
+func TestBuildFixPreviewAllowsMissingRepositoryHints(t *testing.T) {
 	dataDir := t.TempDir()
 	detail := analyzedBuildDetail(false)
 	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
 	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
 	service := NewService(cfg, dataDir, AIConfig{})
 	_, err := service.PreviewFix(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", "")
-	if !errors.Is(err, ErrPreviewRejected) || !strings.Contains(err.Error(), "verified local path") {
+	if err == nil || strings.Contains(err.Error(), "verified local path") {
 		t.Fatalf("fix preview error = %v", err)
 	}
 	if _, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", ""); err == nil {
@@ -976,7 +976,7 @@ func TestBuildSubjectHashChangesWithPublishedAnalysis(t *testing.T) {
 	}
 }
 
-func TestBuildFixSnapshotRejectsRemovedSourceEvidenceButIssueRemainsValid(t *testing.T) {
+func TestBuildFixSnapshotAllowsRemovedSourceHintsAndIssueRemainsValid(t *testing.T) {
 	dataDir := t.TempDir()
 	detail := analyzedBuildDetail(true)
 	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
@@ -995,7 +995,7 @@ func TestBuildFixSnapshotRejectsRemovedSourceEvidenceButIssueRemainsValid(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.validateSubjectSnapshot(id, current.ContentHash, gfKind); !errors.Is(err, ErrPreviewTargetChanged) {
+	if err := service.validateSubjectSnapshot(id, current.ContentHash, gfKind); err != nil {
 		t.Fatalf("current fix snapshot validation = %v", err)
 	}
 	if err := service.validateSubjectSnapshot(id, current.ContentHash, "create-issue"); err != nil {
@@ -1048,7 +1048,38 @@ func TestBuildActionsKeepStrictCritiqueContract(t *testing.T) {
 			if _, err := service.resolveSubject(BuildFailureID(detail.JobID, "123")); err == nil || !strings.Contains(err.Error(), "quality gates") {
 				t.Fatalf("build critique analysis error = %v", err)
 			}
+			if _, err := service.resolveSubjectForManualFix(BuildFailureID(detail.JobID, "123")); err != nil {
+				t.Fatalf("manual build fix subject error = %v", err)
+			}
 		})
+	}
+}
+
+func TestManualBuildFixPersistsQualityWarningsWhileIssueStaysStrict(t *testing.T) {
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(true)
+	analysis := detail.Runs[0].TestCases[0].AIAnalysis
+	analysis.CritiquePassed = false
+	analysis.SuggestedFix = ""
+	analysis.RelevantFiles = nil
+	analysis.FileLinks = nil
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	id := BuildFailureID(detail.JobID, "123")
+
+	created, err := service.CreateRequest(id, "propose-fix", "alice", "token", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	for _, want := range []string{"critique quality contract", "no suggested fix", "no source hints"} {
+		if !strings.Contains(failed.Warning, want) {
+			t.Fatalf("warning %q missing %q", failed.Warning, want)
+		}
+	}
+	if _, err := service.CreateRequest(id, "create-issue", "alice", "token", "", ""); err == nil || !strings.Contains(err.Error(), "quality gates") {
+		t.Fatalf("issue request error = %v", err)
 	}
 }
 
@@ -1476,7 +1507,7 @@ func TestSourceOverrideProvenRequiredCallsRemainSupported(t *testing.T) {
 	}
 }
 
-func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
+func TestSourcePreflightBlocksIssueButNotManualFixAdmission(t *testing.T) {
 	dataDir := t.TempDir()
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	pattern := models.PatternAnalysis{
@@ -1513,7 +1544,7 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	if _, err := service.PreviewIssue(context.Background(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("issue preview error = %v", err)
 	}
-	if _, err := service.PreviewFix(context.Background(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationAlreadyPresent) {
+	if _, err := service.PreviewFix(context.Background(), pattern.ID, "alice", "token", ""); err == nil || errors.Is(err, ErrRemediationAlreadyPresent) {
 		t.Fatalf("fix preview error = %v", err)
 	}
 	request, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
@@ -1533,8 +1564,8 @@ func TestSourcePreflightBlocksAlreadyPresentRemediation(t *testing.T) {
 	service.rmu.Lock()
 	runtimeStarted := service.requests.Requests[fixRequest.ID].Runtime != nil
 	service.rmu.Unlock()
-	if runtimeStarted || fixView.Verification == nil || fixView.Verification.State != actionverify.StateAlreadyPresent {
-		t.Fatalf("blocked fix started runtime work: %+v", fixView)
+	if runtimeStarted || fixView.Verification != nil || fixView.ReasonCode != ReasonGenerationFailed {
+		t.Fatalf("manual fix unexpectedly reused strict source verification: %+v", fixView)
 	}
 }
 
@@ -1756,7 +1787,7 @@ func TestPatternWithoutRemediationTargetsIsInconclusive(t *testing.T) {
 	}
 }
 
-func TestChatRevisedPatternWithoutTargetsIsInconclusive(t *testing.T) {
+func TestChatRevisedPatternWithoutTargetsReachesManualGeneration(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
 	pattern := models.PatternAnalysis{
 		ID: "pattern", ContentHash: "hash", Systemic: true, SuggestedFix: "Fix MachinePoolModelHasChanged.",
@@ -1779,7 +1810,7 @@ func TestChatRevisedPatternWithoutTargetsIsInconclusive(t *testing.T) {
 	_, _, err := service.generateFixPreviewForPattern(t.Context(), pattern, "token", "", &fixpr.GenerationContext{
 		ProposedRevision: &fixpr.RevisionContext{RootCause: "new cause", SuggestedFix: "Use a different remediation."},
 	})
-	if !errors.Is(err, ErrRemediationInconclusive) || ReasonCodeOf(err) != ReasonInvestigationRequired || len(got.Targets) != 0 {
+	if err == nil || strings.Contains(err.Error(), "investigation") || got.Proposal != "" || len(got.Targets) != 0 {
 		t.Fatalf("error=%v code=%s input=%+v", err, ReasonCodeOf(err), got)
 	}
 }
@@ -2123,7 +2154,7 @@ func TestConfirmRejectsUnidentifiedFixPreview(t *testing.T) {
 		t.Fatalf("Confirm unidentified fix error = %v", err)
 	}
 }
-func TestRecoveredPatternBlocksIssueAndFixActionsWithoutClaimingSourceRemediation(t *testing.T) {
+func TestRecoveredPatternBlocksIssueButAllowsManualFixRequest(t *testing.T) {
 	for _, kind := range []string{"create-issue", "propose-fix"} {
 		t.Run(kind, func(t *testing.T) {
 			dataDir := t.TempDir()
@@ -2138,11 +2169,18 @@ func TestRecoveredPatternBlocksIssueAndFixActionsWithoutClaimingSourceRemediatio
 			models.AssignPatternIdentity(&pattern)
 			writeJobDetail(t, dataDir, "periodic-x.json", models.JobDetail{JobID: pattern.JobID, PatternAnalyses: []models.PatternAnalysis{pattern}})
 			service := NewService(&project.Config{AI: &project.AI{SourceRepo: &project.SourceRepo{Owner: "example", Name: "repo"}}}, dataDir, AIConfig{})
-			if _, err := service.CreateRequest(pattern.ID, kind, "alice", "token", "", ""); ReasonCodeOf(err) != ReasonRecovered {
-				t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
+			created, err := service.CreateRequest(pattern.ID, kind, "alice", "token", "", "")
+			if kind == "create-issue" {
+				if ReasonCodeOf(err) != ReasonRecovered || len(service.requests.Requests) != 0 {
+					t.Fatalf("issue request=%+v error=%v code=%s", created, err, ReasonCodeOf(err))
+				}
+				return
 			}
-			if len(service.requests.Requests) != 0 {
-				t.Fatalf("recovered lifecycle persisted %s: %v", kind, service.requests.Requests)
+			if err != nil || created.Status != RequestPending || len(service.requests.Requests) != 1 {
+				t.Fatalf("fix request=%+v error=%v requests=%v", created, err, service.requests.Requests)
+			}
+			if err := service.Wait(t.Context()); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
@@ -2171,7 +2209,7 @@ func conversionPolicyService(t *testing.T, pattern models.PatternAnalysis) *Serv
 	return NewService(cfg, dataDir, AIConfig{})
 }
 
-func TestConversionPolicyBlocksPreviewAndAsyncRequest(t *testing.T) {
+func TestConversionPolicyTreatsOriginalAnalysisAsWarning(t *testing.T) {
 	pattern := conversionPolicyPattern("Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.")
 	service := conversionPolicyService(t, pattern)
 	called := false
@@ -2179,18 +2217,23 @@ func TestConversionPolicyBlocksPreviewAndAsyncRequest(t *testing.T) {
 		called = true
 		return actionverify.Result{State: actionverify.StateUnresolved}, nil
 	}
-	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) || called {
+	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); err == nil || strings.Contains(err.Error(), "remediation") || called {
 		t.Fatalf("PreviewFix error=%v verifier_called=%t", err, called)
 	}
-	if _, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", ""); ReasonCodeOf(err) != ReasonUnsafeRemediation {
-		t.Fatalf("CreateRequest error=%v code=%s", err, ReasonCodeOf(err))
+	created, err := service.CreateRequest(pattern.ID, "propose-fix", "alice", "token", "", "")
+	if err != nil || created.Status != RequestPending {
+		t.Fatalf("CreateRequest request=%+v error=%v", created, err)
 	}
-	if len(service.requests.Requests) != 0 || called {
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	view, err := service.GetRequest(created.ID, "alice")
+	if err != nil || !strings.Contains(view.Warning, "remediation-policy concern") || called {
 		t.Fatalf("requests=%v verifier_called=%t", service.requests.Requests, called)
 	}
 }
 
-func TestConversionPolicyAllowsSafeCleanupToReachVerification(t *testing.T) {
+func TestConversionPolicySafeAnalysisSkipsStrictSourceVerification(t *testing.T) {
 	pattern := conversionPolicyPattern("Delete the obsolete admission webhook configurations while keeping the CRD conversion webhook available until provider deletion completes.")
 	service := conversionPolicyService(t, pattern)
 	called := false
@@ -2198,7 +2241,7 @@ func TestConversionPolicyAllowsSafeCleanupToReachVerification(t *testing.T) {
 		called = true
 		return actionverify.Result{State: actionverify.StateInconclusive, Reason: "bounded test stop"}, nil
 	}
-	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); !errors.Is(err, ErrRemediationInconclusive) || !called {
+	if _, err := service.PreviewFix(t.Context(), pattern.ID, "alice", "token", ""); err == nil || called {
 		t.Fatalf("PreviewFix error=%v verifier_called=%t", err, called)
 	}
 }
@@ -2207,8 +2250,29 @@ func unsafeConversionGeneratedFix() *fixpr.GeneratedFix {
 	pattern := conversionPolicyPattern("Delete the ASO mutating and validating webhook configurations so CRD conversion no longer calls ASO.")
 	return fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
 		Key: "unsafe-conversion-fix", Title: "Unsafe conversion cleanup", Description: "Delete admission webhooks so conversion no longer calls ASO.",
-		Pattern: pattern,
+		Diff: "--- a/crd.yaml\n+++ b/crd.yaml\n@@\n-  conversion webhook strategy: enabled\n+  conversion webhook strategy: none\n", Pattern: pattern,
 	})
+}
+
+func TestManualFixPreviewSurfacesPersistedWarnings(t *testing.T) {
+	entry := &previewEntry{
+		kind: gfKind,
+		fix: fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
+			Key: "qualified-manual-fix", Title: "Investigate failure", Description: "Generated change.",
+			Diff: "--- a/config.yaml\n+++ b/config.yaml\n@@\n-old\n+new\n",
+			Warnings: []string{
+				"The published pattern does not meet automatic Fix eligibility; this manual attempt will investigate.",
+				"The published pattern has no source hints; the coding agent must investigate the repository.",
+			},
+		}),
+	}
+	preview, err := validatedPreviewEntry(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(preview.Warning, "automatic Fix eligibility") || !strings.Contains(preview.Warning, "no source hints") {
+		t.Fatalf("preview warning = %q", preview.Warning)
+	}
 }
 
 func TestConversionPolicyRejectsPersistedPreviewAndConfirmation(t *testing.T) {

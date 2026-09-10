@@ -157,13 +157,13 @@ test("a cause with no fix target names the dependency instead of a dead end", ()
   assert.match(html, /unverified/);
   assert.match(html, /does not open\s+pull requests in a dependency/);
   assert.match(html, /project-side mitigation/);
-  assert.doesNotMatch(html, /meets the Fix eligibility requirements/);
+  assert.doesNotMatch(html, /No representative failed JUnit analysis/);
 });
 
 test("a cause with no upstream owner keeps the existing generic message", () => {
   const html = render(createElement(CausalGroupFixRouting, { jobID: "job", target: null, externalCause: null }));
 
-  assert.match(html, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
+  assert.match(html, /No representative failed JUnit analysis for this cause is reachable/);
   assert.doesNotMatch(html, /dependency/);
 });
 
@@ -180,7 +180,7 @@ test("the pattern panel names the dependency instead of reporting unavailability
 
   const generic = render(createElement(PatternFixGuidance, { jobID: "job", buildID: "208060" }));
   assert.match(generic, /Fix proposal unavailable/);
-  assert.match(generic, /No failed JUnit test in the affected builds meets the Fix eligibility requirements/);
+  assert.match(generic, /No representative failed JUnit analysis for its causes is reachable/);
   assert.doesNotMatch(generic, /dependency/);
 });
 
@@ -243,12 +243,12 @@ test("the pattern panel only points at a chat that is on the page", () => {
     createElement(PatternFixGuidance, { jobID: "job", buildID: "208060", chatAvailable: true }),
   );
   assert.match(withChat, /The pattern chat below/);
-  assert.match(withChat, /A fix proposal becomes available/);
+  assert.match(withChat, /A fix investigation becomes available/);
 
   const withoutChat = render(createElement(PatternFixGuidance, { jobID: "job", buildID: "208060" }));
   assert.doesNotMatch(withoutChat, /pattern chat/);
   // The guidance that does not depend on chat survives.
-  assert.match(withoutChat, /A fix proposal becomes available/);
+  assert.match(withoutChat, /A fix investigation becomes available/);
   assert.match(withoutChat, /View failed tests/);
 });
 
@@ -256,17 +256,17 @@ test("the pattern panel only points at a chat that is on the page", () => {
 // aged out was reported as an eligibility problem in tests that were never
 // examined.
 test("a cause without a fix target names which dead end it hit", () => {
-  const eligibility = render(
+  const unreachable = render(
     createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: true }),
   );
-  assert.match(eligibility, /Fix eligibility requirements/);
-  assert.doesNotMatch(eligibility, /left the analysis window/);
+  assert.match(unreachable, /No representative failed JUnit analysis/);
+  assert.doesNotMatch(unreachable, /left the analysis window/);
 
   const expired = render(
     createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: false }),
   );
   assert.match(expired, /have left the analysis window/);
-  assert.doesNotMatch(expired, /Fix eligibility requirements/);
+  assert.doesNotMatch(expired, /No representative failed JUnit analysis/);
 
   // An upstream cause still reports ownership rather than either dead end.
   const upstream = render(

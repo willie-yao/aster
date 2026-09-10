@@ -20,12 +20,12 @@ func validAnalysisFailure() AnalysisFailure {
 		ID: "analysis::id", Project: "capz", JobID: "periodic-capz", JobName: "periodic-capz", BuildID: "123",
 		TestName: "TestCluster", AnalysisGeneratedAt: "2026-08-13T01:00:00Z", AnalysisHash: "analysis-hash",
 		RootCause: "the reconciler omitted the terminal state", SuggestedFix: "update the reconciler branch",
+		FailureMessage: "cluster failed", FailureBody: "expected Ready",
 		AssistantAnswer:  "The artifact shows the terminal branch never calls `markReady`.",
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		ArtifactCitations: []Evidence{{Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 		SourceRepository:  "up/stream", SourceBranch: "main", FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
-		VerifiedSourceFileHashes: map[string]string{"controllers/cluster_controller.go": strings.Repeat("d", 64)},
-		SourceFiles:              []string{"controllers/cluster_controller.go"}, SourceVerification: "source-hash", FindingVerification: "finding-hash",
+		SourceHints: []string{"controllers/cluster_controller.go"},
 	}
 }
 
@@ -44,7 +44,7 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	if agent.spec.Repo.Ref != exactAnalysisRevision || agent.spec.ExpectedBaseSHA != exactAnalysisRevision || agent.spec.Repo.Token != "" {
 		t.Fatalf("runtime spec = %+v", agent.spec)
 	}
-	for _, want := range []string{"exact failed JUnit analysis", "TestCluster", "ArtifactCitations", "source-hash", "preserve compatibility"} {
+	for _, want := range []string{"exact failed JUnit", "TestCluster", "ArtifactCitations", "SourceHints", "cluster failed", "expected Ready", "preserve compatibility"} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}
@@ -58,7 +58,7 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	}
 }
 
-func TestGenerateAnalysisPreviewQualifiesPartialEvidence(t *testing.T) {
+func TestGenerateAnalysisPreviewQualifiesEvidenceWarnings(t *testing.T) {
 	failure := validAnalysisFailure()
 	failure.EvidenceWarnings = []string{"citation 2 line range was not returned"}
 	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
@@ -68,13 +68,61 @@ func TestGenerateAnalysisPreviewQualifiesPartialEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"EvidenceWarnings", "citation 2 line range was not returned", "partially verified", "only the retained artifact citations are verified evidence"} {
+	for _, want := range []string{"EvidenceWarnings", "citation 2 line range was not returned", "evidence qualification warnings", "warned claims"} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}
 	}
-	if !strings.Contains(fix.Description, "Evidence qualification") || !strings.Contains(fix.Description, "only retained artifact citations were verified") {
+	if !strings.Contains(fix.Description, "Evidence qualification") || !strings.Contains(fix.Description, "warned claims remain hypotheses") {
 		t.Fatalf("description = %s", fix.Description)
+	}
+}
+
+func TestGenerateAnalysisPreviewInvestigatesUnverifiedUncitedAnswerWithoutHints(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.ArtifactCitations = nil
+	failure.SourceHints = nil
+	failure.AssistantUnverified = true
+	failure.AssistantUnverifiedReason = "artifact access ended before verification"
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"explicitly unverified", "artifact access ended before verification",
+		"ArtifactCitations\":null", "SourceHints\":null", "Search the repository as needed",
+		"do not manufacture a patch",
+	} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	if !strings.Contains(fix.Description, "explicitly unverified") ||
+		!strings.Contains(fix.Body, "selected chat hypothesis") {
+		t.Fatalf("description=%q body=%q", fix.Description, fix.Body)
+	}
+}
+
+func TestValidateAnalysisFailureBoundsRawFailureAndHints(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.ArtifactCitations = nil
+	failure.SourceHints = nil
+	if err := validateAnalysisFailure(failure); err != nil {
+		t.Fatalf("investigative context error = %v", err)
+	}
+
+	failure.FailureBody = strings.Repeat("x", maxContextTextBytes+1)
+	if err := validateAnalysisFailure(failure); err == nil {
+		t.Fatal("oversized raw failure body was accepted")
+	}
+	failure.FailureBody = "expected Ready"
+	failure.SourceHints = []string{"z.go", "a.go"}
+	if err := validateAnalysisFailure(failure); err == nil {
+		t.Fatal("unsorted source hints were accepted")
 	}
 }
 
@@ -94,6 +142,24 @@ func TestGenerateAnalysisPreviewAllowsEmptyOriginalSuggestedFix(t *testing.T) {
 	}
 	if fix == nil || len(pr.opened) != 0 {
 		t.Fatalf("fix=%+v opened=%+v", fix, pr.opened)
+	}
+	if fix.Preview.Rationale != failure.AssistantAnswer {
+		t.Fatalf("rationale = %q", fix.Preview.Rationale)
+	}
+}
+
+func TestGenerateAnalysisPreviewUsesMaintainerDirectionAsRationaleFallback(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.SuggestedFix = ""
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	manager := newManager(t, pr, goodAgent(), Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "keep the retry scoped to reconciliation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix.Preview.Rationale != "keep the retry scoped to reconciliation" {
+		t.Fatalf("rationale = %q", fix.Preview.Rationale)
 	}
 }
 
@@ -115,7 +181,7 @@ func TestGenerateAnalysisPreviewUsesCurrentGenerationBase(t *testing.T) {
 	if agent.spec.Repo.Ref == failure.FailureRevision {
 		t.Fatal("generation used the failure revision")
 	}
-	for _, want := range []string{failure.FailureRevision, failure.GenerationBaseRevision, "historical failure revision", "current generation-base revision", "do not assume it still applies", "do not relocate the fix"} {
+	for _, want := range []string{failure.FailureRevision, failure.GenerationBaseRevision, "historical failure revision", "current full commit", "do not assume it still applies", "investigate before deciding"} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}
@@ -214,8 +280,16 @@ func TestAnalysisPreviewDedupIdentityIncludesSelectedChatAndRequest(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Snapshot().Key == second.Snapshot().Key || first.Snapshot().Key == third.Snapshot().Key {
-		t.Fatal("selected chat or preview identity did not change Fix PR dedup key")
+	changedBranch := validAnalysisFailure()
+	changedBranch.SourceBranch = "release"
+	pr.base.Branch = "release"
+	fourth, err := manager.GenerateAnalysisPreview(t.Context(), changedBranch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Snapshot().Key == second.Snapshot().Key || first.Snapshot().Key == third.Snapshot().Key ||
+		first.Snapshot().Key == fourth.Snapshot().Key {
+		t.Fatal("selected chat, preview, or branch identity did not change Fix PR dedup key")
 	}
 }
 

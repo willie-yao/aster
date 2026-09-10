@@ -88,7 +88,7 @@ test("source verification progress is distinct from draft generation", () => {
     actionRequestProgressTitle(verifying, false),
     "Verifying the proposed remediation against pinned source",
   );
-  assert.match(actionRequestProgressDetail(verifying), /before starting any model/);
+  assert.match(actionRequestProgressDetail(verifying, false), /before starting any model/);
 
   const drafting = request("drafting", "pending", {
     stage: "drafting",
@@ -98,7 +98,28 @@ test("source verification progress is distinct from draft generation", () => {
     },
   });
   assert.equal(actionRequestProgressTitle(drafting, true), "Generating the fix proposal");
-  assert.match(actionRequestProgressDetail(drafting), /verified as unresolved/);
+  assert.match(actionRequestProgressDetail(drafting, true), /investigating the pinned repository/);
+  assert.equal(
+    actionRequestProgressTitle(verifying, true),
+    "Resolving the repository and generation base",
+  );
+  assert.match(actionRequestProgressDetail(verifying, true), /pins the allowed repository base/);
+});
+
+test("fix preview warnings are visible without changing issue eligibility", async () => {
+  const fs = await import("node:fs/promises");
+  const [preview, types, actions, requestPage] = await Promise.all([
+    fs.readFile("src/components/ActionDraftPreview.tsx", "utf8"),
+    fs.readFile("src/types/actions.ts", "utf8"),
+    fs.readFile("src/components/FailureActions.tsx", "utf8"),
+    fs.readFile("src/pages/ActionRequestPage.tsx", "utf8"),
+  ]);
+
+  assert.match(types, /body: string;\s*warning\?: string;\s*diff\?: string;/);
+  assert.match(preview, /\{preview\.warning && \([\s\S]*Investigation warning[\s\S]*\{preview\.warning\}/);
+  assert.match(actions, /request\?\.warning \|\| preview\?\.warning[\s\S]*Open draft PR with warnings/);
+  assert.match(requestPage, /request\.warning \|\| preview\?\.warning[\s\S]*Open draft PR with warnings/);
+  assert.match(actions, /const canStartIssue = issueDrafting && eligibility\?\.state === "actionable"/);
 });
 
 test("source verification outcomes have specific labels", () => {

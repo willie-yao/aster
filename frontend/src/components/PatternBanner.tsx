@@ -20,7 +20,6 @@ import type { AnalysisChatReference, CauseAnalysisChatReference } from "../types
 import {
   fileSortKey,
   fileToUrl,
-  meetsConfidenceFloor,
   timeAgo,
   type FileToUrlContext,
 } from "../lib/utils";
@@ -34,7 +33,7 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
 import { lookupPreparedAnalysisChatFindings, applyPreparedFindingResolution, type PreparedFindingResult } from "../lib/analysisChat";
-import { patternActionEligibilityHint, patternActionRefreshBlocked, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
+import { patternActionEligibilityHint, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
@@ -225,9 +224,10 @@ export function PatternBanner({
   // different blast radii for the same pattern.
   const causeResolutionCovers = patternResolutionCovered(pattern, refreshStatus);
   const canResolve = patternResolvable(pattern, refreshStatus) && !causeResolutionCovers;
-  // Drafting follows the remediation contract alone: the two gates are
-  // independent, so one must never suppress the other.
+  // Issue drafting follows the remediation contract. Manual Fix drafting only
+  // needs a legacy pattern identity; causal-group parents remain excluded.
   const draftable = patternDraftable(pattern, refreshStatus);
+  const fixable = Boolean(!analysisOnly && pattern.id);
   // A resolved pattern always offers Reopen, even where a fresh resolution
   // would now be refused: clearing an acknowledgement only un-hides a pattern.
   // An anonymous viewer keeps the block wherever per-cause controls would
@@ -236,7 +236,7 @@ export function PatternBanner({
   // since a resolved cause still offers Reopen after it stops qualifying.
   const causeControlsPresent = causeResolutionCovers || causeResolutions.some(Boolean);
   const showFailureActions =
-    draftable || canResolve || Boolean(resolvedEntry) ||
+    draftable || fixable || canResolve || Boolean(resolvedEntry) ||
     (authStatus === "anonymous" && causeControlsPresent);
   const actionEligibility = patternActionEligibilityHint(
     pattern.remediation_targets,
@@ -246,15 +246,8 @@ export function PatternBanner({
   );
   const fixPatterns =
     !analysisOnly &&
-    // The pattern-scope fix confirms through the actions service, which turns on
-    // readable evidence rather than a fresh correlation, so this mirrors that
-    // instead of requiring the correlation to have refreshed.
-    !patternActionRefreshBlocked(refreshStatus) &&
-    lifecycleActive &&
     pattern.id &&
-    pattern.content_hash &&
-    pattern.suggested_fix &&
-    meetsConfidenceFloor(pattern.confidence, features.chat_fix_min_confidence ?? "high")
+    pattern.content_hash
       ? [pattern]
       : [];
   const recurrenceLabel = pattern.recurrence_classification === "shared_cause"
@@ -571,13 +564,6 @@ export function PatternBanner({
                         ? {
                             target: causalFixTargets[index],
                             externalCause: externalCause(group.cause_location),
-                            // A target exists only where the cause's build is
-                            // still readable, so the offer turns on the
-                            // pattern's lifecycle rather than on whether the
-                            // correlation refreshed: a recovered or
-                            // verified-fixed cause is worth viewing but not
-                            // worth fixing.
-                            stale: !lifecycleActive,
                             evidencePresent: causalEvidencePresent[index],
                           }
                         : undefined
@@ -614,7 +600,6 @@ export function PatternBanner({
                           jobID={jobID}
                           target={causalFixTargets[index]}
                           showBuild={fixTargetNeedsBuild[index]}
-                          stale={!lifecycleActive}
                         />
                       )}
                       <CauseResolution
@@ -752,6 +737,7 @@ export function PatternBanner({
           canResolve={canResolve}
           isResolved={Boolean(resolvedEntry)}
           draftable={draftable}
+          fixable={fixable}
           eligibilityHint={draftable ? actionEligibility : null}
           onResolvedChange={refetchResolved}
           appearance="detail"

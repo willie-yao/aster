@@ -110,16 +110,16 @@ func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *t
 	}
 }
 
-func TestServiceAnalysisFixCandidateRejectsContextOnlyAndFailedTurns(t *testing.T) {
+func TestServiceAnalysisFixCandidateAcceptsContextOnlyButRejectsFailedTurns(t *testing.T) {
 	service, session, requestID, runner := exactFixServiceRunner(t, Reply{Answer: "No artifact evidence was needed.", Assessment: "explains"}, nil)
-	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrInvalidRequest) {
+	if candidate, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); err != nil || len(candidate.ArtifactCitations) != 0 {
 		t.Fatalf("context-only candidate error = %v", err)
 	}
 	secondRequestID := testRequestID(t)
 	if _, err := service.Send(t.Context(), session.ID, "Alice", secondRequestID, "Which function should change?"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", secondRequestID); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", secondRequestID); err != nil {
 		t.Fatalf("ungrounded conversation candidate error = %v", err)
 	}
 	runner.mu.Lock()
@@ -135,13 +135,20 @@ func TestServiceAnalysisFixCandidateRejectsContextOnlyAndFailedTurns(t *testing.
 	}
 }
 
-func TestServiceTestFixPreflightReportsMissingSourcePathsForCitedAnswer(t *testing.T) {
+func TestServiceTestFixPreflightAcceptsMissingSourcePaths(t *testing.T) {
 	service, session, requestID, runner := exactFixServiceRunner(t, Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
 		Citations: []Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 	}, nil)
-	err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", requestID)
-	if !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "no verified immutable source paths") {
+	if err := service.ConfigureTestFixPreflight(func(_ context.Context, repo sourceinvestigation.Repository, branch string) (string, error) {
+		if repo.Revision != exactFixSourceRevision || branch != "main" {
+			t.Fatalf("source=%+v branch=%q", repo, branch)
+		}
+		return exactFixSourceRevision, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", requestID); err != nil {
 		t.Fatalf("missing source path preflight error = %v", err)
 	}
 	runner.mu.Lock()
@@ -308,6 +315,27 @@ func TestServiceAnalysisFixCandidateHashChangesWithAnswerOrEvidence(t *testing.T
 	}
 }
 
+func TestFixCandidateResponseHashIncludesQualification(t *testing.T) {
+	candidate := FixCandidate{AssistantAnswer: "Investigate the retry path."}
+	original, err := fixCandidateResponseHash(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.AssistantUnverified = true
+	unverified, err := fixCandidateResponseHash(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.AssistantUnverifiedReason = UnverifiedCitation
+	qualified, err := fixCandidateResponseHash(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original == unverified || qualified == unverified {
+		t.Fatal("changed evidence qualification retained the same response identity")
+	}
+}
+
 func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *testing.T) {
 	dir := t.TempDir()
 	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
@@ -331,14 +359,14 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	}
 	sourcePreflightErr := errors.New("relevant source drift")
 	generationBase := detail.Runs[0].Commit
-	if err := service.ConfigureTestFixPreflight(func(_ context.Context, repo sourceinvestigation.Repository, branch string, files []string) (string, map[string]string, error) {
-		if repo.Revision != detail.Runs[0].Commit || branch != "main" || !slices.Equal(files, []string{"test/e2e/cni.go"}) {
-			t.Fatalf("source preflight repo=%+v branch=%q files=%v", repo, branch, files)
+	if err := service.ConfigureTestFixPreflight(func(_ context.Context, repo sourceinvestigation.Repository, branch string) (string, error) {
+		if repo.Revision != detail.Runs[0].Commit || branch != "main" {
+			t.Fatalf("source preflight repo=%+v branch=%q", repo, branch)
 		}
 		if sourcePreflightErr != nil {
-			return "", nil, sourcePreflightErr
+			return "", sourcePreflightErr
 		}
-		return generationBase, map[string]string{"test/e2e/cni.go": strings.Repeat("a", 64)}, nil
+		return generationBase, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +473,6 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	}
 	if candidate.SourceRepositorySnapshot.Revision != detail.Runs[0].Commit || candidate.AnalysisContentHash == "" ||
 		candidate.FailureRevision != detail.Runs[0].Commit || candidate.GenerationBaseRevision != detail.Runs[0].Commit ||
-		candidate.VerifiedSourceFileHashes["test/e2e/cni.go"] != strings.Repeat("a", 64) ||
 		!candidate.SourceBranchKnown || candidate.SourceBranch != "main" {
 		t.Fatalf("candidate = %+v", candidate)
 	}
@@ -458,7 +485,6 @@ func TestServiceExactFixResolvesPreservedMutableBuildSourceBeforeProvider(t *tes
 	}
 	restored, err := reloaded.AnalysisFixCandidate(session.ID, "Alice", requestID)
 	if err != nil || restored.FailureRevision != detail.Runs[0].Commit || restored.GenerationBaseRevision != detail.Runs[0].Commit ||
-		restored.VerifiedSourceFileHashes["test/e2e/cni.go"] != strings.Repeat("a", 64) ||
 		!restored.SourceBranchKnown || restored.SourceBranch != "main" {
 		t.Fatalf("restored candidate = %+v, %v", restored, err)
 	}
@@ -593,10 +619,6 @@ func TestConversationCitationsBoundsTotalQuoteBytes(t *testing.T) {
 	}
 }
 
-// TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis pins that a
-// preliminary original analysis no longer blocks a chat answer that carries its
-// own validated evidence. Chat exists to improve such an analysis, so requiring
-// the original to carry verified citations made the improvement unreachable. An analysis
 func TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.T) {
 	reply := Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",
@@ -623,17 +645,6 @@ func TestServiceAnalysisFixCandidateAcceptsUsablePreliminaryAnalysis(t *testing.
 	}
 }
 
-// TestPersistedResolvedAnalysisRetainsDispositionWarnings pins that the session
-// snapshot keeps the warnings qualifying a preliminary disposition. Dropping
-// them made a contested diagnosis look usable to every check reading the
-// snapshot, while a fresh resolve disagreed.
-// TestServiceAnalysisFixCandidateRejectsNewlyContestedAnalysis covers the fresh
-// re-resolve. Disposition warnings are excluded from the analysis content hash,
-// so a diagnosis that becomes contested after the conversation started is caught
-// only by the usable-diagnosis check on the re-resolved analysis.
-// TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp covers
-// the reported symptom: a cause-scoped conversation whose pattern is republished
-// unchanged must stay valid rather than being rejected with "analysis changed".
 func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{
@@ -672,9 +683,9 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 		t.Fatal(err)
 	}
 	if err := service.ConfigureTestFixPreflight(func(
-		_ context.Context, _ sourceinvestigation.Repository, _ string, _ []string,
-	) (string, map[string]string, error) {
-		return exactFixSourceRevision, map[string]string{"pkg/controller.go": strings.Repeat("a", 64)}, nil
+		_ context.Context, _ sourceinvestigation.Repository, _ string,
+	) (string, error) {
+		return exactFixSourceRevision, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -704,28 +715,27 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 	}
 }
 
-func TestServiceCauseAnalysisFixCandidateUsesRepresentativeFailure(t *testing.T) {
+func TestServiceCauseAnalysisFixCandidateAcceptsTransientWithoutSourceLinksOrCitations(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{
 		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
 		Remediation: &models.PatternCausalGroupRemediation{BuildID: "2", SuggestedFix: "change the controller"},
 	}}, nil)
-	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleActive}
+	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleRecovered}
 	models.AssignPatternIdentity(&pattern)
 	detail := causalPatternDetail(pattern, "1", "2")
 	for i := range detail.Runs {
 		run := &detail.Runs[i]
 		run.RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
 		testCase := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
-		testCase.AIAnalysis.FileLinks = map[string]string{
-			"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go",
-		}
+		testCase.AIAnalysis.Severity = "Transient-Ignore"
+		testCase.AIAnalysis.FileLinks = nil
 		run.TestCases = []models.TestCase{testCase}
 	}
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: Reply{
-		Answer: "Both builds show the same controller defect.", Assessment: "supports",
-		Citations: []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
+		Answer: "Investigate retry handling for the recurring timeout.", Assessment: "inconclusive",
+		Unverified: true, UnverifiedReason: UnverifiedCitation,
 	}}
 	service, err := NewService(t.Context(), dir, runner, Options{StateDir: filepath.Join(dir, ".chat")})
 	if err != nil {
@@ -735,12 +745,12 @@ func TestServiceCauseAnalysisFixCandidateUsesRepresentativeFailure(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := service.ConfigureTestFixPreflight(func(
-		_ context.Context, repository sourceinvestigation.Repository, _ string, files []string,
-	) (string, map[string]string, error) {
-		if repository.Revision != exactFixSourceRevision || !slices.Equal(files, []string{"pkg/controller.go"}) {
-			t.Fatalf("repository=%+v files=%v", repository, files)
+		_ context.Context, repository sourceinvestigation.Repository, _ string,
+	) (string, error) {
+		if repository.Revision != exactFixSourceRevision {
+			t.Fatalf("repository=%+v", repository)
 		}
-		return exactFixSourceRevision, map[string]string{"pkg/controller.go": strings.Repeat("a", 64)}, nil
+		return exactFixSourceRevision, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -766,7 +776,8 @@ func TestServiceCauseAnalysisFixCandidateUsesRepresentativeFailure(t *testing.T)
 	if candidate.Analysis.Scope != ScopeCause || candidate.FixTarget.Scope != ScopeTest ||
 		candidate.FixTarget.BuildID != "2" || candidate.FixTarget.TestName != "TestCluster" ||
 		candidate.AnalysisContentHash == "" || candidate.FailureRevision != exactFixSourceRevision ||
-		candidate.VerifiedSourceFileHashes["pkg/controller.go"] != strings.Repeat("a", 64) {
+		candidate.GenerationBaseRevision != exactFixSourceRevision || len(candidate.ArtifactCitations) != 0 ||
+		!candidate.AssistantUnverified || candidate.AssistantUnverifiedReason != UnverifiedCitation {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 }

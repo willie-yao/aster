@@ -81,6 +81,7 @@ export function FailureActions({
   canResolve = true,
   isResolved = false,
   draftable = true,
+  fixable = draftable,
   eligibilityHint = null,
   appearance = "default",
   onResolvedChange,
@@ -95,7 +96,10 @@ export function FailureActions({
   // copy of resolved state. Reading it here too would let the two views
   // disagree when their independent fetches diverge.
   isResolved?: boolean;
+  // Issue eligibility remains strict. A manual fix only needs a structurally
+  // supported subject and is validated independently by the server.
   draftable?: boolean;
+  fixable?: boolean;
   eligibilityHint?: ActionEligibility | null;
   appearance?: "default" | "detail";
   onResolvedChange?: () => void;
@@ -103,16 +107,18 @@ export function FailureActions({
   const { features } = useCapabilities();
   const { status, signIn, login, mode } = useAuth();
   const detailAppearance = appearance === "detail";
-  // Drafting covers issue and fix-PR generation. draftable is false where the
-  // pattern-level remediation contract does not apply (causal-group results),
-  // leaving resolution as the only action.
-  const drafting = draftable && features.action_requests;
+  const issueDrafting = draftable && Boolean(features.action_requests);
+  const fixDrafting = fixable && Boolean(features.action_requests) && Boolean(features.fix_prs);
+  const drafting = issueDrafting || fixDrafting;
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedFailure = searchParams.get("failure");
   const requestedLinkedAction = requestedAction(searchParams.get("action"));
-  const linkedAction = !draftable || (requestedLinkedAction === "propose-fix" && !features.fix_prs)
-    ? null
-    : requestedLinkedAction;
+  const linkedAction =
+    requestedLinkedAction === "create-issue"
+      ? issueDrafting ? requestedLinkedAction : null
+      : requestedLinkedAction === "propose-fix" && fixDrafting
+        ? requestedLinkedAction
+        : null;
   const [reviewIntent, setReviewIntent] = useState<Action | null>(null);
   const [action, setAction] = useState<Action | null>(null);
   const [busy, setBusy] = useState<
@@ -210,7 +216,10 @@ export function FailureActions({
     return () => controller.abort();
   }, [failureID, features.action_eligibility, features.actions, draftable, hasEligibilityHint, status]);
 
-  const canStartActions = eligibility?.state === "actionable";
+  const canStartIssue = issueDrafting && eligibility?.state === "actionable";
+  const canStartFix = fixDrafting;
+  const canStartAction = (requested: Action) =>
+    requested === "propose-fix" ? canStartFix : canStartIssue;
 
   // Email action links are inert GETs. After authentication, they open a local
   // intent dialog that requires an explicit click before a request is created.
@@ -220,18 +229,18 @@ export function FailureActions({
       status !== "authenticated" ||
       linkedFailure !== failureID ||
       !linkedAction ||
-      eligibilityLoading ||
-      !eligibility
+      (linkedAction === "create-issue" && (eligibilityLoading || !eligibility))
     ) {
       return;
     }
     const next = new URLSearchParams(searchParams);
-    if (canStartActions) setReviewIntent(linkedAction);
+    if (linkedAction === "propose-fix" ? canStartFix : canStartIssue) setReviewIntent(linkedAction);
     next.delete("failure");
     next.delete("action");
     setSearchParams(next, { replace: true });
   }, [
-    canStartActions,
+    canStartIssue,
+    canStartFix,
     eligibility,
     eligibilityLoading,
     failureID,
@@ -253,9 +262,10 @@ export function FailureActions({
     }
     const owner = storageOwner;
     const expectedOwner = login?.trim().toLowerCase();
-    const storedActions: Action[] = features.fix_prs
-      ? ["create-issue", "propose-fix"]
-      : ["create-issue"];
+    const storedActions: Action[] = [
+      ...(issueDrafting ? ["create-issue" as const] : []),
+      ...(fixDrafting ? ["propose-fix" as const] : []),
+    ];
     const stored = storedActions
       .map((kind) => ({
         kind,
@@ -311,7 +321,7 @@ export function FailureActions({
     return () => {
       cancelled = true;
     };
-  }, [drafting, failureID, features.fix_prs, login, status, storageOwner]);
+  }, [drafting, failureID, fixDrafting, issueDrafting, login, status, storageOwner]);
 
   useEffect(() => {
     if (
@@ -456,8 +466,12 @@ export function FailureActions({
       setError("Fix PR generation is unavailable on this deployment.");
       return;
     }
-    if (!canStartActions) {
-      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+    if (!canStartAction(requested)) {
+      setError(
+        requested === "propose-fix"
+          ? "Fix PR generation is unavailable for this failure."
+          : eligibility?.reason ?? "Issue eligibility has not been confirmed.",
+      );
       return;
     }
     if (!features.action_requests) {
@@ -519,8 +533,12 @@ export function FailureActions({
   }
 
   function open(requested: Action) {
-    if (!canStartActions) {
-      setError(eligibility?.reason ?? "Action eligibility has not been confirmed.");
+    if (!canStartAction(requested)) {
+      setError(
+        requested === "propose-fix"
+          ? "Fix PR generation is unavailable for this failure."
+          : eligibility?.reason ?? "Issue eligibility has not been confirmed.",
+      );
       return;
     }
     setInstruction("");
@@ -694,8 +712,9 @@ export function FailureActions({
           }),
         }}
       >
-        {drafting && canStartActions && (
+        {drafting && (
           <>
+            {canStartIssue && (
             <Button
               size="small"
               variant={detailAppearance ? "text" : "outlined"}
@@ -706,7 +725,8 @@ export function FailureActions({
             >
               Draft issue
             </Button>
-            {features.fix_prs && (
+            )}
+            {canStartFix && (
               <Button
                 size="small"
                 variant={detailAppearance ? "text" : "outlined"}
@@ -755,10 +775,10 @@ export function FailureActions({
         </Stack>
       )}
 
-      {draftable && !eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
+      {issueDrafting && !eligibilityLoading && eligibility && eligibility.state !== "actionable" && (
         <Alert role="status" severity={eligibility.state === "already_present" || eligibility.state === "recovered" ? "info" : "warning"} variant="outlined" sx={{ mt: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 650 }}>
-            {actionEligibilityTitle(eligibility)}
+            Issue unavailable: {actionEligibilityTitle(eligibility)}
           </Typography>
           <Typography variant="body2">{eligibility.reason}</Typography>
         </Alert>
@@ -919,7 +939,7 @@ export function FailureActions({
                     {actionRequestProgressTitle(request, isFix)}
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
-                    {actionRequestProgressDetail(request)}
+                    {actionRequestProgressDetail(request, isFix)}
                   </Typography>
                 </Box>
               </Stack>
@@ -1082,7 +1102,13 @@ export function FailureActions({
             }
             onClick={confirm}
           >
-            {request?.status === "unknown" ? "Check GitHub result" : isFix ? "Open draft PR" : "File issue"}
+            {request?.status === "unknown"
+              ? "Check GitHub result"
+              : isFix
+                ? request?.warning || preview?.warning
+                  ? "Open draft PR with warnings"
+                  : "Open draft PR"
+                : "File issue"}
           </Button>
         </DialogActions>
       </Dialog>

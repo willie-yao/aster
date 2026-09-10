@@ -209,6 +209,38 @@ func TestEligible_RejectsUnactionablePatterns(t *testing.T) {
 	}
 }
 
+func TestGeneratePreviewAllowsManualInvestigationOutsideAutomaticEligibility(t *testing.T) {
+	tests := map[string]func(*models.PatternAnalysis){
+		"not systemic":     func(pattern *models.PatternAnalysis) { pattern.Systemic = false },
+		"no suggested fix": func(pattern *models.PatternAnalysis) { pattern.SuggestedFix = "" },
+		"low confidence":   func(pattern *models.PatternAnalysis) { pattern.Confidence = "low" },
+		"analysis only": func(pattern *models.PatternAnalysis) {
+			pattern.Recurrence = models.PatternRecurrenceSharedCause
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			pattern := systemicPattern(name)
+			mutate(&pattern)
+			agent := goodAgent()
+			manager := newManager(t, &fakePR{}, agent, Options{})
+			generated, err := manager.GeneratePreview(t.Context(), pattern, "investigate before editing")
+			if err != nil {
+				t.Fatalf("GeneratePreview() error = %v", err)
+			}
+			if agent.calls != 1 {
+				t.Fatalf("agent calls = %d, want 1", agent.calls)
+			}
+			generated.SetWarnings([]string{"Original analysis is only an investigation hypothesis."})
+			if strings.Contains(strings.ToLower(generated.Body), "recurring failure") ||
+				!strings.Contains(generated.Body, "manual investigation request") ||
+				!strings.Contains(generated.Description, "investigation hypothesis") {
+				t.Fatalf("manual preview language = %s", generated.Body)
+			}
+		})
+	}
+}
+
 func TestGeneratePreview_PinsBaseAcrossReadAndCommit(t *testing.T) {
 	pr := &fakePR{}
 	fa := goodAgent()
@@ -355,11 +387,44 @@ func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 	}
 }
 
-func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *testing.T) {
+func TestGeneratePreviewWithContextPersistsEvidenceQualificationWarnings(t *testing.T) {
 	agent := goodAgent()
 	manager := newManager(t, &fakePR{}, agent, Options{})
 	generationContext := validGenerationContext()
 	generationContext.ArtifactCitations = nil
+	generationContext.AssistantUnverified = true
+	generationContext.AssistantUnverifiedReason = "artifact access ended before verification"
+	generationContext.EvidenceWarnings = []string{"No artifact citation was validated."}
+
+	fix, err := manager.GeneratePreviewWithContext(t.Context(), systemicPattern("etcd"), "", generationContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"explicitly unverified", "no retained artifact citations", "evidence qualification warnings"} {
+		if !strings.Contains(strings.Join(fix.Warnings, " "), want) || !strings.Contains(fix.Body, want) {
+			t.Fatalf("warning %q missing from warnings=%v body=%q", want, fix.Warnings, fix.Body)
+		}
+	}
+	for _, want := range []string{`"assistant_unverified":true`, `"artifact_citations":null`, "empty artifact-citation list means no artifact citation was retained"} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("agent instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	if strings.Contains(agent.spec.Instruction, "Verified structured remediation targets") {
+		t.Fatalf("agent instruction implied verified targets: %s", agent.spec.Instruction)
+	}
+
+	fix.SetWarnings([]string{"The published pattern does not meet automatic Fix eligibility; this manual attempt will investigate."})
+	if len(fix.Warnings) != 4 || strings.Count(fix.Body, "This draft came from a manual investigation request.") != 1 {
+		t.Fatalf("merged warnings=%v body=%q", fix.Warnings, fix.Body)
+	}
+}
+
+func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	generationContext := validGenerationContext()
+	generationContext.AssistantAnswer = ""
 	if _, err := manager.GeneratePreviewWithContext(t.Context(), systemicPattern("etcd"), "", generationContext); err == nil {
 		t.Fatal("invalid context was accepted")
 	}
@@ -481,13 +546,17 @@ func TestGenerateBuildPreviewUsesRepositoryEvidenceWithoutPatternSemantics(t *te
 	}
 }
 
-func TestGenerateBuildPreviewRejectsExternalOnlyRemediation(t *testing.T) {
-	manager := newManager(t, &fakePR{}, goodAgent(), Options{})
-	_, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
-		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "external outage", SuggestedFix: "wait for provider",
+func TestGenerateBuildPreviewAllowsMissingSuggestedFixAndSourceHints(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	generated, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1",
 	}, "")
-	if err == nil || !strings.Contains(err.Error(), "verified local path") {
-		t.Fatalf("external-only error = %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generated == nil || !strings.Contains(agent.spec.Instruction, `"SourceHints":null`) {
+		t.Fatalf("generated=%+v instruction=%q", generated, agent.spec.Instruction)
 	}
 }
 
@@ -525,7 +594,7 @@ func TestBuildFixReportsAmbiguousPRCreate(t *testing.T) {
 	}
 }
 
-func TestGeneratePreviewRejectsUnsafeAdmissionConversionClaimBeforeAgent(t *testing.T) {
+func TestGeneratePreviewTreatsOriginalRecommendationAsHypothesis(t *testing.T) {
 	agent := goodAgent()
 	manager := newManager(t, &fakePR{}, agent, Options{})
 	pattern := systemicPattern("conversion")
@@ -534,10 +603,58 @@ func TestGeneratePreviewRejectsUnsafeAdmissionConversionClaimBeforeAgent(t *test
 		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
 		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
 	}}
-	if _, err := manager.GeneratePreview(t.Context(), pattern, ""); err == nil {
-		t.Fatal("unsafe conversion recommendation was accepted")
+	if _, err := manager.GeneratePreview(t.Context(), pattern, ""); err != nil {
+		t.Fatalf("GeneratePreview() error = %v", err)
 	}
-	if agent.spec.Instruction != "" {
-		t.Fatal("agent ran before remediation policy")
+	if agent.calls != 1 {
+		t.Fatalf("agent calls = %d, want 1", agent.calls)
+	}
+}
+
+func TestGeneratePreviewRejectsUnsafeMaintainerInstruction(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{})
+	pattern := systemicPattern("conversion")
+	pattern.RemediationTargets = []models.RemediationTarget{{
+		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",
+		RequiredCall: "example/asomigration.DeleteWebhookConfigurations", Path: "test/e2e/capi_test.go",
+	}}
+	_, err := manager.GeneratePreview(t.Context(), pattern, "Remove the CRD conversion webhook strategy.")
+	if err == nil || !strings.Contains(err.Error(), "safety policy") {
+		t.Fatalf("GeneratePreview() error = %v", err)
+	}
+	if agent.calls != 0 {
+		t.Fatalf("agent calls = %d, want 0", agent.calls)
+	}
+}
+
+func TestGeneratePreviewUsesDistinctKeysForRootlessPatterns(t *testing.T) {
+	manager := newManager(t, &fakePR{}, goodAgent(), Options{})
+	first := systemicPattern("first")
+	first.ID, first.ContentHash, first.SharedRootCause, first.JobID = "pattern-one", "content-one", "", "shared-job"
+	changedContent := first
+	changedContent.ContentHash = "content-two"
+	changedID := first
+	changedID.ID = "pattern-two"
+
+	firstFix, err := manager.GeneratePreview(t.Context(), first, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedContentFix, err := manager.GeneratePreview(t.Context(), changedContent, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedIDFix, err := manager.GeneratePreview(t.Context(), changedID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstFix.key == changedContentFix.key || firstFix.key == changedIDFix.key || changedContentFix.key == changedIDFix.key {
+		t.Fatalf("rootless pattern keys collided: %q %q %q", firstFix.key, changedContentFix.key, changedIDFix.key)
+	}
+	if KeyFor(first) != KeyFor(models.PatternAnalysis{
+		JobID: first.JobID, SharedRootCause: first.SharedRootCause,
+	}) {
+		t.Fatal("automatic KeyFor changed for a rootless pattern")
 	}
 }

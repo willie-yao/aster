@@ -130,7 +130,8 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.match(page, /<AiAnalysisPanel[\s\S]*appearance="detail"/);
   assert.match(page, /traceRef=\{traceRef\}/);
   assert.match(page, /fixPatterns=\{fixPatterns\}/);
-  assert.match(page, /patternLifecycleActive\(pattern\.lifecycle\)/);
+  assert.doesNotMatch(page, /patternLifecycleActive\(pattern\.lifecycle\)|chat_fix_min_confidence|meetsConfidenceFloor/);
+  assert.match(page, /!pattern\.recurrence_classification/);
   assert.match(page, /chatRef=\{\{/);
   assert.match(page, /title="Stack trace"/);
   assert.match(page, /aria-expanded=\{stackOpen\}/);

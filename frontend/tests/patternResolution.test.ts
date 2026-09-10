@@ -161,17 +161,35 @@ test("dismissal stays behind admin auth and the actions capability", () => {
   assert.doesNotMatch(render(causalGroupPattern(), admin, readOnly), /Resolve pattern/);
 });
 
-test("the pattern-level eligibility notice stays with the legacy contract", () => {
+test("legacy issue ineligibility does not hide a manual fix", () => {
   // A legacy pattern with no remediation targets gets a deterministic blocked
   // hint, so the drafting notice renders and resolution is still offered.
   const legacy = causalGroupPattern({ recurrence_classification: undefined, causal_groups: undefined });
   const legacyHtml = render(legacy);
   assert.match(legacyHtml, /Preview generation failed/);
+  assert.match(legacyHtml, /Draft fix PR/);
+  assert.doesNotMatch(legacyHtml, /Draft issue/);
   assert.match(legacyHtml, /Resolve pattern/);
 
   // The same notice is suppressed on a causal-group result, where pattern-level
   // drafting does not apply and per-cause remediation is shown instead.
   assert.doesNotMatch(render(causalGroupPattern()), /Preview generation failed/);
+});
+
+test("manual pattern fixes ignore analysis policy gates while issues stay blocked", () => {
+  const legacy = causalGroupPattern({
+    recurrence_classification: undefined,
+    causal_groups: undefined,
+    systemic: false,
+    confidence: "low",
+    suggested_fix: undefined,
+    remediation_targets: [{ intent: "investigate" }],
+    lifecycle: { state: "recovered", reason: "later runs passed" },
+  });
+  const html = render(legacy);
+
+  assert.match(html, /Draft fix PR/);
+  assert.doesNotMatch(html, /Draft issue/);
 });
 
 // Acknowledging one cause must not hide its siblings, so a signed cause carries
@@ -626,7 +644,7 @@ test("an upstream-owned cause reports ownership in the body and still routes fro
   assert.match(html, /aria-label="Highly available cluster in build 100, open representative failure"/);
   // Ownership is a diagnosis, not a missing route, so the generic dead end must
   // not appear alongside it.
-  assert.doesNotMatch(html, /meets the Fix eligibility requirements/);
+  assert.doesNotMatch(html, /No representative failed JUnit analysis/);
 });
 
 // A cause with no route at all still explains why, from the body, while the bar
@@ -646,16 +664,16 @@ test("a cause with no route keeps its dead-end explanation and still resolves", 
     admin,
     fixCapable,
     undefined,
-    // A run whose failure carries no file links fails the Fix gate, so the
-    // cause is in the window but has no eligible representative.
+    // A run whose analyzed failure has no JUnit identity cannot be the exact
+    // target, so the cause is in the window but has no reachable representative.
     [(() => {
       const run = failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster");
-      delete run.test_cases[0].ai_analysis!.file_links;
+      delete run.test_cases[0].junit_file;
       return run;
     })()],
   );
 
-  assert.match(html, /meets the Fix eligibility requirements/);
+  assert.match(html, /No representative failed JUnit analysis/);
   assert.doesNotMatch(html, /aria-label="[^"]*, open representative failure/);
   assert.match(html, /Resolve failure/);
 });

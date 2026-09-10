@@ -172,9 +172,8 @@ type Features struct {
 	// AnalysisChat enables authenticated conversations about one published analysis.
 	AnalysisChat bool `json:"analysis_chat,omitempty"`
 	// ChatFix enables server-validated chat context for fix previews.
-	ChatFix              bool   `json:"chat_fix,omitempty"`
-	JUnitChatFix         bool   `json:"junit_chat_fix,omitempty"`
-	ChatFixMinConfidence string `json:"chat_fix_min_confidence,omitempty"`
+	ChatFix      bool `json:"chat_fix,omitempty"`
+	JUnitChatFix bool `json:"junit_chat_fix,omitempty"`
 	// PullRequestEscalation enables on-demand analysis of a pull request
 	// failure the deterministic pass could not explain.
 	PullRequestEscalation bool `json:"pull_request_escalation,omitempty"`
@@ -270,9 +269,6 @@ func Handler(opts Options) (http.Handler, error) {
 
 	if opts.Auth != nil && opts.ChatFix != nil {
 		caps.Features.ChatFix = true
-		if strings.TrimSpace(caps.Features.ChatFixMinConfidence) == "" {
-			caps.Features.ChatFixMinConfidence = "high"
-		}
 		timeout := opts.ActionTimeout
 		if timeout <= 0 {
 			timeout = defaultActionTimeout

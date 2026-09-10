@@ -83,9 +83,8 @@ func exactAnalysisRequestInput() AnalysisFixInput {
 		PreviewRequestHash: strings.Repeat("b", 64), AnalysisContentHash: strings.Repeat("c", 64),
 		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: strings.Repeat("d", 40)},
 		FailureRevision:  strings.Repeat("d", 40), GenerationBaseRevision: strings.Repeat("e", 40), SourceBranch: "main",
-		VerifiedSourceFileHashes: map[string]string{"test/e2e/cni.go": strings.Repeat("f", 64)},
-		AssistantAnswer:          "The cited conflict is handled by `InstallCNIManifest`.",
-		ArtifactCitations:        []fixpr.Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 10, Quote: "Conflict"}},
+		AssistantAnswer:   "The cited conflict is handled by `InstallCNIManifest`.",
+		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 10, Quote: "Conflict"}},
 	}
 }
 

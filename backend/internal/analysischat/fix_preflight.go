@@ -2,9 +2,7 @@ package analysischat
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -17,7 +15,7 @@ const analysisFixReferenceTTL = 25 * time.Hour
 
 // ConfigureTestFixPreflight binds the provider-free target source check.
 func (s *Service) ConfigureTestFixPreflight(
-	check func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error),
+	check func(context.Context, sourceinvestigation.Repository, string) (string, error),
 ) error {
 	if check == nil {
 		return fmt.Errorf("analysis chat Fix source preflight is required")
@@ -55,7 +53,7 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 		}
 		target := persistedAnalysisFixTarget(current.Resolved)
 		if target == nil || target.Ref.Source == models.TestCaseSourceBuild || target.Ref.JUnitFile == "" {
-			return changed, fmt.Errorf("%w: Fix requires an eligible failed JUnit test", ErrInvalidRequest)
+			return changed, fmt.Errorf("%w: Fix requires a current failed JUnit test", ErrInvalidRequest)
 		}
 		repository, ok := persistedFixTargetSourceRepository(target, s.sourceRepo)
 		if !ok {
@@ -63,7 +61,6 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 		}
 		if binding, ok := current.FixSources[requestID]; ok {
 			copy := binding
-			copy.VerifiedSourceFileHashes = cloneTestFixHashes(binding.VerifiedSourceFileHashes)
 			existing = &copy
 		}
 		_, requestAdmitted = current.Requests[requestID]
@@ -82,7 +79,7 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 		return err
 	}
 	target := resolvedAnalysisFixTarget(resolved)
-	if target == nil || target.ref != targetRef {
+	if target == nil || target.ref != targetRef || target.testCase.Status != "failed" || target.build.Passed {
 		return ErrAnalysisChanged
 	}
 	currentSource, ok := buildsource.Resolve(target.build, sourceRepository.Owner, sourceRepository.Name)
@@ -93,15 +90,8 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 	if currentBranchKnown != sourceBranchKnown || sourceBranchKnown && currentBranch != sourceBranch {
 		return ErrAnalysisChanged
 	}
-	if target.testCase.AIAnalysis == nil {
-		return fmt.Errorf("%w: exact JUnit Fix has no verified immutable source paths", ErrInvalidRequest)
-	}
-	files := buildsource.VerifiedPaths(target.testCase.AIAnalysis.FileLinks, sourceRepository)
-	if len(files) == 0 {
-		return fmt.Errorf("%w: exact JUnit Fix has no verified immutable source paths", ErrInvalidRequest)
-	}
 	if existing != nil && requestAdmitted {
-		if validTestFixSource(*existing, targetRef, sourceRepository.Revision, files) {
+		if validTestFixSource(*existing, targetRef, sourceRepository.Revision) {
 			return nil
 		}
 		return fmt.Errorf("%w: exact JUnit Fix source binding is invalid", ErrInvalidRequest)
@@ -110,15 +100,14 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 		return fmt.Errorf("%w: exact JUnit Fix source compatibility is unavailable", ErrInvalidRequest)
 	}
 	repository := sourceinvestigation.Repository{Owner: sourceRepository.Owner, Name: sourceRepository.Name, Revision: sourceRepository.Revision}
-	generationBase, hashes, err := s.testFixPreflight(ctx, repository, sourceBranch, files)
+	generationBase, err := s.testFixPreflight(ctx, repository, sourceBranch)
 	if err != nil {
 		return fmt.Errorf("%w: exact JUnit Fix source compatibility failed: %w", ErrInvalidRequest, err)
 	}
 	binding := persistedTestFixSource{
 		TargetRef: targetRef, FailureRevision: sourceRepository.Revision, GenerationBaseRevision: generationBase,
-		VerifiedSourceFileHashes: cloneTestFixHashes(hashes),
 	}
-	if !validTestFixSource(binding, targetRef, sourceRepository.Revision, files) {
+	if !validTestFixSource(binding, targetRef, sourceRepository.Revision) {
 		return fmt.Errorf("%w: exact JUnit Fix source compatibility is invalid", ErrInvalidRequest)
 	}
 	persistCtx, persistCancel := s.store.context()
@@ -141,7 +130,7 @@ func (s *Service) PreflightAnalysisFix(ctx context.Context, sessionID, owner, re
 			current.FixSources = map[string]persistedTestFixSource{}
 		}
 		if previous, ok := current.FixSources[requestID]; ok {
-			if !validTestFixSource(previous, targetRef, repository.Revision, files) {
+			if !validTestFixSource(previous, targetRef, repository.Revision) {
 				return changed, fmt.Errorf("%w: exact JUnit Fix source binding is invalid", ErrInvalidRequest)
 			}
 			if !sameTestFixSource(previous, binding) {
@@ -327,20 +316,11 @@ func persistedFixTargetSourceRepository(
 }
 
 func sameTestFixSource(left, right persistedTestFixSource) bool {
-	if left.TargetRef != right.TargetRef || !strings.EqualFold(left.FailureRevision, right.FailureRevision) ||
-		!strings.EqualFold(left.GenerationBaseRevision, right.GenerationBaseRevision) ||
-		len(left.VerifiedSourceFileHashes) != len(right.VerifiedSourceFileHashes) {
-		return false
-	}
-	for file, hash := range left.VerifiedSourceFileHashes {
-		if right.VerifiedSourceFileHashes[file] != hash {
-			return false
-		}
-	}
-	return true
+	return left.TargetRef == right.TargetRef && strings.EqualFold(left.FailureRevision, right.FailureRevision) &&
+		strings.EqualFold(left.GenerationBaseRevision, right.GenerationBaseRevision)
 }
 
-func validTestFixSource(binding persistedTestFixSource, targetRef AnalysisRef, failureRevision string, files []string) bool {
+func validTestFixSource(binding persistedTestFixSource, targetRef AnalysisRef, failureRevision string) bool {
 	if binding.TargetRef != targetRef {
 		return false
 	}
@@ -348,29 +328,6 @@ func validTestFixSource(binding persistedTestFixSource, targetRef AnalysisRef, f
 	if !ok || !strings.EqualFold(failure, failureRevision) {
 		return false
 	}
-	if _, ok := buildsource.NormalizeRevision(binding.GenerationBaseRevision); !ok || len(binding.VerifiedSourceFileHashes) != len(files) {
-		return false
-	}
-	files = slices.Clone(files)
-	slices.Sort(files)
-	files = slices.Compact(files)
-	for _, file := range files {
-		hash := binding.VerifiedSourceFileHashes[file]
-		decoded, err := hex.DecodeString(hash)
-		if err != nil || len(decoded) != 32 {
-			return false
-		}
-	}
-	return true
-}
-
-func cloneTestFixHashes(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	out := make(map[string]string, len(values))
-	for key, value := range values {
-		out[key] = value
-	}
-	return out
+	_, ok = buildsource.NormalizeRevision(binding.GenerationBaseRevision)
+	return ok
 }

@@ -399,7 +399,7 @@ func (o Options) normalized(dataDir string) Options {
 type Service struct {
 	dataDir            string
 	runner             Runner
-	testFixPreflight   func(context.Context, sourceinvestigation.Repository, string, []string) (string, map[string]string, error)
+	testFixPreflight   func(context.Context, sourceinvestigation.Repository, string) (string, error)
 	sourceRepo         sourceinvestigation.Repository
 	opts               Options
 	store              *sessionStore

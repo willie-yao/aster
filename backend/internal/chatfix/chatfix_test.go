@@ -267,7 +267,6 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
 		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
 		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
-		VerifiedSourceFileHashes: map[string]string{"pkg/controller.go": strings.Repeat("d", 64)},
 		SourceBranch:             "main", SourceBranchKnown: true,
 		Analysis: analysischat.AnalysisRef{
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
@@ -297,11 +296,34 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		input.AnalysisContentHash != "analysis-hash" || input.SourceRepository.Name != "repo" ||
 		input.FailureRevision != "0123456789abcdef0123456789abcdef01234567" ||
 		input.GenerationBaseRevision != "fedcba9876543210fedcba9876543210fedcba98" ||
-		input.VerifiedSourceFileHashes["pkg/controller.go"] != strings.Repeat("d", 64) ||
 		input.SourceBranch != "main" ||
 		len(input.ArtifactCitations) != 1 || !slices.Equal(input.EvidenceWarnings, []string{"citation 2 was omitted"}) ||
 		input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)
+	}
+}
+
+func TestCreateAnalysisFixRequestCarriesUnverifiedUncitedFinding(t *testing.T) {
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+		SessionID: "session", RequestID: "request", ResponseHash: "qualified-response",
+		AnalysisContentHash: "analysis",
+		AssistantAnswer:     "Investigate retries around the recurring timeout.",
+		AssistantUnverified: true, AssistantUnverifiedReason: analysischat.UnverifiedCitation,
+		FixTarget: analysischat.AnalysisRef{
+			Scope: analysischat.ScopeTest, JobID: "job", BuildID: "123", TestName: "test",
+			JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-09-10T00:00:00Z",
+		},
+	}}
+	fixes := &fakeFixPreviewer{}
+	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		t.Context(), "session", "Alice", "request", "token", "",
+	)
+	if err != nil || request.ID != "async-request" || !chat.preflighted || !chat.commitCalled {
+		t.Fatalf("request=%+v err=%v", request, err)
+	}
+	if !fixes.analysisInput.AssistantUnverified || fixes.analysisInput.AssistantUnverifiedReason != analysischat.UnverifiedCitation ||
+		len(fixes.analysisInput.ArtifactCitations) != 0 || fixes.analysisInput.ChatResponseHash != "qualified-response" {
+		t.Fatalf("input=%+v", fixes.analysisInput)
 	}
 }
 
@@ -429,7 +451,6 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 		SourceRepositorySnapshot: sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: "0123456789abcdef0123456789abcdef01234567"},
 		FailureRevision:          "0123456789abcdef0123456789abcdef01234567",
 		GenerationBaseRevision:   "fedcba9876543210fedcba9876543210fedcba98",
-		VerifiedSourceFileHashes: map[string]string{"pkg/controller.go": strings.Repeat("d", 64)},
 		AssistantAnswer:          "The two cause builds support changing the controller.",
 		ArtifactCitations:        []analysischat.Citation{{Path: "builds/209/build-log.txt", Quote: "resource not found"}},
 	}}
@@ -449,7 +470,6 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 		SourceRepository: chat.candidate.SourceRepositorySnapshot,
 		ChatSessionID:    "session", ChatRequestID: "request", ChatResponseHash: "response-hash",
 		FailureRevision: chat.candidate.FailureRevision, GenerationBaseRevision: chat.candidate.GenerationBaseRevision,
-		VerifiedSourceFileHashes: chat.candidate.VerifiedSourceFileHashes,
 	}
 	if err := NewService(chat, fixes).ValidateAnalysisPreview(t.Context(), "Alice", binding); err != nil {
 		t.Fatalf("cause preview validation error = %v", err)

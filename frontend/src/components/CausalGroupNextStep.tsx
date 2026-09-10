@@ -14,8 +14,8 @@ import { overviewTypography } from "../theme/overview";
 
 // CausalGroupNextStep is the one place a cause offers something to act on: the
 // remediation its own member analyses reported, the route to the failure a fix
-// proposal starts from, and a chat with verified citations from the cause's
-// member builds. Each part has its own gate, so the section renders whichever the deployment has.
+// proposal starts from, and a chat grounded in the cause's member builds. Each
+// part has its own gate, so the section renders whichever the deployment has.
 export function CausalGroupNextStep({
   group,
   jobID,
@@ -36,7 +36,6 @@ export function CausalGroupNextStep({
   routing?: {
     target: CausalGroupFixTarget | null;
     externalCause?: AnalysisCauseLocation | null;
-    stale?: boolean;
     evidencePresent?: boolean;
   };
 }) {
@@ -87,7 +86,7 @@ export function CausalGroupNextStep({
             fileCtx={chat.fileCtx}
             preparedFinding={chat.preparedFinding}
             onPreparedResolved={chat.onPreparedResolved}
-            fixTarget={routable && !routable.stale ? routable.target ?? undefined : undefined}
+            fixTarget={routable?.target ?? undefined}
           />
         </Box>
       )}

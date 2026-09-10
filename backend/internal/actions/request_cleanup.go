@@ -203,7 +203,7 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	previous := *request
 	request.Status = finalStatus
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if finalStatus != RequestFailed || request.Kind != requestKindAnalysisFix {
+	if finalStatus != RequestFailed || (request.Kind != requestKindAnalysisFix && request.Kind != "propose-fix") {
 		request.Warning = ""
 	}
 	request.Preview = nil

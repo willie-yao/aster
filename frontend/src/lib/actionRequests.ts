@@ -118,14 +118,23 @@ export function actionRequestProgressTitle(
   isFix: boolean,
 ): string {
   if (!request || request.stage !== "drafting") {
-    return "Verifying the proposed remediation against pinned source";
+    return isFix
+      ? "Resolving the repository and generation base"
+      : "Verifying the proposed remediation against pinned source";
   }
   return isFix ? "Generating the fix proposal" : "Preparing the issue draft";
 }
 
 export function actionRequestProgressDetail(
   request: ActionRequest | null,
+  isFix: boolean,
 ): string {
+  if (isFix) {
+    if (!request || request.stage !== "drafting") {
+      return "The dashboard validates the action subject and pins the allowed repository base before runtime work starts.";
+    }
+    return "The coding agent is investigating the pinned repository in the background. You can leave this page and return later.";
+  }
   if (
     request?.stage === "drafting" &&
     request.verification?.state === "unresolved"

@@ -76,7 +76,6 @@ func enableMockFeatures(opts *server.Options, projectDir, dataDir string) error 
 	opts.AIUsagePricing = pricing
 	opts.AIUsagePricingRule = devmock.PricingRule
 	opts.Capabilities.Features.JUnitChatFix = true
-	opts.Capabilities.Features.ChatFixMinConfidence = cfg.EffectiveFixPRs().MinConfidence
 
 	log.Printf("🎭 mock mode: every admin feature is fabricated, every request signs in as %q, and nothing reaches GitHub or a model provider", login)
 	log.Printf("🎭 mock mode grants admin to anyone who can reach this server; bind it to localhost only")

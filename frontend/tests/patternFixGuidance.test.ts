@@ -92,13 +92,13 @@ test("a cause routes to a failed test that can actually start a fix proposal", (
   });
 });
 
-test("a failed test with no published file link is conclusively ineligible", () => {
+test("a failed analyzed test needs no published source link", () => {
   assert.equal(causalGroupFixTarget(firstGroup, [junitRun]), null);
-  assert.equal(
+  assert.deepEqual(
     causalGroupFixTarget(firstGroup, [
       { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], ai_analysis: { ...analysis, file_links: {} } }] },
     ]),
-    null,
+    { buildID: "208060", testName: "fails" },
   );
 });
 
@@ -123,6 +123,17 @@ test("build-sourced and JUnit-less failures never become fix targets", () => {
   );
 });
 
+test("a failed JUnit case in an overall passed run is not a fix target", () => {
+  assert.equal(causalGroupFixTarget(firstGroup, [{ ...groundedRun, passed: true }]), null);
+  assert.deepEqual(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, passed: true },
+      { ...groundedRun, build_id: "208726" },
+    ]),
+    { buildID: "208726", testName: "fails" },
+  );
+});
+
 test("a cause routes to the representative failure it was actually built from", () => {
   const eligible = groundedRun.test_cases[0];
   const higherSeverity = {
@@ -132,10 +143,10 @@ test("a cause routes to the representative failure it was actually built from", 
   };
 
   // The causal group's root cause comes from the highest-severity analyzed
-  // failure, so an unrelated eligible failure must not be offered in its place.
-  assert.equal(
+  // failure, so the same representative remains the route without source hints.
+  assert.deepEqual(
     causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [higherSeverity, eligible] }]),
-    null,
+    { buildID: "208060", testName: "other" },
   );
   assert.deepEqual(
     causalGroupFixTarget(firstGroup, [
@@ -193,7 +204,7 @@ test("an occurrence hidden from the ledger still shadows the routing target", ()
 
 test("a cause falls through to another affected build when one has no reachable target", () => {
   const eligible = groundedRun.test_cases[0];
-  const blockedRun = { ...groundedRun, test_cases: [{ ...eligible, ai_analysis: { ...analysis, file_links: {} } }] };
+  const blockedRun = { ...groundedRun, test_cases: [{ ...eligible, junit_file: undefined }] };
 
   assert.deepEqual(
     causalGroupFixTarget(firstGroup, [blockedRun, { ...groundedRun, build_id: "208726" }]),
@@ -240,7 +251,7 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(nextStep, /<CausalGroupFixNotice[\s\S]*target=\{routable\.target\}/);
   assert.match(banner, /<CausalGroupFixButton[\s\S]*target=\{causalFixTargets\[index\]\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
+  assert.match(routing, /No representative failed JUnit analysis for this cause is reachable/);
 });
 
 test("fix routing keeps action styling and a focus-accessible full label", () => {
@@ -268,7 +279,7 @@ test("fix routing keeps action styling and a focus-accessible full label", () =>
   assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
 });
 
-test("routing callers propagate build disambiguation and staleness while suffix spacing stays explicit", () => {
+test("routing callers propagate build disambiguation without lifecycle vetoes", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
@@ -276,11 +287,11 @@ test("routing callers propagate build disambiguation and staleness while suffix 
   // on every action to cover that case is what made the label unreadable.
   assert.match(routing, /showBuild = false/);
   assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
-  assert.match(banner, /stale: !lifecycleActive/);
+  assert.doesNotMatch(banner, /stale: !lifecycleActive|stale=\{!lifecycleActive\}/);
   assert.match(routing, /whiteSpace: "pre"/);
 });
 
-test("the pattern-level panel is a fallback for causes with no eligible test", () => {
+test("the pattern-level panel is a fallback for causes with no reachable test", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const guidance = source("src/components/PatternFixGuidance.tsx");
 
@@ -289,7 +300,7 @@ test("the pattern-level panel is a fallback for causes with no eligible test", (
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix proposal unavailable/);
-  assert.match(guidance, /No failed JUnit test in the affected builds meets the Fix eligibility requirements/);
+  assert.match(guidance, /No representative failed JUnit analysis for its causes is reachable/);
   assert.match(guidance, /View failed tests/);
   assert.match(guidance, /jobRunPath\(jobID, buildID\)/);
   assert.match(guidance, /to=\{destination\}/);
@@ -316,8 +327,10 @@ test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain 
   // Drafting stays tied to the remediation contract; dismissal must not be, and
   // neither gate may suppress the other.
   assert.match(banner, /const draftable = patternDraftable\(pattern, refreshStatus\)/);
+  assert.match(banner, /const fixable = Boolean\(!analysisOnly && pattern\.id\)/);
   assert.doesNotMatch(banner, /draftable = dismissible/);
   assert.match(banner, /draftable=\{draftable\}/);
+  assert.match(banner, /fixable=\{fixable\}/);
   assert.match(banner, /eligibilityHint=\{draftable \? actionEligibility : null\}/);
   assert.match(banner, /<FailureActions/);
   assert.doesNotMatch(banner, />\s*Draft issue\s*</);
@@ -339,17 +352,19 @@ test("pattern resolution is reachable on the causal-group results the engine pub
   assert.match(banner, /const resolvedEntry = pattern\.id \? resolved\.resolved\[pattern\.id\] : undefined/);
   // A resolved pattern keeps its Reopen control even once a fresh resolution
   // would be refused.
-  assert.match(banner, /draftable \|\| canResolve \|\| Boolean\(resolvedEntry\)/);
+  assert.match(banner, /draftable \|\| fixable \|\| canResolve \|\| Boolean\(resolvedEntry\)/);
   assert.match(banner, /canResolve=\{canResolve\}/);
   // Per-cause resolution replaces the pattern-level control only where it
   // covers every cause, so a pattern with an unsigned cause keeps the fallback.
   assert.match(banner, /const causeResolutionCovers = patternResolutionCovered\(pattern, refreshStatus\)/);
   assert.match(banner, /patternResolvable\(pattern, refreshStatus\) && !causeResolutionCovers/);
 
-  // Only drafting is suppressed when draftable is false; resolution is not.
-  assert.match(actions, /const drafting = draftable && features\.action_requests/);
-  assert.match(actions, /\{drafting && canStartActions && \(/);
-  assert.match(actions, /\{draftable && !eligibilityLoading && eligibility/);
+  // Issue and Fix availability are independent, and neither changes resolution.
+  assert.match(actions, /const issueDrafting = draftable && Boolean\(features\.action_requests\)/);
+  assert.match(actions, /const fixDrafting = fixable && Boolean\(features\.action_requests\) && Boolean\(features\.fix_prs\)/);
+  assert.match(actions, /\{canStartIssue && \(/);
+  assert.match(actions, /\{canStartFix && \(/);
+  assert.match(actions, /\{issueDrafting && !eligibilityLoading && eligibility/);
 });
 
 // A cause is acknowledged on its own, so its control has to live in the cause

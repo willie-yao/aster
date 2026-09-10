@@ -101,12 +101,11 @@ type persistedRequest struct {
 }
 
 type persistedTestFixSource struct {
-	PendingReservations      map[string]bool   `json:"pending_reservations,omitempty"`
-	References               map[string]bool   `json:"references,omitempty"`
-	TargetRef                AnalysisRef       `json:"target_ref"`
-	FailureRevision          string            `json:"failure_revision"`
-	GenerationBaseRevision   string            `json:"generation_base_revision"`
-	VerifiedSourceFileHashes map[string]string `json:"verified_source_file_hashes"`
+	PendingReservations    map[string]bool `json:"pending_reservations,omitempty"`
+	References             map[string]bool `json:"references,omitempty"`
+	TargetRef              AnalysisRef     `json:"target_ref"`
+	FailureRevision        string          `json:"failure_revision"`
+	GenerationBaseRevision string          `json:"generation_base_revision"`
 }
 
 type persistedActiveTurn struct {

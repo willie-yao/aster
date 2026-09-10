@@ -4,7 +4,6 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { MemoryStorage } from "./helpers/memoryStorage.js";
 
-import { chatFixVerifiedCitationRequestIDs, chatFixVerifiedSourcePaths } from "../src/lib/chatFixEligibility.js";
 import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
@@ -12,44 +11,39 @@ import {
   readStoredChatFixRequest,
   storeChatFixRequest,
 } from "../src/lib/chatFixRequestStorage.js";
-import type { AnalysisChatMessage } from "../src/types/analysisChat.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-test("exact JUnit chat fix requires conversation evidence and verified source paths", () => {
+test("exact JUnit chat fix requires only a completed answer on a structural target", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /features\.junit_chat_fix/);
   assert.match(chat, /analysisRef\.source !== "build"/);
   assert.match(chat, /analysisRef\.junit_file/);
-  assert.match(chat, /chatFixVerifiedCitationRequestIDs/);
-  assert.match(chat, /chatFixVerifiedSourcePaths/);
-  assert.doesNotMatch(chat, /hasExplicitSourceSymbol/);
-  assert.doesNotMatch(chat, /citation from this turn/);
-  assert.match(chat, /no answer in this conversation carries a validated artifact citation/);
-  assert.match(chat, /no verified immutable source path/);
+  assert.match(chat, /completedFinding = Boolean\(message\.request_id && message\.content\.trim\(\)\)/);
+  assert.match(chat, /exactFixEligible = exactFixEnabled && completedFinding/);
+  assert.doesNotMatch(chat, /chatFixVerifiedCitationRequestIDs|chatFixVerifiedSourcePaths/);
+  assert.doesNotMatch(chat, /hasArtifactEvidence|hasVerifiedSourcePaths|fixSourceUnavailable/);
 });
 
-test("partially verified chat findings keep validated evidence fix-eligible", () => {
+test("qualified and unverified chat findings can start an investigation", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /Partially verified/);
   assert.match(chat, /Some citations were omitted or could not be verified/);
   assert.match(chat, /The evidence shown below is verified/);
-  assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
+  assert.match(chat, /chatFixEnabled && fixEligible && message\.request_id/);
+  assert.doesNotMatch(chat, /chatFixEnabled && !unverified/);
   assert.match(chat, /validation repair/);
   assert.doesNotMatch(chat, /response-contract repair/);
   assert.doesNotMatch(chat, /The response contract was rejected/);
   assert.match(chat, /The response or its evidence did not pass validation/);
 });
 
-test("permanent source ineligibility is reported before the per-response citation reason", () => {
+test("missing source hints and citations do not create permanent ineligibility notices", () => {
   const chat = source("src/components/AnalysisChat.tsx");
-  assert.match(chat, /fixSourceUnavailable = Boolean\(features\.junit_chat_fix\) && exactJUnitAnalysis/);
-  assert.match(chat, /\{fixSourceUnavailable && \(\s*<Alert/);
-  assert.match(chat, /exactFixEnabled && \(causeFixEnabled \|\| hasVerifiedSourcePaths\) && !hasArtifactEvidence/);
-  // Ineligibility is reported without gating a mode, and the one question set
-  // leads with an artifact-cited prompt so answers can become fix-eligible.
+  assert.doesNotMatch(chat, /Fix preview is not possible|no verified immutable source path/);
+  assert.doesNotMatch(chat, /validated artifact citation.*start a fix preview/);
   assert.match(chat, /questions = causeScope \? causeSuggestedQuestions : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
   assert.match(chat, /"What does the build log show at the failure\?"/);
 });
@@ -62,7 +56,7 @@ test("cause chat fixes use a representative failure and replace the global patte
   assert.match(chat, /causeFixEnabled = causeScope && Boolean\(fixTarget\)/);
   assert.match(chat, /exactAnalysis=\{!patternScope\}/);
   assert.match(chat, /causeScope=\{causeScope\}/);
-  assert.match(nextStep, /fixTarget=\{routable && !routable\.stale \? routable\.target \?\? undefined : undefined\}/);
+  assert.match(nextStep, /fixTarget=\{routable\?\.target \?\? undefined\}/);
   assert.match(banner, /causalGroups\.length === 0 && chatAvailability === "ready"/);
   assert.match(dialog, /representative failed JUnit target for this cause/);
 });
@@ -75,110 +69,7 @@ test("prepared cause findings are labeled and remain immediately fix-eligible", 
   assert.match(chat, /message\.prepared \? "Prepared finding" : "Analysis agent"/);
   assert.match(chat, /Generated during the scheduled analysis run/);
   assert.match(chat, /void createPreparedSession\(\)/);
-  assert.match(chat, /chatFixEnabled && !unverified && fixEligible/);
-});
-
-test("chat fix citation verification accumulates across the conversation", () => {
-  const answer = (requestID: string, cited: boolean): AnalysisChatMessage => ({
-    role: "assistant", request_id: requestID, content: "answer", created_at: "2026-08-17T00:00:00Z",
-    citations: cited ? [{ path: "build-log.txt", line_start: 4, line_end: 4, quote: "boom" }] : undefined,
-  });
-  const question = (requestID: string): AnalysisChatMessage => ({
-    role: "user", request_id: requestID, content: "question", created_at: "2026-08-17T00:00:00Z",
-  });
-
-  const verified = chatFixVerifiedCitationRequestIDs([
-    question("one"), answer("one", true), question("two"), answer("two", false),
-  ]);
-  assert.deepEqual([...verified].sort(), ["one", "two"]);
-
-  const later = chatFixVerifiedCitationRequestIDs([
-    question("one"), answer("one", false), question("two"), answer("two", true),
-  ]);
-  assert.deepEqual([...later], ["two"]);
-
-  const sourceOnly = answer("source", false);
-  sourceOnly.citations = [{
-    repository: "example/project", revision: "0123456789abcdef0123456789abcdef01234567",
-    path: "pkg/controller.go", line_start: 10, line_end: 10, quote: "return err",
-  }];
-  assert.equal(chatFixVerifiedCitationRequestIDs([sourceOnly]).size, 0);
-
-  assert.equal(chatFixVerifiedCitationRequestIDs([question("one"), answer("one", false)]).size, 0);
-  assert.equal(chatFixVerifiedCitationRequestIDs(undefined).size, 0);
-});
-
-test("exact JUnit source-path eligibility requires the bound repository and revision", () => {
-  const repository = {
-    owner: "kubernetes-sigs",
-    name: "cluster-api-provider-azure",
-    revision: "0123456789abcdef0123456789abcdef01234567",
-  };
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths(
-      {
-        "controllers/cluster_controller.go":
-          "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/0123456789abcdef0123456789abcdef01234567/controllers/cluster_controller.go#L10",
-      },
-      repository,
-    ),
-    ["controllers/cluster_controller.go"],
-  );
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths(
-      {
-        "controllers/cluster_controller.go":
-          "https://github.com/other/repo/blob/0123456789abcdef0123456789abcdef01234567/controllers/cluster_controller.go",
-      },
-      repository,
-    ),
-    [],
-  );
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths(
-      {
-        "controllers/cluster_controller.go":
-          "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/controllers/cluster_controller.go",
-      },
-      repository,
-    ),
-    [],
-  );
-});
-
-test("exact JUnit source-path eligibility derives the path from the blob URL like the server", () => {
-  const repository = {
-    owner: "kubernetes-sigs",
-    name: "cluster-api-provider-azure",
-    revision: "0123456789abcdef0123456789abcdef01234567",
-  };
-  const blob = (path: string) =>
-    `https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/0123456789abcdef0123456789abcdef01234567/${path}`;
-  // The analysis cites a repository-prefixed path, so the key and the URL path
-  // differ. buildsource.VerifiedPaths accepts it, so eligibility must too.
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths(
-      { "cluster-api-provider-azure/test/e2e/cni.go": blob("test/e2e/cni.go") },
-      repository,
-    ),
-    ["test/e2e/cni.go"],
-  );
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths({ "./test/e2e/cni.go": blob("test/./e2e/cni.go") }, repository),
-    ["test/e2e/cni.go"],
-  );
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths({ a: blob("test/e2e/cni.go"), b: blob("test/e2e/cni.go") }, repository),
-    ["test/e2e/cni.go"],
-  );
-  assert.deepEqual(
-    chatFixVerifiedSourcePaths({ escaped: blob("test/e2e%2Fcni.go") }, repository),
-    ["test/e2e/cni.go"],
-  );
-  // Traversal and absolute paths stay rejected on both sides.
-  assert.deepEqual(chatFixVerifiedSourcePaths({ up: blob("../secrets.go") }, repository), []);
-  assert.deepEqual(chatFixVerifiedSourcePaths({ up: blob("test/../../secrets.go") }, repository), []);
-  assert.deepEqual(chatFixVerifiedSourcePaths({ backslash: blob("test%5Ce2e.go") }, repository), []);
+  assert.match(chat, /chatFixEnabled && fixEligible && message\.request_id/);
 });
 
 test("exact JUnit fix dialog excludes pattern authority and keeps confirmation separate", () => {
@@ -188,15 +79,18 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /loadAnalysisChatFixRequest/);
   assert.match(dialog, /Generation continues in the background/);
   assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
-  assert.match(dialog, /server resolves the exact repository revision from build metadata/);
-  assert.match(dialog, /rejects the preview if the target branch has moved/);
+  assert.match(dialog, /server resolves the repository and tested branch from build metadata/);
+  assert.match(dialog, /rejects the preview if that identity changes/);
+  assert.match(dialog, /Source paths from the analysis are optional investigation hints/);
+  assert.match(dialog, /This finding is unverified/);
+  assert.match(dialog, /No validated artifact citations accompany this finding/);
   assert.match(dialog, /Generate fix preview/);
   assert.match(dialog, /Open draft PR with warnings/);
   assert.match(dialog, /Regenerate with feedback/);
   assert.match(dialog, /request\.warning/);
   assert.match(dialog, /instruction\.trim\(\) !== submittedInstruction\.trim\(\)/);
   assert.match(dialog, /Change the previous instruction to enable regeneration/);
-  assert.match(dialog, /Source verification warning/);
+  assert.match(dialog, /Investigation warning/);
   assert.match(dialog, /Coding agent summary/);
   assert.match(dialog, /cancelAnalysisChatFixRequest\(request\.id\)/);
   assert.match(dialog, /clearStoredChatFixRequest[\s\S]*createAnalysisChatFixRequest/);
@@ -234,8 +128,7 @@ test("one chat serves questions and fix proposals with no separate mode", () => 
   assert.doesNotMatch(chat, /beginAnalysisChatFixInvestigation/);
   // A finding in the one conversation still opens a fix proposal.
   assert.match(chat, /onUseForFix=\{\(\) => openFix\(message\)\}/);
-  // Source ineligibility is still surfaced without entering a mode.
-  assert.match(chat, /fixSourceUnavailable/);
+  assert.doesNotMatch(chat, /fixSourceUnavailable/);
 });
 
 test("anonymous fix proposal uses the existing OAuth sign-in path", () => {
@@ -353,7 +246,7 @@ test("exact JUnit regeneration keeps feedback replacement separate from provider
 
 test("recoverable no-patch feedback is grouped with regeneration controls", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
-  const finding = dialog.indexOf("Source verification warning");
+  const finding = dialog.indexOf("Investigation warning");
   const noPatch = dialog.indexOf("Generation completed without a patch");
   const instruction = dialog.indexOf('label="Maintainer instruction (optional)"');
   const regenerate = dialog.indexOf("Regenerate with feedback");

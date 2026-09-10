@@ -33,24 +33,25 @@ type AnalysisSnapshot struct {
 
 // FixCandidate is one selected successful answer.
 type FixCandidate struct {
-	SessionID                string
-	RequestID                string
-	Analysis                 AnalysisRef
-	FixTarget                AnalysisRef
-	Original                 AnalysisSnapshot
-	AssistantAnswer          string
-	ProposedRevision         *Revision
-	ArtifactCitations        []Citation
-	EvidenceWarnings         []string
-	Pattern                  models.PatternAnalysis
-	ResponseHash             string
-	AnalysisContentHash      string
-	SourceRepositorySnapshot sourceinvestigation.Repository
-	FailureRevision          string
-	GenerationBaseRevision   string
-	VerifiedSourceFileHashes map[string]string
-	SourceBranch             string
-	SourceBranchKnown        bool
+	SessionID                 string
+	RequestID                 string
+	Analysis                  AnalysisRef
+	FixTarget                 AnalysisRef
+	Original                  AnalysisSnapshot
+	AssistantAnswer           string
+	AssistantUnverified       bool
+	AssistantUnverifiedReason string
+	ProposedRevision          *Revision
+	ArtifactCitations         []Citation
+	EvidenceWarnings          []string
+	Pattern                   models.PatternAnalysis
+	ResponseHash              string
+	AnalysisContentHash       string
+	SourceRepositorySnapshot  sourceinvestigation.Repository
+	FailureRevision           string
+	GenerationBaseRevision    string
+	SourceBranch              string
+	SourceBranchKnown         bool
 }
 
 // AnalysisFixCandidate returns one shared answer and its exact failed-test Fix target.
@@ -82,20 +83,21 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
-		if answer == nil || answer.Unverified || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
-			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
+		if answer == nil || strings.TrimSpace(answer.Content) == "" {
+			return changed, fmt.Errorf("%w: conversation has no completed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
-		if !analysisFixConversationUsable(current.View.Analysis.Scope, analysis) {
-			return changed, fmt.Errorf("%w: the analysis has no usable diagnosis to fix", ErrInvalidRequest)
+		if analysis == nil {
+			return changed, ErrAnalysisNotFound
 		}
 		target := persistedAnalysisFixTarget(current.Resolved)
-		if target == nil || target.TestCase.AIAnalysis == nil || !models.AnalysisHasUsableDiagnosis(target.TestCase.AIAnalysis) {
-			return changed, fmt.Errorf("%w: conversation has no eligible failed-test Fix target", ErrInvalidRequest)
+		if target == nil || target.TestCase.AIAnalysis == nil {
+			return changed, fmt.Errorf("%w: conversation has no current failed-test Fix target", ErrInvalidRequest)
 		}
 		candidate = FixCandidate{
 			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis, FixTarget: target.Ref,
 			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
+			AssistantUnverified: answer.Unverified, AssistantUnverifiedReason: answer.UnverifiedReason,
 			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: citations,
 			EvidenceWarnings:    conversationEvidenceWarnings(current.View.Messages, requestID),
 			AnalysisContentHash: target.AnalysisHash, SourceRepositorySnapshot: target.Source,
@@ -103,7 +105,6 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		if binding, ok := current.FixSources[requestID]; ok {
 			candidate.FailureRevision = binding.FailureRevision
 			candidate.GenerationBaseRevision = binding.GenerationBaseRevision
-			candidate.VerifiedSourceFileHashes = cloneTestFixHashes(binding.VerifiedSourceFileHashes)
 			candidate.SourceBranch, candidate.SourceBranchKnown = buildsource.Branch(
 				target.Build, target.Source.Owner, target.Source.Name,
 			)
@@ -123,9 +124,9 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	currentSource, sourceOK := resolveBuildSourceRepository(target.build, candidate.SourceRepositorySnapshot)
-	if !analysisFixConversationUsable(candidate.Analysis.Scope, analysis) ||
+	if analysis == nil ||
 		!sameBoundAnalysisSnapshot(candidate.Analysis.Scope, candidate.Original, analysisSnapshot(analysis)) || candidate.FixTarget != target.ref ||
-		target.testCase.AIAnalysis == nil || !models.AnalysisHasUsableDiagnosis(target.testCase.AIAnalysis) ||
+		target.testCase.AIAnalysis == nil || target.testCase.Status != "failed" || target.build.Passed ||
 		candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(target.testCase) != candidate.AnalysisContentHash ||
 		sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK || currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
@@ -137,15 +138,10 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		if currentBranchKnown != candidate.SourceBranchKnown || candidate.SourceBranchKnown && currentBranch != candidate.SourceBranch {
 			return FixCandidate{}, ErrAnalysisChanged
 		}
-		files := buildsource.VerifiedPaths(target.testCase.AIAnalysis.FileLinks, buildsource.Source{
-			Owner: candidate.SourceRepositorySnapshot.Owner, Name: candidate.SourceRepositorySnapshot.Name,
-			Revision: candidate.SourceRepositorySnapshot.Revision,
-		})
 		if !validTestFixSource(persistedTestFixSource{
 			TargetRef: candidate.FixTarget, FailureRevision: candidate.FailureRevision,
-			GenerationBaseRevision:   candidate.GenerationBaseRevision,
-			VerifiedSourceFileHashes: candidate.VerifiedSourceFileHashes,
-		}, candidate.FixTarget, candidate.SourceRepositorySnapshot.Revision, files) {
+			GenerationBaseRevision: candidate.GenerationBaseRevision,
+		}, candidate.FixTarget, candidate.SourceRepositorySnapshot.Revision) {
 			return FixCandidate{}, ErrAnalysisChanged
 		}
 	}
@@ -154,16 +150,6 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		return FixCandidate{}, err
 	}
 	return candidate, nil
-}
-
-func analysisFixConversationUsable(scope string, analysis *models.AIAnalysis) bool {
-	if analysis == nil {
-		return false
-	}
-	if scope == ScopeCause {
-		return strings.TrimSpace(analysis.RootCause) != ""
-	}
-	return models.AnalysisHasUsableDiagnosis(analysis)
 }
 
 func persistedAnalysisFixTarget(resolved persistedResolvedAnalysis) *persistedResolvedFixTarget {
@@ -198,19 +184,21 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		FixTarget                               AnalysisRef
 		Original                                AnalysisSnapshot
 		AssistantAnswer                         string
+		AssistantUnverified                     bool
+		AssistantUnverifiedReason               string
 		ProposedRevision                        *Revision
 		ArtifactCitations                       []Citation
 		EvidenceWarnings                        []string
 		AnalysisContentHash                     string
 		SourceRepository                        sourceinvestigation.Repository
 		FailureRevision, GenerationBaseRevision string
-		VerifiedSourceFileHashes                map[string]string
 		SourceBranch                            string
 		SourceBranchKnown                       bool
 	}{
 		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.FixTarget, candidate.Original, candidate.AssistantAnswer,
+		candidate.AssistantUnverified, candidate.AssistantUnverifiedReason,
 		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.EvidenceWarnings, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
-		candidate.FailureRevision, candidate.GenerationBaseRevision, candidate.VerifiedSourceFileHashes,
+		candidate.FailureRevision, candidate.GenerationBaseRevision,
 		candidate.SourceBranch, candidate.SourceBranchKnown,
 	})
 	if err != nil {
@@ -219,7 +207,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 	return hashBytes(payload), nil
 }
 
-// FixCandidate returns one shared evidence-backed assistant response.
+// FixCandidate returns one completed shared assistant response.
 func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (FixCandidate, error) {
 	owner = normalizeOwner(owner)
 	if owner == "" {
@@ -245,7 +233,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			return changed, ErrSessionNotFound
 		}
 		if current.View.Analysis.Scope == ScopeCause {
-			return changed, fmt.Errorf("%w: cause-scoped conversations cannot create fixes", ErrInvalidRequest)
+			return changed, fmt.Errorf("%w: cause-scoped findings require an exact failed-test Fix request", ErrInvalidRequest)
 		}
 		if current.View.Analysis.Scope == ScopePattern &&
 			(patternID != current.View.Analysis.PatternID || patternHash != current.View.Analysis.PatternHash) {
@@ -257,22 +245,24 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
-		if answer == nil || answer.Unverified || strings.TrimSpace(answer.Content) == "" || len(citations) == 0 {
-			return changed, fmt.Errorf("%w: conversation has no evidence-backed assistant answer", ErrInvalidRequest)
+		if answer == nil || strings.TrimSpace(answer.Content) == "" {
+			return changed, fmt.Errorf("%w: conversation has no completed assistant answer", ErrInvalidRequest)
 		}
 		analysis := current.Resolved.TestCase.AIAnalysis
 		if analysis == nil {
 			return changed, ErrAnalysisNotFound
 		}
 		candidate = FixCandidate{
-			SessionID:         current.View.ID,
-			RequestID:         requestID,
-			Analysis:          current.View.Analysis,
-			Original:          analysisSnapshot(analysis),
-			AssistantAnswer:   strings.TrimSpace(answer.Content),
-			ProposedRevision:  cloneRevision(answer.ProposedRevision),
-			ArtifactCitations: citations,
-			EvidenceWarnings:  conversationEvidenceWarnings(current.View.Messages, requestID),
+			SessionID:                 current.View.ID,
+			RequestID:                 requestID,
+			Analysis:                  current.View.Analysis,
+			Original:                  analysisSnapshot(analysis),
+			AssistantAnswer:           strings.TrimSpace(answer.Content),
+			AssistantUnverified:       answer.Unverified,
+			AssistantUnverifiedReason: answer.UnverifiedReason,
+			ProposedRevision:          cloneRevision(answer.ProposedRevision),
+			ArtifactCitations:         citations,
+			EvidenceWarnings:          conversationEvidenceWarnings(current.View.Messages, requestID),
 		}
 		return changed, nil
 	})
@@ -393,15 +383,8 @@ func conversationEvidenceWarnings(messages []Message, requestID string) []string
 	return warnings
 }
 
-// conversationCitations returns the validated artifact citations accumulated by the
-// conversation up to and including the promoted answer, most recent first.
-// Evidence validated in an earlier turn stays trustworthy, so a conversation with verified
-// citations does not have to re-read artifacts to keep a later answer
-// fix-eligible. Turn history replays prior citations to the model, so recent
-// evidence is normally what the promoted answer reasoned over; history
-// compaction drops the oldest turns first, so truncation keeps the most recent.
-// Later turns are excluded so the promoted response identity stays stable as
-// the conversation continues.
+// conversationCitations collects bounded validated artifact evidence through
+// the selected answer, newest first. Later turns cannot change an admitted fix.
 func conversationCitations(messages []Message, requestID string) []Citation {
 	index := assistantResponseIndex(messages, requestID)
 	if index < 0 {

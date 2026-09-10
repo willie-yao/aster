@@ -243,7 +243,6 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 			opts.ChatFix = bridge
 			actionService.ConfigureAnalysisPreviewValidator(bridge)
 			opts.Capabilities.Features.JUnitChatFix = exactEnabled
-			opts.Capabilities.Features.ChatFixMinConfidence = fixConfig.MinConfidence
 			log.Printf("🛠️ analysis chat fix previews enabled (exact_junit=%t)", exactEnabled)
 		} else {
 			log.Printf("🛠️ analysis chat fix previews disabled: no compatible runtime or source and fix repositories differ")
