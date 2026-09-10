@@ -36,6 +36,7 @@ Because the notes are published verbatim as the release body, relative paths in 
 3. The `Release` workflow (`.github/workflows/release.yml`) runs on the tag:
    - re-runs the full CI gate against the tagged commit,
    - verifies both release tags identify the reviewed commit; if the root tag exists and only the module tag is missing, it creates the module tag with a non-force push before publishing,
+   - refuses to publish a tag that is not the newest version in the repository, comparing by semantic precedence rather than string order, so a prerelease sorts below the release it leads to and `beta` sorts below `rc`,
    - creates the GitHub Release from `changelog/<tag>.md` (marked **pre-release** when the tag has a `-beta`/`-rc` suffix),
    - packages the application and platform Helm charts at the release version, pushes them to `oci://ghcr.io/<owner>/charts/aster` and `oci://ghcr.io/<owner>/charts/aster-platform`, and attaches `aster-<version>.tgz` and `aster-platform-<version>.tgz` to the release,
    - cross-compiles the `aster` CLI for Linux and macOS on amd64 and arm64, attaches `aster-<tag>-<target>` for each target, an exact source archive, a machine-readable release manifest, and `SHA256SUMS`,
@@ -44,7 +45,7 @@ Because the notes are published verbatim as the release body, relative paths in 
 
    In parallel, `.github/workflows/image.yml` publishes only the exact release tag for the application, remote fixer, and Agent Sandbox Fix executor. The Fix executor is published for `linux/amd64` at `ghcr.io/<owner>/aster/agent-sandbox-fix-executor`; deployed Agent Sandbox configuration still requires the resolved OCI digest. The git-only remote fixer is published at `ghcr.io/<owner>/aster/remote-fixer` for dashboard-side patch reconstruction and contains neither OpenCode nor model credentials.
 
-The `backend/` tag does not match the release or image workflow triggers, so it does not publish a second GitHub Release or duplicate OCI artifacts. To inspect tag state without changing it, run the publishing script with `RELEASE_DRY_RUN=true`. To recover only a missing module tag without publishing artifacts, use `RELEASE_TAGS_ONLY=true`. Both modes still reject invalid versions, moved tags, and mismatched tag pairs.
+The `backend/` tag does not match the release or image workflow triggers, so it does not publish a second GitHub Release or duplicate OCI artifacts. To inspect tag state without changing it, run the publishing script with `RELEASE_DRY_RUN=true`. To recover only a missing module tag without publishing artifacts, use `RELEASE_TAGS_ONLY=true`; that mode is also the gate the image workflow uses before pushing version-tagged images, so it enforces the forward-only rule. Both modes still reject invalid versions, moved tags, and mismatched tag pairs.
 
 4. After both tags and release artifacts are published and the onboarding contract passes at that exact tag, update `docs/supported-onboarding-release.txt`, current onboarding examples, and the setup skill in a follow-up change. Run `make check-onboarding-release-pins`; the guard requires both tags to exist and identify the same commit. An older supported tag may be retained when maintainers explicitly record that compatibility boundary.
 
@@ -58,15 +59,15 @@ v1.0.0-beta.1  ->  v1.0.0-beta.2  ->  v1.0.0-rc.1  ->  v1.0.0
 
 Pre-releases never move the `vMAJOR` alias and are never marked "latest", so a consumer on `@v1` is unaffected until `v1.0.0` ships. Test a pre-release by pinning a consumer to the exact tag (e.g. `@v1.0.0-beta.1`).
 
+Each tag must move the line forward. The publisher rejects a version that is not the newest in the repository, so an accidental return to an older line, or a prerelease of a version that already shipped, fails before anything is published.
+
 ## Release branches (backports)
 
-While everything ships from `main`, no release branch is needed. Create one only when you must patch an older major after `main` has moved on:
+While everything ships from `main`, no release branch is needed.
 
-1. At a `vMAJOR.0.0` stable release, cut `release-MAJOR.x` from the tag (e.g. `release-1.x` from `v1.0.0`).
-2. Backport a fix: land it on `main`, then cherry-pick to the release branch.
-3. Tag the next patch/minor from the branch (e.g. `v1.4.1`); the release workflow advances the `v1` alias.
+Publishing a patch for an older major is **not currently supported by the release automation**. Both the release and image workflows enforce the forward-only rule, so a tag such as `v1.4.1` pushed after `v2.0.0` exists is rejected before anything is published. Supporting it means giving both workflows a manual path that carries the backward-release confirmation through to the publishing script; that path does not exist today, so do not document or promise a backport until it does.
 
-Do not pre-create empty release branches; create `release-N.x` only when there is a real backport to make.
+`RELEASE_ALLOW_BACKWARD=true` exists for one narrow local operation: recovering a missing `backend/` module tag on an already-published older release, with `RELEASE_TAGS_ONLY=true`. That combination exits before any artifact is published. Never set it to work around an accidental tag; delete the tag instead.
 
 ## Building images from a branch
 
