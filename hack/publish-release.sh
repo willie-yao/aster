@@ -146,6 +146,20 @@ if [[ $(go env GOVERSION) != go1.26.8 ]]; then
   exit 1
 fi
 
+release_notes="changelog/$TAG.md"
+if [[ ! -s $release_notes ]] || ! grep -q '[^[:space:]]' "$release_notes"; then
+  echo "missing release notes: $release_notes" >&2
+  exit 1
+fi
+# Match the canonical index entry for this exact tag. A prose mention, a
+# commented-out line, or an entry labelled with a different version all leave
+# the release undiscoverable from the index and must not satisfy this check.
+tag_pattern=${TAG//./\\.}
+if ! grep -Eq "^- \[${tag_pattern}\]\(changelog/${tag_pattern}\.md\)" CHANGELOG.md; then
+  echo "release notes are not indexed in CHANGELOG.md: $release_notes" >&2
+  exit 1
+fi
+
 chart_version=${TAG#v}
 TAG="$TAG" \
   IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
@@ -284,7 +298,7 @@ ensure_release_tag_pair
 helm push "$app_pkg" "$registry"
 ensure_release_tag_pair
 
-release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --generate-notes --verify-tag)
+release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --notes-file "$release_notes" --verify-tag)
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)
 fi

@@ -17,11 +17,11 @@ See [CHANGELOG.md](../CHANGELOG.md) for what bumps major/minor/patch. Note that 
 
 ## Release notes
 
-Each release has one notes file named for its tag, `changelog/<tag>.md`, listed in the `CHANGELOG.md` index. The file holds the notes body alone, without a version heading of its own.
+Each release has one notes file named for its tag, `changelog/<tag>.md`, listed in the `CHANGELOG.md` index. The file holds the notes body alone, without a version heading of its own. It is published verbatim as the GitHub Release body, so the release page shows the curated notes rather than a generated commit list. The publisher refuses to release a tag whose notes file is missing, empty, or absent from the index.
 
 Notes are assembled from the `release-note` blocks of the pull requests merged since the previous tag. A prerelease covers everything since the previous tag; a stable release covers everything since the previous *stable* tag, so it tells the whole story of the versions that led up to it.
 
-Links to repository files resolve from `changelog/`, so a doc link is `../docs/<file>.md`. Rewrite any root-relative link copied out of a `release-note` block.
+Because the notes are published verbatim as the release body, relative paths in them do not resolve against the repository. Link repository files with absolute URLs pinned to the tag, such as `https://github.com/willie-yao/aster/blob/<tag>/docs/<file>.md`. Rewrite any relative or root-relative link copied out of a `release-note` block.
 
 ## Cutting a release
 
@@ -36,7 +36,7 @@ Links to repository files resolve from `changelog/`, so a doc link is `../docs/<
 3. The `Release` workflow (`.github/workflows/release.yml`) runs on the tag:
    - re-runs the full CI gate against the tagged commit,
    - verifies both release tags identify the reviewed commit; if the root tag exists and only the module tag is missing, it creates the module tag with a non-force push before publishing,
-   - creates the GitHub Release with auto-generated notes (marked **pre-release** when the tag has a `-beta`/`-rc` suffix),
+   - creates the GitHub Release from `changelog/<tag>.md` (marked **pre-release** when the tag has a `-beta`/`-rc` suffix),
    - packages the application and platform Helm charts at the release version, pushes them to `oci://ghcr.io/<owner>/charts/aster` and `oci://ghcr.io/<owner>/charts/aster-platform`, and attaches `aster-<version>.tgz` and `aster-platform-<version>.tgz` to the release,
    - cross-compiles the `aster` CLI for Linux and macOS on amd64 and arm64, attaches `aster-<tag>-<target>` for each target, an exact source archive, a machine-readable release manifest, and `SHA256SUMS`,
    - waits for the matching engine, remote-fixer, and Agent Sandbox Fix executor images and verifies their embedded source revision before publishing charts, the GitHub Release, or the stable major alias,
