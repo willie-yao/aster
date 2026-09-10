@@ -5,12 +5,69 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 script=$root/hack/publish-release.sh
 real_git=$(command -v git)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/aster-release-test.XXXXXX")
+
+# The publisher validates release notes against the real repository, so the
+# fixture tags need indexed notes files. Each file is reserved with noclobber,
+# so an existing file is never overwritten and a second concurrent run loses the
+# race atomically. The first entry is the reservation that provides mutual
+# exclusion: no test may remove or rewrite it, so it is held for the whole run.
+# v1.2.3.md is last because the notes-validation tests below delete and rewrite
+# it. Only files this run reserved are removed, and index lines carry a per-run
+# marker, so concurrent runs never strip each other's entries.
+changelog=$root/CHANGELOG.md
+notes_fixtures=("$root/changelog/v1.9.5.md" "$root/changelog/v1.2.3-rc.1.md" "$root/changelog/v1.2.3.md")
+fixture_marker=" - release-test fixture $$"
+created_fixtures=()
+write_fixtures() {
+  local notes
+  for notes in "${notes_fixtures[@]}"; do
+    if ! (set -o noclobber; : > "$notes") 2>/dev/null; then
+      echo "refusing to overwrite existing release notes: $notes" >&2
+      exit 1
+    fi
+    created_fixtures+=("$notes")
+    printf 'Fixture release notes.\n' > "$notes"
+    printf -- '- [%s](changelog/%s)%s\n' \
+      "$(basename "$notes" .md)" "$(basename "$notes")" "$fixture_marker" >> "$changelog"
+  done
+}
+restore_fixtures() {
+  ((${#created_fixtures[@]})) || return 0
+  # Undo every shared-file mutation while the reservation is still held, then
+  # release it last. Removing it first would let a second run acquire it and
+  # append index lines that this run's rewrite would then overwrite.
+  if ! { grep -v -- "$fixture_marker\$" "$changelog" > "$tmp/CHANGELOG.restored" &&
+    cat "$tmp/CHANGELOG.restored" > "$changelog"; }; then
+    echo "failed to strip fixture entries from $changelog; remove lines ending in '$fixture_marker' by hand" >&2
+    return 1
+  fi
+  local reservation=${created_fixtures[0]}
+  local rest=()
+  ((${#created_fixtures[@]} > 1)) && rest=("${created_fixtures[@]:1}")
+  if ((${#rest[@]})) && ! rm -f "${rest[@]}"; then
+    echo "failed to remove fixture notes: ${rest[*]}" >&2
+    return 1
+  fi
+  if ! rm -f "$reservation"; then
+    echo "failed to release fixture reservation: $reservation" >&2
+    return 1
+  fi
+  created_fixtures=()
+}
+
 cleanup() {
+  restore_fixtures || true
   find "$tmp" -type f -delete 2>/dev/null || true
   find "$tmp" -type l -delete 2>/dev/null || true
   find "$tmp" -depth -type d -exec rmdir {} \; 2>/dev/null || true
 }
+on_signal() {
+  cleanup
+  exit 130
+}
 trap cleanup EXIT
+trap on_signal INT TERM HUP
+write_fixtures
 mkdir -p "$tmp/bin"
 log=$tmp/operations.log
 
@@ -350,6 +407,9 @@ release_line = lines[release]
 assert 'aster-1.2.3.tgz' in release_line
 assert 'aster-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
+assert '--notes-file' in release_line, release_line
+assert 'changelog/v1.2.3.md' in release_line, release_line
+assert '--generate-notes' not in release_line, release_line
 assert 'SHA256SUMS' in release_line
 expected = [
     'aster-1.2.3.tgz',
@@ -373,8 +433,51 @@ PY
 : > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3-rc.1 REPOSITORY_OWNER=example "$script")
 grep -F 'gh release create ' "$log" | grep -Fq -- '--prerelease'
+grep -F 'gh release create ' "$log" | grep -Fq -- 'changelog/v1.2.3-rc.1.md'
 if grep -Fq 'git push origin' "$log"; then
   echo 'pre-release moved the stable major alias' >&2
+  exit 1
+fi
+
+# A release whose notes file is missing, whitespace-only, or not indexed under
+# its own tag must be rejected before anything is published. Paired-tag repair
+# deliberately runs earlier, so these assert on published artifacts rather than
+# on tag state.
+: > "$log"
+rm -f "$root/changelog/v1.2.3.md"
+if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-notes.out" 2>&1; then
+  echo 'release without notes was accepted' >&2
+  exit 1
+fi
+grep -Fq 'missing release notes: changelog/v1.2.3.md' "$tmp/missing-notes.out"
+if grep -Eq '^(helm push|gh release create|go build|git tag -f|git push origin)' "$log"; then
+  echo 'missing release notes published charts, assets, or a release' >&2
+  exit 1
+fi
+
+: > "$log"
+printf '   \n\t\n' > "$root/changelog/v1.2.3.md"
+if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/blank-notes.out" 2>&1; then
+  echo 'release with whitespace-only notes was accepted' >&2
+  exit 1
+fi
+grep -Fq 'missing release notes: changelog/v1.2.3.md' "$tmp/blank-notes.out"
+
+: > "$log"
+printf 'Unindexed fixture notes.\n' > "$root/changelog/v1.2.3.md"
+# Drop the canonical entry so only the commented-out and mislabelled ones remain.
+good_entry="- [v1.2.3](changelog/v1.2.3.md)$fixture_marker"
+grep -vxF -- "$good_entry" "$changelog" > "$tmp/CHANGELOG.trimmed"
+cat "$tmp/CHANGELOG.trimmed" > "$changelog"
+printf -- '<!-- - [v1.2.3](changelog/v1.2.3.md) -->%s\n' "$fixture_marker" >> "$changelog"
+printf -- '- [v1.2.4](changelog/v1.2.3.md)%s\n' "$fixture_marker" >> "$changelog"
+if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/unindexed-notes.out" 2>&1; then
+  echo 'release indexed only by a commented-out or mislabelled entry was accepted' >&2
+  exit 1
+fi
+grep -Fq 'release notes are not indexed in CHANGELOG.md: changelog/v1.2.3.md' "$tmp/unindexed-notes.out"
+if grep -Eq '^(helm push|gh release create|go build|git tag -f|git push origin)' "$log"; then
+  echo 'unindexed release notes published charts, assets, or a release' >&2
   exit 1
 fi
 
