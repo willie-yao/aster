@@ -8,7 +8,7 @@ See [Local development](docs/development.md) for setup and [Testing](docs/testin
 
 ## Prerequisites
 
-- Go 1.25 as declared by `backend/go.mod`
+- Go 1.26 as declared by `backend/go.mod`
 - Node.js 20 or newer
 - npm
 - `staticcheck` for the full backend validation

@@ -141,8 +141,8 @@ fi
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 
 export GOTOOLCHAIN=local
-if [[ $(go env GOVERSION) != go1.25.12 ]]; then
-  echo "release requires Go 1.25.12 with GOTOOLCHAIN=local" >&2
+if [[ $(go env GOVERSION) != go1.26.8 ]]; then
+  echo "release requires Go 1.26.8 with GOTOOLCHAIN=local" >&2
   exit 1
 fi
 

@@ -3,6 +3,7 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Typography from "@mui/material/Typography";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "../hooks/useAuth";
 import { escalationActive, type EscalationView } from "../lib/escalation";
 import { soft } from "../theme";
 import { overviewTypography } from "../theme/overview";
@@ -52,6 +53,8 @@ function EscalationPanelForSubject({
   disclaimer,
   enabled,
 }: EscalationPanelProps) {
+  const auth = useAuth();
+  const authenticated = auth.status === "authenticated";
   const [view, setView] = useState<EscalationView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -98,15 +101,24 @@ function EscalationPanelForSubject({
   }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !authenticated) {
+      ++generation.current;
+      requestKey.current = null;
+      claimFocus.current = false;
+      startingRef.current = false;
+      setStarting(false);
+      setView(null);
+      setError(null);
+      return;
+    }
     void reload();
-  }, [enabled, reload]);
+  }, [authenticated, enabled, reload]);
 
   useEffect(() => {
-    if (!enabled || !escalationActive(view?.state)) return;
+    if (!enabled || !authenticated || !escalationActive(view?.state)) return;
     const timer = setInterval(() => void reload(), pollIntervalMs);
     return () => clearInterval(timer);
-  }, [enabled, reload, view?.state]);
+  }, [authenticated, enabled, reload, view?.state]);
 
   const active = escalationActive(view?.state ?? "not_started");
   // A start that reaches either of these has replaced the button, so the focus
@@ -128,7 +140,7 @@ function EscalationPanelForSubject({
   }, [view?.state]);
 
   async function onStart() {
-    if (startingRef.current) return;
+    if (!authenticated || startingRef.current) return;
     startingRef.current = true;
     claimFocus.current = true;
     setStarting(true);
@@ -148,12 +160,37 @@ function EscalationPanelForSubject({
         setError(errorMessage(startError));
       }
     } finally {
-      startingRef.current = false;
-      if (!cancelled.current) setStarting(false);
+      if (requestKey.current === key && issued === generation.current) {
+        startingRef.current = false;
+        if (!cancelled.current) setStarting(false);
+      }
     }
   }
 
   if (!enabled) return null;
+
+  if (auth.status === "loading") {
+    return (
+      <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
+        Checking operator sign-in...
+      </Typography>
+    );
+  }
+
+  if (auth.status === "anonymous") {
+    return (
+      <Box sx={{ mt: 1, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+        <Typography color="textSecondary" sx={overviewTypography.description}>
+          Sign in to view or start deeper analysis.
+        </Typography>
+        <Button size="small" variant="outlined" onClick={auth.signIn}>
+          Sign in
+        </Button>
+      </Box>
+    );
+  }
+
+  if (!authenticated) return null;
 
   const state = view?.state ?? "not_started";
   // Failure states speak through the alert below, so they leave this empty.

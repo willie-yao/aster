@@ -39,7 +39,7 @@ The default published pair is:
 <engine-ref> = v0.10.0-rc.1
 ```
 
-This published pair is the default for Pages setup. It predates the Kubernetes storage flags required by this skill. For Kubernetes, use a current clean Aster checkout or a later exact release or full commit SHA whose `onboard -h` output advertises both storage flags. Stop before planning when that surface is absent.
+This published prerelease pair is the default for Pages setup and supports the Kubernetes storage flags required by this skill. For Kubernetes, verify that the selected CLI's `onboard -h` output advertises both storage flags. Stop before planning when that surface is absent.
 
 For an explicitly requested exact release tag or full commit SHA, use that exact ref in the module command and as `<engine-ref>`. Do not use `main`, `latest`, a branch name, or a moving major alias for a standard Pages output.
 

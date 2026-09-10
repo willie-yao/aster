@@ -48,7 +48,7 @@ func TestConsumerSetupAgentSkill(t *testing.T) {
 		"Run discovery as soon as the source is known", "Do not ask for a slug",
 		"separate workspaces, plans, handoffs", "fetch the canonical", "stale or fork-only local engine", "hard scope boundary",
 		"manifest/locations.json", "manifest/consumer-files.sha256", "reports/setup-summary.md",
-		"@v0.10.0-rc.1", "<engine-ref>", "-engine-ref <engine-ref>", "default for Pages setup", "predates the Kubernetes",
+		"@v0.10.0-rc.1", "<engine-ref>", "-engine-ref <engine-ref>", "default for Pages setup", "supports the Kubernetes storage flags",
 		"exact release tag or full commit SHA", "<engine-repository> = willie-yao/aster",
 		"<engine-repository-url> = https://github.com/willie-yao/aster",
 		"willie-yao/aster/.github/workflows/reusable-deploy.yml",

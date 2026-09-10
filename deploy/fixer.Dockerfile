@@ -2,7 +2,7 @@
 # agent-runtime fix-PR generator. Unlike the default distroless engine image,
 # this uses a glibc base so opencode (a Bun-compiled binary) runs. Opt-in and
 # separate; the default image stays minimal.
-FROM golang:1.25.12-bookworm AS build
+FROM golang:1.26.8-bookworm AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download

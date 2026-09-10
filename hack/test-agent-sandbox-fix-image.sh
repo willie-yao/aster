@@ -110,7 +110,7 @@ tool_versions=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$imag
   opencode --version
 ')
 printf '%s\n' "$tool_versions"
-printf '%s\n' "$tool_versions" | grep -Fxq 'go version go1.25.12 linux/amd64'
+printf '%s\n' "$tool_versions" | grep -Fxq 'go version go1.26.8 linux/amd64'
 printf '%s\n' "$tool_versions" | grep -Fxq 'local'
 printf '%s\n' "$tool_versions" | grep -Fxq 'git version 2.54.0'
 printf '%s\n' "$tool_versions" | grep -Fxq '1.18.2'
@@ -156,7 +156,7 @@ toolchain_guard=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$im
   set -eu
   mkdir /workspace/newer-toolchain
   cd /workspace/newer-toolchain
-  printf "module example.com/newer\n\ngo 1.26.0\n" > go.mod
+  printf "module example.com/newer\n\ngo 1.27.0\n" > go.mod
   set +e
   output=$(go list ./... 2>&1)
   status=$?
@@ -178,7 +178,7 @@ expected_identity="fixexecutor version=${expected_version} commit=${expected_com
   exit 1
 }
 build_info=$(docker run --rm "${runtime_args[@]}" --entrypoint go "$image" version -m /usr/local/bin/fixexecutor)
-printf '%s\n' "$build_info" | grep -Fq '/usr/local/bin/fixexecutor: go1.25.12'
+printf '%s\n' "$build_info" | grep -Fq '/usr/local/bin/fixexecutor: go1.26.8'
 printf '%s\n' "$build_info" | grep -Fq $'path\tgithub.com/willie-yao/aster/backend/cmd/fixexecutor'
 
 docker volume create "$source_volume" >/dev/null
@@ -340,7 +340,7 @@ expected = [
 ]
 assert [entry["argv"] for entry in commands] == expected, commands
 assert all(entry["exit_code"] == 0 and not entry.get("timed_out", False) for entry in commands), commands
-assert "go version go1.25.12 linux/amd64" in commands[0].get("stdout", ""), commands[0]
+assert "go version go1.26.8 linux/amd64" in commands[0].get("stdout", ""), commands[0]
 patch = result["diff"]
 assert "diff --git a/message.go b/message.go" in patch, patch
 open(patch_path, "w", encoding="utf-8").write(patch)

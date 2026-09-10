@@ -4,7 +4,7 @@ This guide is for contributors working on the engine. See [`CONTRIBUTING.md`](..
 
 ## Prerequisites
 
-- Go 1.25 as declared by `backend/go.mod`
+- Go 1.26 as declared by `backend/go.mod`
 - Node.js 20 or newer
 - npm
 - `staticcheck` for full backend validation
