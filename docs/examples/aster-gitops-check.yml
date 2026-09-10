@@ -14,9 +14,9 @@ permissions:
   contents: read
 
 env:
-  ASTER_RELEASE_TAG: v0.9.0
+  ASTER_RELEASE_TAG: replace-with-release-tag
   ASTER_BINARY_SHA256: replace-with-reviewed-sha256
-  ASTER_CHART_VERSION: 0.9.0
+  ASTER_CHART_VERSION: replace-with-chart-version
   ASTER_RELEASE: replace-with-release
   ASTER_NAMESPACE: replace-with-namespace
   ASTER_EXECUTION_NAMESPACE: ""
