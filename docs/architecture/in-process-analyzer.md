@@ -147,7 +147,7 @@ The analyzer publishes evidence and diagnosis. Other packages consume that outpu
 | Cache identity and acceptance | `backend/internal/ai/service.go`, `backend/internal/ai/cache.go`, `backend/internal/ai/cache_acceptance.go` |
 | Public and cache analysis projection | `backend/internal/ai/analysis_record.go`, `backend/internal/models/models.go`, `backend/internal/output/` |
 | Private trace and usage output | `backend/internal/ai/trace.go`, `backend/internal/ai/trace_store.go`, `backend/internal/aiusage/` |
-| Recurring patterns | `backend/internal/patterns/`, `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, `backend/internal/ai/pattern_verification.go` |
+| Recurring patterns | `backend/internal/patterns/`, `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, `backend/internal/models/patternlifecycle.go` |
 | Analysis chat and published-analysis resolution | `backend/internal/analysischat/chat.go`, `backend/internal/analysischat/resolution.go` |
 | Confirmed action requests | `backend/internal/actions/requests.go`, `backend/internal/actions/request_generation.go`, `backend/internal/actions/request_state.go`, `backend/internal/actions/request_cleanup.go` |
 | Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |

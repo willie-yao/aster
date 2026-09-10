@@ -189,11 +189,23 @@ func TestReasoningEffortToolLoopRetainsEffort(t *testing.T) {
 			}))
 			defer server.Close()
 
-			registry := tools.NewRegistry()
-			registry.Register(&stubTool{})
 			client := NewClientWithOptions(Options{API: apiMode, Endpoint: server.URL, Model: "m", ReasoningEffort: ReasoningEffortXHigh})
-			if _, err := client.ToolLoop(context.Background(), "system", "user", registry, []string{"echo"}, &tools.Env{}, ToolLoopOptions{MaxIters: 2}); err != nil {
+			result, err := client.runToolLoop(context.Background(), toolLoopParams{
+				messages: []modelMessage{
+					{Role: "system", Content: strPtr("system")},
+					{Role: "user", Content: strPtr("user")},
+				},
+				schemas:  []tools.Schema{{Type: "function", Function: tools.FunctionDecl{Name: "echo"}}},
+				maxIters: 2,
+				dispatch: func(context.Context, modelToolCall) (string, map[string]interface{}, tools.Result) {
+					return `{"echo":"hi"}`, map[string]interface{}{"echo": "hi"}, tools.Result{}
+				},
+			})
+			if err != nil {
 				t.Fatal(err)
+			}
+			if result.Content != "done" {
+				t.Fatalf("content = %q, want done", result.Content)
 			}
 			if len(requests) != 2 {
 				t.Fatalf("requests = %d, want 2", len(requests))

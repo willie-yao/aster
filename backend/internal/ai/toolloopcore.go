@@ -39,7 +39,6 @@ type toolLoopDecision struct {
 	stop      bool
 	err       error
 	prompt    string // corrective user message; empty means accept
-	forceTool string // the next turn must call exactly this tool
 	grantIter bool   // the corrective round does not consume from maxIters
 }
 
@@ -55,12 +54,6 @@ func toolLoopCorrect(prompt string) toolLoopDecision {
 	return toolLoopDecision{prompt: prompt}
 }
 
-// forcing pins the corrective turn to one tool call.
-func (d toolLoopDecision) forcing(name string) toolLoopDecision {
-	d.forceTool = name
-	return d
-}
-
 // granting lets the corrective round run without spending an iteration.
 func (d toolLoopDecision) granting() toolLoopDecision {
 	d.grantIter = true
@@ -73,12 +66,8 @@ func (d toolLoopDecision) corrective() bool { return !d.stop && d.prompt != "" }
 // hook may rewrite Envelope before it is appended to the conversation.
 type toolLoopDispatch struct {
 	Call     modelToolCall
-	Forced   bool
 	Envelope string
 	Payload  map[string]interface{}
-	// Result is the raw tool result when the dispatcher exposes one. It is
-	// zero for dispatchers that do their own byte accounting.
-	Result tools.Result
 }
 
 // toolLoopParams configures one run of the shared tool-calling loop. Only
@@ -106,9 +95,6 @@ type toolLoopParams struct {
 	onTurn func(modelMessage)
 	// onAnswer decides what to do with a tools-free answer. A nil hook accepts.
 	onAnswer func(toolLoopAnswer) toolLoopDecision
-	// onForcedTurn fires just before a turn pinned to one tool is issued, so a
-	// caller can count forced attempts that actually reach the model.
-	onForcedTurn func(tool string)
 	// onDispatch observes each dispatched call and may rewrite its envelope.
 	onDispatch func(*toolLoopDispatch)
 	// progress reports loop position for caller-side status reporting.
@@ -178,7 +164,6 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		parallelToolCalls = &value
 	}
 
-	forcedName := ""
 	for iter := 0; iter < maxIters; iter++ {
 		if iter > 0 && params.progress != nil {
 			params.progress(toolLoopPhaseTurn)
@@ -198,14 +183,6 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		request := modelRequest{
 			Model: c.model, Messages: messages, Tools: params.schemas,
 			ParallelToolCalls: parallelToolCalls,
-		}
-		if forcedName != "" {
-			request.ToolChoice = &ToolChoice{Name: forcedName}
-			parallel := false
-			request.ParallelToolCalls = &parallel
-			if params.onForcedTurn != nil {
-				params.onForcedTurn(forcedName)
-			}
 		}
 		providerStart := time.Now()
 		response, err := c.callModelRequest(ctx, request)
@@ -247,7 +224,6 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			if decision.corrective() {
 				messages = appendToolsFreeAssistant(messages, message)
 				messages = append(messages, modelMessage{Role: "user", Content: strPtr(decision.prompt)})
-				forcedName = decision.forceTool
 				if decision.grantIter {
 					maxIters++
 				}
@@ -258,13 +234,10 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			result.Content = content
 			return result, nil
 		}
-		forced := forcedName != ""
-		forcedName = ""
-
 		if params.progress != nil {
 			params.progress(toolLoopPhaseDispatch)
 		}
-		toolCalls, dropped := limitToolCalls(message.ToolCalls, params.singleToolCall || forced)
+		toolCalls, dropped := limitToolCalls(message.ToolCalls, params.singleToolCall)
 		if dropped > 0 {
 			log.Printf("  ⤵ single_tool_call: executing 1 of %d tool calls, dropping %d", len(message.ToolCalls), dropped)
 		}
@@ -289,11 +262,10 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		messages = append(messages, skippedOutputs...)
 
 		for _, toolCall := range toolCalls {
-			envelope, payload, toolResult := params.dispatch(ctx, toolCall)
+			envelope, payload, _ := params.dispatch(ctx, toolCall)
 			result.Calls++
 			dispatched := toolLoopDispatch{
-				Call: toolCall, Forced: forced, Envelope: envelope,
-				Payload: payload, Result: toolResult,
+				Call: toolCall, Envelope: envelope, Payload: payload,
 			}
 			if params.onDispatch != nil {
 				params.onDispatch(&dispatched)

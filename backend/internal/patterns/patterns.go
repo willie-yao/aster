@@ -26,10 +26,6 @@ type observedAnalyzer interface {
 	AnalyzePatternWithOptions(ctx context.Context, jobID, subject string, failures []ai.PatternFailure, options ai.PatternAnalyzeOptions) (*models.PatternAnalysis, error)
 }
 
-type remediationVerifier interface {
-	VerifyPatternRemediation(context.Context, models.PatternAnalysis, models.JobDetail) (models.PatternRemediationVerification, error)
-}
-
 const maxPatternAttempts = 2
 
 // AnalyzeStats records eligible jobs and completed or failed correlations.
@@ -137,7 +133,6 @@ func AnalyzeDetailedWithOptions(ctx context.Context, analyzer Analyzer, details 
 			errs = append(errs, fmt.Errorf("%s: %w", d.Name, err))
 			continue
 		}
-		applyRemediationVerification(ctx, analyzer, pa, *d)
 		if applyAnalysis(d, pa) {
 			result.Stats.Completed++
 		}
@@ -182,7 +177,6 @@ func AnalyzeConcurrent(ctx context.Context, analyzer Analyzer, details []models.
 			log.Printf("  ⚠ pattern analysis failed for %s: category=%s", d.Name, ai.PatternFailureCategoryOf(result.err))
 			continue
 		}
-		applyRemediationVerification(ctx, analyzer, result.pa, *d)
 		if applyAnalysis(d, result.pa) {
 			stats.Completed++
 		}
@@ -276,24 +270,6 @@ func applyAnalysis(detail *models.JobDetail, pa *models.PatternAnalysis) bool {
 	}
 	log.Printf("  🔗 pattern analysis for %s across %d builds: %s", detail.Name, pa.BuildsAnalyzed, verdict)
 	return true
-}
-
-func applyRemediationVerification(ctx context.Context, analyzer Analyzer, pattern *models.PatternAnalysis, detail models.JobDetail) {
-	if pattern == nil || !models.PatternAllowsActions(*pattern) || !pattern.Systemic {
-		return
-	}
-	verifier, ok := analyzer.(remediationVerifier)
-	if !ok {
-		return
-	}
-	verification, err := verifier.VerifyPatternRemediation(ctx, *pattern, detail)
-	if err != nil {
-		pattern.RemediationVerification = &models.PatternRemediationVerification{
-			State: models.PatternRemediationInconclusive, Reason: "Pinned source verification could not be completed.",
-		}
-		return
-	}
-	pattern.RemediationVerification = &verification
 }
 
 // CollectRecurring gathers systemic verdicts, ordered by confidence and span.

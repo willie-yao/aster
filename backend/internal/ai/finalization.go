@@ -119,12 +119,8 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 			phase = "final_answer"
 			items = responsesAssistantProviderItem(content, phase)
 		}
-		captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, modelMessage{
-			Role: "assistant", Content: strPtr(content), Phase: phase, ProviderItems: items,
-		}))
 		return content, items, true
 	}
-	captureToolLoopContinuation(ctx, c, appendToolsFreeAssistant(messages, resp.Message))
 	if resp.Message.Content != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "success", Status: "plain_content"})
 		return *resp.Message.Content, resp.Message.ProviderItems, true
