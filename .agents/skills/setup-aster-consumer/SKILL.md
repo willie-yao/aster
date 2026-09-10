@@ -35,8 +35,8 @@ Every Pages module-origin, tag, commit, and availability check must use this exa
 The default published pair is:
 
 ```text
-<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10
-<engine-ref> = v0.9.0-rc.10
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1
+<engine-ref> = v0.10.0-rc.1
 ```
 
 This published pair is the default for Pages setup. It predates the Kubernetes storage flags required by this skill. For Kubernetes, use a current clean Aster checkout or a later exact release or full commit SHA whose `onboard -h` output advertises both storage flags. Stop before planning when that surface is absent.
@@ -65,7 +65,7 @@ Record the full `git rev-parse HEAD` as `<selected-commit>`, worktree state, and
 Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.9.0-rc.10 onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 onboard ...
 ```
 
 Use one form consistently as `<aster>` for discovery, planning, application, and doctor. When the request asks for the current or latest engine, fetch the canonical Aster URL, compare `HEAD` with its current `main`, and record both SHAs. If the checkout is stale, dirty, fork-only, or its primary branch must remain untouched, create a detached engine worktree at the reviewed official `main` commit under the task workspace and use it for every command. Do not silently use a stale or fork-only local engine merely because it is the current working directory. For Pages, use that full reviewed official commit SHA as both the module source and `<engine-ref>`, never the mutable name `main`. Preserve an explicitly requested exact ref or commit.
