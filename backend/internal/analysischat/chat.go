@@ -875,7 +875,7 @@ func requestFailureKind(err error) string {
 		return failureProvider
 	case errors.Is(err, ErrResponseValidationFailed):
 		return failureValidation
-	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
+	case errors.Is(err, sourceinvestigation.ErrUnavailable):
 		return failureSource
 	default:
 		return failureModel
