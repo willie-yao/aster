@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
@@ -297,61 +298,59 @@ func TestNewRejectsInvalidReasoningEffortBeforeProviderIO(t *testing.T) {
 	}
 }
 
-// The planner preserves the configured analysis source repository.
-func TestReusePlannerPreservesAnalysisSourceRepository(t *testing.T) {
-	dir := t.TempDir()
-	write := func(path, content string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+func TestReusePlannerUsesOnlyAcceptanceInputs(t *testing.T) {
+	configured := &Project{
+		Config: &project.Config{AI: &project.AI{Agentic: project.Agentic{
+			MinToolCalls: 3, MinGCSBytes: 100,
+			Critique: project.AgenticCritique{CachePolicy: project.CritiqueCachePolicyStrict},
+		}}},
+		CacheGenerationFingerprint: "generation",
 	}
-	write(filepath.Join(dir, "project.yaml"), `id: test
-name: Test
-discovery:
-  testgrid_dashboard: test
-storage:
-  provider: local
-  base: /fixtures
-branding:
-  title: Test
-  base_path: /
-  site_url: https://example.invalid
-  source_repo:
-    owner: example
-    name: project
-ai:
-  tools: [filesystem]
-`)
-	write(filepath.Join(dir, "prompts", "system.md"), "Investigate artifacts.\n")
-	cfg, err := project.Load(filepath.Join(dir, "project.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadProject(dir, cfg, DeploymentConfig{
-		API: "chat_completions", Endpoint: "https://model.invalid/v1/chat/completions", Model: "model",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	planner := NewReusePlanner(loaded)
+	planner := NewReusePlanner(configured)
 	if planner == nil {
 		t.Fatal("planner was not created")
 	}
-	sourceRepo := loaded.AnalysisSource
-	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
-		sourceRepo = cfg.EffectiveAnalysisSourceRepo()
+	if !planner.NeedsAnalysis(nil) {
+		t.Fatal("missing analysis should need work")
 	}
-	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
-		t.Fatal("test project resolved no analysis source repository")
-	}
-	owner, name := planner.SourceRepo()
-	if owner != sourceRepo.Owner || name != sourceRepo.Name {
-		t.Fatalf("planner source repo = %s/%s, want %s/%s", owner, name, sourceRepo.Owner, sourceRepo.Name)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*models.TestCase)
+		want   bool
+	}{
+		{name: "accepted without provider or prompt"},
+		{name: "tool floor", mutate: func(tc *models.TestCase) { tc.AIAnalysis.ToolCalls-- }, want: true},
+		{name: "evidence floor", mutate: func(tc *models.TestCase) { tc.AIAnalysis.GCSBytes-- }, want: true},
+		{name: "build-specific evidence floor", mutate: func(tc *models.TestCase) {
+			tc.Source = models.TestCaseSourceBuild
+			tc.AIAnalysis.GCSBytes = 0
+		}},
+		{name: "critique policy", mutate: func(tc *models.TestCase) {
+			tc.AIAnalysis.CritiquePassed = false
+			tc.AIAnalysis.CritiqueSoftWarnings = []string{"remediation.punt"}
+		}, want: true},
+		{name: "generation", mutate: func(tc *models.TestCase) { tc.AIAnalysis.CacheGeneration = "old" }, want: true},
+		{name: "preliminary", mutate: func(tc *models.TestCase) {
+			tc.AIAnalysis.Disposition = models.AnalysisDispositionPreliminary
+		}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := &models.TestCase{
+				AISummary: &models.AISummary{Summary: "cached"},
+				AIAnalysis: &models.AIAnalysis{
+					GeneratedAt: time.Now().UTC().Format(time.RFC3339), Mode: ai.AgenticMode,
+					Disposition: models.AnalysisDispositionCitationsVerified,
+					ToolCalls:   3, GCSBytes: 100, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
+					CacheGeneration: "generation", ModelHash: "old-model", PromptHash: "old-prompt", SkillSetHash: "old-skills",
+				},
+			}
+			if tc.mutate != nil {
+				tc.mutate(failure)
+			}
+			if got := planner.NeedsAnalysis(failure); got != tc.want {
+				t.Fatalf("NeedsAnalysis = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }
 

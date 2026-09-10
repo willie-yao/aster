@@ -883,7 +883,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	}
 	cacheVerification := benchmarkCacheVerification{}
 	if benchmarkCacheReuseEnabled() && tc.AIAnalysis != nil {
-		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, service, cacheGeneration, jobID, bc, run, tc.AIAnalysis)
+		cacheVerification = verifyBenchmarkCacheReuse(t, client, clientOptions, serviceConfig.AgenticOptions, cacheGeneration, jobID, bc, tc.AIAnalysis)
 	}
 	critiquePolicy := ai.CritiqueCachePolicy(agentic.Critique.EffectiveCachePolicy())
 	evidenceCoverage := evidenceRecorder.coverage()
@@ -998,7 +998,7 @@ func benchmarkCacheReuseEnabled() bool {
 	return strings.TrimSpace(os.Getenv("BENCH_VERIFY_CACHE_REUSE")) == "1"
 }
 
-func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai.Options, service *ai.Service, cacheGeneration, jobID string, bc benchCase, run *models.BuildResult, analysis *models.AIAnalysis) benchmarkCacheVerification {
+func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai.Options, opts ai.AgenticOptions, cacheGeneration, jobID string, bc benchCase, analysis *models.AIAnalysis) benchmarkCacheVerification {
 	t.Helper()
 	out := benchmarkCacheVerification{LookupAttempted: true, CacheGeneration: cacheGeneration}
 	if analysis != nil {
@@ -1012,7 +1012,13 @@ func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai
 	out.CacheSaveSucceeded = true
 	reloadedClient := ai.NewClientWithOptions(clientOptions)
 	fresh := benchTestCase(bc)
-	policy := service.FailureCachePolicy(context.Background(), &http.Client{Timeout: 60 * time.Second}, run, fresh, bc.consecutiveFailures)
+	policy := ai.AgenticCachePolicy{
+		MinToolCalls: opts.MinToolCalls, MinGCSBytes: opts.MinGCSBytes,
+		CritiquePolicy: opts.CritiqueCachePolicy, CacheGeneration: cacheGeneration,
+	}
+	if fresh.Source == models.TestCaseSourceBuild {
+		policy.MinGCSBytes = 0
+	}
 	key := ai.AgenticCacheKeyForGeneration(universal.New().Name(), cacheGeneration, jobID, bc.buildID, bc.testName, fresh.FailureMessage)
 	result, reason := ai.LookupAgenticCache(reloadedClient.Cache(), key, policy)
 	out.LookupRejectionReason = reason
@@ -2063,10 +2069,7 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 		name: "cache-case", stableID: "0123456789abcdef0123", jobType: "periodic", jobName: "example", buildID: "123", testName: "failed test",
 		failureMsg: "failed", sourceRepo: [2]string{"example", "project"},
 	}
-	service := ai.NewService(ai.ServiceConfig{
-		Client: client, Module: universal.New(), SystemPrompt: "sys", CacheGeneration: generation,
-		AgenticOptions: ai.AgenticOptions{MinToolCalls: 1, MinGCSBytes: 50, CritiqueMaxRetries: 1},
-	})
+	opts := ai.AgenticOptions{MinToolCalls: 1, MinGCSBytes: 50, CritiqueMaxRetries: 1}
 	now := time.Now().UTC()
 	result := ai.FailureAnalysisResult{
 		Summary: &models.AISummary{GeneratedAt: now.Format(time.RFC3339), Summary: "summary"},
@@ -2084,11 +2087,10 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 	if err := client.Cache().StoreEntry(entry); err != nil {
 		t.Fatal(err)
 	}
-	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
 	result.Analysis.CachePersistenceAttempted = true
 	result.Analysis.CachePersistenceAccepted = true
 	requestsBefore := requests.Load()
-	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, generation, jobID, bc, run, result.Analysis)
+	got := verifyBenchmarkCacheReuse(t, client, clientOptions, opts, generation, jobID, bc, result.Analysis)
 	if delta := requests.Load() - requestsBefore; delta != 0 {
 		t.Fatalf("cache verification made %d provider requests, want 0", delta)
 	}
@@ -2100,15 +2102,11 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 
 func TestVerifyBenchmarkCacheReusePreservesPolicyRejection(t *testing.T) {
 	client, clientOptions, requests := newBenchmarkCacheTestClient(t)
-	service := ai.NewService(ai.ServiceConfig{
-		Client: client, Module: universal.New(), SystemPrompt: "sys", CacheGeneration: "generation",
-		AgenticOptions: ai.AgenticOptions{CritiqueCachePolicy: ai.CritiqueCachePolicyStrict},
-	})
+	opts := ai.AgenticOptions{CritiqueCachePolicy: ai.CritiqueCachePolicyStrict}
 	bc := benchCase{name: "case", stableID: "0123456789abcdef0123", jobName: "job", buildID: "1", testName: "test", failureMsg: "failed"}
-	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
 	analysis := &models.AIAnalysis{CachePolicyRejectionReason: string(ai.CacheRejectedCritiqueStrictWarning)}
 	requestsBefore := requests.Load()
-	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, "generation", "job", bc, run, analysis)
+	got := verifyBenchmarkCacheReuse(t, client, clientOptions, opts, "generation", "job", bc, analysis)
 	if delta := requests.Load() - requestsBefore; delta != 0 {
 		t.Fatalf("cache verification made %d provider requests, want 0", delta)
 	}

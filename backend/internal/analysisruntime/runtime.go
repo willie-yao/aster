@@ -446,29 +446,13 @@ func NewReusePlanner(project *Project) *ai.Service {
 	if project == nil || project.Config == nil || project.Config.AI == nil {
 		return nil
 	}
-	client := ai.NewClientWithOptions(ai.Options{
-		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
-		ReasoningEffort: project.Provider.ReasoningEffort,
-	})
-	// Preserve the analyzer's source repository for prompt provenance.
-	sourceRepo := project.AnalysisSource
-	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
-		sourceRepo = project.Config.EffectiveAnalysisSourceRepo()
-	}
 	eff := project.Config.AI.EffectiveAgentic()
 	return ai.NewService(ai.ServiceConfig{
-		Client:          client,
-		Module:          universal.New(),
-		SystemPrompt:    project.SystemPrompt,
 		CacheGeneration: project.CacheGenerationFingerprint,
 		AgenticOptions: ai.AgenticOptions{
 			MinToolCalls:        eff.MinToolCalls,
 			MinGCSBytes:         eff.MinGCSBytes,
-			CritiqueMaxRetries:  *eff.Critique.MaxRetries,
 			CritiqueCachePolicy: ai.CritiqueCachePolicy(eff.Critique.EffectiveCachePolicy()),
 		},
-		Skills:          project.SkillSet,
-		SourceRepoOwner: sourceRepo.Owner,
-		SourceRepoName:  sourceRepo.Name,
 	})
 }

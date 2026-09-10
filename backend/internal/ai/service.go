@@ -136,8 +136,7 @@ func NewService(config ServiceConfig) *Service {
 	}
 }
 
-// SourceRepo returns the configured analysis source repository. It is part of
-// the effective prompt identity, so scheduling and publication must agree on it.
+// SourceRepo returns the configured analysis source repository.
 func (s *Service) SourceRepo() (owner, name string) {
 	return s.sourceRepoOwner, s.sourceRepoName
 }
@@ -194,8 +193,8 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	}
 	promptHash := s.analysisPromptHashWithSources(tc, basePrompt, sources)
 	cacheKey := s.agenticCacheKey(jobID, run.BuildID, tc.Name, tc.FailureMessage)
-	budgetSpent := s.preliminaryBudgetSpent(tc, cacheKey, promptHash)
-	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.reanalysisRequired(tc, promptHash, budgetSpent) {
+	budgetSpent := s.preliminaryBudgetSpent(tc, cacheKey)
+	if tc.AISummary != nil && tc.AIAnalysis != nil && !s.reanalysisRequired(tc, budgetSpent) {
 		s.refreshBuildFileLinks(ctx, httpClient, run, tc)
 		trace.Discard()
 		usageOutcome = aiusage.OutcomeCacheHit
@@ -384,25 +383,11 @@ func isUnavailableSummary(s *models.AISummary) bool {
 }
 
 // NeedsAnalysis reports whether the current analysis contract requires work.
-func (s *Service) NeedsAnalysis(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) bool {
+func (s *Service) NeedsAnalysis(tc *models.TestCase) bool {
 	if tc == nil || tc.AISummary == nil || tc.AIAnalysis == nil {
 		return true
 	}
-	consecutiveFailures = max(1, consecutiveFailures)
-	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	sources, _ := s.sourceCatalogForBuild(run)
-	return s.shouldReanalyzeWithPromptHash(tc, s.analysisPromptHashWithSources(tc, basePrompt, sources))
-}
-
-// FailureCachePolicy returns the current private-cache contract for one failure.
-func (s *Service) FailureCachePolicy(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) AgenticCachePolicy {
-	if s == nil {
-		return AgenticCachePolicy{}
-	}
-	consecutiveFailures = max(1, consecutiveFailures)
-	basePrompt := s.baseFailurePrompt(ctx, httpClient, run, tc, consecutiveFailures)
-	sources, _ := s.sourceCatalogForBuild(run)
-	return s.agenticCachePolicyFor(tc, s.analysisPromptHashWithSources(tc, basePrompt, sources), consecutiveFailures)
+	return s.shouldReanalyze(tc)
 }
 
 func (s *Service) baseFailurePrompt(ctx context.Context, httpClient *http.Client, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int) string {
@@ -458,15 +443,7 @@ func renderFailureCohortContext(context *FailureCohortContext) string {
 // shouldReanalyze returns true when a cached analysis must be discarded
 // because it predates the single agentic path or fails any current quality gate.
 func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
-	return s.shouldReanalyzeWithPrompt(tc, "")
-}
-
-func (s *Service) shouldReanalyzeWithPrompt(tc *models.TestCase, userPrompt string) bool {
-	return s.shouldReanalyzeWithPromptHash(tc, s.analysisPromptHash(tc, userPrompt))
-}
-
-func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash string) bool {
-	return s.reanalysisRequired(tc, promptHash, false)
+	return s.reanalysisRequired(tc, false)
 }
 
 // reanalysisRequired reports whether a cached analysis must be discarded.
@@ -475,7 +452,7 @@ func (s *Service) shouldReanalyzeWithPromptHash(tc *models.TestCase, promptHash 
 // it. A spent budget forgives only the quality floors that made the analysis
 // preliminary; contract version, generation, and entry validity still force
 // reanalysis.
-func (s *Service) reanalysisRequired(tc *models.TestCase, promptHash string, preliminaryBudgetSpent bool) bool {
+func (s *Service) reanalysisRequired(tc *models.TestCase, preliminaryBudgetSpent bool) bool {
 	if tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
@@ -486,7 +463,7 @@ func (s *Service) reanalysisRequired(tc *models.TestCase, promptHash string, pre
 		return true
 	}
 	preliminary := disposition == models.AnalysisDispositionPreliminary
-	reason := s.agenticRejection(tc, promptHash)
+	reason := s.agenticRejection(tc)
 	if reason == CacheAccepted {
 		return preliminary && !preliminaryBudgetSpent
 	}
@@ -519,11 +496,11 @@ func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
 // preliminary retry budget with nothing better to fall back on. An accepted
 // private entry is always preferred, because serving it costs no model call
 // and may carry a citation-verified result a concurrent analysis of the same key wrote.
-func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey, promptHash string) bool {
+func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey string) bool {
 	if s.client == nil || s.client.preliminaryAttempts(cacheKey) < maxPreliminaryAttempts {
 		return false
 	}
-	_, reason := LookupAgenticCache(s.client.cache, cacheKey, s.agenticCachePolicyFor(tc, promptHash, 0))
+	_, reason := LookupAgenticCache(s.client.cache, cacheKey, s.agenticCachePolicyFor(tc))
 	return reason != CacheAccepted
 }
 
@@ -532,10 +509,7 @@ func (s *Service) analysisPromptHash(tc *models.TestCase, userPrompt string) str
 }
 
 func (s *Service) analysisPromptHashWithSources(tc *models.TestCase, userPrompt string, sources *tools.SourceCatalog) string {
-	// The repository section is part of the prompt actually sent, and it decides
-	// how the model classifies cause ownership. Repointing the project's source
-	// repo must therefore invalidate cached analyses rather than reuse a
-	// classification made against the previous repository.
+	// Include repository context in the provenance of newly generated analyses.
 	effectiveSystemPrompt := s.systemPrompt + agToolDocs + agenticSourceContextSection(sources, s.sourceRepoOwner, s.sourceRepoName)
 	if tc != nil && tc.Source == models.TestCaseSourceBuild && userPrompt != "" {
 		return PromptFingerprint(effectiveSystemPrompt + "\x00" + userPrompt)
@@ -544,17 +518,13 @@ func (s *Service) analysisPromptHashWithSources(tc *models.TestCase, userPrompt 
 }
 
 // agenticRejection reports why a published analysis fails the current contract.
-func (s *Service) agenticRejection(tc *models.TestCase, expectedPromptHash string) CacheRejectionReason {
-	policy := s.agenticCachePolicyFor(tc, expectedPromptHash, 0)
+func (s *Service) agenticRejection(tc *models.TestCase) CacheRejectionReason {
+	policy := s.agenticCachePolicyFor(tc)
 	return AgenticResultRejection(FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, policy)
 }
 
-func (s *Service) agenticCachePolicyFor(tc *models.TestCase, expectedPromptHash string, consecutiveFailures int) AgenticCachePolicy {
-	wantHash := ""
-	if s.skillSet != nil {
-		wantHash = s.skillSet.Hash()
-	}
-	policy := agenticCachePolicy(s.client, s.agenticOptionsFor(tc), wantHash, expectedPromptHash, consecutiveFailures)
+func (s *Service) agenticCachePolicyFor(tc *models.TestCase) AgenticCachePolicy {
+	policy := agenticCachePolicy(s.agenticOptionsFor(tc))
 	policy.CacheGeneration = s.cacheGeneration
 	return policy
 }

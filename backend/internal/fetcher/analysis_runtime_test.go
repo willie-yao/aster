@@ -77,7 +77,7 @@ func TestCollectAIWorkPrioritizesMissingBuildAnalysis(t *testing.T) {
 		},
 	}}
 
-	work := collectAIWork(t.Context(), nil, details, nil, nil)
+	work := collectAIWork(details, nil)
 	if len(work) != 4 {
 		t.Fatalf("work items = %d, want 4", len(work))
 	}
@@ -90,7 +90,7 @@ func TestCollectAIWorkPrioritizesMissingBuildAnalysis(t *testing.T) {
 
 type namedAnalysisPlanner map[string]bool
 
-func (p namedAnalysisPlanner) NeedsAnalysis(_ context.Context, _ *http.Client, _ *models.BuildResult, tc *models.TestCase, _ int) bool {
+func (p namedAnalysisPlanner) NeedsAnalysis(tc *models.TestCase) bool {
 	return p[tc.Name]
 }
 
@@ -108,7 +108,7 @@ func TestCollectAIWorkUsesCurrentStalenessPlanner(t *testing.T) {
 			},
 		}},
 	}}
-	work := collectAIWork(t.Context(), nil, details, nil, namedAnalysisPlanner{"stale": true})
+	work := collectAIWork(details, namedAnalysisPlanner{"stale": true})
 	if len(work) != 2 || work[0].tc.Name != "stale" || work[1].tc.Name != "reusable" {
 		t.Fatalf("work order = %v, %v", work[0].tc.Name, work[1].tc.Name)
 	}
