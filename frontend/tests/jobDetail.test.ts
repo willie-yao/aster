@@ -120,6 +120,14 @@ test("job detail separates current observation from rolling reliability", () => 
   assert.equal(currentJobStatus("FAILING", runs), "FAILING");
 });
 
+test("job header keeps status on the right above mobile widths", () => {
+  const page = source("src/pages/JobDetailPage.tsx");
+  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<TechnicalIdentity"));
+
+  assert.match(header, /gridTemplateColumns: \{\s*xs: "minmax\(0, 1fr\)",\s*sm: "minmax\(0, 1fr\) auto",\s*\}/);
+  assert.match(header, /role="status"/);
+});
+
 test("job detail uses the approved shared detail composition", () => {
   const page = source("src/pages/JobDetailPage.tsx");
   const pattern = source("src/components/PatternBanner.tsx");
