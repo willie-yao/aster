@@ -176,7 +176,10 @@ HELM_SUPPORT_PATHS = (
 RELEASE_SHARED_PATHS = (
     ".gitattributes",
     "Makefile",
+    "hack/prepare-release-tag.sh",
     "hack/publish-release.sh",
+    "hack/release-checks.sh",
+    "hack/test-prepare-release-tag.sh",
     "hack/test-publish-release.sh",
     "hack/test-release-cli-assets.sh",
     "hack/test-verify-release-images.sh",

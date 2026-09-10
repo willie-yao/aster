@@ -26,13 +26,15 @@ Because the notes are published verbatim as the release body, relative paths in 
 ## Cutting a release
 
 1. Make sure `main` is green. Write `changelog/<tag>.md` from the `release-note` blocks merged since the previous tag, and add the release to the index in `CHANGELOG.md`. Keep `docs/supported-onboarding-release.txt`, current onboarding examples, and the setup skill pinned to the last published release.
-2. Create the root and nested-module tags at the same reviewed commit, then push both without force:
+2. Create the release tag pair by running the **Release tag** workflow (Actions -> Release tag -> Run workflow) with the version, for example `v1.0.0-beta.1`. It validates before it tags: the version is well formed, `changelog/<tag>.md` exists with real content and is indexed in `CHANGELOG.md` under that exact tag, the version moves the line forward, neither tag exists yet, and the checkout is the reviewed tip of `main`. Only then does it create both tags at that commit and push them atomically.
+
    ```bash
-   git checkout main && git pull
-   git tag v1.0.0-beta.1
-   git tag backend/v1.0.0-beta.1
-   git push origin v1.0.0-beta.1 backend/v1.0.0-beta.1
+   gh workflow run release-tag.yml -f version=v1.0.0-beta.1
    ```
+
+   Run it with `-f dry_run=true` first to validate without tagging. Tagging by hand skips every one of those checks, which is how this repository once published a release whose module tag was never created, and a version line that moved backward.
+
+   The workflow pushes with a GitHub App installation token from the `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` secrets, because GitHub suppresses workflow runs triggered by the default `GITHUB_TOKEN`: tags pushed with it would exist and publish nothing. Without those secrets the workflow fails before tagging.
 3. The `Release` workflow (`.github/workflows/release.yml`) runs on the tag:
    - re-runs the full CI gate against the tagged commit,
    - verifies both release tags identify the reviewed commit; if the root tag exists and only the module tag is missing, it creates the module tag with a non-force push before publishing,
@@ -102,13 +104,15 @@ Consumers pinned to an exact tag are unaffected.
 
 Deleting a tag does not un-publish a release, and the pieces come apart in ways that matter.
 
-**The Go module is permanent.** Once anything has fetched `github.com/willie-yao/aster/backend@<tag>`, `proxy.golang.org` caches that version and its checksum forever. Deleting the git tag does not remove it: `go install ...@<tag>` keeps working from the proxy. This is verifiable at any time:
+**Deleting a tag does not reliably withdraw the Go module.** Once `proxy.golang.org` has fetched `github.com/willie-yao/aster/backend@<tag>`, it may keep serving that version from its cache even though the tag, and even the whole repository, is gone. The mirror does this deliberately, to avoid breaking builds that already depend on it. All 13 deleted `v0.9.0-rc.*` versions were still listed here well after their tags were removed:
 
 ```bash
 curl -s https://proxy.golang.org/github.com/willie-yao/aster/backend/@v/list
 ```
 
-The consequence is the rule that matters most here: **never reuse a version number for different content.** Re-tagging a deleted version at a new commit makes the proxy serve the old code, and anyone whose checksum database disagrees gets a security error rather than a clean failure. If a tag was wrong, burn the number and move to the next one. The forward-only guard in the publisher enforces this.
+The consequence is the rule that matters most here: **never reuse a version number for different content.** A version is identified by a checksum that does not change, so after re-tagging, some clients keep getting the original cached bytes while any client that fetches the rebuilt content fails verification with a security error rather than a clean failure. If a tag was wrong, burn the number and move to the next one. The upstream advice is the same: publish a new version instead.
+
+The **Release tag** workflow enforces the part it can see: it refuses a version the module mirror is currently serving. It cannot see a version that was never fetched before its tags were deleted, so treat never reusing a version as an operating rule rather than something the tooling guarantees.
 
 To tell Go tooling not to select a published version, add a `retract` directive to `backend/go.mod` and release it in a later version:
 
@@ -118,8 +122,8 @@ retract (
 )
 ```
 
-`go list -m -versions` then hides it, and a consumer already on it is told to upgrade. A retraction is itself shipped as a release, so it must be a forward version.
+`go get` and `go list -m -u all` then report the retraction to a consumer already on that version, and it stops being selected as a latest or upgrade candidate. A retraction is itself shipped as a release, so it must be a forward version.
 
-**Images and charts are separate.** Deleting a git tag leaves `ghcr.io/<owner>/aster:<tag>`, the remote fixer, the Fix executor, and both OCI charts published and pullable. Removing those means deleting the package versions from GHCR directly, which needs a token with `delete:packages`. Deleting a chart version breaks any GitOps deployment pinned to it, so repoint consumers first.
+**Images and charts are separate.** Deleting a git tag leaves `ghcr.io/<owner>/aster:<tag>`, the remote fixer, the Fix executor, and both OCI charts published and pullable. Removing those means deleting the package versions from GHCR directly, which needs package-admin access: the web UI, or a token with `delete:packages` for the API. A public version with more than 5,000 downloads cannot be deleted without GitHub Support. Deleting a chart version breaks any GitOps deployment pinned to it, so repoint consumers first.
 
 **The GitHub Release is the only cheap part.** It can be deleted or edited freely; nothing resolves against it except the CLI asset download URLs.
