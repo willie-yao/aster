@@ -181,7 +181,12 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 	fallbackPreview := !analysisRequest && errors.Is(err, ErrDraftRefinementRejected) && entry != nil
 	if err == nil || fallbackPreview {
 		if analysisRequest {
-			if validated, validateErr := validatedAnalysisFixRequestPreview(preview); validateErr != nil {
+			if validateErr := s.validateAnalysisPreview(ctx, input.owner, AnalysisPreviewBinding{Handoff: input.analysisFix}); validateErr != nil {
+				err = validateErr
+				if input.analysisFix != nil {
+					_ = s.previewStore.revoke(input.owner, idempotentPreviewToken(input.owner, input.analysisFix.PreviewRequestHash))
+				}
+			} else if validated, validateErr := validatedAnalysisFixRequestPreview(preview); validateErr != nil {
 				err = classifiedAnalysisPreviewValidationError(validateErr)
 			} else {
 				preview = validated
@@ -235,8 +240,8 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 	request.BaseIssue = nil
 	request.BaseTargetRepo = ""
 	request.BasePatternHash = ""
-	request.AnalysisFix = nil
 	if err != nil {
+		request.AnalysisFix = nil
 		request.Status = RequestFailed
 		request.ReasonCode = ReasonCodeOf(err)
 		if analysisRequest {

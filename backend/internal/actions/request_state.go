@@ -347,6 +347,9 @@ func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
 		entry.kind = gfKind
 		entry.fix = fixpr.RestoreGeneratedFix(request.Fix)
 	case requestKindAnalysisFix:
+		if request.AnalysisFix == nil || validateAnalysisFixHandoff(*request.AnalysisFix) != nil {
+			return nil, fmt.Errorf("saved analysis Fix handoff requires regeneration")
+		}
 		if request.Preview == nil || strings.TrimSpace(request.Preview.Token) == "" {
 			return nil, fmt.Errorf("ready analysis fix request has no preview token")
 		}

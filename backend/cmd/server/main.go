@@ -234,14 +234,9 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		fixConfig := cfg.EffectiveFixPRs()
 		exactEnabled := exactJUnitChatFixEnabled(fixConfig) && !opts.DisableFixActions
 		if exactEnabled && fixConfig.Repo != nil && strings.EqualFold(analysisRepo.Owner, fixConfig.Repo.Owner) && strings.EqualFold(analysisRepo.Name, fixConfig.Repo.Name) {
-			if exactEnabled {
-				if err := chatService.ConfigureTestFixPreflight(actionService.PreflightAnalysisFixSource); err != nil {
-					return fmt.Errorf("configuring exact JUnit Fix source preflight: %w", err)
-				}
-			}
+
 			bridge := chatfix.NewService(chatService, actionService)
 			opts.ChatFix = bridge
-			actionService.ConfigureAnalysisPreviewValidator(bridge)
 			opts.Capabilities.Features.JUnitChatFix = exactEnabled
 			log.Printf("🛠️ analysis chat fix previews enabled (exact_junit=%t)", exactEnabled)
 		} else {

@@ -33,18 +33,16 @@ type persistedState struct {
 }
 
 type persistedSession struct {
-	View              SessionView                       `json:"view"`
-	Owner             string                            `json:"owner"`
-	Resolved          persistedResolvedAnalysis         `json:"resolved"`
-	Turns             int                               `json:"turns"`
-	ExpiresAt         time.Time                         `json:"expires_at"`
-	CreateRequestID   string                            `json:"create_request_id"`
-	CreateRequestHash string                            `json:"create_request_hash"`
-	Requests          map[string]persistedRequest       `json:"requests,omitempty"`
-	FixSources        map[string]persistedTestFixSource `json:"fix_sources,omitempty"`
-	Active            *persistedActiveTurn              `json:"active,omitempty"`
-	Retired           bool                              `json:"retired,omitempty"`
-	FixBaseExpiresAt  time.Time                         `json:"fix_base_expires_at,omitempty"`
+	View              SessionView                 `json:"view"`
+	Owner             string                      `json:"owner"`
+	Resolved          persistedResolvedAnalysis   `json:"resolved"`
+	Turns             int                         `json:"turns"`
+	ExpiresAt         time.Time                   `json:"expires_at"`
+	CreateRequestID   string                      `json:"create_request_id"`
+	CreateRequestHash string                      `json:"create_request_hash"`
+	Requests          map[string]persistedRequest `json:"requests,omitempty"`
+	Active            *persistedActiveTurn        `json:"active,omitempty"`
+	Retired           bool                        `json:"retired,omitempty"`
 }
 
 type persistedResolvedAnalysis struct {
@@ -98,14 +96,6 @@ type persistedRequest struct {
 	Prepared     bool   `json:"prepared,omitempty"`
 	CreatedAt    string `json:"created_at,omitempty"`
 	UpdatedAt    string `json:"updated_at,omitempty"`
-}
-
-type persistedTestFixSource struct {
-	PendingReservations    map[string]bool `json:"pending_reservations,omitempty"`
-	References             map[string]bool `json:"references,omitempty"`
-	TargetRef              AnalysisRef     `json:"target_ref"`
-	FailureRevision        string          `json:"failure_revision"`
-	GenerationBaseRevision string          `json:"generation_base_revision"`
 }
 
 type persistedActiveTurn struct {

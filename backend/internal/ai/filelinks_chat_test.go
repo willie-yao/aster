@@ -22,11 +22,11 @@ func (staticChatRunner) Reply(context.Context, analysischat.Turn) (analysischat.
 	return analysischat.Reply{Answer: "The artifact supports the analysis.", Assessment: "supports"}, nil
 }
 
-// TestPreflightAnalysisFixSurvivesFlakyLinkVerification covers the reported
+// TestAnalysisFixCandidateSurvivesFlakyLinkVerification covers the reported
 // symptom: a chat session bound to an unchanged cache-hit analysis must stay
 // valid across a publication pass where GitHub link verification fails, rather
 // than being rejected with "analysis changed".
-func TestPreflightAnalysisFixSurvivesFlakyLinkVerification(t *testing.T) {
+func TestAnalysisFixCandidateSurvivesFlakyLinkVerification(t *testing.T) {
 	revision := strings.Repeat("d", 40)
 	healthy := true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -79,11 +79,6 @@ func TestPreflightAnalysisFixSurvivesFlakyLinkVerification(t *testing.T) {
 	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.ConfigureTestFixPreflight(func(_ context.Context, _ sourceinvestigation.Repository, _ string) (string, error) {
-		return revision, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	session, err := service.Create(analysischat.AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
 		AnalysisGeneratedAt: "2026-08-16T07:11:06Z",
@@ -91,13 +86,16 @@ func TestPreflightAnalysisFixSurvivesFlakyLinkVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
+	if _, err := service.Send(t.Context(), session.ID, "Alice", "answer-1", "Explain the failure."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", "answer-1"); err != nil {
 		t.Fatalf("initial Fix preflight error = %v", err)
 	}
 
 	healthy = false
 	publish()
-	if err := service.PreflightAnalysisFix(t.Context(), session.ID, "Alice", "request-1"); err != nil {
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", "answer-1"); err != nil {
 		t.Fatalf("Fix preflight after flaky link verification error = %v (analysis changed = %v)",
 			err, errors.Is(err, analysischat.ErrAnalysisChanged))
 	}

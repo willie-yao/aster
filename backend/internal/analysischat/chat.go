@@ -45,8 +45,6 @@ var (
 	ErrSessionNotFound = errors.New("analysis chat session not found")
 	// ErrSessionBusy means another turn is already running for the session.
 	ErrSessionBusy = errors.New("analysis chat session is busy")
-	// ErrSessionReferenced means a Fix request still depends on the session.
-	ErrSessionReferenced = errors.New("analysis chat session supports a fix request")
 	// ErrRequestPending means this idempotent request is still running.
 	ErrRequestPending = errors.New("analysis chat request is pending")
 	// ErrRequestNotFound means the session has no request with this ID.
@@ -399,7 +397,6 @@ func (o Options) normalized(dataDir string) Options {
 type Service struct {
 	dataDir            string
 	runner             Runner
-	testFixPreflight   func(context.Context, sourceinvestigation.Repository, string) (string, error)
 	sourceRepo         sourceinvestigation.Repository
 	opts               Options
 	store              *sessionStore
@@ -690,9 +687,6 @@ func (s *Service) Delete(id, owner string) error {
 		}
 		if current.Active != nil {
 			return changed, ErrSessionBusy
-		}
-		if hasFixDependency(current.FixSources) {
-			return changed, ErrSessionReferenced
 		}
 		delete(state.Sessions, id)
 		return true, nil

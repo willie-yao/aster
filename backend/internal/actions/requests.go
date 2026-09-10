@@ -311,7 +311,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 
 // CreateAnalysisFixRequest persists one exact JUnit chat-to-fix preview request
 // and starts generation independently of the initiating HTTP request.
-func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userToken, instruction string, replacesRequestIDs ...string) (ActionRequestView, error) {
+func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFixInput, owner, userToken, instruction string, replacesRequestIDs ...string) (ActionRequestView, error) {
 	owner = normalizeActionOwner(owner)
 	instruction = strings.TrimSpace(instruction)
 	if s.cfg != nil {
@@ -336,6 +336,13 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 	replacesRequestID := ""
 	if len(replacesRequestIDs) == 1 {
 		replacesRequestID = strings.TrimSpace(replacesRequestIDs[0])
+	}
+	if existing, found, err := s.FindAnalysisFixRequest(input.ChatSessionID, input.ChatRequestID, owner, instruction); err != nil || found {
+		return existing, err
+	}
+	input, err := s.prepareAnalysisFix(ctx, input, owner, instruction)
+	if err != nil {
+		return ActionRequestView{}, err
 	}
 	replacementHash := analysisFixReplacementHash(input)
 
@@ -367,7 +374,7 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 		if existing == nil || existing.Owner != owner || existing.Kind != requestKindAnalysisFix || existing.RequestHash != input.PreviewRequestHash {
 			continue
 		}
-		if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
+		if analysisFixRequestReusable(existing) {
 			view := existing.ActionRequestView
 			s.rmu.Unlock()
 			return view, nil
@@ -417,6 +424,10 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("too many active action requests")
 	}
+	if err := ctx.Err(); err != nil {
+		s.rmu.Unlock()
+		return ActionRequestView{}, err
+	}
 	s.requests.Requests[request.ID] = request
 	if err := s.saveRequestsLocked(); err != nil {
 		delete(s.requests.Requests, request.ID)
@@ -432,6 +443,7 @@ func (s *Service) CreateAnalysisFixRequest(input AnalysisFixInput, owner, userTo
 
 func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 	clone := input
+	clone.Origin.Original.RelevantFiles = slices.Clone(input.Origin.Original.RelevantFiles)
 	clone.ArtifactCitations = slices.Clone(input.ArtifactCitations)
 	clone.EvidenceWarnings = slices.Clone(input.EvidenceWarnings)
 	if input.ProposedRevision != nil {

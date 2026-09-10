@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ const (
 )
 
 func exactJUnitDetail() models.JobDetail {
-	return models.JobDetail{Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
+	return models.JobDetail{JobType: models.JobTypePeriodic, Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{
 			BuildID: "123", JobName: "periodic-capz",
 			RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + analysisFixRevision},
@@ -76,6 +77,7 @@ func exactIdentity() AnalysisIdentity {
 }
 
 type fakeAnalysisSourceRevisionClient struct {
+	mu             sync.Mutex
 	base           ghpr.Base
 	branchBases    map[string]ghpr.Base
 	resolveErr     error
@@ -86,6 +88,8 @@ type fakeAnalysisSourceRevisionClient struct {
 }
 
 func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.branchRequests = append(f.branchRequests, branch)
 	if f.resolveErr != nil {
 		return ghpr.Base{}, f.resolveErr
@@ -100,6 +104,8 @@ func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, 
 }
 
 func (f *fakeAnalysisSourceRevisionClient) CompareCommits(context.Context, string, string, string, string) (bool, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.compareCalls++
 	if f.compareErr != nil {
 		return false, "", f.compareErr
@@ -346,18 +352,6 @@ func TestPreflightAnalysisFixSourcePropagatesAccessAndAncestryErrors(t *testing.
 	})
 }
 
-type acceptingAnalysisPreviewValidator struct{}
-
-func (acceptingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error {
-	return nil
-}
-
-type rejectingAnalysisPreviewValidator struct{}
-
-func (rejectingAnalysisPreviewValidator) ValidateAnalysisPreview(context.Context, string, AnalysisPreviewBinding) error {
-	return errors.New("chat response changed")
-}
-
 func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview(t *testing.T) {
 	dir := t.TempDir()
 	detail := exactJUnitDetail()
@@ -401,15 +395,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 			Base:               ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
 			RequireBaseCurrent: true,
 		})
-		binding := &AnalysisPreviewBinding{
-			Identity: current.Identity, AnalysisID: current.ID, AnalysisHash: current.ContentHash,
-			AnalysisContentHash: current.AnalysisContentHash,
-			ChatSessionID:       input.ChatSessionID, ChatRequestID: input.ChatRequestID,
-			ChatResponseHash: input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
-			SourceRepository: current.SourceRepository, SourceBranch: "main",
-			FailureRevision: current.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
-			VerificationVersion: analysisSourceVerificationVersion,
-		}
+		binding := &AnalysisPreviewBinding{Handoff: cloneAnalysisFixInput(input)}
 		entry := &previewEntry{
 			failureID: current.ID, patternHash: current.ContentHash, kind: gfKind,
 			targetRepo:          current.SourceRepository.Owner + "/" + current.SourceRepository.Name,
@@ -429,6 +415,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	}
 
 	input := AnalysisFixInput{
+		Origin:   testFixOrigin(subject.Identity, subject.Failure.AIAnalysis),
 		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: subject.SourceRepository,
@@ -436,7 +423,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		SourceBranch: "main", AssistantAnswer: "Investigate whether reconciliation skips the terminal update.",
 		AssistantUnverified: true, AssistantUnverifiedReason: "artifact access ended before verification",
 	}
-	created, err := service.CreateAnalysisFixRequest(input, "alice", "write-token", "")
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +468,6 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	if _, err := validatedPreviewEntry(entry); err != nil {
 		t.Fatalf("restored preview contract error = %v", err)
 	}
-	reloaded.analysisPreviewValidator = acceptingAnalysisPreviewValidator{}
 	reloaded.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
 		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
 	}
@@ -490,116 +476,6 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	}
 	if err := reloaded.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); err != nil {
 		t.Fatalf("restored preview is not confirmable: %v", err)
-	}
-}
-
-func TestAnalysisPreviewBindingSurvivesRestartAndFailsClosed(t *testing.T) {
-	dir := t.TempDir()
-	binding := &AnalysisPreviewBinding{
-		Identity: exactIdentity(), AnalysisID: "analysis::id", AnalysisHash: "analysis-hash",
-		AnalysisContentHash: "content-hash",
-		ChatSessionID:       "session", ChatRequestID: "request", ChatResponseHash: "chat",
-		PreviewRequestHash: "preview",
-		SourceRepository: sourceinvestigation.Repository{
-			Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision,
-		},
-		SourceBranch: "main", FailureRevision: analysisFixRevision,
-		GenerationBaseRevision: analysisFixRevision,
-		VerificationVersion:    analysisSourceVerificationVersion,
-	}
-	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
-		Subject: "TestCluster", Rationale: "fix", Diff: "diff",
-		Files:  map[string]string{"controllers/cluster_controller.go": "package controllers\n"},
-		Verify: fixpr.VerifyResult{Status: fixpr.VerifyPassed},
-		Title:  "fix: test", Description: "safe description", Body: "body",
-		Key:                "fix-analysis::id",
-		Base:               ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
-		RequireBaseCurrent: true,
-	})
-	first := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	token, err := first.stash("alice", &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind,
-		targetRepo:          "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig:        fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()),
-		verificationVersion: sourceVerificationVersion, fix: fix, analysisBinding: binding,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	second := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	entry, err := second.previewStore.take("alice", token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entry.analysisBinding == nil || entry.analysisBinding.SourceBranch != "main" ||
-		entry.analysisBinding.VerificationVersion != analysisSourceVerificationVersion {
-		t.Fatalf("restored binding = %+v", entry.analysisBinding)
-	}
-
-	third := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	third.analysisPreviewValidator = rejectingAnalysisPreviewValidator{}
-	token, err = third.stash("alice", &previewEntry{
-		failureID: "analysis::id", patternHash: "analysis-hash", kind: gfKind,
-		targetRepo:          "kubernetes-sigs/cluster-api-provider-azure",
-		targetConfig:        fixTargetFingerprint(exactAnalysisConfig().EffectiveFixPRs()),
-		verificationVersion: sourceVerificationVersion, fix: fix, analysisBinding: binding,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := third.Confirm(t.Context(), token, "alice", "write-token"); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("changed chat confirmation error = %v", err)
-	}
-}
-
-func TestValidateAnalysisPreviewBindsIdentityRepositoryBranchAndCurrentBase(t *testing.T) {
-	dir := t.TempDir()
-	detail := exactJUnitDetail()
-	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
-	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	service.analysisPreviewValidator = acceptingAnalysisPreviewValidator{}
-	client := &fakeAnalysisSourceRevisionClient{
-		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
-	}
-	service.sourceRevisionClient = client
-	subject, err := service.ResolveAnalysisActionSubject(exactIdentity())
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding := AnalysisPreviewBinding{
-		Identity: exactIdentity(), AnalysisID: subject.ID, AnalysisHash: subject.ContentHash,
-		AnalysisContentHash: subject.AnalysisContentHash,
-		ChatSessionID:       "session", ChatRequestID: "request", ChatResponseHash: "chat",
-		PreviewRequestHash: "preview",
-		SourceRepository:   subject.SourceRepository, SourceBranch: "main",
-		FailureRevision: subject.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
-		VerificationVersion: analysisSourceVerificationVersion,
-	}
-	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); err != nil {
-		t.Fatalf("valid binding error = %v", err)
-	}
-	for _, testCase := range []struct {
-		name   string
-		mutate func(*AnalysisPreviewBinding)
-	}{
-		{name: "stale contract", mutate: func(b *AnalysisPreviewBinding) { b.VerificationVersion = 2 }},
-		{name: "wrong source branch", mutate: func(b *AnalysisPreviewBinding) { b.SourceBranch = "release" }},
-		{name: "wrong failure revision", mutate: func(b *AnalysisPreviewBinding) { b.FailureRevision = strings.Repeat("f", 40) }},
-		{name: "wrong repository", mutate: func(b *AnalysisPreviewBinding) { b.SourceRepository.Name = "other" }},
-		{name: "changed analysis", mutate: func(b *AnalysisPreviewBinding) { b.AnalysisContentHash = "changed" }},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			changed := binding
-			testCase.mutate(&changed)
-			if err := service.validateAnalysisPreview(t.Context(), "alice", changed); !errors.Is(err, ErrPreviewTargetChanged) {
-				t.Fatalf("error = %v", err)
-			}
-		})
-	}
-	client.base.HeadSHA = capzGenerationBaseRevision
-	if err := service.validateAnalysisPreview(t.Context(), "alice", binding); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("advanced base error = %v", err)
 	}
 }
 
@@ -617,8 +493,8 @@ func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
 		t.Fatal(err)
 	}
 	input.FailureRevision = analysisFixRevision
-	if err := validateAnalysisFixInput(input); err == nil {
-		t.Fatal("partial source binding was accepted")
+	if err := validateAnalysisFixHandoff(input); err == nil {
+		t.Fatal("partial handoff was accepted")
 	}
 	input.GenerationBaseRevision = analysisFixRevision
 	input.SourceBranch = "main"
@@ -666,12 +542,13 @@ func TestPreviewAnalysisFixRejectsUnsafeMaintainerInstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.PreviewAnalysisFix(t.Context(), AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
-		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
-		AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: subject.SourceRepository,
-		AssistantAnswer: "Investigate the reconciliation path.",
-	}, "alice", "github-write-token", "Remove the conversion webhook before upgrade.")
+	input := exactAnalysisRequestInput()
+	input.Origin = testFixOrigin(subject.Identity, subject.Failure.AIAnalysis)
+	input, err = service.prepareAnalysisFix(t.Context(), input, "alice", "Remove the conversion webhook before upgrade.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.PreviewAnalysisFix(t.Context(), input, "alice", "github-write-token", input.Instruction)
 	if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonUnsafeRemediation {
 		t.Fatalf("unsafe instruction error = %v", err)
 	}
@@ -690,7 +567,7 @@ func TestValidatedAnalysisPreviewRejectsDestructiveGeneratedPatch(t *testing.T) 
 	})
 	_, err := validatedPreviewEntry(&previewEntry{
 		kind: gfKind, fix: fix,
-		analysisBinding: &AnalysisPreviewBinding{PreviewRequestHash: "request"},
+		analysisBinding: &AnalysisPreviewBinding{},
 	})
 	if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonUnsafeRemediation {
 		t.Fatalf("destructive patch error = %v", err)
