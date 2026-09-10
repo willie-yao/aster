@@ -81,7 +81,7 @@ func writeChatFixRequestError(w http.ResponseWriter, sessionID, login string, er
 		errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged),
 		errors.Is(err, analysischat.ErrRequestPending), errors.Is(err, analysischat.ErrRequestOutcomeUnknown),
 		errors.Is(err, analysischat.ErrInvalidRequest), errors.Is(err, analysischat.ErrRequestFailed),
-		errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable):
+		errors.Is(err, sourceinvestigation.ErrUnavailable):
 		writeChatFixError(w, sessionID, login, err)
 	default:
 		writeActionError(w, sessionID, login, err)
@@ -162,7 +162,7 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusGatewayTimeout, "fix proposal timed out"
 	case errors.Is(err, context.Canceled):
 		status, message = 499, "fix proposal cancelled"
-	case errors.Is(err, sourceinvestigation.ErrInvalidResult), errors.Is(err, sourceinvestigation.ErrUnavailable),
+	case errors.Is(err, sourceinvestigation.ErrUnavailable),
 		errors.Is(err, analysischat.ErrRequestFailed):
 		status, message = http.StatusUnprocessableEntity, "verified source input is not usable"
 	case errors.Is(err, actions.ErrPreviewRejected):

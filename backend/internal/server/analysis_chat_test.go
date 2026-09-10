@@ -546,7 +546,7 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
 		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
 		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
-		{sourceinvestigation.ErrInvalidResult, http.StatusBadGateway, "analysis chat source validation failed", "failed"},
+		{sourceinvestigation.ErrUnavailable, http.StatusBadGateway, "analysis chat source validation failed", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"},
 		{analysischat.ErrResponseValidationFailed, http.StatusUnprocessableEntity, analysischat.ErrResponseValidationFailed.Error(), "failed"},
