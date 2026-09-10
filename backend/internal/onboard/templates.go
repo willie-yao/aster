@@ -267,46 +267,55 @@ metadata only. The doctor does not create a Sandbox or call the provider.
 
 ## Verify
 
+Run each verification block as a whole and stop on any nonzero result. Resolved names stay in the calling shell:
+
 ` + "```bash" + `
+test -n "${CONTEXT:-}" && test -n "${NAMESPACE:-}" && test -n "${RELEASE:-}" &&
 SERVER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
-  -o jsonpath='{.items[0].metadata.name}')
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$SERVER" &&
 WRITER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=worker" \
-  -o jsonpath='{.items[0].metadata.name}')
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$WRITER" &&
 SERVICE=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get service \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
-  -o jsonpath='{.items[0].metadata.name}')
-test -n "$SERVER" && test -n "$WRITER" && test -n "$SERVICE"
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$SERVICE" &&
 kubectl --context "$CONTEXT" -n "$NAMESPACE" \
-  rollout status "deployment/$SERVER" --timeout=5m
+  rollout status "deployment/$SERVER" --timeout=5m &&
 kubectl --context "$CONTEXT" -n "$NAMESPACE" \
   rollout status "deployment/$WRITER" --timeout=10m
 ` + "```" + `
 
-Port-forward the Service in a second terminal:
+Port-forward the Service in a second terminal using the same reviewed CONTEXT
+and NAMESPACE and the resolved SERVICE value from the first terminal:
 
 ` + "```bash" + `
 kubectl --context "$CONTEXT" -n "$NAMESPACE" \
   port-forward "service/$SERVICE" 18080:80
 ` + "```" + `
 
-Then verify data, private-file filtering, the public origin, and execution
-cleanup:
+Back in the first terminal, verify data, privacy, public origin, and cleanup. This Bash subshell stops on errors without changing the calling shell's options:
 
 ` + "```bash" + `
+(
+set -euo pipefail
+test -n "${EXPECTED_JOB:-}"
 curl --fail --retry 60 --retry-delay 10 --retry-connrefused \
   http://127.0.0.1:18080/data/manifest.json | python3 -m json.tool >/dev/null
 curl --fail http://127.0.0.1:18080/data/dashboard.json | grep -F "$EXPECTED_JOB"
-test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  http://127.0.0.1:18080/data/ai_cache.json)" = 404
-if [ -n "$PUBLIC_URL" ]; then
+PRIVATE_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  http://127.0.0.1:18080/data/ai_cache.json)
+test "$PRIVATE_STATUS" = 404
+if [ -n "${PUBLIC_URL:-}" ]; then
   curl --fail "${PUBLIC_URL%/}/data/manifest.json" | python3 -m json.tool >/dev/null
 fi
-if [ -n "$EXECUTION_NAMESPACE" ]; then
-  test -z "$(kubectl --context "$CONTEXT" -n "$EXECUTION_NAMESPACE" \
-    get sandboxes.agents.x-k8s.io -o name)"
+if [ -n "${EXECUTION_NAMESPACE:-}" ]; then
+  test -n "${CONTEXT:-}"
+  SANDBOXES=$(kubectl --context "$CONTEXT" -n "$EXECUTION_NAMESPACE" \
+    get sandboxes.agents.x-k8s.io -o name)
+  test -z "$SANDBOXES"
 fi
+)
 ` + "```" + `
 
 Confirm branding, the expected project job, and authentication when enabled.

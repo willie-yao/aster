@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH=/usr/bin:/bin
+trusted_python=$(command -v python3)
+trusted_bash=$(command -v bash)
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 upgrade=$root/deploy/helm/upgrade.sh
 tmp="$root/.test-work/aster-upgrade-$$"
@@ -10,6 +13,43 @@ if [[ -e $tmp ]]; then
 fi
 mkdir -p "$tmp/bin"
 trap 'rm -rf "$tmp"' EXIT
+
+if [[ ${1:-} != --isolated ]]; then
+  cat > "$tmp/sentinel" <<EOF_SENTINEL
+#!$trusted_bash
+printf '%s\n' "\${0##*/}" >> "$tmp/sentinel-calls"
+exit 97
+EOF_SENTINEL
+  chmod +x "$tmp/sentinel"
+  ln -s "$tmp/sentinel" "$tmp/sentinel-helm"
+  ln -s "$tmp/sentinel" "$tmp/sentinel-python"
+  printf '%s\n' 'scratch sentinel' > "$tmp/sentinel-scratch"
+  export HELM="$tmp/sentinel-helm"
+  export PYTHON="$tmp/sentinel-python"
+  export ASTER_HELM_TMPDIR="$tmp/sentinel-scratch"
+  for executable in "$HELM" "$PYTHON"; do
+    if "$executable"; then
+      echo 'override sentinel unexpectedly succeeded' >&2
+      exit 1
+    else
+      test "$?" -eq 97
+    fi
+  done
+  grep -Fxq sentinel-helm "$tmp/sentinel-calls"
+  grep -Fxq sentinel-python "$tmp/sentinel-calls"
+  : > "$tmp/sentinel-calls"
+
+  FAKE_UNSUPPORTED_HELM=true FAKE_MUTABLE_IMAGE=true FAKE_IMAGE_FAILURE=true \
+    FAKE_CACHE_GENERATION='invalid generation' FAIL_UPGRADE=true \
+    "$trusted_bash" "$root/deploy/helm/test-upgrade.sh" --isolated
+  if [[ -s $tmp/sentinel-calls ]]; then
+    echo 'upgrade checks used an inherited executable override' >&2
+    exit 1
+  fi
+  test "$(cat "$tmp/sentinel-scratch")" = 'scratch sentinel'
+  echo 'Inherited override isolation checks passed.'
+  exit 0
+fi
 
 calls=$tmp/helm-calls
 inspections=$tmp/image-inspections
@@ -176,7 +216,24 @@ cat > "$tmp/consumer-values.yaml" <<'VALUES'
 }
 VALUES
 
-export PATH="$tmp/bin:/usr/bin:/bin"
+mkdir "$tmp/utilities"
+for utility in awk bash cat chmod cmp cp dirname grep mkdir python3 rm sed sort wc; do
+  ln -s "$(command -v "$utility")" "$tmp/utilities/$utility"
+done
+export PATH="$tmp/bin:$tmp/utilities"
+export HELM="$tmp/bin/helm"
+export PYTHON="$trusted_python"
+export ASTER_HELM_TMPDIR="$tmp/scratch"
+for control in $(compgen -A variable FAKE_) $(compgen -A variable FAIL_); do
+  unset "$control"
+done
+for inspector in crane skopeo; do
+  if command -v "$inspector" >/dev/null 2>&1; then
+    echo "unexpected image inspector on isolated PATH: $inspector" >&2
+    exit 1
+  fi
+done
+test "$(command -v docker)" = "$tmp/bin/docker"
 
 "$upgrade" \
   --context h100 \

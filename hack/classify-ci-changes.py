@@ -301,11 +301,15 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
 
         if path == "hack/check-doc-links.py":
             result["documentation"] = True
+            result["helm_static"] = True
             matched = True
 
         if not matched:
             # Unknown paths run the complete suite until they are classified.
             result["release_shared"] = True
+
+    if result["backend"]:
+        result["benchmarks"] = True
 
     if force_full or result["release_shared"]:
         for name in CLASSES:
@@ -321,7 +325,7 @@ def emit(result: dict[str, bool]) -> None:
 
 def self_test() -> None:
     scenarios = (
-        ("root documentation contract", ["README.md"], {"backend", "documentation"}),
+        ("root documentation contract", ["README.md"], {"backend", "benchmarks", "documentation"}),
         (
             "generic documentation",
             ["docs/reference-example.md"],
@@ -330,7 +334,7 @@ def self_test() -> None:
         (
             "shared onboarding documentation",
             ["docs/onboarding-a-new-project.md"],
-            {"backend", "helm_static", "documentation"},
+            {"backend", "benchmarks", "helm_static", "documentation"},
         ),
         (
             "Kubernetes documentation contract",
@@ -350,16 +354,21 @@ def self_test() -> None:
         (
             "agent skill contract",
             [".agents/skills/setup-aster-consumer/references/decisions.md"],
-            {"backend", "documentation"},
+            {"backend", "benchmarks", "documentation"},
         ),
         ("release notes", ["changelog/v1.2.3.md"], {"documentation"}),
         ("changelog index", ["CHANGELOG.md"], {"documentation"}),
-        ("documentation link check", ["hack/check-doc-links.py"], {"documentation"}),
+        ("documentation link check", ["hack/check-doc-links.py"], {"documentation", "helm_static"}),
         (".gitattributes release contract", [".gitattributes"], set(CLASSES)),
         (
             "benchmark module",
             ["backend/benchmarks/benchmark_test.go"],
             {"benchmarks"},
+        ),
+        (
+            "backend module dependencies",
+            ["backend/go.mod", "backend/go.sum"],
+            {"backend", "benchmarks", "remote_fixer", "fix_executor"},
         ),
         (
             "frontend",
@@ -369,7 +378,7 @@ def self_test() -> None:
         (
             "embedded prompt-author skill",
             ["backend/internal/onboard/promptauthor/skill/system-prompt-generation.md"],
-            {"backend", "helm_static", "remote_fixer"},
+            {"backend", "benchmarks", "helm_static", "remote_fixer"},
         ),
         (
             "platform",
@@ -379,18 +388,19 @@ def self_test() -> None:
         (
             "chart values backend contract",
             ["deploy/helm/aster/values.yaml"],
-            {"backend", "helm_static"},
+            {"backend", "benchmarks", "helm_static"},
         ),
         (
             "fix executor",
             ["backend/internal/fixexecutor/executor.go"],
-            {"backend", "helm_static", "fix_executor"},
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
         ),
         (
             "shared Dockerfile",
             ["Dockerfile"],
             {
                 "backend",
+                "benchmarks",
                 "remote_fixer",
                 "fix_executor",
                         },
@@ -398,18 +408,19 @@ def self_test() -> None:
         (
             "remote runtime",
             ["backend/internal/server/server.go"],
-            {"backend", "remote_fixer"},
+            {"backend", "benchmarks", "remote_fixer"},
         ),
         (
             "Aster CLI clean-room contract",
             ["backend/cmd/aster/main.go"],
-            {"backend", "helm_static", "remote_fixer"},
+            {"backend", "benchmarks", "helm_static", "remote_fixer"},
         ),
         (
             "project clean-room dependency",
             ["backend/internal/project/project.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -419,6 +430,7 @@ def self_test() -> None:
             ["backend/internal/ai/skills/skills.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -428,6 +440,7 @@ def self_test() -> None:
             ["backend/internal/ai/tools/filesystem/filesystem.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -437,6 +450,7 @@ def self_test() -> None:
             ["backend/internal/artifacts/browser.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -446,6 +460,7 @@ def self_test() -> None:
             ["backend/internal/models/models.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -455,6 +470,7 @@ def self_test() -> None:
             ["backend/internal/prowbuild/builds.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -464,6 +480,7 @@ def self_test() -> None:
             ["backend/internal/runtime/runtime.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                 "fix_executor",
@@ -474,6 +491,7 @@ def self_test() -> None:
             ["backend/internal/storage/storage.go"],
             {
                 "backend",
+                "benchmarks",
                 "helm_static",
                 "remote_fixer",
                         },
@@ -498,13 +516,22 @@ def self_test() -> None:
     ).read_text(encoding="utf-8")
     changes_start = workflow.index("\n  changes:")
     backend_start = workflow.index("\n  backend:")
-    frontend_start = workflow.index("\n  frontend:", backend_start)
+    benchmarks_start = workflow.index("\n  benchmarks:", backend_start)
+    frontend_start = workflow.index("\n  frontend:", benchmarks_start)
     changes_job = workflow[changes_start:backend_start]
     if "make check-onboarding-release-pins" not in changes_job:
         raise AssertionError("always-running changes job does not check onboarding release pins")
-    backend_job = workflow[backend_start:frontend_start]
+    if "python3 hack/check-onboarding-release-pins.py --self-test" not in changes_job:
+        raise AssertionError("always-running changes job does not test onboarding release pin checks")
+    backend_job = workflow[backend_start:benchmarks_start]
     if "bash hack/test-release-cli-assets.sh" not in backend_job:
         raise AssertionError("backend job does not run the release CLI asset contract")
+    benchmarks_job = workflow[benchmarks_start:frontend_start]
+    if "go test ./... -count=1" not in benchmarks_job:
+        raise AssertionError("benchmark job does not run provider-free harness tests")
+    for gate in ("RUN_AI_BENCHMARK", "RUN_CAUSE_RESOLUTION_BENCHMARK", "RUN_BENCHMARK_FIXTURE_VALIDATION"):
+        if f'{gate}: ""' not in benchmarks_job:
+            raise AssertionError(f"benchmark job does not disable {gate}")
 
     with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:
         repository = pathlib.Path(tmp)
@@ -559,7 +586,7 @@ def self_test() -> None:
                 f"rename/merge-base: expected {sorted(expected_paths)}, got {sorted(paths)}"
             )
         actual = {key for key, enabled in classify(paths).items() if enabled}
-        expected = {"backend", "helm_static", "remote_fixer", "documentation"}
+        expected = {"backend", "benchmarks", "helm_static", "remote_fixer", "documentation"}
         if actual != expected:
             raise AssertionError(
                 f"rename/merge-base: expected {sorted(expected)}, got {sorted(actual)}"

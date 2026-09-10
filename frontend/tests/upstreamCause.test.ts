@@ -4,7 +4,7 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import { externalCause, patternExternalCause } from "../src/lib/patternFixGuidance.js";
 import type { CausalGroupFixTarget } from "../src/lib/patternFixGuidance.js";
 import type {
@@ -13,27 +13,32 @@ import type {
   PatternCausalGroup,
 } from "../src/types/dashboard.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { CausalGroupFixNotice, CausalGroupFixButton, PatternFixGuidance, defaultTheme } = await withSSR(async (vite) => {
+  const { CausalGroupFixNotice, CausalGroupFixButton } = (await vite.ssrLoadModule("/src/components/CausalGroupFixRouting.tsx")) as {
+    CausalGroupFixNotice: (props: {
+      jobID?: string;
+      target: CausalGroupFixTarget | null;
+      externalCause?: AnalysisCauseLocation | null;
+      evidencePresent?: boolean;
+    }) => ReturnType<typeof createElement>;
+    CausalGroupFixButton: (props: {
+      jobID?: string;
+      target: CausalGroupFixTarget | null;
+      showBuild?: boolean;
+      stale?: boolean;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/PatternFixGuidance.tsx")) as {
+    PatternFixGuidance: (props: {
+      jobID: string;
+      buildID: string;
+      externalCause?: AnalysisCauseLocation | null;
+      chatAvailable?: boolean;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
+  return { CausalGroupFixNotice, CausalGroupFixButton, PatternFixGuidance, defaultTheme };
 });
-const { CausalGroupFixNotice, CausalGroupFixButton } = (await vite.ssrLoadModule("/src/components/CausalGroupFixRouting.tsx")) as {
-  CausalGroupFixNotice: (props: {
-    jobID?: string;
-    target: CausalGroupFixTarget | null;
-    externalCause?: AnalysisCauseLocation | null;
-    evidencePresent?: boolean;
-  }) => ReturnType<typeof createElement>;
-  CausalGroupFixButton: (props: {
-    jobID?: string;
-    target: CausalGroupFixTarget | null;
-    showBuild?: boolean;
-    stale?: boolean;
-  }) => ReturnType<typeof createElement>;
-};
 
 // The notice and the action are rendered in two places on a cause card: the
 // prose stays in the body while the button moves to the action bar. They are
@@ -64,17 +69,6 @@ function CausalGroupFixRouting(props: {
     }),
   );
 }
-const { PatternFixGuidance } = (await vite.ssrLoadModule("/src/components/PatternFixGuidance.tsx")) as {
-  PatternFixGuidance: (props: {
-    jobID: string;
-    buildID: string;
-    externalCause?: AnalysisCauseLocation | null;
-    chatAvailable?: boolean;
-  }) => ReturnType<typeof createElement>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-await vite.close();
-
 function render(element: ReturnType<typeof createElement>): string {
   return renderToStaticMarkup(
     createElement(ThemeProvider, { theme: defaultTheme }, createElement(MemoryRouter, null, element)),

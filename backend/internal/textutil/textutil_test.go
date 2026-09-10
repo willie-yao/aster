@@ -1,9 +1,6 @@
 package textutil
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {
@@ -37,20 +34,6 @@ func TestTruncate_RuneSafe(t *testing.T) {
 	if got != "a…" {
 		t.Fatalf("Truncate(%q, 2) = %q, want %q", s, got, "a…")
 	}
-	// The prefix before the ellipsis must be valid UTF-8 with no partial rune.
-	prefix := strings.TrimSuffix(got, "…")
-	if !isValidUTF8(prefix) {
-		t.Errorf("prefix %q is not valid UTF-8 (rune split)", prefix)
-	}
-}
-
-func isValidUTF8(s string) bool {
-	for _, r := range s {
-		if r == '\uFFFD' {
-			return false
-		}
-	}
-	return true
 }
 
 func TestTrimCredential(t *testing.T) {

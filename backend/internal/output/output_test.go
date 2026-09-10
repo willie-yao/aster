@@ -63,16 +63,8 @@ func TestWriteDashboard(t *testing.T) {
 		t.Fatalf("WriteDashboard: %v", err)
 	}
 
-	path := filepath.Join(dir, "dashboard.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read dashboard.json: %v", err)
-	}
-
 	var got models.Dashboard
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal dashboard.json: %v", err)
-	}
+	readJSON(t, filepath.Join(dir, "dashboard.json"), &got)
 	if got.GeneratedAt != dash.GeneratedAt {
 		t.Errorf("GeneratedAt = %v, want %v", got.GeneratedAt, dash.GeneratedAt)
 	}
@@ -135,16 +127,8 @@ func TestWriteJobDetail(t *testing.T) {
 		t.Fatalf("WriteJobDetail: %v", err)
 	}
 
-	path := filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID))
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read job detail: %v", err)
-	}
-
 	var got models.JobDetail
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal job detail: %v", err)
-	}
+	readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), &got)
 	if got.Name != detail.Name {
 		t.Errorf("Name = %q, want %q", got.Name, detail.Name)
 	}
@@ -164,14 +148,8 @@ func TestWriteJobDetailBackfillsPatternIdentity(t *testing.T) {
 	if err := WriteJobDetail(dir, detail); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var written models.JobDetail
-	if err := json.Unmarshal(data, &written); err != nil {
-		t.Fatal(err)
-	}
+	readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), &written)
 	pattern := written.PatternAnalyses[0]
 	if pattern.ID != "stable-pattern" || pattern.ContentHash != models.PatternHash(pattern) {
 		t.Fatalf("written pattern = %+v", pattern)
@@ -193,14 +171,8 @@ func TestWriteFlakinessReportBackfillsPatternIdentity(t *testing.T) {
 	if err := WriteFlakinessReport(dir, report); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var written models.FlakinessReport
-	if err := json.Unmarshal(data, &written); err != nil {
-		t.Fatal(err)
-	}
+	readJSON(t, filepath.Join(dir, "flakiness.json"), &written)
 	pattern := written.RecurringPatterns[0]
 	group := pattern.CausalGroups[0]
 	if pattern.ID != "stable-pattern" || pattern.ContentHash != models.PatternHash(pattern) ||
@@ -250,16 +222,10 @@ func TestWriteFlakinessReportPublishesLowPassRateSection(t *testing.T) {
 		if err := WriteFlakinessReport(dir, report); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
 		var written struct {
 			LowPassRate []map[string]any `json:"low_pass_rate"`
 		}
-		if err := json.Unmarshal(data, &written); err != nil {
-			t.Fatal(err)
-		}
+		readJSON(t, filepath.Join(dir, "flakiness.json"), &written)
 		if len(written.LowPassRate) != 1 {
 			t.Fatalf("low_pass_rate = %d entries, want 1", len(written.LowPassRate))
 		}
@@ -291,22 +257,10 @@ func TestWriteAllKeepsPatternIdentityConsistent(t *testing.T) {
 	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, report, models.SearchIndex{}); err != nil {
 		t.Fatal(err)
 	}
-	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	flakinessData, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var writtenDetail models.JobDetail
 	var writtenReport models.FlakinessReport
-	if err := json.Unmarshal(jobData, &writtenDetail); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
-		t.Fatal(err)
-	}
+	readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), &writtenDetail)
+	readJSON(t, filepath.Join(dir, "flakiness.json"), &writtenReport)
 	if writtenDetail.ConfigFile != detail.ConfigFile || writtenDetail.ConfigRevision != detail.ConfigRevision {
 		t.Fatalf("written Prow config source = %q@%q", writtenDetail.ConfigFile, writtenDetail.ConfigRevision)
 	}
@@ -368,14 +322,8 @@ func TestWriteAll(t *testing.T) {
 	}
 
 	// manifest.json exists and round-trips the config
-	manifestData, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		t.Fatalf("read manifest.json: %v", err)
-	}
 	var gotManifest project.Config
-	if err := json.Unmarshal(manifestData, &gotManifest); err != nil {
-		t.Fatalf("unmarshal manifest.json: %v", err)
-	}
+	readJSON(t, filepath.Join(dir, "manifest.json"), &gotManifest)
 	if gotManifest.ID != "capz" || gotManifest.Branding.Title != "CAPZ Prow Dashboard" || gotManifest.Discovery.TestInfraRevision != strings.Repeat("a", 40) || gotManifest.Discovery.ResolvedTestInfraRevision != strings.Repeat("a", 40) {
 		t.Errorf("manifest round-trip mismatch: %+v", gotManifest)
 	}
@@ -482,14 +430,8 @@ func TestWriteManifest(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		t.Fatalf("read manifest.json: %v", err)
-	}
 	var got project.Config
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal manifest.json: %v", err)
-	}
+	readJSON(t, filepath.Join(dir, "manifest.json"), &got)
 	if got.ID != cfg.ID || got.Name != cfg.Name || got.Branding.SiteURL != cfg.Branding.SiteURL {
 		t.Errorf("manifest mismatch: got %+v want %+v", got, cfg)
 	}
@@ -547,22 +489,10 @@ func TestPublicPatternOutputBackfillsCausalGroupIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobData, err := os.ReadFile(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	flakinessData, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var writtenDetail models.JobDetail
 	var writtenReport models.FlakinessReport
-	if err := json.Unmarshal(jobData, &writtenDetail); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(flakinessData, &writtenReport); err != nil {
-		t.Fatal(err)
-	}
+	readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), &writtenDetail)
+	readJSON(t, filepath.Join(dir, "flakiness.json"), &writtenReport)
 	jobGroup := writtenDetail.PatternAnalyses[0].CausalGroups[0]
 	reportGroup := writtenReport.RecurringPatterns[0].CausalGroups[0]
 	if jobGroup.ID == "" || jobGroup.ContentHash == "" || jobGroup.ID != reportGroup.ID || jobGroup.ContentHash != reportGroup.ContentHash {

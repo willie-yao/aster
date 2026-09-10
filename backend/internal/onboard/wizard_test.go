@@ -3,7 +3,6 @@ package onboard
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -554,32 +553,6 @@ func TestRun_K8sFlaggedInputsRequireStorage(t *testing.T) {
 				t.Fatalf("writes=%d pull requests=%d", writer.writes, pullRequests.calls)
 			}
 		})
-	}
-}
-
-func TestBuildPlan_DoesNotContainTokens(t *testing.T) {
-	deps, _, _, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out",
-		PromptMode: promptModeTemplate, GitHubToken: "fixture-github-token",
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	encoded, err := json.Marshal(plan)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	all := string(encoded)
-	for _, content := range plan.Files {
-		all += content
-	}
-	for _, secret := range []string{"fixture-github-token"} {
-		if strings.Contains(all, secret) {
-			t.Fatalf("plan or generated files contain %q", secret)
-		}
 	}
 }
 

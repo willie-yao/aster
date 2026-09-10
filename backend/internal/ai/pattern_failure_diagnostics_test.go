@@ -32,7 +32,7 @@ type patternRejectionReplayFixture struct {
 
 func TestPatternRejectionReplayFixtures(t *testing.T) {
 	paths, err := filepath.Glob("testdata/pattern-rejections/*.json")
-	if err != nil || len(paths) != 2 {
+	if err != nil || len(paths) != 1 {
 		t.Fatalf("fixtures=%d err=%v", len(paths), err)
 	}
 	for _, path := range paths {

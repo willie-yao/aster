@@ -7,45 +7,13 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-var searchBaseTime = time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
-
-func searchHoursAgo(h int) time.Time {
-	return searchBaseTime.Add(-time.Duration(h) * time.Hour)
-}
-
 func makeSearchBuild(buildID, jobName string, started time.Time, passed bool, tests []models.TestCase) models.BuildResult {
-	total := len(tests)
-	p, f, s := 0, 0, 0
-	for _, tc := range tests {
-		switch tc.Status {
-		case "passed":
-			p++
-		case "failed":
-			f++
-		case "skipped":
-			s++
-		}
-	}
-	result := "SUCCESS"
-	if !passed {
-		result = "FAILURE"
-	}
-	return models.BuildResult{
-		BuildInfo: models.BuildInfo{
-			BuildID:         buildID,
-			JobName:         jobName,
-			Started:         started,
-			Finished:        started.Add(300 * time.Second),
-			Passed:          passed,
-			Result:          result,
-			DurationSeconds: 300,
-		},
-		TestCases:    tests,
-		TestsTotal:   total,
-		TestsPassed:  p,
-		TestsFailed:  f,
-		TestsSkipped: s,
-	}
+	build := makeBuild(buildID, started, passed, tests)
+	build.JobName = jobName
+	build.Commit = ""
+	build.ProwURL = ""
+	build.BuildLogURL = ""
+	return build
 }
 
 func searchJobs() []models.ProwJob {
@@ -60,16 +28,16 @@ func TestBuildSearchIndex_Deduplication(t *testing.T) {
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("2", "job-alpha", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("2", "job-alpha", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestDup", "passed", 1.0, ""),
 			}),
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(2), false, []models.TestCase{
+			makeSearchBuild("1", "job-alpha", hoursAgo(2), false, []models.TestCase{
 				makeTC("TestDup", "failed", 1.0, "err"),
 			}),
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	count := 0
 	for _, e := range idx.Entries {
@@ -87,16 +55,16 @@ func TestBuildSearchIndex_StatusFromLatestRun(t *testing.T) {
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("2", "job-alpha", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("2", "job-alpha", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestStatus", "passed", 1.0, ""),
 			}),
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(2), false, []models.TestCase{
+			makeSearchBuild("1", "job-alpha", hoursAgo(2), false, []models.TestCase{
 				makeTC("TestStatus", "failed", 1.0, "err"),
 			}),
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	var found *models.SearchEntry
 	for i := range idx.Entries {
@@ -124,13 +92,13 @@ func TestBuildSearchIndex_JobStatusUsesNewestRun(t *testing.T) {
 		runs []models.BuildResult
 		want string
 	}{
-		{name: "passing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", searchHoursAgo(1), true, nil)}, want: string(models.JobCurrentPassing)},
-		{name: "failing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", searchHoursAgo(1), false, nil)}, want: string(models.JobCurrentFailing)},
+		{name: "passing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", hoursAgo(1), true, nil)}, want: string(models.JobCurrentPassing)},
+		{name: "failing", runs: []models.BuildResult{makeSearchBuild("2", "job-alpha", hoursAgo(1), false, nil)}, want: string(models.JobCurrentFailing)},
 		{name: "running", runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "2", JobName: "job-alpha", Result: "PENDING"}}}, want: string(models.JobCurrentRunning)},
 		{name: "unknown", runs: []models.BuildResult{}, want: string(models.JobCurrentUnknown)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			index := BuildSearchIndex(map[string][]models.BuildResult{"job-alpha": testCase.runs}, jobs, searchBaseTime)
+			index := BuildSearchIndex(map[string][]models.BuildResult{"job-alpha": testCase.runs}, jobs, baseTime)
 			for _, entry := range index.Entries {
 				if entry.Kind == "job" {
 					if entry.Status != testCase.want {
@@ -149,18 +117,18 @@ func TestBuildSearchIndex_SkippedOnlyExclusion(t *testing.T) {
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("2", "job-alpha", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("2", "job-alpha", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestSkipOnly", "skipped", 0, ""),
 				makeTC("TestReal", "passed", 1.0, ""),
 			}),
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(2), true, []models.TestCase{
+			makeSearchBuild("1", "job-alpha", hoursAgo(2), true, []models.TestCase{
 				makeTC("TestSkipOnly", "skipped", 0, ""),
 				makeTC("TestReal", "passed", 1.0, ""),
 			}),
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	for _, e := range idx.Entries {
 		if e.TestName == "TestSkipOnly" {
@@ -185,7 +153,7 @@ func TestBuildSearchIndex_SetupTeardownExclusion(t *testing.T) {
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("2", "job-alpha", searchHoursAgo(1), false, []models.TestCase{
+			makeSearchBuild("2", "job-alpha", hoursAgo(1), false, []models.TestCase{
 				makeTC("[SynchronizedBeforeSuite] setup", "passed", 1.0, ""),
 				makeTC("[BeforeSuite] init", "failed", 1.0, "setup failed"),
 				makeTC("[AfterSuite] cleanup", "passed", 1.0, ""),
@@ -194,7 +162,7 @@ func TestBuildSearchIndex_SetupTeardownExclusion(t *testing.T) {
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	names := make(map[string]bool)
 	for _, e := range idx.Entries {
@@ -226,19 +194,19 @@ func TestBuildSearchIndex_SortOrder(t *testing.T) {
 	}
 	jobResults := map[string][]models.BuildResult{
 		"job-beta": {
-			makeSearchBuild("1", "job-beta", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("1", "job-beta", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestZ", "passed", 1.0, ""),
 				makeTC("TestA", "passed", 1.0, ""),
 			}),
 		},
 		"job-alpha": {
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("1", "job-alpha", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestM", "passed", 1.0, ""),
 			}),
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	if len(idx.Entries) != 5 {
 		t.Fatalf("expected 5 entries, got %d", len(idx.Entries))
@@ -267,13 +235,13 @@ func TestBuildSearchIndex_JobMetadata(t *testing.T) {
 	jobs := searchJobs()
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(1), true, []models.TestCase{
+			makeSearchBuild("1", "job-alpha", hoursAgo(1), true, []models.TestCase{
 				makeTC("TestMeta", "passed", 1.0, ""),
 			}),
 		},
 	}
 
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 
 	// 1 job entry plus 1 test entry.
 	if len(idx.Entries) != 2 {
@@ -298,9 +266,9 @@ func TestBuildSearchIndex_JobMetadata(t *testing.T) {
 }
 
 func TestBuildSearchIndex_GeneratedAt(t *testing.T) {
-	idx := BuildSearchIndex(nil, nil, searchBaseTime)
+	idx := BuildSearchIndex(nil, nil, baseTime)
 
-	expected := searchBaseTime.UTC().Format(time.RFC3339)
+	expected := baseTime.UTC().Format(time.RFC3339)
 	if idx.GeneratedAt != expected {
 		t.Errorf("GeneratedAt = %q, want %q", idx.GeneratedAt, expected)
 	}
@@ -310,12 +278,12 @@ func TestBuildSearchIndexExcludesBuildFailures(t *testing.T) {
 	jobs := searchJobs()[:1]
 	jobResults := map[string][]models.BuildResult{
 		"job-alpha": {
-			makeSearchBuild("1", "job-alpha", searchHoursAgo(1), false, []models.TestCase{{
+			makeSearchBuild("1", "job-alpha", hoursAgo(1), false, []models.TestCase{{
 				Name: "Prow job execution", Source: models.TestCaseSourceBuild, Status: "failed",
 			}}),
 		},
 	}
-	idx := BuildSearchIndex(jobResults, jobs, searchBaseTime)
+	idx := BuildSearchIndex(jobResults, jobs, baseTime)
 	for _, entry := range idx.Entries {
 		if entry.TestName == "Prow job execution" {
 			t.Fatalf("build failure entered the test search index: %+v", entry)

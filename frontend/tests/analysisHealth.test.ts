@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import * as ts from "typescript";
 import {
   analysisHealthCounts,
@@ -24,50 +24,50 @@ import {
 } from "../src/lib/analysisTraces.js";
 import type { AnalysisTrace, AnalysisTraceEvent } from "../src/types/traces.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
-});
-const { AnalysisTraceLedger, CopyIdentifierAction, TraceEventRow } = (await vite.ssrLoadModule(
-  "/src/components/AnalysisTraceLedger.tsx",
-)) as {
-  AnalysisTraceLedger: (props: {
-    title: string;
-    description?: string;
-    metadata?: string;
-    items: Array<{
+const { AnalysisTraceLedger, CopyIdentifierAction, TraceEventRow, TraceDetailBody, AnalysisTraceFilters, defaultTheme } = await withSSR(async (vite) => {
+  const { AnalysisTraceLedger, CopyIdentifierAction, TraceEventRow, TraceDetailBody } = (await vite.ssrLoadModule(
+    "/src/components/AnalysisTraceLedger.tsx",
+  )) as {
+    AnalysisTraceLedger: (props: {
+      title: string;
+      description?: string;
+      metadata?: string;
+      items: Array<{
+        trace: AnalysisTrace;
+        verdict: ReturnType<typeof analysisHealthVerdict>;
+        displayTitle: string;
+        displayJob: string;
+        testHref: string;
+        responseIDs: string[];
+      }>;
+    }) => ReturnType<typeof createElement>;
+    CopyIdentifierAction: (props: {
+      label: string;
+      value: string;
+      copied: boolean;
+      onCopy: () => void;
+    }) => ReturnType<typeof createElement>;
+    TraceEventRow: (props: { event: AnalysisTraceEvent }) => ReturnType<typeof createElement>;
+    TraceDetailBody: (props: {
       trace: AnalysisTrace;
-      verdict: ReturnType<typeof analysisHealthVerdict>;
-      displayTitle: string;
-      displayJob: string;
-      testHref: string;
       responseIDs: string[];
-    }>;
-  }) => ReturnType<typeof createElement>;
-  CopyIdentifierAction: (props: {
-    label: string;
-    value: string;
-    copied: boolean;
-    onCopy: () => void;
-  }) => ReturnType<typeof createElement>;
-  TraceEventRow: (props: { event: AnalysisTraceEvent }) => ReturnType<typeof createElement>;
-};
-const { AnalysisTraceFilters } = (await vite.ssrLoadModule(
-  "/src/components/AnalysisTraceFilters.tsx",
-)) as {
-  AnalysisTraceFilters: (props: {
-    searchParams: URLSearchParams;
-    onApply: (params: URLSearchParams) => void;
-    onClear: () => void;
-  }) => ReturnType<typeof createElement>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-  defaultTheme: Theme;
-};
-await vite.close();
+      testHref?: string;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { AnalysisTraceFilters } = (await vite.ssrLoadModule(
+    "/src/components/AnalysisTraceFilters.tsx",
+  )) as {
+    AnalysisTraceFilters: (props: {
+      searchParams: URLSearchParams;
+      onApply: (params: URLSearchParams) => void;
+      onClear: () => void;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
+    defaultTheme: Theme;
+  };
+  return { AnalysisTraceLedger, CopyIdentifierAction, TraceEventRow, TraceDetailBody, AnalysisTraceFilters, defaultTheme };
+});
 
 const ledgerSource = readFileSync(
   resolve(process.cwd(), "src/components/AnalysisTraceLedger.tsx"),
@@ -477,14 +477,34 @@ test("health ledger leads with severity and why, and keeps route and copy action
   assert.deepEqual(collectInteractiveNesting(), []);
 });
 
-test("expanded health rows expose the test route and copyable identifiers", () => {
+test("health rows initially keep the test route in the collapsed detail body", () => {
   const html = render(
     createElement(AnalysisTraceLedger, { title: "Healthy", items: [ledgerItem()] }),
   );
 
   assert.match(html, /Completed without intervention/);
   assert.match(html, /aria-label="Expand Healthy analysis for Highly-available cluster\./);
+  assert.match(html, /aria-expanded="false"/);
   assert.doesNotMatch(html, /href="\/job\/job-main/);
+});
+
+test("trace detail body exposes the exact test route and distinct copy identifiers", () => {
+  const item = ledgerItem();
+  const html = render(createElement(TraceDetailBody, {
+    trace: item.trace,
+    responseIDs: item.responseIDs,
+    testHref: item.testHref,
+  }));
+  const links = [...html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gu)];
+  assert.equal(links.length, 1);
+  assert.equal(links[0][1], "/job/job-main/test/test-name?run=20134789654");
+  assert.match(links[0][2], /Open test run/);
+  const names = [...html.matchAll(/<button\b[^>]*aria-label="([^"]+)"/gu)].map((match) => match[1]);
+  assert.deepEqual(names, [
+    "Copy build 20134789654",
+    "Copy response 1 resp-one",
+    "Copy response 2 resp-two",
+  ]);
 });
 
 test("mobile event rows keep sequence elapsed kind outcome and details visible", () => {

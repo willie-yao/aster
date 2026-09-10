@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import * as ts from "typescript";
+import {
+  getSharedFailureEscalation, startSharedFailureEscalation,
+  type SharedFailureEscalationView,
+} from "../src/lib/sharedFailureEscalation.js";
 
 import {
   evidenceMember,
@@ -161,14 +166,56 @@ test("a failure is matched to its cluster on the whole correlation key", () => {
   assert.equal(findSharedFailureFor(undefined, "main", "j", "t"), undefined);
 });
 
-test("the shared failure escalation request identifies its subject by path", () => {
-  const client = source("src/lib/sharedFailureEscalation.ts");
+for (const method of ["GET", "POST"] as const) {
+  const id = "shared/cluster ?+#";
+  const invoke = () => method === "GET"
+    ? getSharedFailureEscalation(id)
+    : startSharedFailureEscalation(id, "shared-attempt-9");
 
-  assert.match(client, /api\/shared-failures\/\$\{encodeURIComponent\(id\)\}\/escalation/);
-  // The subject is entirely in the path, so the body carries nothing that
-  // could disagree with it.
-  assert.match(client, /idempotencyKey, "\{\}"/);
-});
+  test(`shared failure escalation ${method} identifies its subject only by path`, async (t) => {
+    const originalFetch = globalThis.fetch;
+    t.after(() => { globalThis.fetch = originalFetch; });
+    const result: SharedFailureEscalationView = {
+      ref: { id },
+      state: "complete",
+      root_cause: "The registry is unavailable.",
+      evidence: { repo: "org/repo", pull_number: 9, build_id: "42" },
+      citations: [{ path: "build-log.txt", line_start: 8, quote: "registry timeout" }],
+    };
+    const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, init });
+      return Response.json(result);
+    };
+
+    assert.deepEqual(await invoke(), result);
+    assert.equal(calls.length, 1);
+    const { url: input, init } = calls[0];
+    assert.equal(String(input), "/api/shared-failures/shared%2Fcluster%20%3F%2B%23/escalation");
+    assert.equal(init?.method ?? "GET", method);
+    assert.equal(init?.credentials, "same-origin");
+    if (method === "GET") {
+      assert.equal(init?.body, undefined);
+    } else {
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("Content-Type"), "application/json");
+      assert.equal(headers.get("Idempotency-Key"), "shared-attempt-9");
+      assert.equal(init?.body, "{}");
+    }
+  });
+
+  for (const [body, message] of [
+    ["  shared request rejected\n", "shared request rejected"],
+    [" \n ", "Escalation request failed with HTTP 409."],
+  ]) {
+    test(`shared failure escalation ${method} propagates ${body.trim() ? "server text" : "the HTTP fallback"}`, async (t) => {
+      const originalFetch = globalThis.fetch;
+      t.after(() => { globalThis.fetch = originalFetch; });
+      globalThis.fetch = async () => new Response(body, { status: 409 });
+      await assert.rejects(invoke, { message });
+    });
+  }
+}
 
 test("the shared failure control is gated on its own advertised capability", () => {
   const page = source("src/pages/SharedFailurePage.tsx");
@@ -186,14 +233,41 @@ test("a widespread verdict links to the shared failure instead of a peer", () =>
   assert.match(detail, /to=\{sharedFailurePath\(cluster\.id\)\}/);
 });
 
-test("the shared failure route is matched before the pull request number", () => {
-  const app = source("src/App.tsx");
-
-  // "shared" would otherwise be captured as a pull request number.
-  assert.ok(
-    app.indexOf('path="pull-requests/shared/:id"') <
-      app.indexOf('path="pull-requests/:number"'),
-  );
+test("App registers the shared failure and pull request detail routes exactly once", () => {
+  const file = ts.createSourceFile("App.tsx", source("src/App.tsx"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const app = file.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === "App");
+  assert.ok(app?.body, "missing App route owner");
+  const rendered = app.body.statements.find(ts.isReturnStatement)?.expression;
+  assert.ok(rendered, "missing App render");
+  const routeTrees: ts.JsxElement[] = [];
+  function findRoutes(node: ts.Node) {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === "Routes") routeTrees.push(node);
+    ts.forEachChild(node, findRoutes);
+  }
+  findRoutes(rendered);
+  assert.equal(routeTrees.length, 1, "App must render its route table");
+  const registrations: Array<{ path: string; component: string }> = [];
+  function visit(node: ts.Node) {
+    if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && node.tagName.getText(file) === "Route") {
+      const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
+      const path = attributes.find((attribute) => attribute.name.getText(file) === "path")?.initializer;
+      const element = attributes.find((attribute) => attribute.name.getText(file) === "element")?.initializer;
+      if (path && ts.isStringLiteral(path)) {
+        const child = element && ts.isJsxExpression(element) ? element.expression : undefined;
+        const component = child && ts.isJsxSelfClosingElement(child) ? child.tagName.getText(file) : "";
+        registrations.push({ path: path.text, component });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(routeTrees[0]);
+  for (const [path, component] of [
+    ["pull-requests/shared/:id", "SharedFailurePage"],
+    ["pull-requests/:number", "PullRequestDetailPage"],
+  ]) {
+    assert.deepEqual(registrations.filter((route) => route.path === path), [{ path, component }]);
+  }
 });
 
 test("the shared failure view says its build window is not a start time", () => {

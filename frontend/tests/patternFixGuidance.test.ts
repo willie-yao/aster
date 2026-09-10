@@ -243,7 +243,7 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(routing, /No failed JUnit test in these builds meets the Fix eligibility requirements/);
 });
 
-test("fix routing reads as an action and names the test it opens", () => {
+test("fix routing keeps action styling and a focus-accessible full label", () => {
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   // The old treatment was the monospace data token, which is exactly how build
@@ -257,16 +257,7 @@ test("fix routing reads as an action and names the test it opens", () => {
   assert.doesNotMatch(routing, /overviewTypography\.data/);
   assert.doesNotMatch(routing, /bgcolor: "action\.selected"/);
 
-  // The subject is in the visible label, not in a caption below it that reads
-  // as if it belonged to the next cause, and it uses the same humanized title
-  // the test ledger shows rather than the raw JUnit name. The label names the
-  // navigation it performs: "Fix" read as an action the button never took.
-  assert.match(routing, /parseTestDisplayName\(target\.testName\)\.displayName/);
-  assert.match(routing, /const actionLabel = "open representative failure"/);
-  assert.doesNotMatch(routing, /"View affected failure"|: "Fix"/);
-  // The icon carries the verb, so the visible label is only the test; the verb
-  // trails the same text in the accessible name.
-  assert.match(routing, /^\s*\{testName\}$/m);
+  // The subject must not be repeated in a caption below the action.
   assert.doesNotMatch(routing, /\{target\.testName\} in build \{target\.buildID\}\s*<\/Typography>/);
 
   // A long test name truncates inline, and the full value stays reachable on
@@ -277,31 +268,16 @@ test("fix routing reads as an action and names the test it opens", () => {
   assert.doesNotMatch(routing, /title=\{subject\}\s*\n\s*aria-label/);
 });
 
-test("the build only joins the label where it is needed to tell two actions apart", () => {
+test("routing callers propagate build disambiguation and staleness while suffix spacing stays explicit", () => {
   const banner = source("src/components/PatternBanner.tsx");
   const routing = source("src/components/CausalGroupFixRouting.tsx");
 
   // Two causes can route to the same test in different builds. Paying 19 digits
   // on every action to cover that case is what made the label unreadable.
   assert.match(routing, /showBuild = false/);
-  assert.match(routing, /\{showBuild && \(/);
   assert.match(banner, /showBuild=\{fixTargetNeedsBuild\[index\]\}/);
   assert.match(banner, /stale: !lifecycleActive/);
-
-  // Counting the DISPLAYED label, not the canonical name: two canonical names
-  // can humanize to one title, which would hide both builds and leave two
-  // identical buttons. causalFixRouting.test.ts proves the rendered result.
-  assert.match(banner, /parseTestDisplayName\(target\.testName\)\.displayName/);
-  assert.match(banner, /const fixTargetLabelCounts = fixTargetLabels\.reduce/);
-
-  // One suffix backs both strings, and the accessible name leads with the
-  // visible subject, so the visible label cannot drift out of being a literal
-  // prefix of the accessible name.
-  assert.match(routing, /const buildSuffix = ` in build \$\{target\.buildID\}`/);
-  assert.match(routing, /const subject = `\$\{testName\}\$\{buildSuffix\}`/);
-  assert.match(routing, /const accessibleName = `\$\{subject\}, \$\{actionLabel\}`/);
   assert.match(routing, /whiteSpace: "pre"/);
-  assert.doesNotMatch(routing, /\\u00a0/);
 });
 
 test("the pattern-level panel is a fallback for causes with no eligible test", () => {

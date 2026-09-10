@@ -297,11 +297,8 @@ func TestNewRejectsInvalidReasoningEffortBeforeProviderIO(t *testing.T) {
 	}
 }
 
-// TestReusePlannerMatchesAnalyzerPromptIdentity keeps scheduling and publication
-// on one prompt contract. The planner decides reuse by comparing prompt hashes,
-// so a planner configured differently from the analyzing service would treat
-// every published analysis as stale and reanalyze the whole corpus.
-func TestReusePlannerMatchesAnalyzerPromptIdentity(t *testing.T) {
+// The planner preserves the configured analysis source repository.
+func TestReusePlannerPreservesAnalysisSourceRepository(t *testing.T) {
 	dir := t.TempDir()
 	write := func(path, content string) {
 		t.Helper()

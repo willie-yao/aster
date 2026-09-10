@@ -77,7 +77,10 @@ func newTestSMTPSender(t *testing.T, config SMTPConfig, session *fakeSMTPSession
 func TestSMTPSenderStartTLSAndMIME(t *testing.T) {
 	session := &fakeSMTPSession{startTLSAvailable: true}
 	sender, implicit, tlsConfig, _ := newTestSMTPSender(t, SMTPConfig{Host: "smtp.example.com", Port: 587, TLSMode: "starttls"}, session)
-	if err := sender.Send(context.Background(), testMessage()); err != nil {
+	sent := testMessage()
+	sent.TextBody = "plain body: caf\u00e9 = yes"
+	sent.HTMLBody = "<p>html body: caf\u00e9 = yes</p>"
+	if err := sender.Send(context.Background(), sent); err != nil {
 		t.Fatal(err)
 	}
 	if *implicit || !session.startTLSCalled || session.authCalled {
@@ -102,22 +105,31 @@ func TestSMTPSenderStartTLSAndMIME(t *testing.T) {
 		t.Fatalf("content type = %q params=%v err=%v", mediaType, params, err)
 	}
 	reader := multipart.NewReader(message.Body, params["boundary"])
-	parts := 0
-	for {
+	for i, want := range []struct {
+		mediaType string
+		body      string
+	}{
+		{mediaType: "text/plain", body: sent.TextBody},
+		{mediaType: "text/html", body: sent.HTMLBody},
+	} {
 		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("part %d: %v", i+1, err)
 		}
-		if _, err := io.ReadAll(part); err != nil {
-			t.Fatal(err)
+		mediaType, params, err := mimeParseMediaType(part.Header.Get("Content-Type"))
+		if err != nil || mediaType != want.mediaType || !strings.EqualFold(params["charset"], "utf-8") {
+			t.Fatalf("part %d content type = %q params=%v err=%v, want %s with UTF-8 charset", i+1, mediaType, params, err, want.mediaType)
 		}
-		parts++
+		body, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("part %d body: %v", i+1, err)
+		}
+		if string(body) != want.body {
+			t.Fatalf("part %d body = %q, want %q", i+1, body, want.body)
+		}
 	}
-	if parts != 2 {
-		t.Fatalf("MIME parts = %d", parts)
+	if _, err := reader.NextPart(); !errors.Is(err, io.EOF) {
+		t.Fatalf("after two MIME parts: err = %v, want EOF", err)
 	}
 }
 

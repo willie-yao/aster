@@ -19,7 +19,7 @@ func TestServiceAnalyzeFailureReturnsResult(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"summary":"result","is_transient":false,"root_cause":"cause","severity":"Low","suggested_fix":"fix","relevant_files":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
@@ -83,7 +83,7 @@ func TestServiceAnalyzeFailureClonesCachedResult(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,

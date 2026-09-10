@@ -42,37 +42,47 @@ Keep `CONTEXT` explicit in every Kubernetes and Helm command. Use the CLI and ch
 A normal contributor uses the published binary and does not need an engine source checkout or local build.
 
 ```bash
-export CLI_DIR="$HOME/.local/share/aster/$CLI_VERSION"
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) CLI_TARGET=linux-amd64 ;;
-  Linux-aarch64|Linux-arm64) CLI_TARGET=linux-arm64 ;;
-  Darwin-x86_64) CLI_TARGET=darwin-amd64 ;;
-  Darwin-arm64) CLI_TARGET=darwin-arm64 ;;
-  *) printf 'Unsupported CLI platform\n' >&2; exit 1 ;;
-esac
+CLI_PATH=$(
+  test -n "${CLI_VERSION:-}" || { printf 'Set CLI_VERSION to a published tag\n' >&2; exit 1; }
+  CLI_OS=$(uname -s) || exit $?
+  CLI_ARCH=$(uname -m) || exit $?
+  case "$CLI_OS-$CLI_ARCH" in
+    (Linux-x86_64) CLI_TARGET=linux-amd64 ;;
+    (Linux-aarch64|Linux-arm64) CLI_TARGET=linux-arm64 ;;
+    (Darwin-x86_64) CLI_TARGET=darwin-amd64 ;;
+    (Darwin-arm64) CLI_TARGET=darwin-arm64 ;;
+    (*) printf 'Unsupported CLI platform\n' >&2; exit 1 ;;
+  esac
 
-CLI_ASSET="aster-${CLI_VERSION}-${CLI_TARGET}"
-RELEASE_URL="https://github.com/willie-yao/aster/releases/download/${CLI_VERSION}"
-install -d -m 755 "$CLI_DIR"
-DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/aster-cli-download.XXXXXX")
-trap 'find "$DOWNLOAD_DIR" -type f -delete 2>/dev/null || true; rmdir "$DOWNLOAD_DIR" 2>/dev/null || true' EXIT
-curl --fail --location "$RELEASE_URL/$CLI_ASSET" --output "$DOWNLOAD_DIR/$CLI_ASSET"
-curl --fail --location "$RELEASE_URL/SHA256SUMS" --output "$DOWNLOAD_DIR/SHA256SUMS"
-CHECKSUM_LINE=$(awk -v asset="$CLI_ASSET" '$2 == asset {print}' "$DOWNLOAD_DIR/SHA256SUMS")
-test -n "$CHECKSUM_LINE"
-(
-  cd "$DOWNLOAD_DIR"
+  CLI_DIR="$HOME/.local/share/aster/$CLI_VERSION"
+  CLI_ASSET="aster-${CLI_VERSION}-${CLI_TARGET}"
+  RELEASE_URL="https://github.com/willie-yao/aster/releases/download/${CLI_VERSION}"
+  install -d -m 755 "$CLI_DIR" || exit $?
+  DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-$CLI_DIR}/aster-cli-download.XXXXXX") || exit $?
+  trap 'status=$?; cleanup_status=0
+    rm -f -- "$DOWNLOAD_DIR/$CLI_ASSET" "$DOWNLOAD_DIR/SHA256SUMS" &&
+      rmdir -- "$DOWNLOAD_DIR" || cleanup_status=$?
+    if [ "$status" -eq 0 ]; then status=$cleanup_status; fi
+    exit "$status"' EXIT
+  curl --fail --location "$RELEASE_URL/$CLI_ASSET" --output "$DOWNLOAD_DIR/$CLI_ASSET" || exit $?
+  curl --fail --location "$RELEASE_URL/SHA256SUMS" --output "$DOWNLOAD_DIR/SHA256SUMS" || exit $?
+  CHECKSUM_LINE=$(awk -v asset="$CLI_ASSET" '$2 == asset {print}' "$DOWNLOAD_DIR/SHA256SUMS") || exit $?
+  test -n "$CHECKSUM_LINE" || { printf 'Missing CLI checksum entry\n' >&2; exit 1; }
+  cd "$DOWNLOAD_DIR" || exit $?
   if command -v sha256sum >/dev/null; then
-    printf '%s\n' "$CHECKSUM_LINE" | sha256sum --check
+    sha256sum --check <<< "$CHECKSUM_LINE" >&2 || exit $?
+  elif command -v shasum >/dev/null; then
+    shasum -a 256 --check <<< "$CHECKSUM_LINE" >&2 || exit $?
   else
-    printf '%s\n' "$CHECKSUM_LINE" | shasum -a 256 --check
+    printf 'Install sha256sum or shasum to verify the CLI\n' >&2
+    exit 1
   fi
-)
-install -m 0755 "$DOWNLOAD_DIR/$CLI_ASSET" "$CLI_DIR/$CLI_ASSET"
-export ASTER="$CLI_DIR/$CLI_ASSET"
+  install -m 0755 "$DOWNLOAD_DIR/$CLI_ASSET" "$CLI_DIR/$CLI_ASSET" || exit $?
+  printf '%s\n' "$CLI_DIR/$CLI_ASSET" || exit $?
+) && export ASTER="$CLI_PATH"
 ```
 
-A missing asset, missing checksum entry, checksum mismatch, or unavailable checksum tool stops the procedure.
+A missing asset, missing checksum entry, checksum mismatch, or unavailable checksum tool stops the procedure before installation. Run the block as a whole and stop on any nonzero result. It cleans up downloads immediately, preserves caller shell options and traps, and exports `ASTER` only after installation and cleanup succeed. Verification failures leave an existing binary and `ASTER` unchanged; a failed final install may have modified its destination.
 
 ## Review the consumer bundle
 
@@ -146,43 +156,52 @@ Install refuses an existing release. The wrapper validates the current bundle, w
 
 ## Verify the first deployment
 
-Resolve release-owned objects through stable labels and wait for the writer and server:
+Run each verification block as a whole and stop on any nonzero result. Resolve release-owned objects through stable labels and wait for the writer and server. The readiness block keeps the resolved names in your calling shell:
 
 ```bash
+test -n "${CONTEXT:-}" && test -n "${NAMESPACE:-}" && test -n "${RELEASE:-}" &&
 SERVER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
-  -o jsonpath='{.items[0].metadata.name}')
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$SERVER" &&
 WRITER=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=worker" \
-  -o jsonpath='{.items[0].metadata.name}')
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$WRITER" &&
 SERVICE=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get service \
   -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=server" \
-  -o jsonpath='{.items[0].metadata.name}')
-test -n "$SERVER" && test -n "$WRITER" && test -n "$SERVICE"
-kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$SERVER" --timeout=5m
+  -o jsonpath='{.items[0].metadata.name}') && test -n "$SERVICE" &&
+kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$SERVER" --timeout=5m &&
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$WRITER" --timeout=10m
 ```
 
-Port-forward the Service in a second terminal, then verify published and private paths:
+Port-forward the Service in a second terminal using the same reviewed `CONTEXT` and `NAMESPACE` and the resolved `SERVICE` value from the first terminal:
 
 ```bash
 kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward "service/$SERVICE" 18080:80
 ```
 
+Back in the first terminal, verify published and private paths. This Bash subshell stops on errors without changing the calling shell's options:
+
 ```bash
+(
+set -euo pipefail
+test -n "${EXPECTED_JOB:-}"
 curl --fail --retry 60 --retry-delay 10 --retry-connrefused \
   http://127.0.0.1:18080/data/manifest.json | python3 -m json.tool >/dev/null
 curl --fail http://127.0.0.1:18080/data/dashboard.json \
   | grep -F "$EXPECTED_JOB"
-test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  http://127.0.0.1:18080/data/ai_cache.json)" = 404
-if [ -n "$PUBLIC_URL" ]; then
+PRIVATE_STATUS=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  http://127.0.0.1:18080/data/ai_cache.json)
+test "$PRIVATE_STATUS" = 404
+if [ -n "${PUBLIC_URL:-}" ]; then
   curl --fail "${PUBLIC_URL%/}/data/manifest.json" | python3 -m json.tool >/dev/null
 fi
-if [ -n "$EXECUTION_NAMESPACE" ]; then
-  test -z "$(kubectl --context "$CONTEXT" -n "$EXECUTION_NAMESPACE" \
-    get sandboxes.agents.x-k8s.io -o name)"
+if [ -n "${EXECUTION_NAMESPACE:-}" ]; then
+  test -n "${CONTEXT:-}"
+  SANDBOXES=$(kubectl --context "$CONTEXT" -n "$EXECUTION_NAMESPACE" \
+    get sandboxes.agents.x-k8s.io -o name)
+  test -z "$SANDBOXES"
 fi
+)
 ```
 
 Confirm branding, the expected project job, authentication when enabled, normal DNS, and the configured public-origin topology. Do not use a direct-IP kubeconfig, edit `/etc/hosts`, remove the cluster CA, or disable TLS validation.

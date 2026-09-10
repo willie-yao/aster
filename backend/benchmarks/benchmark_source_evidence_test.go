@@ -2,7 +2,6 @@ package benchmarks
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -304,14 +303,13 @@ func TestBenchmarkExpectedSourceReadCoverage(t *testing.T) {
 	}
 }
 
-func TestBenchmarkSourceReadPartialCoverageIsArmIndependent(t *testing.T) {
+func TestBenchmarkSourceReadPartialCoverage(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	expected := []benchmarkSourceRange{{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 10, LineEnd: 20}}
 	reads := []benchmarkSourceRead{{benchmarkSourceRange: benchmarkSourceRange{Repository: "owner/repo", Revision: revision, Path: "pkg/file.go", LineStart: 12, LineEnd: 16}, Tool: "read", Outcome: "succeeded"}}
-	left := benchmarkExpectedSourceReadCoverage(expected, reads)
-	right := benchmarkExpectedSourceReadCoverage(expected, append([]benchmarkSourceRead(nil), reads...))
-	if !reflect.DeepEqual(left, right) || left.Hits != 0 || left.CoveredLines != 5 || left.ExpectedLines != 11 || left.CoverageRatio != 5.0/11.0 || len(left.Ranges) != 1 || left.Ranges[0].CoverageRatio != 5.0/11.0 {
-		t.Fatalf("coverage left=%+v right=%+v", left, right)
+	coverage := benchmarkExpectedSourceReadCoverage(expected, reads)
+	if coverage.Hits != 0 || coverage.CoveredLines != 5 || coverage.ExpectedLines != 11 || coverage.CoverageRatio != 5.0/11.0 || len(coverage.Ranges) != 1 || coverage.Ranges[0].CoverageRatio != 5.0/11.0 {
+		t.Fatalf("coverage = %+v", coverage)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -367,28 +368,55 @@ func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *test
 	}
 }
 
-func TestParseJSONObjectSelectsFinalValidReviewObject(t *testing.T) {
-	raw := `The change includes code like if err != nil { return retry() }.
+func TestParseReviewIssuesCandidates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "final-valid",
+			raw: `The change includes code like if err != nil { return retry() }.
 First draft: {"issues":["stale concern"]}
 Final answer:
-` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```"
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-}
-
-func TestParseJSONObjectHandlesBracesInsideStrings(t *testing.T) {
-	raw := `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "map[string]") {
-		t.Fatalf("issues = %#v", issues)
+` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```",
+			want: []string{},
+		},
+		{
+			name: "string-braces",
+			raw:  `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`,
+			want: []string{`check map[string]any{"key": "value"}`},
+		},
+		{
+			name: "invalid-outer",
+			raw:  `reasoning { final: {"issues":[]} }`,
+			want: []string{},
+		},
+		{
+			name: "valid-outer",
+			raw:  `{"issues":["outer issue contains {nested text}"]}`,
+			want: []string{"outer issue contains {nested text}"},
+		},
+		{
+			name: "prose-brace",
+			raw:  `The code checks strings.Contains(s, "{"). Final: {"issues":[]}`,
+			want: []string{},
+		},
+		{
+			name: "original-offset",
+			raw:  "{\"issues\":[\"" + strings.Repeat("\n", 50) + "earlier\"]}\n{\"issues\":[]}",
+			want: []string{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issues, err := parseReviewIssues(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(issues, tc.want) {
+				t.Fatalf("issues = %#v, want %#v", issues, tc.want)
+			}
+		})
 	}
 }
 
@@ -397,50 +425,6 @@ func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
 	_, err := critiqueAgentFix(t.Context(), completer, systemicPattern("etcd"), map[string]string{"a.go": "package a\n"}, "diff", nil)
 	if err == nil || !strings.Contains(err.Error(), "issues field is required") {
 		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestParseReviewIssuesFallsThroughInvalidOuterWrapper(t *testing.T) {
-	raw := `reasoning { final: {"issues":[]} }`
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-}
-
-func TestParseReviewIssuesPrefersValidOuterResponse(t *testing.T) {
-	raw := `{"issues":["outer issue contains {nested text}"]}`
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 1 || issues[0] != "outer issue contains {nested text}" {
-		t.Fatalf("issues = %#v", issues)
-	}
-}
-
-func TestParseReviewIssuesIgnoresQuotedProseBrace(t *testing.T) {
-	raw := `The code checks strings.Contains(s, "{"). Final: {"issues":[]}`
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("issues = %#v", issues)
-	}
-}
-
-func TestParseReviewIssuesOrdersEscapedDraftByOriginalOffset(t *testing.T) {
-	raw := "{\"issues\":[\"" + strings.Repeat("\n", 50) + "earlier\"]}\n{\"issues\":[]}"
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("earlier escaped draft won: %#v", issues)
 	}
 }
 

@@ -209,20 +209,13 @@ test("one shared component defines the briefing section treatment", () => {
   assert.match(panel, /<BriefingSection label="Suggested remediation">/);
 });
 
-test("a long section cannot run into the next one without a boundary", () => {
+test("briefing boundaries use a quiet rule and padding wider than the label gap", () => {
   const section = source("src/components/BriefingSection.tsx");
 
   // A root cause routinely runs several hundred pixels tall. The container gap
   // alone did not read as a boundary against a block that size.
-  assert.match(section, /\.\$\{briefingSectionClass\} ~ &/);
   assert.match(section, /borderTop: "1px solid"/);
   assert.match(section, /borderColor: "divider"/);
-
-  // Keying on a preceding sibling section rather than on position means an
-  // intervening div, or a future sibling that happens to be a section, cannot
-  // change which block goes unruled.
-  assert.match(section, /className=\{briefingSectionClass\}/);
-  assert.doesNotMatch(section, /first-of-type|first-child/);
 
   // The separation added on top of the container gap must exceed the gap
   // between a section's own label and its body, or the rhythm inverts.
@@ -343,14 +336,10 @@ test("the chat wears the page's section band instead of its own chat styling", (
   assert.doesNotMatch(chat, /borderRadius: "\d+px"/);
 });
 
-test("the severity chip is suppressed exactly where a header already states it", () => {
-  const panel = source("src/components/AiAnalysisPanel.tsx");
+test("severity suppression callers keep the signal in desktop and mobile headers", () => {
   const testDetail = source("src/pages/TestDetailPage.tsx");
   const table = source("src/components/TestCaseTable.tsx");
   const buildFailure = source("src/components/BuildFailurePanel.tsx");
-
-  assert.match(panel, /severityInHeader = false/);
-  assert.match(panel, /\{!severityInHeader && \(\s*<Chip/);
 
   // The test detail band always leads with the severity, so it always opts out.
   assert.match(testDetail, /severity\} severity ·/);

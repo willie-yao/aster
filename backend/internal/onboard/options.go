@@ -87,7 +87,7 @@ type Options struct {
 	// GitHubToken authenticates metadata/doc reads and scaffold PR creation. It
 	// is never copied into a plan or generated file.
 	GitHubToken string
-	// PromptTimeout bounds prompt authoring, including agent execution.
+	// PromptTimeout bounds source revision resolution for the prompt handoff.
 	PromptTimeout time.Duration
 
 	// OpenPR opens a pull request against the dashboard repo with the scaffold

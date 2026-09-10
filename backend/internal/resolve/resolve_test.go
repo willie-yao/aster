@@ -96,9 +96,9 @@ func TestPrune_ReopensDespiteWhitespaceInNewerBuild(t *testing.T) {
 
 func TestPrune_KeepsWhenOnlyUnparseableOlderContext(t *testing.T) {
 	s := &State{Resolved: map[string]Entry{"a": {Watermark: "250"}}}
-	out, changed := s.Prune([]models.PatternAnalysis{pattern("a", "100", "250")})
+	out, changed := s.Prune([]models.PatternAnalysis{pattern("a", "junk", "100", "250", "999x")})
 	if changed || !out.IsResolved("a") {
-		t.Fatal("no newer build: should stay resolved")
+		t.Fatal("malformed, older, and equal build IDs should leave the pattern resolved")
 	}
 }
 
@@ -108,9 +108,6 @@ func TestLoadSave_RoundTrip(t *testing.T) {
 		"a": {ResolvedBy: "willie-yao", Note: "fixed by test-infra #123", Watermark: "42", Subject: "job x"},
 	}}
 	if err := s.Save(dir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := filepath.Abs(filepath.Join(dir, FileName)); err != nil {
 		t.Fatal(err)
 	}
 	got := Load(dir)

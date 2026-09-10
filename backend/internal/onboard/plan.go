@@ -3,7 +3,6 @@ package onboard
 import (
 	"context"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -158,7 +157,7 @@ func buildPlan(ctx context.Context, opts Options, planning planningContext, deps
 	if err != nil {
 		return nil, fmt.Errorf("hashing discovery output: %w", err)
 	}
-	promptPlan := promptResult.promptPlan(opts)
+	promptPlan := promptResult.promptPlan()
 	promptPlan.BaselineStatus = promptBaselineSourceOnly
 	promptPlan.CandidateSHA256 = planArtifactDigest([]byte(prompt))
 	engine := currentEnginePlan()
@@ -295,11 +294,9 @@ func effectiveAIEnabled(opts Options) bool {
 	return opts.AIEnabled == nil || *opts.AIEnabled
 }
 
-type defaultPromptBuilder struct {
-	err io.Writer
-}
+type defaultPromptBuilder struct{}
 
-func (b defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, promptPreparationResult, error) {
+func (defaultPromptBuilder) Build(ctx context.Context, opts Options, data scaffoldData, input promptDraftInput) (string, promptPreparationResult, error) {
 	switch effectivePromptMode(opts) {
 	case promptModeHandoff:
 		parentCtx := ctx

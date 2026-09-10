@@ -122,25 +122,11 @@ func TestModelProvenanceRejectsEndpointLikeValues(t *testing.T) {
 	}
 }
 
-func TestVersionOneLedgerIsRejectedAndCurrentModelMapIsRepaired(t *testing.T) {
+func TestCurrentLedgerModelMapIsRepaired(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "usage.json")
-	old := UsageLedger{
-		Version: 1, Currency: "USD", RetentionDays: 90,
-		Days: []DailyUsage{}, RecentOperations: []OperationUsage{},
-	}
-	data, err := json.Marshal(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewRecorder(path, RecorderOptions{RetentionDays: 90, RecentOperations: 10, Now: func() time.Time { return now }}); err == nil {
-		t.Fatal("version 1 ledger was accepted")
-	}
 	current := UsageLedger{Version: LedgerVersion, Days: []DailyUsage{{Date: "2026-08-10", ModelCountsKnown: true}}, RecentOperations: []OperationUsage{}}
-	data, err = json.Marshal(current)
+	data, err := json.Marshal(current)
 	if err != nil {
 		t.Fatal(err)
 	}

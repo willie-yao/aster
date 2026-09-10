@@ -4,7 +4,7 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import {
   attentionGroupNoun,
   attentionGroups,
@@ -20,28 +20,23 @@ import type {
 } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { NeedsAttention, ManifestContext, defaultTheme } = await withSSR(async (vite) => {
+  const { NeedsAttention } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
+    NeedsAttention: (props: {
+      report: FlakinessReport | null;
+      loading: boolean;
+      error: string | null;
+      jobsByID: Record<string, JobSummary>;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { ManifestContext } = (await vite.ssrLoadModule("/src/hooks/useManifest.ts")) as {
+    ManifestContext: React.Context<Manifest | null>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
+    defaultTheme: Theme;
+  };
+  return { NeedsAttention, ManifestContext, defaultTheme };
 });
-const { NeedsAttention } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
-  NeedsAttention: (props: {
-    report: FlakinessReport | null;
-    loading: boolean;
-    error: string | null;
-    jobsByID: Record<string, JobSummary>;
-  }) => ReturnType<typeof createElement>;
-};
-const { ManifestContext } = (await vite.ssrLoadModule("/src/hooks/useManifest.ts")) as {
-  ManifestContext: React.Context<Manifest | null>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-  defaultTheme: Theme;
-};
-await vite.close();
 
 function manifest(threshold?: number): Manifest {
   return {

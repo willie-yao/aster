@@ -141,80 +141,53 @@ func TestBuildPlan_OpenPRDoesNotRequireWriteCredential(t *testing.T) {
 	}
 }
 
-func TestApply_RejectsModifiedPlanBeforeWriting(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	plan.Files["../outside"] = "unsafe"
-	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "unexpected file") {
-		t.Fatalf("applyPlan error = %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("modified plan wrote %d time(s)", writer.writes)
-	}
-}
-
-func TestApply_RejectsProjectMutationBeforeWriting(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	plan.Files["project.yaml"] = "id: invalid\n"
-	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "failed validation") {
-		t.Fatalf("applyPlan error = %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("modified plan wrote %d time(s)", writer.writes)
-	}
-}
-
-func TestApply_RejectsMismatchedDashboardRepoFields(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	plan.DashboardRepo.Owner = "other"
-	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "do not match full_name") {
-		t.Fatalf("applyPlan error = %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("mismatched plan wrote %d time(s)", writer.writes)
-	}
-}
-
-func TestApply_RejectsGitHubTokenInPlanFiles(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	token := "fixture-github-token"
-	plan.Files["prompts/system.md"] = token
-	if err := applyPlan(context.Background(), plan, token, deps); err == nil || !strings.Contains(err.Error(), "contains the supplied GitHub credential") {
-		t.Fatalf("applyPlan error = %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("credential-bearing plan wrote %d time(s)", writer.writes)
+func TestApply_RejectsMutatedPlanBeforeWriting(t *testing.T) {
+	const token = "fixture-github-token"
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*Plan)
+		token   string
+		wantErr string
+	}{
+		{name: "unexpected path", mutate: func(plan *Plan) {
+			plan.Files["../outside"] = "unsafe"
+		}, wantErr: "unexpected file"},
+		{name: "invalid project", mutate: func(plan *Plan) {
+			plan.Files["project.yaml"] = "id: invalid\n"
+		}, wantErr: "failed validation"},
+		{name: "mismatched repository", mutate: func(plan *Plan) {
+			plan.DashboardRepo.Owner = "other"
+		}, wantErr: "do not match full_name"},
+		{name: "credential in file", mutate: func(plan *Plan) {
+			plan.Files["prompts/system.md"] = token
+		}, token: token, wantErr: "contains the supplied GitHub credential"},
+		{name: "credential in metadata before validation", mutate: func(plan *Plan) {
+			plan.Destination.OutDir = token
+			plan.Deployment.Mode = token
+		}, token: token, wantErr: "contains the supplied GitHub credential"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, writer, _ := wizardDependencies("")
+			opts := Options{
+				TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
+				SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
+			}
+			plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
+			if err != nil {
+				t.Fatalf("buildPlan: %v", err)
+			}
+			tc.mutate(plan)
+			err = applyPlan(context.Background(), plan, tc.token, deps)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("applyPlan error = %v, want containing %q", err, tc.wantErr)
+			}
+			if tc.token != "" && err != nil && strings.Contains(err.Error(), tc.token) {
+				t.Errorf("credential leaked into error: %v", err)
+			}
+			if writer.writes != 0 {
+				t.Errorf("mutated plan wrote %d time(s)", writer.writes)
+			}
+		})
 	}
 }
 
@@ -226,31 +199,6 @@ func TestNormalizeRepositories_ChecksCredentialsBeforeParsing(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), opts.GitHubToken) {
 		t.Fatalf("credential leaked into error: %v", err)
-	}
-}
-
-func TestApply_RejectsGitHubTokenInPlanMetadataBeforeValidation(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
-	opts := Options{
-		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
-		SourceRepo: "example/project", Mode: modePages, EngineRef: "main", OutDir: "out", PromptMode: promptModeTemplate,
-	}
-	plan, err := buildPlan(context.Background(), opts, planningContext{}, deps)
-	if err != nil {
-		t.Fatalf("buildPlan: %v", err)
-	}
-	token := "fixture-github-token"
-	plan.Destination.OutDir = token
-	plan.Deployment.Mode = token
-	err = applyPlan(context.Background(), plan, token, deps)
-	if err == nil || !strings.Contains(err.Error(), "contains the supplied GitHub credential") {
-		t.Fatalf("applyPlan error = %v", err)
-	}
-	if strings.Contains(err.Error(), token) {
-		t.Fatalf("credential leaked into error: %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("credential-bearing plan wrote %d time(s)", writer.writes)
 	}
 }
 
@@ -292,7 +240,7 @@ func TestBuildPlanPassesExistingJobEvidenceToPromptBuilder(t *testing.T) {
 }
 
 func TestApply_RejectsDestinationChangesAfterReview(t *testing.T) {
-	deps, _, writer, _ := wizardDependencies("")
+	deps, _, _, _ := wizardDependencies("")
 	dir := t.TempDir()
 	deps.files = localScaffoldWriter{}
 	opts := Options{
@@ -308,9 +256,6 @@ func TestApply_RejectsDestinationChangesAfterReview(t *testing.T) {
 	}
 	if err := applyPlan(context.Background(), plan, "", deps); err == nil || !strings.Contains(err.Error(), "changed after review") {
 		t.Fatalf("applyPlan error = %v", err)
-	}
-	if writer.writes != 0 {
-		t.Fatalf("fake writer writes = %d", writer.writes)
 	}
 	content, err := os.ReadFile(filepath.Join(dir, "project.yaml"))
 	if err != nil || string(content) != "unexpected" {

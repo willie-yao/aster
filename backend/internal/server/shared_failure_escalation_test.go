@@ -77,20 +77,7 @@ func sharedFailureServer(t *testing.T, runner SharedFailureEscalationRunner) *ht
 
 func startSharedFailure(t *testing.T, srv *httptest.Server, body, idempotency, authHeader string) *http.Response {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+sharedFailurePath, strings.NewReader(body))
-	if idempotency != "" {
-		req.Header.Set("Idempotency-Key", idempotency)
-	}
-	if authHeader != "" {
-		req.Header.Set("Authorization", authHeader)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	return resp
+	return postEscalation(t, srv, sharedFailurePath, body, idempotency, authHeader)
 }
 
 func capabilitiesOf(t *testing.T, srv *httptest.Server) Capabilities {

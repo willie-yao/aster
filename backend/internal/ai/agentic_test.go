@@ -255,6 +255,9 @@ func newScriptedChatServer(t *testing.T) *scriptedChatServer {
 		reqBody, _ := io.ReadAll(r.Body)
 		s.requests = append(s.requests, reqBody)
 		w.Header().Set("Content-Type", "application/json")
+		if status == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "0")
+		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
@@ -767,7 +770,7 @@ func TestAgentic_EvidencePlanCoverageSatisfiesGCSFloorAndSurvivesReload(t *testi
 	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"x509": `
 id: x509
 triggers: ["x509"]
@@ -831,7 +834,7 @@ func TestAgentic_CompleteSparseEvidencePlanSatisfiesGCSFloor(t *testing.T) {
 	final := `{"summary":"profiled failure","is_transient":false,"root_cause":"The profiled failure is proven by build-log.txt.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"initiating failure"}]}`
 	srv.push(200, chatRespFinal(final))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"profiled": `
 id: profiled
 triggers: ["profiled"]
@@ -1010,7 +1013,7 @@ func TestAgentic_EvidencePlanCoverageDoesNotBypassMinToolCalls(t *testing.T) {
 	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
 	srv.push(200, chatRespFinal(final))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"x509": `
 id: x509
 triggers: ["x509"]
@@ -1048,7 +1051,7 @@ required_evidence:
 }
 
 func TestEvidencePlanCoverageRequiresCompleteInitialScan(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"profiled": `
 id: profiled
 triggers: ["profiled"]
@@ -1572,7 +1575,7 @@ func TestAgentic_PassingPostInjectionInitialIsCached(t *testing.T) {
 	srv.push(200, chatRespFinal(initial))
 	srv.push(200, chatRespFinal(revised))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -1746,7 +1749,7 @@ func TestAzureEvidenceBackedRepairUsesHistoricalPublishedQuality(t *testing.T) {
 		fmt.Fprintf(&candidateRecipe, "  - id: candidate-%d\n    any_of: [\"^candidate-%d\\\\.log$\"]\n", i, i)
 		paths = append(paths, fmt.Sprintf("candidate-%d.log", i))
 	}
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"current":   currentRecipe.String(),
 		"candidate": candidateRecipe.String(),
 	})
@@ -2229,7 +2232,7 @@ func TestAgentic_CritiqueBudgetSharedAcrossLoopAndPostLoop(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -2270,7 +2273,7 @@ func TestAgentic_PostLoopEvidenceRepairUsesSharedBudget(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -2323,7 +2326,7 @@ func TestAgentic_UnparseableEvidenceRepairRetainsPassingInjectedDraft(t *testing
 	srv.push(200, chatRespFinal("not json"))
 	srv.push(200, chatRespFinal(final))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -2360,102 +2363,57 @@ required_evidence:
 	}
 }
 
-func TestAgentic_UnparseableInLoopRepairCannotExceedBudget(t *testing.T) {
+func TestAgentic_UnusableCritiqueRepairRetainsPriorDraft(t *testing.T) {
 	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal("not json"))
-	srv.push(200, chatRespFinal(cleanFinalJSON))
+	for _, tc := range []struct {
+		name     string
+		response string
+		retries  int
+	}{
+		{name: "malformed/retries_1", response: "not json", retries: 1},
+		{name: "blank/retries_1", response: "", retries: 1},
+		{name: "malformed/retries_2", response: "not json", retries: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespFinal(puntyFinalJSON))
+			srv.push(200, chatRespFinal(tc.response))
+			// A clean response is the forbidden-extra-call sentinel.
+			srv.push(200, chatRespFinal(cleanFinalJSON))
 
-	client := newAgenticTestClient(t, srv.URL)
-	key := "agentic:test:unparseable-in-loop-budget"
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
-			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict,
-		}), key, "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("call count = %d, want 2", got)
-	}
-	if summary.Summary != "shallow" || analysis.CritiquePassed {
-		t.Fatalf("unparseable repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
-	}
-	if _, ok := client.Cache().Get(key); ok {
-		t.Fatal("failing retained draft was cached")
+			client := newAgenticTestClient(t, srv.URL)
+			key := "agentic:test:unusable-critique-repair:" + tc.name
+			summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
+				newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+					MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+					Timeout: 30 * time.Second, CritiqueMaxRetries: tc.retries, CritiqueCachePolicy: CritiqueCachePolicyStrict,
+				}), key, "sys", "user")
+			if err != nil {
+				t.Fatalf("doAnalyzeAgentic: %v", err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != 2 {
+				t.Fatalf("call count = %d, want 2", got)
+			}
+			if summary.Summary != "shallow" || analysis.CritiquePassed {
+				t.Fatalf("unusable repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
+			}
+			if analysis.SuggestedFix == "Unable to parse structured response" {
+				t.Fatalf("published synthesized parse failure instead of prior draft: %+v", analysis)
+			}
+			if _, ok := client.Cache().Get(key); ok {
+				t.Fatal("failing retained draft was cached")
+			}
+		})
 	}
 }
 
-func TestAgentic_BlankInLoopRepairCannotExceedBudget(t *testing.T) {
+func TestAgentic_CritiqueRepairUnexpectedFunctionRetainsPriorDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal(""))
-	srv.push(200, chatRespFinal(cleanFinalJSON))
-
-	client := newAgenticTestClient(t, srv.URL)
-	key := "agentic:test:blank-in-loop-budget"
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
-			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict,
-		}), key, "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("call count = %d, want 2", got)
-	}
-	if summary.Summary != "shallow" || analysis.CritiquePassed {
-		t.Fatalf("blank repair did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
-	}
-	if _, ok := client.Cache().Get(key); ok {
-		t.Fatal("failing retained draft was cached")
-	}
-}
-
-func TestAgentic_TwoUnparseableInLoopRepairsRetainPriorDraft(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(puntyFinalJSON))
-	srv.push(200, chatRespFinal("not json"))
-	srv.push(200, chatRespFinal("still not json"))
-	srv.push(200, chatRespFinal(cleanFinalJSON))
-
-	client := newAgenticTestClient(t, srv.URL)
-	key := "agentic:test:two-unparseable-in-loop-repairs"
-	summary, analysis, err := client.doAnalyzeAgentic(context.Background(),
-		newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
-			MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-			Timeout: 30 * time.Second, CritiqueMaxRetries: 2, CritiqueCachePolicy: CritiqueCachePolicyStrict,
-		}), key, "sys", "user")
-	if err != nil {
-		t.Fatalf("doAnalyzeAgentic: %v", err)
-	}
-	if got := atomic.LoadInt32(&srv.calls); got != 2 {
-		t.Fatalf("call count = %d, want 2", got)
-	}
-	if summary.Summary != "shallow" || analysis.CritiquePassed {
-		t.Fatalf("two unparseable repairs did not retain prior draft: summary=%+v analysis=%+v", summary, analysis)
-	}
-	if analysis.SuggestedFix == "Unable to parse structured response" {
-		t.Fatalf("published synthesized parse failure instead of prior draft: %+v", analysis)
-	}
-	if _, ok := client.Cache().Get(key); ok {
-		t.Fatal("failing retained draft was cached")
-	}
-}
-
-func TestAgentic_ToolRepairUsesRemainingBudgetAfterUnparseableFinalize(t *testing.T) {
-	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespFinal(puntyFinalJSON))
+	// The forced-finalize repair must not execute this unexpected function.
 	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespFinal("not json"))
+	// A clean response is the forbidden-extra-call sentinel.
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -2747,31 +2705,6 @@ func TestAgentic_CacheInvalidatedByCritiqueVersionBump(t *testing.T) {
 	}
 }
 
-// loadAgenticSkillsForTest creates a temp dir with one or more YAML
-// recipes and returns the loaded skills.Set, ready for stamping onto
-// AgenticInputs. Mirrors loadSkillsForTest in critique_test.go but
-// kept package-local-private so the two test files don't have to
-// share a helper.
-func loadAgenticSkillsForTest(t *testing.T, recipes map[string]string) *skills.Set {
-	t.Helper()
-	dir := t.TempDir()
-	skillsDir := filepath.Join(dir, "skills")
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range recipes {
-		p := filepath.Join(skillsDir, name+".yaml")
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	set, err := skills.Load(dir)
-	if err != nil {
-		t.Fatalf("skills.Load: %v", err)
-	}
-	return set
-}
-
 func TestAgentic_CacheRetainedBySkillSetHashChange(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
@@ -2779,7 +2712,7 @@ func TestAgentic_CacheRetainedBySkillSetHashChange(t *testing.T) {
 	srv.push(200, chatRespFinal(cleanFinal))
 
 	client := newAgenticTestClient(t, srv.URL)
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"unrelated": `
 id: unrelated-recipe
 triggers: ["never-matches-this-draft"]
@@ -2804,7 +2737,7 @@ required_evidence:
 		t.Fatalf("first analysis = %+v, skill hash = %q", analysis, set.Hash())
 	}
 
-	edited := loadAgenticSkillsForTest(t, map[string]string{
+	edited := loadSkillsForTest(t, map[string]string{
 		"unrelated": `
 id: unrelated-recipe
 triggers: ["still-does-not-match-this-draft-but-different-pattern"]
@@ -3272,7 +3205,7 @@ func TestAgentic_SkillEvidenceAbsentFromBuild_StillCaches(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -3316,7 +3249,7 @@ func TestAgentic_SkillEvidencePresentButUnread_ZeroRetriesDoesNotRepair(t *testi
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"webhook": `
 id: webhook-tls
 triggers: ["x509"]
@@ -3415,7 +3348,7 @@ func TestAgentic_InitialEvidencePlanUsesOneTreeListing(t *testing.T) {
 	// group is unread. The second answer is accepted without another listing.
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"independent bug","severity":"Low","suggested_fix":"Update config.yaml and redeploy.","relevant_files":[]}`))
 
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"ranked": `
 id: ranked
 triggers: ["ranked failure"]
@@ -3466,7 +3399,7 @@ procedure: Read the ranked logs.
 }
 
 func TestBuildEvidenceInjectionUsesRankedCandidatesInGroupOrder(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"ranked": `
 id: ranked
 triggers: ["ranked failure"]
@@ -3513,7 +3446,7 @@ required_evidence:
 }
 
 func TestBuildEvidenceInjectionDeduplicatesCandidatePaths(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"shared": `
 id: shared
 triggers: ["shared failure"]
@@ -3543,7 +3476,7 @@ required_evidence:
 }
 
 func TestBuildEvidenceInjectionFallsBackForMissingCandidate(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"fallback": `
 id: fallback
 triggers: ["fallback failure"]
@@ -3574,7 +3507,7 @@ required_evidence:
 }
 
 func TestBuildEvidenceInjectionRejectsErrorAndEmptyReads(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"read": `
 id: read
 triggers: ["read failure"]
@@ -3633,7 +3566,7 @@ func TestBuildEvidenceInjectionRespectsArtifactAndByteBounds(t *testing.T) {
 	for _, group := range groups {
 		fmt.Fprintf(&recipe, "  - id: %s\n    any_of: [%q]\n", group.ID, group.AnyOf[0])
 	}
-	set := loadAgenticSkillsForTest(t, map[string]string{"bounded": recipe.String()})
+	set := loadSkillsForTest(t, map[string]string{"bounded": recipe.String()})
 	matched := set.Match("bounded")[0]
 	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: files}}
 	state := &agentState{
@@ -3665,7 +3598,7 @@ func TestAgentic_StrongModelReadsPlannedEvidenceWithoutRepair(t *testing.T) {
 	path := "artifacts/issuer.yaml"
 	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update issuer.yaml with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"x509": `
 id: x509
 triggers: ["x509"]
@@ -3820,7 +3753,7 @@ func TestToolResultSnippetsCaptureReadTailAndSeparateGrepMatches(t *testing.T) {
 }
 
 func TestEvidenceInjectionTriesParallelCandidatesUntilContentMatches(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"conversion": `
 id: aso-conversion
 triggers: ["conversion webhook"]
@@ -3945,7 +3878,7 @@ func TestAdditionalUniqueContentAdvancesEvidenceRevision(t *testing.T) {
 }
 
 func TestEvidenceInjectionKeepsCaseDistinctCandidates(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{"case": `
+	set := loadSkillsForTest(t, map[string]string{"case": `
 id: case-sensitive
 triggers: ["failure"]
 required_evidence:
@@ -3980,7 +3913,7 @@ required_evidence:
 }
 
 func TestEvidenceInjectionDoesNotTreatPartialReadAsNegativeProof(t *testing.T) {
-	set := loadAgenticSkillsForTest(t, map[string]string{"partial": `
+	set := loadSkillsForTest(t, map[string]string{"partial": `
 id: partial
 triggers: ["failure"]
 required_evidence:

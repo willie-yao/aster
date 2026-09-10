@@ -9,21 +9,6 @@ import (
 	"time"
 )
 
-// stubTokenEndpoint points the OAuth token exchange at a local stub.
-func stubTokenEndpoint(t *testing.T) func() {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"access_token":"user-tok","scope":"read:user"}`))
-	}))
-	orig := githubTokenURL
-	githubTokenURL = srv.URL + "/login/oauth/access_token"
-	return func() {
-		githubTokenURL = orig
-		srv.Close()
-	}
-}
-
 func testOAuth(t *testing.T, admins []string) *OAuth {
 	return testOAuthWithSecureCookies(t, admins, false)
 }
@@ -126,7 +111,7 @@ func TestOAuth_CallbackRejectsBadState(t *testing.T) {
 }
 
 func TestOAuth_Exchange(t *testing.T) {
-	cleanup := stubTokenEndpoint(t)
+	cleanup := stubTokenEndpointWith(t, `{"access_token":"user-tok","scope":"read:user"}`)
 	defer cleanup()
 	o := testOAuth(t, []string{"alice"})
 	tok, scope, err := o.exchange(context.Background(), "code123")

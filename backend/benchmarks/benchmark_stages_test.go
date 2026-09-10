@@ -453,7 +453,7 @@ func validateBenchmarkEvidenceStageReport(bc benchCase, report benchmarkEvidence
 	}
 }
 
-func benchmarkTrialStatus(outcome benchmarkOutcome, analysisErr error, tc *models.TestCase, snapshot ai.AnalysisTraceFile) string {
+func benchmarkTrialStatus(analysisErr error, tc *models.TestCase, snapshot ai.AnalysisTraceFile) string {
 	contractViolation := benchmarkTraceHasContractViolation(snapshot)
 	if analysisErr != nil {
 		switch {
@@ -461,8 +461,6 @@ func benchmarkTrialStatus(outcome benchmarkOutcome, analysisErr error, tc *model
 			return "timeout"
 		case contractViolation:
 			return "contract_violation"
-		case outcome == benchmarkOutcomeCitationPolicyUnavailable:
-			return "invalid_result"
 		case errors.Is(analysisErr, ai.ErrRejectedAnalysis):
 			return "invalid_result"
 		default:
@@ -687,23 +685,25 @@ func TestBenchmarkTrialStatus(t *testing.T) {
 	valid := &models.TestCase{AISummary: &models.AISummary{}, AIAnalysis: &models.AIAnalysis{}}
 	contract := ai.AnalysisTraceFile{Traces: []ai.AnalysisTrace{{Events: []ai.TraceEvent{{Kind: "finalize_recovery", Outcome: "synthesized"}}}}}
 	for _, tc := range []struct {
-		name    string
-		outcome benchmarkOutcome
-		err     error
-		result  *models.TestCase
-		trace   ai.AnalysisTraceFile
-		want    string
+		name   string
+		err    error
+		result *models.TestCase
+		trace  ai.AnalysisTraceFile
+		want   string
 	}{
-		{name: "valid", outcome: benchmarkOutcomeUsable, result: valid, want: "valid_result"},
-		{name: "no result", outcome: benchmarkOutcomeUsable, want: "no_result"},
-		{name: "invalid", outcome: benchmarkOutcomeCitationPolicyUnavailable, err: errors.New("analysis unavailable"), want: "invalid_result"},
-		{name: "contract warning", outcome: benchmarkOutcomeUsable, result: valid, trace: contract, want: "valid_result"},
-		{name: "rejected", outcome: benchmarkOutcomeUnknown, err: ai.ErrRejectedAnalysis, want: "invalid_result"},
-		{name: "timeout", outcome: benchmarkOutcomeUnknown, err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), want: "timeout"},
-		{name: "runtime", outcome: benchmarkOutcomeUnknown, err: errors.New("provider failed"), want: "runtime_failure"},
+		{name: "valid", result: valid, want: "valid_result"},
+		{name: "no result", want: "no_result"},
+		{name: "no result with contract violation", trace: contract, want: "contract_violation"},
+		{name: "contract warning", result: valid, trace: contract, want: "valid_result"},
+		{name: "rejected", err: ai.ErrRejectedAnalysis, want: "invalid_result"},
+		{name: "contract violation before rejection", err: ai.ErrRejectedAnalysis, trace: contract, want: "contract_violation"},
+		{name: "timeout", err: fmt.Errorf("wrapped: %w", context.DeadlineExceeded), want: "timeout"},
+		{name: "timeout before contract violation", err: context.DeadlineExceeded, trace: contract, want: "timeout"},
+		{name: "cancellation before contract violation", err: context.Canceled, trace: contract, want: "timeout"},
+		{name: "runtime", err: errors.New("provider failed"), want: "runtime_failure"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := benchmarkTrialStatus(tc.outcome, tc.err, tc.result, tc.trace); got != tc.want {
+			if got := benchmarkTrialStatus(tc.err, tc.result, tc.trace); got != tc.want {
 				t.Fatalf("status = %q, want %q", got, tc.want)
 			}
 		})

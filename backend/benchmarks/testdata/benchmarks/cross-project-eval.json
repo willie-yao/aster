@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "cases": [
     {
       "id": "secrets-store-csi-image-scan",
@@ -257,7 +257,6 @@
       "junit_file": "junit_pdcsi.xml",
       "failure_message": "[FAILED] Failed to obtain filesystem size of a volume mount: resolved empty volumeID for mountPath \"/mnt/volume1\" at provisioning.go:525.",
       "opposite_diagnosis": "The Windows mount path was absent and the volume ID was empty. NodePublishVolume did not succeed. The evidence was insufficient to distinguish ownership, but the GCE PD CSI node driver was unquestionably responsible.",
-      "allow_unavailable": true,
       "signals": [
         {
           "name": "identifies missing Windows mount path",

@@ -58,9 +58,6 @@ type PromptPlan struct {
 	FinalStatus     string `json:"final_status"`
 	Output          string `json:"output"`
 	Source          string `json:"source"`
-	FailureStage    string `json:"failure_stage,omitempty"`
-	FailureCategory string `json:"failure_category,omitempty"`
-	FailureAction   string `json:"failure_action,omitempty"`
 	Runtime         string `json:"runtime,omitempty"`
 	Model           string `json:"model,omitempty"`
 	AgentRef        string `json:"agent_ref,omitempty"`

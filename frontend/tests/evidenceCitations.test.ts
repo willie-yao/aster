@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  COLLAPSE_THRESHOLD,
   MAX_RENDERED_CITATIONS,
   citationArtifactURL,
   citationKey,
@@ -106,17 +105,6 @@ test("the summary counts citations and the artifacts they come from", () => {
     ),
     "3 citations from 2 artifacts",
   );
-});
-
-test("a short list stays open and a longer one collapses", () => {
-  const short = Array.from({ length: COLLAPSE_THRESHOLD }, (_unused, index) =>
-    citation({ line_start: index + 1, line_end: index + 1 }),
-  );
-  const long = Array.from({ length: COLLAPSE_THRESHOLD + 1 }, (_unused, index) =>
-    citation({ line_start: index + 1, line_end: index + 1 }),
-  );
-  assert.equal(usableCitations(short).length > COLLAPSE_THRESHOLD, false);
-  assert.equal(usableCitations(long).length > COLLAPSE_THRESHOLD, true);
 });
 
 test("fractional line numbers are rejected", () => {

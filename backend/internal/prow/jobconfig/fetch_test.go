@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -34,6 +35,8 @@ type fakeTestInfra struct {
 	forcedCommitBody   string   // non-empty overrides the successful commit body
 	failRawPath        string   // when set, returns 404 for this exact path
 	extraTreeEntries   []string // extra paths emitted in the tree for coverage
+
+	rawRequestOverride func(http.ResponseWriter, *http.Request, string) bool
 
 	rawCalls    atomic.Int64
 	commitCalls atomic.Int64
@@ -59,13 +62,16 @@ func (f *fakeTestInfra) start(t *testing.T) (rawURL, apiURL string, stop func())
 			return
 		}
 		path := rest[slash+1:]
-		if path == f.failRawPath {
-			http.Error(w, "fake 404", http.StatusNotFound)
-			return
-		}
 		body, ok := f.files[path]
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if f.rawRequestOverride != nil && f.rawRequestOverride(w, r, path) {
+			return
+		}
+		if path == f.failRawPath {
+			http.Error(w, "fake 404", http.StatusNotFound)
 			return
 		}
 		_, _ = w.Write([]byte(body))
@@ -291,8 +297,16 @@ func TestFetchJobConfigs_CommitResolutionFails(t *testing.T) {
 }
 
 func TestFetchJobConfigs_RawDownloadFailureCancelsBatch(t *testing.T) {
-	// One file 404s; the whole discovery must fail with a clear per-file
-	// error rather than silently dropping that file.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	siblingStarted := make(chan struct{})
+	failureStarted := make(chan struct{})
+	releaseFailure := make(chan struct{})
+	siblingCancelled := make(chan struct{})
+	releaseHandlers := make(chan struct{})
+	result := make(chan error, 1)
+	done := make(chan struct{})
+
 	tf := &fakeTestInfra{
 		files: map[string]string{
 			"config/jobs/k/a.yaml": periodicJob("a", "d"),
@@ -300,19 +314,77 @@ func TestFetchJobConfigs_RawDownloadFailureCancelsBatch(t *testing.T) {
 			"config/jobs/k/c.yaml": periodicJob("c", "d"),
 		},
 		failRawPath: "config/jobs/k/b.yaml",
+		rawRequestOverride: func(_ http.ResponseWriter, r *http.Request, path string) bool {
+			switch path {
+			case "config/jobs/k/a.yaml":
+				close(siblingStarted)
+				select {
+				case <-r.Context().Done():
+					close(siblingCancelled)
+				case <-releaseHandlers:
+				}
+				return true
+			case "config/jobs/k/b.yaml":
+				close(failureStarted)
+				select {
+				case <-releaseFailure:
+					return false
+				case <-r.Context().Done():
+				case <-releaseHandlers:
+				}
+				return true
+			default:
+				return false
+			}
+		},
 	}
 	raw, api, stop := tf.start(t)
-	defer stop()
+	t.Cleanup(stop)
 	setURLs(t, raw, api)
 	setToken(t, "fake-token")
 
+	// Release handlers and reap the caller before restoring URLs or closing the server.
+	t.Cleanup(func() {
+		cancel()
+		close(releaseHandlers)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("FetchJobConfigs did not stop after cleanup cancellation")
+		}
+	})
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
-	if err == nil {
-		t.Fatal("expected error when a candidate file fails to download, got nil")
+	go func() {
+		defer close(done)
+		_, err := FetchJobConfigs(ctx, http.DefaultClient, cfg)
+		result <- err
+	}()
+
+	waitFor := func(ch <-chan struct{}, event string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", event)
+		}
 	}
-	if !strings.Contains(err.Error(), "config/jobs/k/b.yaml") || !strings.Contains(err.Error(), "404") {
-		t.Errorf("error should name the failing file and status; got: %v", err)
+	waitFor(siblingStarted, "the blocked sibling request")
+	waitFor(failureStarted, "the failing request")
+	close(releaseFailure)
+	waitFor(siblingCancelled, "sibling cancellation after the 404")
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("parent context was cancelled before observing internal cancellation: %v", err)
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("expected error when a candidate file fails to download, got nil")
+		}
+		if !strings.Contains(err.Error(), "config/jobs/k/b.yaml") || !strings.Contains(err.Error(), "404") {
+			t.Errorf("error should name the failing file and status; got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("FetchJobConfigs did not return after cancelling its sibling")
 	}
 }
 

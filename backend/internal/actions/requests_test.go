@@ -43,6 +43,17 @@ func requestTestService(t *testing.T) (*Service, models.PatternAnalysis) {
 	return service, pattern
 }
 
+func writeActionRequestState(t *testing.T, dataDir string, state actionRequestState, mode os.FileMode) {
+	t.Helper()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "action_request_state.json"), data, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func waitRequest(t *testing.T, service *Service, id, owner string, want ...string) ActionRequestView {
 	t.Helper()
 	allowed := map[string]bool{}
@@ -973,10 +984,7 @@ func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		}},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("request-1", "alice")
@@ -998,10 +1006,7 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 			BaseIssue: base, BaseTargetRepo: "o/r",
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("request-refine", "alice")
@@ -1038,10 +1043,7 @@ func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
 			BaseIssue: base, BaseTargetRepo: "o/r",
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("request-unsafe-refine", "alice")
@@ -1068,10 +1070,7 @@ func TestLoadRejectsUnsafeLegacyReadyIssue(t *testing.T) {
 			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody},
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("unsafe-ready", "alice")
@@ -1107,10 +1106,7 @@ func TestLoadHidesUnsafeUnknownDraftWithoutChangingOutcome(t *testing.T) {
 			Issue: &issues.IssueSpec{Key: key, Title: "Unsafe", Body: unsafeBody}, TargetRepo: "o/r",
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("unsafe-unknown", "alice")
@@ -1169,10 +1165,7 @@ func TestConfigureAsyncRequestsRetriesPersistedReadyEmail(t *testing.T) {
 			Issue: spec, VerificationVersion: sourceVerificationVersion,
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	notified := make(chan ActionRequestView, 1)
@@ -1210,10 +1203,7 @@ func TestConfigureAsyncRequestsSkipsExpiredReadyEmail(t *testing.T) {
 			Preview:   &PreviewResult{Kind: "issue", Title: "Expired", Body: "Body"},
 		}},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	notified := make(chan ActionRequestView, 1)
@@ -1291,10 +1281,7 @@ func TestConfirmedRequestExpiresAndClearsDraft(t *testing.T) {
 			Fix:         &fixpr.GeneratedFixSnapshot{Title: "Fix", Diff: "private diff", Files: map[string]string{"main.go": "private source"}},
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("request-confirmed", "alice")
@@ -1478,10 +1465,7 @@ func TestRestartResumesRuntimeCleanup(t *testing.T) {
 			Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: "restart-runtime"},
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o600)
 
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	fake := &fakeManagedAgentRuntime{}
@@ -1899,10 +1883,7 @@ func TestLoadActionRequestsInvalidatesLegacyVerifiedPreview(t *testing.T) {
 			Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"}, VerificationVersion: sourceVerificationVersion - 1,
 		},
 	}}
-	data, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeActionRequestState(t, service.dataDir, state, 0o644)
 	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 	view, err := reloaded.GetRequest("legacy", "alice")
 	if err != nil || view.Status != RequestFailed || view.Preview != nil {
@@ -1953,10 +1934,7 @@ func TestLoadActionRequestsRejectsUnidentifiedOrUnverifiedFix(t *testing.T) {
 					Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"}, VerificationVersion: testCase.verificationVersion,
 				},
 			}}
-			data, _ := json.Marshal(state)
-			if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeActionRequestState(t, service.dataDir, state, 0o600)
 			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 			view, err := reloaded.GetRequest("legacy-fix", "alice")
 			if err != nil || view.Status != RequestFailed || view.Preview != nil {
@@ -2005,10 +1983,7 @@ func TestConversionPolicyRejectsRestoredAndConfirmedAsyncFix(t *testing.T) {
 			}
 			if testCase.restore {
 				state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{"unsafe-fix": request}}
-				data, _ := json.Marshal(state)
-				if err := os.WriteFile(filepath.Join(service.dataDir, "action_request_state.json"), data, 0o600); err != nil {
-					t.Fatal(err)
-				}
+				writeActionRequestState(t, service.dataDir, state, 0o600)
 				service = NewService(service.cfg, service.dataDir, AIConfig{})
 				view, err := service.GetRequest("unsafe-fix", "alice")
 				if err != nil || view.Status != RequestFailed || view.Preview != nil {

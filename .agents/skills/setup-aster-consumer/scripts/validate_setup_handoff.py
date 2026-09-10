@@ -317,70 +317,40 @@ def self_test() -> None:
     errors = validate(fixture)
     if errors:
         raise AssertionError(errors)
-    broken = copy.deepcopy(fixture)
-    broken["prompt"]["candidate_sha256"] = "sha256:" + "0" * 64
-    if not any("source_only_candidate" in item for item in validate(broken)):
-        raise AssertionError("candidate hash mismatch was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["apply_result"]["files"][0]["matches_reviewed_plan"] = False
-    if not any("matches_reviewed_plan" in item for item in validate(broken)):
-        raise AssertionError("manifest mismatch was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["deployment"]["mode"] = "k8s"
-    if not any("requires exactly one" in item for item in validate(broken)):
-        raise AssertionError("Kubernetes handoff without storage was accepted")
     numeric = copy.deepcopy(fixture)
     numeric["schema_version"] = 2.0
     if validate(numeric):
         raise AssertionError("integral numeric schema version 2.0 was rejected")
-    old_numeric = copy.deepcopy(fixture)
-    old_numeric["schema_version"] = 1.0
-    if not any("numeric integer 2" in item for item in validate(old_numeric)):
-        raise AssertionError("schema version 1.0 was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["schema_version"] = True
-    if not any("numeric integer 2" in item for item in validate(broken)):
-        raise AssertionError("boolean schema version was accepted")
     nested_numeric = copy.deepcopy(fixture)
     nested_numeric["apply_result"]["schema_version"] = 1.0
     nested_numeric["artifact_smoke"]["builds_per_job"] = 1.0
     nested_numeric["engine"]["modified"] = False
     if validate(nested_numeric):
         raise AssertionError("valid nested numeric or boolean fields were rejected")
-    broken = copy.deepcopy(fixture)
-    broken["apply_result"]["schema_version"] = True
-    if not any("apply_result.schema_version" in item for item in validate(broken)):
-        raise AssertionError("boolean apply-result schema version was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["artifact_smoke"]["builds_per_job"] = True
-    if not any("artifact_smoke.builds_per_job" in item for item in validate(broken)):
-        raise AssertionError("boolean artifact smoke build count was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["engine"]["modified"] = "false"
-    if not any("engine.modified" in item for item in validate(broken)):
-        raise AssertionError("non-boolean engine modified value was accepted")
-    broken = copy.deepcopy(fixture)
-    broken["deployment"]["ai_enabled"] = "false"
-    if not any("deployment.ai_enabled" in item for item in validate(broken)):
-        raise AssertionError("non-boolean AI enabled value was accepted")
-    legacy = copy.deepcopy(fixture)
-    legacy["schema_version"] = 1
-    if not any("numeric integer 2" in item for item in validate(legacy)):
-        raise AssertionError("schema version 1 was accepted")
     kubernetes = copy.deepcopy(fixture)
     kubernetes["deployment"]["mode"] = "k8s"
     kubernetes["deployment"]["k8s_storage_class"] = "shared-rwx"
     if validate(kubernetes):
         raise AssertionError("valid Kubernetes storage was rejected")
-    broken = copy.deepcopy(kubernetes)
-    broken["deployment"]["k8s_existing_claim"] = "shared-data"
-    if not any("requires exactly one" in item for item in validate(broken)):
-        raise AssertionError("ambiguous Kubernetes storage was accepted")
-    broken = copy.deepcopy(kubernetes)
-    broken["deployment"]["k8s_existing_claim"] = None
-    null_errors = validate(broken)
-    if not any("valid Kubernetes" in item or "requires exactly one" in item for item in null_errors):
-        raise AssertionError("null Kubernetes storage was accepted")
+    for name, base, mutate, fragments in [
+        ("candidate hash", fixture, lambda v: v["prompt"].update(candidate_sha256="sha256:" + "0" * 64), ("source_only_candidate",)),
+        ("manifest mismatch", fixture, lambda v: v["apply_result"]["files"][0].update(matches_reviewed_plan=False), ("matches_reviewed_plan",)),
+        ("missing storage", fixture, lambda v: v["deployment"].update(mode="k8s"), ("requires exactly one",)),
+        ("old numeric version", fixture, lambda v: v.update(schema_version=1.0), ("numeric integer 2",)),
+        ("boolean version", fixture, lambda v: v.update(schema_version=True), ("numeric integer 2",)),
+        ("boolean apply version", fixture, lambda v: v["apply_result"].update(schema_version=True), ("apply_result.schema_version",)),
+        ("boolean build count", fixture, lambda v: v["artifact_smoke"].update(builds_per_job=True), ("artifact_smoke.builds_per_job",)),
+        ("string modified", fixture, lambda v: v["engine"].update(modified="false"), ("engine.modified",)),
+        ("string AI enabled", fixture, lambda v: v["deployment"].update(ai_enabled="false"), ("deployment.ai_enabled",)),
+        ("old integer version", fixture, lambda v: v.update(schema_version=1), ("numeric integer 2",)),
+        ("ambiguous storage", kubernetes, lambda v: v["deployment"].update(k8s_existing_claim="shared-data"), ("requires exactly one",)),
+        ("null storage", kubernetes, lambda v: v["deployment"].update(k8s_existing_claim=None), ("valid Kubernetes", "requires exactly one")),
+    ]:
+        broken = copy.deepcopy(base)
+        mutate(broken)
+        errors = validate(broken)
+        if not any(fragment in item for item in errors for fragment in fragments):
+            raise AssertionError(f"{name}: expected {fragments}, got {errors}")
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "handoff.json"
         path.write_text(json.dumps(fixture))

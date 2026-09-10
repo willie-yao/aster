@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { escalationActive } from "../src/lib/pullRequestEscalation.js";
+import {
+  escalationActive, getEscalation, startEscalation,
+  type EscalationRef, type PullRequestEscalationView,
+} from "../src/lib/pullRequestEscalation.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -18,19 +21,67 @@ test("only in-progress escalation states are polled", () => {
   assert.equal(escalationActive(undefined), false);
 });
 
-test("escalation requests are same-origin and carry an idempotency key", () => {
-  // Both escalation kinds share one transport, so the credential and
-  // idempotency contract is asserted once, where it lives.
-  const shared = source("src/lib/escalation.ts");
-  const client = source("src/lib/pullRequestEscalation.ts");
+const ref: EscalationRef = {
+  pullNumber: 37,
+  jobID: "org/repo job?#",
+  buildID: "build/42 +#",
+  testName: "[It] creates / cluster? x=y & z+#",
+};
+const endpoint = "/api/pull-requests/37/checks/org%2Frepo%20job%3F%23/builds/build%2F42%20%2B%23/escalation";
 
-  assert.match(shared, /credentials: "same-origin"/);
-  assert.match(shared, /"Idempotency-Key": idempotencyKey/);
-  // Every path segment is encoded; a Ginkgo test name goes in the body/query.
-  assert.match(client, /encodeURIComponent\(ref\.jobID\)/);
-  assert.match(client, /encodeURIComponent\(ref\.buildID\)/);
-  assert.match(client, /JSON\.stringify\(\{ test_name: ref\.testName \}\)/);
-});
+for (const method of ["GET", "POST"] as const) {
+  const invoke = () => method === "GET" ? getEscalation(ref) : startEscalation(ref, "pr-attempt-37");
+
+  test(`pull request escalation ${method} sends its exact subject and returns the result`, async (t) => {
+    const originalFetch = globalThis.fetch;
+    t.after(() => { globalThis.fetch = originalFetch; });
+    const result: PullRequestEscalationView = {
+      ref: { pull_number: 37, job_id: ref.jobID, build_id: ref.buildID, test_name: ref.testName },
+      state: "complete",
+      root_cause: "The bootstrap image is unavailable.",
+      severity: "high",
+      suggested_fix: "Publish the image.",
+      citations: [{ path: "build-log.txt", line_start: 17, quote: "image missing" }],
+    };
+    const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, init });
+      return Response.json(result);
+    };
+
+    assert.deepEqual(await invoke(), result);
+    assert.equal(calls.length, 1);
+    const { url: input, init } = calls[0];
+    const url = new URL(String(input), "https://dashboard.example");
+    assert.equal(url.origin, "https://dashboard.example");
+    assert.equal(url.pathname, endpoint);
+    assert.equal(url.hash, "");
+    assert.equal(init?.method ?? "GET", method);
+    assert.equal(init?.credentials, "same-origin");
+    if (method === "GET") {
+      assert.deepEqual([...url.searchParams], [["test", ref.testName]]);
+      assert.equal(init?.body, undefined);
+    } else {
+      assert.equal(url.search, "");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("Content-Type"), "application/json");
+      assert.equal(headers.get("Idempotency-Key"), "pr-attempt-37");
+      assert.equal(init?.body, JSON.stringify({ test_name: ref.testName }));
+    }
+  });
+
+  for (const [body, message] of [
+    ["  request rejected\n", "request rejected"],
+    [" \n ", "Escalation request failed with HTTP 503."],
+  ]) {
+    test(`pull request escalation ${method} propagates ${body.trim() ? "server text" : "the HTTP fallback"}`, async (t) => {
+      const originalFetch = globalThis.fetch;
+      t.after(() => { globalThis.fetch = originalFetch; });
+      globalThis.fetch = async () => new Response(body, { status: 503 });
+      await assert.rejects(invoke, { message });
+    });
+  }
+}
 
 test("the escalation control is gated on the advertised capability", () => {
   const page = source("src/pages/PullRequestDetailPage.tsx");

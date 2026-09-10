@@ -77,7 +77,15 @@ func escalationServer(t *testing.T, runner PullRequestEscalationRunner) *httptes
 
 func startEscalation(t *testing.T, srv *httptest.Server, body, idempotency, authHeader string) *http.Response {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+escalationPath, strings.NewReader(body))
+	return postEscalation(t, srv, escalationPath, body, idempotency, authHeader)
+}
+
+func postEscalation(t *testing.T, srv *httptest.Server, path, body, idempotency, authHeader string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if idempotency != "" {
 		req.Header.Set("Idempotency-Key", idempotency)
 	}
@@ -101,16 +109,7 @@ func TestEscalationRoutesAreWithheldWithoutARunner(t *testing.T) {
 		t.Fatalf("status = %d, want 404 when escalation is not configured", resp.StatusCode)
 	}
 
-	capsResp, err := http.Get(srv.URL + "/api/capabilities")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer capsResp.Body.Close()
-	var caps Capabilities
-	if err := json.NewDecoder(capsResp.Body).Decode(&caps); err != nil {
-		t.Fatal(err)
-	}
-	if caps.Features.PullRequestEscalation {
+	if capabilitiesOf(t, srv).Features.PullRequestEscalation {
 		t.Error("the capability must not be advertised without a runner")
 	}
 }
@@ -118,16 +117,7 @@ func TestEscalationRoutesAreWithheldWithoutARunner(t *testing.T) {
 func TestEscalationCapabilityIsAdvertisedWhenConfigured(t *testing.T) {
 	srv := escalationServer(t, &fakeEscalationRunner{})
 
-	resp, err := http.Get(srv.URL + "/api/capabilities")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var caps Capabilities
-	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
-		t.Fatal(err)
-	}
-	if !caps.Features.PullRequestEscalation {
+	if !capabilitiesOf(t, srv).Features.PullRequestEscalation {
 		t.Fatal("the capability should be advertised")
 	}
 }
