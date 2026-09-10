@@ -97,3 +97,29 @@ git push origin -f refs/tags/v1
 ```
 
 Consumers pinned to an exact tag are unaffected.
+
+## Retracting a release
+
+Deleting a tag does not un-publish a release, and the pieces come apart in ways that matter.
+
+**The Go module is permanent.** Once anything has fetched `github.com/willie-yao/aster/backend@<tag>`, `proxy.golang.org` caches that version and its checksum forever. Deleting the git tag does not remove it: `go install ...@<tag>` keeps working from the proxy. This is verifiable at any time:
+
+```bash
+curl -s https://proxy.golang.org/github.com/willie-yao/aster/backend/@v/list
+```
+
+The consequence is the rule that matters most here: **never reuse a version number for different content.** Re-tagging a deleted version at a new commit makes the proxy serve the old code, and anyone whose checksum database disagrees gets a security error rather than a clean failure. If a tag was wrong, burn the number and move to the next one. The forward-only guard in the publisher enforces this.
+
+To tell Go tooling not to select a published version, add a `retract` directive to `backend/go.mod` and release it in a later version:
+
+```go
+retract (
+    v1.2.3 // Published without the fix in #123; use v1.2.4.
+)
+```
+
+`go list -m -versions` then hides it, and a consumer already on it is told to upgrade. A retraction is itself shipped as a release, so it must be a forward version.
+
+**Images and charts are separate.** Deleting a git tag leaves `ghcr.io/<owner>/aster:<tag>`, the remote fixer, the Fix executor, and both OCI charts published and pullable. Removing those means deleting the package versions from GHCR directly, which needs a token with `delete:packages`. Deleting a chart version breaks any GitOps deployment pinned to it, so repoint consumers first.
+
+**The GitHub Release is the only cheap part.** It can be deleted or edited freely; nothing resolves against it except the CLI asset download URLs.
