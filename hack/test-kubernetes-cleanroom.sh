@@ -12,7 +12,7 @@ trap cleanup EXIT
 (
   cd "$root/backend"
   go test ./internal/onboard \
-    -run '^(TestK8sDeployReadmeGuidesSafeProjectSpecificInstall|TestKubernetesCleanRoomScaffoldContract)$' \
+    -run '^(TestScaffold_K8sMode|TestScaffold_K8sStaysFocused|TestK8sDeployReadmeGuidesSafeProjectSpecificInstall|TestK8sDeployReadmeIsProjectAndProviderAgnostic)$' \
     -count=1
 )
 
@@ -86,7 +86,7 @@ python3 - \
   "$tmp" <<'PY'
 from pathlib import Path
 import os
-import re
+import runpy
 import sys
 
 quickstart = Path(sys.argv[1])
@@ -96,6 +96,9 @@ chart = Path(sys.argv[4])
 generated = Path(sys.argv[5])
 root = Path(sys.argv[6])
 fixture_root = Path(sys.argv[7])
+checker = runpy.run_path(str(root / "hack" / "check-doc-links.py"))
+check_links = checker["check"]
+strip_fences = checker["strip_fences"]
 
 documents = [quickstart, platform, reference, chart, generated]
 platform_examples = """Examples only. These are not automatic compatibility guarantees.
@@ -243,110 +246,6 @@ for path in [
         if str(removed_path) in text:
             raise SystemExit(f"{path} still links removed document {removed_path}")
 
-def markdown_anchors(path):
-    anchors = set()
-    counts = {}
-    for line in path.read_text().splitlines():
-        match = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
-        if not match:
-            continue
-        heading = re.sub(r"`([^`]*)`", r"\1", match.group(1)).lower()
-        heading = re.sub(r"<[^>]+>", "", heading)
-        heading = re.sub(r"[^\w\- ]", "", heading)
-        base = re.sub(r"\s+", "-", heading.strip())
-        count = counts.get(base, 0)
-        counts[base] = count + 1
-        anchors.add(base if count == 0 else f"{base}-{count}")
-    return anchors
-
-def markdown_without_fenced_code(text):
-    visible = []
-    fence = None
-    for line in text.splitlines():
-        match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence is None:
-            if match:
-                fence = match.group(1)
-                visible.append("")
-            else:
-                visible.append(line)
-            continue
-        if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
-            fence = None
-        visible.append("")
-    return "\n".join(visible)
-
-def markdown_targets(text):
-    text = markdown_without_fenced_code(text)
-    inline_pattern = re.compile(
-        r"""!?\[[^]\n]+\]\(
-            [ \t]*
-            (?:
-                <([^>\n]+)>
-                |
-                ((?:\\[^\n]|[^()\s])+)
-            )
-            (?:
-                [ \t]+
-                (?:
-                    "(?:\\.|[^"\\])*"
-                    |
-                    '(?:\\.|[^'\\])*'
-                    |
-                    \((?:\\.|[^)\\])*\)
-                )
-            )?
-            [ \t]*
-        \)""",
-        re.VERBOSE,
-    )
-    inline = [match.group(1) or match.group(2) for match in inline_pattern.finditer(text)]
-    definitions = []
-    definition_pattern = re.compile(
-        r"^[ \t]{0,3}\[[^]\n]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))",
-        re.MULTILINE,
-    )
-    for match in definition_pattern.finditer(text):
-        definitions.append(match.group(1) or match.group(2))
-    return inline, definitions
-
-def external_target(target):
-    return target.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)
-
-class MarkdownContractError(Exception):
-    pass
-
-def validate_markdown_target(path, target, repository_root):
-    target = target.strip()
-    if target.startswith("<") and target.endswith(">"):
-        target = target[1:-1].strip()
-    if not target or external_target(target):
-        return
-    relative, _, anchor = target.partition("#")
-    resolved = path.resolve() if not relative else (path.parent / relative).resolve()
-    try:
-        resolved.relative_to(repository_root)
-    except ValueError as err:
-        raise MarkdownContractError(
-            f"Markdown link escapes repository in {path}: {target}"
-        ) from err
-    if not resolved.exists():
-        raise MarkdownContractError(f"broken Markdown link in {path}: {target}")
-    if anchor and resolved.suffix == ".md" and anchor.lower() not in markdown_anchors(resolved):
-        raise MarkdownContractError(f"broken Markdown anchor in {path}: {target}")
-
-def validate_markdown(path, repository_root):
-    if path.is_symlink():
-        raise MarkdownContractError(f"Markdown scan refuses symlink: {path}")
-    try:
-        path.resolve().relative_to(repository_root)
-    except ValueError as err:
-        raise MarkdownContractError(f"Markdown source escapes repository: {path}") from err
-    inline, definitions = markdown_targets(path.read_text())
-    for target in inline + definitions:
-        validate_markdown_target(path, target, repository_root)
-    return definitions
-
 def markdown_tree(base):
     paths = []
     for directory, names, files in os.walk(base, followlinks=False):
@@ -371,15 +270,16 @@ markdown_files = [
     *markdown_tree(root / "docs"),
     *markdown_tree(root / "experimental"),
 ]
-for path in markdown_files + [chart]:
-    validate_markdown(path, repository_root)
+errors = check_links(repository_root, markdown_files + [chart])
+if errors:
+    raise SystemExit("\n".join(errors))
 
 retired_feature_terms = [
     "analysis correction",
     "remediation investigation",
 ]
 for path in markdown_tree(root / "docs"):
-    visible = markdown_without_fenced_code(path.read_text()).lower()
+    visible = strip_fences(path.read_text()).lower()
     for term in retired_feature_terms:
         if term in visible:
             raise SystemExit(f"{path} still documents removed feature {term!r}")
@@ -408,68 +308,13 @@ for heading in [
     if heading in (root / "docs" / "project-configuration.md").read_text():
         raise SystemExit(f"project configuration duplicates pull request guide section {heading!r}")
 
-link_fixtures = fixture_root / "markdown-link-contract"
-link_fixtures.mkdir()
-outside = Path("/etc/hosts")
-if not outside.exists():
-    raise SystemExit("Markdown traversal fixture requires /etc/hosts")
-traversal = link_fixtures / "traversal.md"
-traversal.write_text(f"[outside]({os.path.relpath(outside, traversal.parent)})\n")
-try:
-    validate_markdown(traversal, link_fixtures.resolve())
-except MarkdownContractError as err:
-    if "escapes repository" not in str(err):
-        raise SystemExit(f"traversal fixture failed for the wrong reason: {err}")
-else:
-    raise SystemExit("out-of-repository Markdown traversal was accepted")
-
-broken_reference = link_fixtures / "broken-reference.md"
-broken_reference.write_text("[missing][target]\n\n[target]: missing.md\n")
-try:
-    validate_markdown(broken_reference, link_fixtures.resolve())
-except MarkdownContractError as err:
-    if "broken Markdown link" not in str(err):
-        raise SystemExit(f"reference fixture failed for the wrong reason: {err}")
-else:
-    raise SystemExit("broken Markdown reference definition was accepted")
-
-broken_titled = link_fixtures / "broken-titled.md"
-broken_titled.write_text('[missing](missing.md "Missing documentation")\n')
-try:
-    validate_markdown(broken_titled, link_fixtures.resolve())
-except MarkdownContractError as err:
-    if "missing.md" not in str(err) or "Missing documentation" in str(err):
-        raise SystemExit(f"titled link fixture failed for the wrong reason: {err}")
-else:
-    raise SystemExit("broken titled Markdown destination was accepted")
-
-valid_target = link_fixtures / "target.md"
-valid_target.write_text("# Target\n")
-valid_reference = link_fixtures / "valid-reference.md"
-valid_reference.write_text("""# Fixture
-
-[local][target]
-![local image](target.md#target)
-[titled link](target.md#target "Documentation index")
-![titled image](<target.md#target> "Target image")
-
-[target]: target.md#target
-[section]: #fixture
-[external]: https://example.com/docs
-[email]: mailto:maintainers@example.com
-
-```markdown
-[code example](missing.md)
-[code-reference]: missing.md
-```
-""")
-validate_markdown(valid_reference, link_fixtures.resolve())
-
 PY
 
+python3 "$root/hack/check-doc-links.py" --root "$consumer" deploy/README.md
 bash "$root/deploy/helm/aster-platform/test-render.sh"
 bash "$root/hack/test-release-cli-assets.sh"
-bash "$root/hack/test-kubernetes-verification-failures.sh"
+bash "$root/hack/test-kubernetes-verification-failures.sh" \
+  "$root/docs/kubernetes.md" "$consumer/deploy/README.md"
 bash "$root/hack/test-cli-download-failclosed.sh"
 grep -Fq '"--rollback-on-failure"' "$root/backend/internal/kubernetesdeploy/deploy.go"
 

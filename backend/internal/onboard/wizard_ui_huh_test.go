@@ -194,12 +194,27 @@ func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
 	reader := &blockingReader{started: make(chan struct{}), release: make(chan struct{})}
 	ui := newAccessibleWizardUI(Terminal{In: reader, Out: io.Discard, Err: io.Discard}).(*accessibleWizardUI)
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		close(reader.release)
+		if err := ui.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	// Initialize before the prompt goroutine so early cleanup cannot race it.
+	if err := ui.ensureReader(); err != nil {
+		t.Fatal(err)
+	}
 	result := make(chan error, 1)
 	go func() {
 		_, err := ui.Input(ctx, inputPrompt{Title: "Blocked", Value: "default"})
 		result <- err
 	}()
-	<-reader.started
+	select {
+	case <-reader.started:
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not start reading")
+	}
 	cancel()
 	select {
 	case err := <-result:
@@ -208,10 +223,6 @@ func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("prompt did not return after context cancellation")
-	}
-	close(reader.release)
-	if err := ui.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
 	}
 }
 

@@ -20,8 +20,8 @@ import {
   loadLatestActionRequest,
   readStoredActionRequestID,
   syncStoredActionRequest,
-  type ActionRequestStorage,
 } from "../src/lib/actionRequests.js";
+import { MemoryStorage } from "./helpers/memoryStorage.js";
 import type {
   Action,
   ActionRequest,
@@ -29,22 +29,6 @@ import type {
 } from "../src/types/actions.js";
 
 const originalFetch = globalThis.fetch;
-
-class MemoryStorage implements ActionRequestStorage {
-  readonly values = new Map<string, string>();
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value);
-  }
-
-  removeItem(key: string): void {
-    this.values.delete(key);
-  }
-}
 
 function request(
   id: string,

@@ -4,72 +4,30 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
-import type { BuildResult, PatternAnalysis, TestCase } from "../src/types/dashboard.js";
+import { withSSR } from "./helpers/ssr.js";
+import { failedJUnitRun } from "./helpers/failedJUnitRun.js";
+import type { BuildResult, PatternAnalysis } from "../src/types/dashboard.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { PatternBanner, CapabilitiesContext, defaultTheme } = await withSSR(async (vite) => {
+  const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBanner.tsx")) as {
+    PatternBanner: (props: {
+      pattern: PatternAnalysis;
+      jobID?: string;
+      runs?: BuildResult[];
+    }) => ReturnType<typeof createElement>;
+  };
+  const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
+    CapabilitiesContext: React.Context<Capabilities>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
+  return { PatternBanner, CapabilitiesContext, defaultTheme };
 });
-const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBanner.tsx")) as {
-  PatternBanner: (props: {
-    pattern: PatternAnalysis;
-    jobID?: string;
-    runs?: BuildResult[];
-  }) => ReturnType<typeof createElement>;
-};
-const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
-  CapabilitiesContext: React.Context<Capabilities>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-await vite.close();
 
 const fixCapable: Capabilities = {
   mode: "server",
   features: { actions: true, analysis_chat: true, junit_chat_fix: true },
 };
-
-function failedTest(name: string): TestCase {
-  return {
-    name,
-    status: "failed",
-    duration_seconds: 1,
-    junit_file: "artifacts/junit_01.xml",
-    ai_analysis: {
-      generated_at: "2026-08-18T00:00:00Z",
-      root_cause: "cause",
-      severity: "high",
-      suggested_fix: "fix",
-      disposition: "citations_verified",
-      file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
-    },
-  };
-}
-
-function run(buildID: string, testName: string): BuildResult {
-  return {
-    build_id: buildID,
-    job_name: "periodic-capz-e2e-main",
-    started: "2026-08-18T00:00:00Z",
-    finished: "2026-08-18T01:00:00Z",
-    passed: false,
-    result: "FAILURE",
-    duration_seconds: 3600,
-    commit: "abc123",
-    prow_url: "https://prow.example",
-    web_url: "https://gcsweb.example",
-    build_log_url: "https://gcsweb.example/build-log.txt",
-    test_cases: [failedTest(testName)],
-    tests_total: 1,
-    tests_passed: 0,
-    tests_failed: 1,
-    tests_skipped: 0,
-  };
-}
 
 // Causes 1 and 2 carry DIFFERENT canonical test names that humanize to the SAME
 // display title. Counting canonical names would see two unique labels and hide
@@ -78,7 +36,7 @@ const collidingA = "[It] Workload cluster creation Creating a highly available c
 const collidingB = "[It] Running the Cluster API E2E tests Highly available cluster";
 const distinct = "[It] Conformance Tests conformance tests should pass";
 
-const runs = [run("100", collidingA), run("250", collidingB), run("300", distinct)];
+const runs = [failedJUnitRun("100", collidingA), failedJUnitRun("250", collidingB), failedJUnitRun("300", distinct)];
 
 const pattern: PatternAnalysis = {
   id: "pattern-1",

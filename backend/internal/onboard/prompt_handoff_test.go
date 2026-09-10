@@ -2,10 +2,13 @@ package onboard
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const promptSourceTestSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -51,6 +54,106 @@ func TestHandoffModeResolvesCompleteFlagSourceToCommit(t *testing.T) {
 	}
 	if !strings.Contains(result.Handoff, `"source_ref": "`+promptSourceTestSHA+`"`) || !strings.Contains(result.Handoff, `"source_ref_kind": "commit"`) {
 		t.Fatalf("handoff:\n%s", result.Handoff)
+	}
+}
+
+func TestHandoffModeFallsBackWhenSourceResolutionFails(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		branch      string
+		requestPath string
+		refKind     string
+	}{
+		{"known branch", "main", "/repos/example/project/commits/main", "default-branch"},
+		{"unresolved ref", "", "/repos/example/project", "unresolved"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.URL.Path != test.requestPath {
+					t.Errorf("request path = %q, want %q", r.URL.Path, test.requestPath)
+				}
+				http.NotFound(w, r)
+			}))
+			input := agentPromptInput()
+			input.SourceRepo.Branch = test.branch
+			input.SourceRevision = ""
+			prompt, result, err := (defaultPromptBuilder{}).Build(t.Context(), Options{PromptMode: promptModeHandoff}, scaffoldData{Name: "Project"}, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requests.Load() != 1 {
+				t.Fatalf("requests = %d, want 1", requests.Load())
+			}
+			if result.Requested != promptRequestHandoff || result.Status != promptStatusHandoff || result.Output != promptOutputTemplate || !strings.Contains(prompt, "## Architecture") {
+				t.Fatalf("result=%+v prompt=%q", result, prompt)
+			}
+			for _, want := range []string{`"source_ref": "` + test.branch + `"`, `"source_ref_kind": "` + test.refKind + `"`} {
+				if !strings.Contains(result.Handoff, want) {
+					t.Fatalf("handoff missing %q:\n%s", want, result.Handoff)
+				}
+			}
+		})
+	}
+}
+
+func TestHandoffModeReturnsParentCancellation(t *testing.T) {
+	for _, beforeRequest := range []bool{true, false} {
+		name := "during request"
+		if beforeRequest {
+			name = "before request"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var requests atomic.Int32
+			withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				cancel()
+				<-r.Context().Done()
+			}))
+			if beforeRequest {
+				cancel()
+			}
+			input := agentPromptInput()
+			input.SourceRevision = ""
+			prompt, result, err := (defaultPromptBuilder{}).Build(ctx, Options{PromptMode: promptModeHandoff}, scaffoldData{Name: "Project"}, input)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want parent cancellation", err)
+			}
+			if prompt != "" || result != (promptPreparationResult{}) {
+				t.Fatalf("cancelled build returned prompt=%q result=%+v", prompt, result)
+			}
+			wantRequests := int32(1)
+			if beforeRequest {
+				wantRequests = 0
+			}
+			if requests.Load() != wantRequests {
+				t.Fatalf("requests = %d, want %d", requests.Load(), wantRequests)
+			}
+		})
+	}
+}
+
+func TestHandoffModePromptTimeoutFallsBackWithoutCancellingParent(t *testing.T) {
+	withPromptGitHubAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	input := agentPromptInput()
+	input.SourceRevision = ""
+	opts := Options{PromptMode: promptModeHandoff, PromptTimeout: 20 * time.Millisecond}
+	prompt, result, err := (defaultPromptBuilder{}).Build(ctx, opts, scaffoldData{Name: "Project"}, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("parent context = %v", ctx.Err())
+	}
+	if prompt == "" || result.Status != promptStatusHandoff || !strings.Contains(result.Handoff, `"source_ref": "main"`) || !strings.Contains(result.Handoff, `"source_ref_kind": "default-branch"`) {
+		t.Fatalf("result=%+v prompt=%q", result, prompt)
 	}
 }
 

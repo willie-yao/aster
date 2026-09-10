@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "cases": [
     {
       "id": "cluster-api-kind-minimum-version",

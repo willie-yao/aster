@@ -76,7 +76,7 @@ func defaultDependencies(opts Options, terminal Terminal) dependencies {
 		catalogs:       prowCatalogClient{client: client},
 		sweeper:        defaultSweeper{},
 		remotes:        gitRemoteDetector{},
-		prompts:        defaultPromptBuilder{err: terminal.Err},
+		prompts:        defaultPromptBuilder{},
 		files:          localScaffoldWriter{},
 		pullRequests:   githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
 		terminal:       terminal,
@@ -659,12 +659,6 @@ func printReview(out io.Writer, plan *Plan) {
 	}
 	fmt.Fprintf(out, "  Prompt requested:     %s\n", safeTerminal(plan.Prompt.RequestedMode))
 
-	if plan.Prompt.FailureStage != "" {
-		fmt.Fprintf(out, "  Prompt failure:       %s (%s)\n", safeTerminal(promptPreparationStage(plan.Prompt.FailureStage).label()), safeTerminal(plan.Prompt.FailureCategory))
-		if plan.Prompt.FailureAction != "" {
-			fmt.Fprintf(out, "  Prompt action:        %s\n", safeTerminal(plan.Prompt.FailureAction))
-		}
-	}
 	if plan.Destination.OpenPR {
 		fmt.Fprintln(out, "  Destination:          scaffold pull request")
 	} else {

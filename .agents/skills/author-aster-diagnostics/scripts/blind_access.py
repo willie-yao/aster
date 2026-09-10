@@ -81,6 +81,10 @@ def access(args: argparse.Namespace) -> int:
 
 
 def self_test() -> None:
+    import io
+    from contextlib import redirect_stdout
+    from unittest.mock import patch
+
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
         policy = root / "policy.json"
@@ -92,16 +96,45 @@ def self_test() -> None:
         policy.write_text(json.dumps({"deny_categories": ["prior_diagnosis"]}) + "\n")
         common = argparse.Namespace(policy=policy, log=log, phase="pre_freeze", purpose="self-test")
         common.command, common.path, common.category = "read", allowed, "source_code"
-        if access(common) != 0:
+        with io.TextIOWrapper(io.BytesIO(), encoding="utf-8") as stdout, redirect_stdout(stdout):
+            status = access(common)
+            stdout.flush()
+            allowed_output = stdout.buffer.getvalue()
+        if status != 0:
             raise AssertionError("allowed read failed")
+        if allowed_output != b"allowed\n":
+            raise AssertionError("allowed read did not emit exact content")
+
+        denied_opens = []
+        original_open = Path.open
+
+        def observed_open(path, *args, **kwargs):
+            if path == denied:
+                denied_opens.append(path)
+                raise AssertionError("denylisted evidence was opened")
+            return original_open(path, *args, **kwargs)
+
         common.command, common.path, common.category = "read", denied, "prior_diagnosis"
-        if access(common) != 3:
+        with patch.object(Path, "open", observed_open):
+            with io.TextIOWrapper(io.BytesIO(), encoding="utf-8") as stdout, redirect_stdout(stdout):
+                status = access(common)
+                stdout.flush()
+                denied_output = stdout.buffer.getvalue()
+        if status != 3:
             raise AssertionError("denylisted read was not blocked")
+        if denied_opens or denied_output:
+            raise AssertionError("blocked access opened or emitted evidence")
         records = [json.loads(line) for line in log.read_text().splitlines()]
-        if records[0]["decision"] != "allowed" or records[0]["content_sha256"] is None:
-            raise AssertionError("allowed access was not hashed")
-        if records[1]["decision"] != "blocked" or records[1]["bytes_read"] is not None:
-            raise AssertionError("blocked access read content")
+        if len(records) != 2:
+            raise AssertionError("accesses were not logged exactly once")
+        if (records[0]["decision"] != "allowed"
+                or records[0]["content_sha256"] != hashlib.sha256(b"allowed\n").hexdigest()
+                or records[0]["bytes_read"] != len(b"allowed\n")):
+            raise AssertionError("allowed access hash or byte count was incorrect")
+        if (records[1]["decision"] != "blocked"
+                or records[1]["content_sha256"] is not None
+                or records[1]["bytes_read"] is not None):
+            raise AssertionError("blocked access recorded content metadata")
         if denied.read_text() != "denied\n":
             raise AssertionError("self-test changed evidence")
 

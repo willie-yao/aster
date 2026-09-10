@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import { MemoryRouter } from "react-router-dom";
 import { parseTestDisplayName } from "../src/lib/detailTitles.js";
 import type { BuildResult, TestCase } from "../src/types/dashboard.js";
@@ -13,92 +13,93 @@ import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetc
 import type { AIUsageDaily } from "../src/types/usage.js";
 import type { RuntimeSummary } from "../src/lib/runtimeTrend.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const {
+  DetailSectionBand, RunHistory, MetricStrip, RuntimeTrend, DaySummaryButton, HistoricalTable,
+  JobDetailPrimaryLayout, BuildFailurePanel, TestCaseTable, EvidenceSourceLink, defaultTheme, RichText,
+} = await withSSR(async (vite) => {
+  const { DetailSectionBand } = (await vite.ssrLoadModule("/src/components/DetailSectionBand.tsx")) as {
+    DetailSectionBand: (props: {
+      title: string;
+      metadata?: string;
+      headingLevel?: "h2" | "h3";
+    }) => ReturnType<typeof createElement>;
+  };
+  const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
+    RunHistory: (props: {
+      runs: BuildResult[];
+      selectedBuildId?: string;
+      onSelect: (buildId: string) => void;
+      metadata?: string;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { MetricStrip } = (await vite.ssrLoadModule("/src/components/MetricStrip.tsx")) as {
+    MetricStrip: (props: {
+      label: string;
+      items: Array<{ label: string; value: string; note?: string }>;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend.tsx")) as {
+    RuntimeTrend: (props: {
+      summary: RuntimeSummary;
+      subject: string;
+      runHref: (buildID: string) => string;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
+    DaySummaryButton: (props: {
+      day: AIUsageDaily;
+      open: boolean;
+      controls: string;
+      onToggle: () => void;
+    }) => ReturnType<typeof createElement>;
+    HistoricalTable: (props: { days: AIUsageDaily[] }) => ReturnType<typeof createElement>;
+  };
+  const { JobDetailPrimaryLayout } = (await vite.ssrLoadModule("/src/pages/JobDetailPage.tsx")) as {
+    JobDetailPrimaryLayout: (props: {
+      patternAnalysis?: ReturnType<typeof createElement>;
+      buildFailureAnalysis?: ReturnType<typeof createElement>;
+      runHistory: ReturnType<typeof createElement>;
+      runtimeTrend: ReturnType<typeof createElement>;
+      runMetadata: ReturnType<typeof createElement>;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
+    BuildFailurePanel: (props: {
+      jobID: string;
+      run: BuildResult;
+      failure: TestCase;
+      fetchStatus: FetchStatusResponse | null;
+      showDetailLink?: boolean;
+      briefingTitle?: string;
+      mobileBriefingTitle?: string;
+      beforeActions?: ReturnType<typeof createElement>;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { TestCaseTable, EvidenceSourceLink } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
+    TestCaseTable: (props: {
+      testCases: TestCase[];
+      jobID?: string;
+      buildId?: string;
+      buildLogUrl?: string;
+      webUrl?: string;
+    }) => ReturnType<typeof createElement>;
+    EvidenceSourceLink: (props: {
+      href: string;
+      label: string;
+      text: string;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
+    defaultTheme: Theme;
+  };
+  const { RichText } = (await vite.ssrLoadModule("/src/components/RichText.tsx")) as {
+    RichText: (props: { text: string; steps?: boolean }) => ReturnType<typeof createElement>;
+  };
+  return {
+    DetailSectionBand, RunHistory, MetricStrip, RuntimeTrend, DaySummaryButton, HistoricalTable,
+    JobDetailPrimaryLayout, BuildFailurePanel, TestCaseTable, EvidenceSourceLink, defaultTheme, RichText,
+  };
 });
-const { DetailSectionBand } = (await vite.ssrLoadModule("/src/components/DetailSectionBand.tsx")) as {
-  DetailSectionBand: (props: {
-    title: string;
-    metadata?: string;
-    headingLevel?: "h2" | "h3";
-  }) => ReturnType<typeof createElement>;
-};
-const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
-  RunHistory: (props: {
-    runs: BuildResult[];
-    selectedBuildId?: string;
-    onSelect: (buildId: string) => void;
-    metadata?: string;
-  }) => ReturnType<typeof createElement>;
-};
-const { MetricStrip } = (await vite.ssrLoadModule("/src/components/MetricStrip.tsx")) as {
-  MetricStrip: (props: {
-    label: string;
-    items: Array<{ label: string; value: string; note?: string }>;
-  }) => ReturnType<typeof createElement>;
-};
-const { RuntimeTrend } = (await vite.ssrLoadModule("/src/components/RuntimeTrend.tsx")) as {
-  RuntimeTrend: (props: {
-    summary: RuntimeSummary;
-    subject: string;
-    runHref: (buildID: string) => string;
-  }) => ReturnType<typeof createElement>;
-};
-const { DaySummaryButton, HistoricalTable } = (await vite.ssrLoadModule("/src/components/AIUsageDaily.tsx")) as {
-  DaySummaryButton: (props: {
-    day: AIUsageDaily;
-    open: boolean;
-    controls: string;
-    onToggle: () => void;
-  }) => ReturnType<typeof createElement>;
-  HistoricalTable: (props: { days: AIUsageDaily[] }) => ReturnType<typeof createElement>;
-};
-const { JobDetailPrimaryLayout } = (await vite.ssrLoadModule("/src/pages/JobDetailPage.tsx")) as {
-  JobDetailPrimaryLayout: (props: {
-    patternAnalysis?: ReturnType<typeof createElement>;
-    buildFailureAnalysis?: ReturnType<typeof createElement>;
-    runHistory: ReturnType<typeof createElement>;
-    runtimeTrend: ReturnType<typeof createElement>;
-    runMetadata: ReturnType<typeof createElement>;
-  }) => ReturnType<typeof createElement>;
-};
-const { BuildFailurePanel } = (await vite.ssrLoadModule("/src/components/BuildFailurePanel.tsx")) as {
-  BuildFailurePanel: (props: {
-    jobID: string;
-    run: BuildResult;
-    failure: TestCase;
-    fetchStatus: FetchStatusResponse | null;
-    showDetailLink?: boolean;
-    briefingTitle?: string;
-    mobileBriefingTitle?: string;
-    beforeActions?: ReturnType<typeof createElement>;
-  }) => ReturnType<typeof createElement>;
-};
-const { TestCaseTable, EvidenceSourceLink } = (await vite.ssrLoadModule("/src/components/TestCaseTable.tsx")) as {
-  TestCaseTable: (props: {
-    testCases: TestCase[];
-    jobID?: string;
-    buildId?: string;
-    buildLogUrl?: string;
-    webUrl?: string;
-  }) => ReturnType<typeof createElement>;
-  EvidenceSourceLink: (props: {
-    href: string;
-    label: string;
-    text: string;
-  }) => ReturnType<typeof createElement>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-  defaultTheme: Theme;
-};
-const { RichText } = (await vite.ssrLoadModule("/src/components/RichText.tsx")) as {
-  RichText: (props: { text: string; steps?: boolean }) => ReturnType<typeof createElement>;
-};
-await vite.close();
 
 function render(element: ReturnType<typeof createElement>): string {
   return renderToStaticMarkup(
@@ -518,6 +519,179 @@ test("collapsed desktop usage days do not add empty table rows", () => {
   const html = render(createElement(HistoricalTable, { days: [usageDay()] }));
   assert.equal(html.match(/<tr(?:\s|>)/g)?.length, 2);
 });
+
+const historicalUsageCases: Array<{
+  name: string;
+  day: AIUsageDaily;
+  cells: string[];
+  summary: string;
+}> = [
+  {
+    name: "high cold analysis",
+    day: usageDay({
+      date: "2026-08-04", current_partial_utc: false,
+      recorded_cost_status: "available", recorded_currency: "USD",
+      current_rate_status: "available", current_rate_currency: "EUR", current_rate_estimated_cost_nanos: "1250000000",
+      totals: {
+        operations: 10, model_requests: 10, cache_hits: 0, failures: 0,
+        reported_requests: 10, unreported_requests: 0, external_unmetered_operations: 0,
+        input_tokens: 1000000, cached_input_tokens: 100000, cache_write_input_tokens: 200000,
+        cache_write_reported_requests: 10, output_tokens: 50000, reasoning_tokens: 0, estimated_cost_nanos: "1000000001",
+      },
+      coverage: {
+        status: "complete", states: ["fully_priced_provider_reported"],
+        model_requests: 10, reported_requests: 10, unreported_requests: 0, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["10", "10", "0", "700,000", "100,000", "200,000", "50,000", "USD 1.00", "EUR 1.25", "Complete Fully priced provider usage"],
+    summary: "10 operations. 10 requests. 0 cache hits. Recorded estimate USD 1.00. Current-rate reprice EUR 1.25. Complete coverage.",
+  },
+  {
+    name: "mostly warm cache with reported zero writes and zero current cost",
+    day: usageDay({
+      date: "2026-08-05", current_partial_utc: false,
+      recorded_cost_status: "available", recorded_currency: "USD",
+      current_rate_status: "available", current_rate_estimated_cost_nanos: "0",
+      totals: {
+        operations: 20, model_requests: 2, cache_hits: 18, failures: 0,
+        reported_requests: 2, unreported_requests: 0, external_unmetered_operations: 0,
+        input_tokens: 100000, cached_input_tokens: 80000, cache_write_input_tokens: 0,
+        cache_write_reported_requests: 2, output_tokens: 5000, reasoning_tokens: 0, estimated_cost_nanos: "40000000",
+      },
+      coverage: {
+        status: "complete", states: ["fully_priced_provider_reported"],
+        model_requests: 2, reported_requests: 2, unreported_requests: 0, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["20", "2", "18", "20,000", "80,000", "0", "5,000", "USD 0.04", "USD 0.00", "Complete Fully priced provider usage"],
+    summary: "20 operations. 2 requests. 18 cache hits. Recorded estimate USD 0.04. Current-rate reprice USD 0.00. Complete coverage.",
+  },
+  {
+    name: "pattern failures with mixed recorded currencies",
+    day: usageDay({
+      date: "2026-08-06", current_partial_utc: false,
+      recorded_cost_status: "mixed_currency", recorded_currency: undefined,
+      current_rate_status: "partial", current_rate_estimated_cost_nanos: "30000000",
+      totals: {
+        operations: 6, model_requests: 6, cache_hits: 0, failures: 5,
+        reported_requests: 6, unreported_requests: 0, external_unmetered_operations: 0,
+        input_tokens: 11800, cached_input_tokens: 0, cache_write_input_tokens: 0,
+        cache_write_unreported_requests: 6, output_tokens: 1400, reasoning_tokens: 0, estimated_cost_nanos: "0",
+      },
+      coverage: {
+        status: "partial", states: ["cache_write_unreported"],
+        model_requests: 6, reported_requests: 6, unreported_requests: 0, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["6", "6", "0", "11,800", "0", "Not reported", "1,400", "Mixed currencies", "USD 0.03", "Partial Missing cache-write usage"],
+    summary: "6 operations. 6 requests. 0 cache hits. Recorded estimate Mixed currencies. Current-rate reprice USD 0.03. Partial coverage.",
+  },
+  {
+    name: "pricing unavailable at recording but available at current rates",
+    day: usageDay({
+      date: "2026-08-07", current_partial_utc: false,
+      recorded_cost_status: "unavailable", recorded_currency: "USD",
+      current_rate_status: "available", current_rate_estimated_cost_nanos: "80000000",
+      totals: {
+        operations: 1, model_requests: 1, cache_hits: 0, failures: 0,
+        reported_requests: 1, unreported_requests: 0, external_unmetered_operations: 0,
+        input_tokens: 30000, cached_input_tokens: 0, cache_write_input_tokens: 0,
+        output_tokens: 2000, reasoning_tokens: 0, estimated_cost_nanos: "0",
+      },
+      coverage: {
+        status: "partial", states: ["pricing_added_after_operation"],
+        model_requests: 1, reported_requests: 1, unreported_requests: 0, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["1", "1", "0", "30,000", "0", "Not reported", "2,000", "Unavailable", "USD 0.08", "Partial Pricing added after operation"],
+    summary: "1 operations. 1 requests. 0 cache hits. Recorded estimate Unavailable. Current-rate reprice USD 0.08. Partial coverage.",
+  },
+  {
+    name: "external unmetered activity is not a priced zero",
+    day: usageDay({
+      date: "2026-08-08", current_partial_utc: false,
+      recorded_cost_status: "unavailable", current_rate_status: "unavailable",
+      current_rate_estimated_cost_nanos: undefined,
+      totals: {
+        operations: 1, model_requests: 0, cache_hits: 0, failures: 0,
+        reported_requests: 0, unreported_requests: 0, external_unmetered_operations: 1,
+        input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0,
+        output_tokens: 0, reasoning_tokens: 0, estimated_cost_nanos: "0",
+      },
+      coverage: {
+        status: "unavailable", states: ["external_unmetered"],
+        model_requests: 0, reported_requests: 0, unreported_requests: 0, external_unmetered_operations: 1,
+      },
+    }),
+    cells: ["1", "0", "0", "0", "0", "Not reported", "0", "Unavailable", "Unavailable", "Unavailable External unmetered operations"],
+    summary: "1 operations. 0 requests. 0 cache hits. Recorded estimate Unavailable. Current-rate reprice Unavailable. Coverage unavailable.",
+  },
+  {
+    name: "cache write tokens are separate from uncached input",
+    day: usageDay({
+      date: "2026-08-09", current_partial_utc: false,
+      recorded_cost_status: "available", recorded_currency: "USD",
+      current_rate_status: "available", current_rate_estimated_cost_nanos: undefined,
+      totals: {
+        operations: 1, model_requests: 1, cache_hits: 0, failures: 0,
+        reported_requests: 1, unreported_requests: 0, external_unmetered_operations: 0,
+        input_tokens: 50000, cached_input_tokens: 0, cache_write_input_tokens: 10000,
+        cache_write_reported_requests: 1, output_tokens: 1000, reasoning_tokens: 0, estimated_cost_nanos: "60000000",
+      },
+      coverage: {
+        status: "complete", states: ["fully_priced_provider_reported"],
+        model_requests: 1, reported_requests: 1, unreported_requests: 0, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["1", "1", "0", "40,000", "0", "10,000", "1,000", "USD 0.06", "Unavailable", "Complete Fully priced provider usage"],
+    summary: "1 operations. 1 requests. 0 cache hits. Recorded estimate USD 0.06. Current-rate reprice Unavailable. Complete coverage.",
+  },
+  {
+    name: "partial current day retains partial token coverage",
+    day: usageDay({
+      date: "2026-08-10", current_partial_utc: true,
+      recorded_cost_status: "partial", recorded_currency: "USD",
+      current_rate_status: "partial", current_rate_estimated_cost_nanos: "35000000",
+      totals: {
+        operations: 2, model_requests: 2, cache_hits: 0, failures: 0,
+        reported_requests: 1, unreported_requests: 1, external_unmetered_operations: 0,
+        input_tokens: 20000, cached_input_tokens: 0, cache_write_input_tokens: 0,
+        output_tokens: 1000, reasoning_tokens: 0, estimated_cost_nanos: "25000000",
+      },
+      coverage: {
+        status: "partial", states: ["partial_token_usage"],
+        model_requests: 2, reported_requests: 1, unreported_requests: 1, external_unmetered_operations: 0,
+      },
+    }),
+    cells: ["2", "2", "0", "20,000", "0", "Not reported", "1,000", "USD 0.03", "USD 0.04", "Partial Partial token usage"],
+    summary: "2 operations. 2 requests. 0 cache hits. Recorded estimate USD 0.03. Current-rate reprice USD 0.04. Partial coverage. Partial UTC day.",
+  },
+];
+
+for (const { name, day, cells, summary } of historicalUsageCases) {
+  test(`historical accounting renders ${name}`, () => {
+    const plainText = (html: string) => html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gu, "")
+      .replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ").trim();
+    const summaryHTML = render(createElement(DaySummaryButton, {
+      day, open: false, controls: `summary-${day.date}`, onToggle: () => undefined,
+    }));
+    const button = /<button\b[^>]*aria-label="([^"]+)"[^>]*>/u.exec(summaryHTML);
+    assert.ok(button, "missing day summary button");
+    assert.equal(button[1], `Expand feature breakdown for ${day.date}. ${summary}`);
+    assert.match(button[0], /aria-expanded="false"/u);
+
+    const tableHTML = render(createElement(HistoricalTable, { days: [day] }));
+    const body = /<tbody\b[^>]*>([\s\S]*?)<\/tbody>/u.exec(tableHTML);
+    assert.ok(body, "missing historical table body");
+    const rows = [...body[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gu)];
+    assert.equal(rows.length, 1);
+    const rowCells = [...rows[0][1].matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/gu)]
+      .map((match) => plainText(match[1]));
+    assert.deepEqual(rowCells, [
+      "", `${day.date}${day.current_partial_utc ? " Partial UTC day" : ""}`, ...cells,
+    ]);
+  });
+}
 
 test("metric strip retains qualification notes without changing its shared geometry", () => {
   const html = render(createElement(MetricStrip, {

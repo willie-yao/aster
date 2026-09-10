@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import * as ts from "typescript";
 
 import {
   attributionLabel,
@@ -368,9 +369,27 @@ test("the attribution banner leads each failure and cites its evidence", () => {
 });
 
 test("outbound pull request links cannot reach the opener", () => {
-  const detail = source("src/pages/PullRequestDetailPage.tsx");
-  const externalLinks = detail.match(/target="_blank"/g) ?? [];
-  const guarded = detail.match(/rel="noopener noreferrer"/g) ?? [];
-  assert.ok(externalLinks.length > 0);
-  assert.equal(guarded.length, externalLinks.length);
+  const file = ts.createSourceFile(
+    "PullRequestDetailPage.tsx", source("src/pages/PullRequestDetailPage.tsx"),
+    ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
+  );
+  const sites: string[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
+      const target = attributes.find((attribute) => attribute.name.getText(file) === "target")?.initializer;
+      if (target && ts.isStringLiteral(target) && target.text === "_blank") {
+        const rel = attributes.find((attribute) => attribute.name.getText(file) === "rel")?.initializer;
+        assert.ok(rel && ts.isStringLiteral(rel), `missing rel on ${node.getText(file)}`);
+        const tokens = new Set(rel.text.split(/\s+/u));
+        assert.ok(tokens.has("noopener") && tokens.has("noreferrer"), node.getText(file));
+        const href = attributes.find((attribute) => attribute.name.getText(file) === "href")?.initializer;
+        assert.ok(href, "missing outbound destination");
+        sites.push(href.getText(file));
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  assert.deepEqual(sites.sort(), ["{data.html_url}", "{href}"], "both outbound-link sites must be inspected");
 });

@@ -3,6 +3,10 @@ package fetcher
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"net/http"
@@ -136,13 +140,6 @@ func TestRefreshPullRequestsRequiresJobCatalog(t *testing.T) {
 	}
 }
 
-// A pull request refresh failure must not abort the surrounding pass, so the
-// dashboard still publishes when GitHub or the catalog is unavailable.
-func TestRunPullRequestPassSwallowsFailures(t *testing.T) {
-	p := &pipeline{cfg: &project.Config{PullRequests: &project.PullRequests{Enabled: true}}}
-	p.runPullRequestPass(context.Background(), nil)
-}
-
 func TestRunPullRequestPassSkipsWhenDisabled(t *testing.T) {
 	called := false
 	original := writePullRequestOutput
@@ -273,6 +270,19 @@ func failingHTTPClient(t *testing.T) *http.Client {
 	return &http.Client{Transport: refusingTransport{t: t}}
 }
 
+func setCommentAppCredentials(t *testing.T) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ASTER_APP_ID", "1")
+	t.Setenv("ASTER_APP_PRIVATE_KEY", string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})))
+}
+
 // commentConfig builds a config with commenting in the given state.
 func commentConfig(triage, comment bool) *project.Config {
 	return &project.Config{
@@ -288,6 +298,7 @@ func commentConfig(triage, comment bool) *project.Config {
 // all. A transport that fails the test on use proves it rather than asserting
 // on a log line.
 func TestRunPullRequestCommentsDisabledMakesNoCall(t *testing.T) {
+	setCommentAppCredentials(t)
 	cases := []struct {
 		name string
 		cfg  *project.Config
@@ -299,9 +310,6 @@ func TestRunPullRequestCommentsDisabledMakesNoCall(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Credentials are present, so only the config gates the call.
-			t.Setenv("ASTER_APP_ID", "1")
-			t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
-
 			p := &pipeline{cfg: tc.cfg, client: failingHTTPClient(t)}
 			p.runPullRequestComments(context.Background(), triageOutcome{})
 		})
@@ -367,8 +375,7 @@ func TestWarnCommentCredentialsMissing(t *testing.T) {
 // GitHub writes, and a comment on a contributor's pull request is a GitHub
 // write like any other.
 func TestRunPullRequestCommentsRespectsSkipSideEffects(t *testing.T) {
-	t.Setenv("ASTER_APP_ID", "1")
-	t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
+	setCommentAppCredentials(t)
 
 	p := &pipeline{
 		cfg:    commentConfig(true, true),
@@ -402,13 +409,12 @@ func TestCommentCandidatesComeFromPublishedDetails(t *testing.T) {
 // suppresses commenting: without a successful publish, the triage pages a
 // comment links to are missing or stale.
 func TestRunPullRequestPassSkipsCommentingWhenTriageFails(t *testing.T) {
-	t.Setenv("ASTER_APP_ID", "1")
-	t.Setenv("ASTER_APP_PRIVATE_KEY", "irrelevant")
+	setCommentAppCredentials(t)
 	// A nil job catalog makes refreshPullRequests fail before any GitHub call,
 	// and the refusing transport proves commenting never runs afterwards.
 	p := &pipeline{
 		cfg:    commentConfig(true, true),
 		client: failingHTTPClient(t),
 	}
-	p.runPullRequestPass(context.Background(), &refreshResult{})
+	p.runPullRequestPass(context.Background(), nil)
 }

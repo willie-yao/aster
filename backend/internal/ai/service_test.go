@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
-	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -103,7 +102,7 @@ func TestService_Agentic_TagsModeAgentic(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 	tc := newFailedTC("Test A", "failure msg")
@@ -126,7 +125,7 @@ func TestService_ReanalyzeOnModeChange(t *testing.T) {
 	srv.push(200, chatRespFinal(final))
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
@@ -149,7 +148,7 @@ func TestService_SkipWhenAlreadyAnalyzedSameMode(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 	traces := NewTraceStore()
@@ -186,7 +185,7 @@ func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	consec := map[string]int{"j::Test A": transientPersistThreshold}
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: consec})
 	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
@@ -326,7 +325,7 @@ func TestService_ToolsUnsupported_SetsUnavailable(t *testing.T) {
 	srv.push(400, `{"error":{"message":"function calling not supported"}}`)
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(s, AgenticOptions{MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second}, &fakeFactory{}, registry, enabled)
 
@@ -361,7 +360,7 @@ func TestServiceProviderFailureExcludesResponseBodyFromEverySurface(t *testing.T
 	defer server.Close()
 
 	client := newAgenticTestClient(t, server.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	traces := NewTraceStore()
 	service := NewService(ServiceConfig{
 		Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", TraceStore: traces,
@@ -461,7 +460,7 @@ func TestService_ShouldReanalyze_FloorTable(t *testing.T) {
 
 func TestService_EvidencePlanCoverageOnlyBypassesGCSFloor(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
-	set := loadAgenticSkillsForTest(t, map[string]string{
+	set := loadSkillsForTest(t, map[string]string{
 		"profiled": "id: profiled\ntriggers: [profiled]\nrequired_evidence:\n  - id: log\n    any_of: [failure\\.log$]\n",
 	})
 	s := &Service{
@@ -608,7 +607,7 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	srv.push(200, chatRespFinal(`{"summary":"fresh post-floor","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(s,
 		AgenticOptions{MaxIters: 4, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second, MinToolCalls: 1},
@@ -627,18 +626,6 @@ func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	if !strings.Contains(tc.AISummary.Summary, "fresh post-floor") {
 		t.Errorf("expected fresh summary, got %q (build-cached pre-floor entry should have been invalidated)", tc.AISummary.Summary)
 	}
-}
-
-// newServiceTestRegistry returns a filesystem-only registry for service tests.
-func newServiceTestRegistry(t *testing.T) (*tools.Registry, []string) {
-	t.Helper()
-	r := tools.NewRegistry()
-	filesystem.Register(r)
-	enabled, err := r.Enable([]string{"filesystem"})
-	if err != nil {
-		t.Fatalf("registry.Enable: %v", err)
-	}
-	return r, enabled
 }
 
 type fakeFactory struct{ browser artifacts.Browser }
@@ -774,7 +761,7 @@ func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 
 	module := &stubModule{name: "universal", prompt: "use the build log"}
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	service := NewService(ServiceConfig{Client: client, Module: module, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
@@ -822,7 +809,7 @@ func TestService_MissingCitationReanalysisReplacesStaleAnalysis(t *testing.T) {
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	s := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	factory := &serviceFixedBrowserFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("initiating failure\n")}}}
 	configureAgenticTestService(s, AgenticOptions{
@@ -859,7 +846,7 @@ func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.
 	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
@@ -979,7 +966,7 @@ func TestPreliminaryRetryBudgetStopsUncachedReanalysis(t *testing.T) {
 		srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	}
 	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newServiceTestRegistry(t)
+	registry, enabled := newTestRegistry(t)
 	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
 	configureAgenticTestService(service, AgenticOptions{
 		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,

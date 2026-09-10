@@ -45,6 +45,8 @@ jobs:
         run: python3 hack/check-doc-links.py --self-test
       - name: Check documentation links
         run: make check-doc-links
+      - name: Test onboarding release pin check
+        run: python3 hack/check-onboarding-release-pins.py --self-test
       - name: Check onboarding release pins
         run: make check-onboarding-release-pins
       - name: Classify changes
@@ -149,6 +151,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.benchmarks == 'true'
     runs-on: ubuntu-latest
+    env:
+      RUN_AI_BENCHMARK: ""
+      RUN_CAUSE_RESOLUTION_BENCHMARK: ""
+      RUN_BENCHMARK_FIXTURE_VALIDATION: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -161,6 +167,9 @@ jobs:
       - name: Vet
         working-directory: backend/benchmarks
         run: go vet ./...
+      - name: Test provider-free harness
+        working-directory: backend/benchmarks
+        run: go test ./... -count=1
 
   frontend:
     needs: changes
@@ -185,8 +194,15 @@ jobs:
       - name: Lint
         working-directory: frontend
         run: npm run lint
-      - name: Build
+      - name: Build root deployment
         working-directory: frontend
+        env:
+          VITE_BASE_PATH: /
+        run: npm run build
+      - name: Build subpath deployment
+        working-directory: frontend
+        env:
+          VITE_BASE_PATH: /audit-preview/
         run: npm run build
 
   helm:

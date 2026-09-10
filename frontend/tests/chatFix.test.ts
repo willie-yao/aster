@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { MemoryStorage } from "./helpers/memoryStorage.js";
 
 import { chatFixVerifiedCitationRequestIDs, chatFixVerifiedSourcePaths } from "../src/lib/chatFixEligibility.js";
 import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
@@ -206,15 +207,10 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
 });
 
 test("exact JUnit fix request storage preserves the durable request identity and instruction", () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
-  };
+  const storage = new MemoryStorage();
   const key = chatFixRequestStorageKey("session", "chat-request");
   storeChatFixRequest(storage, "session", "chat-request", { id: "request-1", instruction: "keep compatibility" });
-  assert.equal(values.has(key), true);
+  assert.equal(storage.values.has(key), true);
   assert.deepEqual(readStoredChatFixRequest(storage, "session", "chat-request"), {
     id: "request-1",
     instruction: "keep compatibility",
@@ -224,14 +220,9 @@ test("exact JUnit fix request storage preserves the durable request identity and
 });
 
 test("exact JUnit fix request storage rejects malformed request identities", () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
-  };
+  const storage = new MemoryStorage();
   const key = chatFixRequestStorageKey("session", "chat-request");
-  values.set(key, JSON.stringify({ id: "bad request id", instruction: "x" }));
+  storage.values.set(key, JSON.stringify({ id: "bad request id", instruction: "x" }));
   assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
 });
 

@@ -141,20 +141,25 @@ func TestPatternFailureBackoffExpiresIntoFreshRetry(t *testing.T) {
 
 func TestPatternFailureBackoffDoesNotPersistTransientOrCancellation(t *testing.T) {
 	shrinkCallDelay(t)
-	for _, status := range []int{429, 500} {
-		t.Run(httpStatusName(status), func(t *testing.T) {
+	for _, test := range []struct {
+		status              int
+		requestsPerAnalysis int32
+	}{
+		{status: 429, requestsPerAnalysis: 3},
+		{status: 500, requestsPerAnalysis: 1},
+	} {
+		t.Run(httpStatusName(test.status), func(t *testing.T) {
 			srv := newScriptedChatServer(t)
-			for range 6 {
-				srv.push(status, "private transient response")
+			for range 2 * test.requestsPerAnalysis {
+				srv.push(test.status, "private transient response")
 			}
 			service := newPatternBackoffService(t, srv.URL, t.TempDir(), "claude-test")
-			var previous int32
 			for attempt := 0; attempt < 2; attempt++ {
 				_, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
-				if err == nil || IsPatternFailureSuppressed(err) || atomic.LoadInt32(&srv.calls) <= previous {
-					t.Fatalf("attempt=%d error=%v calls=%d previous=%d", attempt, err, srv.calls, previous)
+				want := int32(attempt+1) * test.requestsPerAnalysis
+				if calls := atomic.LoadInt32(&srv.calls); err == nil || IsPatternFailureSuppressed(err) || calls != want {
+					t.Fatalf("attempt=%d error=%v calls=%d want=%d", attempt, err, calls, want)
 				}
-				previous = atomic.LoadInt32(&srv.calls)
 			}
 		})
 	}

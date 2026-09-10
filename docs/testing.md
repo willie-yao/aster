@@ -12,7 +12,7 @@ cd backend && go vet ./... && go test ./... -count=1 && staticcheck ./...
 cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-CI runs build, test, and vet for the main backend module plus frontend type check, lint, and build. A benchmark-scoped job checks that the separate module is tidy and passes vet when benchmark files change. CI does not run `staticcheck`, so run it locally for backend changes.
+CI runs build, test, and vet for the main backend module plus frontend type check, tests, lint, and root/subpath builds. A benchmark-scoped job runs provider-free harness tests, tidy, and vet when backend or benchmark changes select it. Live benchmark gates are explicitly disabled. CI does not run `staticcheck`, so run it locally for backend changes.
 
 Check Go formatting with:
 
@@ -36,6 +36,24 @@ cd backend && go test -race -count=1 ./internal/ai/...
 
 Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by anchor tests. Update the relevant anchor test in the same change as intentional prompt edits.
 
+## Test helpers
+
+Keep Go helpers package-local in `_test.go` files. Share arrangement and checked
+serialization, while leaving expected outcomes, intentionally invalid inputs,
+file modes, clocks, and service inputs visible in each case. Use fresh
+fixtures for table rows rather than mutating the previous row's state.
+
+Frontend SSR tests use `frontend/tests/helpers/ssr.ts`. Load each suite's
+components, application contexts, and theme in one `withSSR` callback so they
+share a Vite module graph. The helper closes that suite's server on success or
+failure. Keep differing render providers and viewport configuration local.
+
+`failedJUnitRun` supplies the shared grounded JUnit fixture with fresh nested
+objects. `MemoryStorage` supplies only the three storage methods used by tests.
+Keep bespoke fixtures when missing evidence, source identity, or malformed
+storage is the subject, and do not share a live Vite server or mutable fixtures
+across suites.
+
 ## End-to-end pipeline tests
 
 `internal/e2e` runs `fetcher.Run` through discovery, artifact parsing, aggregation, scripted AI analysis, and output writing against local fixtures. It has no network, model, or GCS dependency.
@@ -56,7 +74,10 @@ Fixtures live under `backend/internal/e2e/testdata`. Benchmark fixtures live sep
 
 ## AI quality benchmark
 
-The opt-in benchmarks live in a separate Go module at `backend/benchmarks`. The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. CI checks its module metadata and vet result when benchmark files change. Live cases remain gated behind their own `RUN_*` or `BENCH_*` environment variable. Provider-free harness tests can be run directly with `go -C backend/benchmarks test ./... -count=1`.
+The opt-in benchmarks live in a separate Go module at `backend/benchmarks`. The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. CI runs its provider-free harness tests and checks module metadata and vet when backend or benchmark changes select it. Live cases remain gated behind their own `RUN_*` or `BENCH_*` environment variable. Provider-free harness tests can be run directly with `go -C backend/benchmarks test ./... -count=1` with the live benchmark gates unset.
+
+Use a Go toolchain at least as new as `backend/benchmarks/go.mod` requires on
+`PATH`, including for the fixture verifier's nested `go test` commands.
 
 ```bash
 RUN_AI_BENCHMARK=1 \
@@ -72,6 +93,12 @@ There is no checked-in A/B comparison command. Compare benchmark logs or saved r
 The benchmark reports the unique successful filesystem and Kubernetes Tool names and per-Tool call counts for each trial.
 
 ## Documentation validation
+
+`make check-doc-links` validates Git-tracked Markdown files. For generated files,
+use `python3 hack/check-doc-links.py --root <root> <file>...`, with paths relative
+to that root. Explicit selection needs no Git repository and rejects source
+symlinks and paths escaping the root. Cleanroom uses this checker for both engine
+documentation and the generated consumer deployment README.
 
 When editing Markdown:
 

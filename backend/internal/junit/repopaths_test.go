@@ -1,6 +1,7 @@
 package junit
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -51,11 +52,15 @@ func TestRepoFailurePathsDeduplicatesAndBounds(t *testing.T) {
 	}
 
 	body = ""
+	var paths []string
 	for i := 0; i < maxRepoFailurePaths*2; i++ {
-		body += "sigs.k8s.io/cluster-api-provider-azure/test/e2e/f" + string(rune('a'+i%26)) + string(rune('a'+i/26)) + ".go:1\n"
+		path := fmt.Sprintf("test/e2e/f%02d.go", maxRepoFailurePaths*2-i)
+		paths = append(paths, path)
+		body += "sigs.k8s.io/cluster-api-provider-azure/" + path + ":1\n"
 	}
-	if got := RepoFailurePaths(body, capz); len(got) > maxRepoFailurePaths {
-		t.Fatalf("paths = %d, over the bound %d", len(got), maxRepoFailurePaths)
+	want := paths[:maxRepoFailurePaths]
+	if got := RepoFailurePaths(body, capz); !reflect.DeepEqual(got, want) {
+		t.Fatalf("paths = %v, want the first %d encountered paths: %v", got, maxRepoFailurePaths, want)
 	}
 }
 

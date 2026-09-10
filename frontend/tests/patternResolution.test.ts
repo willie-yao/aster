@@ -6,7 +6,8 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
+import { failedJUnitRun } from "./helpers/failedJUnitRun.js";
 import {
   patternFullyResolved,
   unlistedCauseResolutions,
@@ -16,38 +17,33 @@ import type { BuildResult, FlakinessReport, PatternAnalysis, PatternRefreshStatu
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme } = await withSSR(async (vite) => {
+  const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBanner.tsx")) as {
+    PatternBanner: (props: {
+      pattern: PatternAnalysis;
+      jobID?: string;
+      refreshStatus?: PatternRefreshStatus;
+      runs?: BuildResult[];
+    }) => ReturnType<typeof createElement>;
+  };
+  const { UnlistedResolutionRow } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
+    UnlistedResolutionRow: (props: {
+      scope: "pattern" | "cause";
+      id: string;
+      entry: ResolvedEntry;
+      filePrefix: string;
+      onRestored: () => void;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
+    CapabilitiesContext: React.Context<Capabilities>;
+  };
+  const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
+    AuthContext: React.Context<AuthState>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
+  return { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme };
 });
-const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBanner.tsx")) as {
-  PatternBanner: (props: {
-    pattern: PatternAnalysis;
-    jobID?: string;
-    refreshStatus?: PatternRefreshStatus;
-    runs?: BuildResult[];
-  }) => ReturnType<typeof createElement>;
-};
-const { UnlistedResolutionRow } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
-  UnlistedResolutionRow: (props: {
-    scope: "pattern" | "cause";
-    id: string;
-    entry: ResolvedEntry;
-    filePrefix: string;
-    onRestored: () => void;
-  }) => ReturnType<typeof createElement>;
-};
-const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
-  CapabilitiesContext: React.Context<Capabilities>;
-};
-const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
-  AuthContext: React.Context<AuthState>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-await vite.close();
 
 function source(file: string): string {
   return readFileSync(resolvePath(process.cwd(), file), "utf8");
@@ -456,42 +452,6 @@ test("reopening an unlisted resolution stays behind admin auth and the actions c
   assert.doesNotMatch(renderUnlisted(resolution(), admin, readOnly, "cause"), /Reopen failure/);
 });
 
-function failingRun(buildID: string, testName: string): BuildResult {
-  return {
-    build_id: buildID,
-    job_name: "periodic-capz-e2e-main",
-    started: "2026-08-18T00:00:00Z",
-    finished: "2026-08-18T01:00:00Z",
-    passed: false,
-    result: "FAILURE",
-    duration_seconds: 3600,
-    commit: "abc123",
-    prow_url: "https://prow.example",
-    web_url: "https://gcsweb.example",
-    build_log_url: "https://gcsweb.example/build-log.txt",
-    tests_total: 1,
-    tests_passed: 0,
-    tests_failed: 1,
-    tests_skipped: 0,
-    test_cases: [{
-      name: testName,
-      status: "failed",
-      duration_seconds: 1,
-      junit_file: "artifacts/junit_01.xml",
-      ai_analysis: {
-        generated_at: "2026-08-18T00:00:00Z",
-        root_cause: "cause",
-        severity: "high",
-        suggested_fix: "fix",
-        disposition: "citations_verified",
-        // An analysis with no file links has no verified source path, so the
-        // Fix gate refuses it and no route would render.
-        file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
-      },
-    }],
-  };
-}
-
 // Both of a cause's actions belong in one bar. Before this they were split by
 // the chat accordion, with the route buried mid-body and the resolution below a
 // rule, so neither read as the card's set of actions.
@@ -510,7 +470,7 @@ test("a cause offers its route and its resolution in one action bar", () => {
     admin,
     fixCapable,
     undefined,
-    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
   );
 
   // Both actions render as outlined controls, so the bar reads as a row of
@@ -544,15 +504,40 @@ test("a cause offers its route and its resolution in one action bar", () => {
   assert.match(routing, /minWidth: 0/);
   assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: "wrap"/);
 
-  // They are siblings in one bar: nothing separates them, and the route no
-  // longer renders up in the body under the Next step heading.
   const barStart = html.indexOf("open representative failure");
   const resolveAt = html.indexOf("Resolve failure");
   assert.ok(barStart !== -1 && resolveAt > barStart, "the route precedes the resolution in the bar");
-  assert.ok(
-    html.indexOf("Next step") < barStart,
-    "the action bar sits after the body, not inside the Next step section",
+});
+
+test("a cause's remediation precedes its representative route and resolution", () => {
+  const html = render(
+    causalGroupPattern({
+      causal_groups: [{
+        builds: ["100"], root_cause: "cni conflict", confidence: "high", signature: "sig-a",
+        remediation: { suggested_fix: "Remove the conflicting CNI configuration.", build_id: "100" },
+      }],
+    }),
+    admin,
+    {
+      mode: "server",
+      features: { actions: true, analysis_chat: true, junit_chat_fix: true },
+      auth: { mode: "oauth" },
+    },
+    undefined,
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
   );
+  const anchors = [
+    "Next step", "Remove the conflicting CNI configuration.",
+    "open representative failure", "Resolve failure",
+  ];
+  const positions = anchors.map((anchor) => {
+    const index = html.indexOf(anchor);
+    assert.notEqual(index, -1, `missing ${anchor}`);
+    return index;
+  });
+  for (let index = 1; index < positions.length; index++) {
+    assert.ok(positions[index - 1] < positions[index], `${anchors[index - 1]} must precede ${anchors[index]}`);
+  }
 });
 
 // Only a resolved cause folds away, so an active one keeps its body on screen
@@ -633,7 +618,7 @@ test("an upstream-owned cause reports ownership in the body and still routes fro
     admin,
     fixCapable,
     undefined,
-    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
   );
 
   assert.match(html, /kubernetes\/kubernetes/);
@@ -664,7 +649,7 @@ test("a cause with no route keeps its dead-end explanation and still resolves", 
     // A run whose failure carries no file links fails the Fix gate, so the
     // cause is in the window but has no eligible representative.
     [(() => {
-      const run = failingRun("100", "[It] Workload cluster creation Creating a highly available cluster");
+      const run = failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster");
       delete run.test_cases[0].ai_analysis!.file_links;
       return run;
     })()],
@@ -693,7 +678,7 @@ test("a cause with a route but no remediation and no chat renders no Next step h
     admin,
     fixCapable,
     undefined,
-    [failingRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
   );
 
   // The route still renders, from the bar.

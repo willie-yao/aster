@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,12 +87,17 @@ func TestInferCategories_EdgeCases(t *testing.T) {
 
 func TestInferCategories_RespectsCap(t *testing.T) {
 	var jobs []string
-	for i := 0; i < 30; i++ {
-		jobs = append(jobs, "periodic-proj-flavor"+string(rune('a'+i))+"-main")
+	for _, group := range []string{"juliet", "india", "hotel", "golf", "foxtrot", "echo", "delta", "charlie", "bravo", "alpha"} {
+		jobs = append(jobs, "periodic-proj-"+group+"-main", "periodic-proj-"+group+"-release-1-23")
 	}
 	rules := InferCategories(jobs)
-	if len(rules) > maxCategories {
-		t.Errorf("got %d categories, want <= %d", len(rules), maxCategories)
+	var ids []string
+	for _, rule := range rules {
+		ids = append(ids, rule.ID)
+	}
+	want := []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"}
+	if !slices.Equal(ids, want) {
+		t.Errorf("category IDs = %v, want %v", ids, want)
 	}
 }
 
@@ -112,14 +118,25 @@ func TestInferCategories_SubstringCoverage(t *testing.T) {
 	// "capi" contains "api"; coverage must use the engine's substring semantics
 	// so the proposed rules validate and classify as they will at runtime.
 	jobs := []string{
+		"periodic-api-e2e-main", "periodic-api-e2e-release-1-23",
 		"periodic-capi-e2e-main", "periodic-capi-e2e-release-1-23",
+		"periodic-storage-e2e-main",
 	}
-	// Both jobs share "capi" and "e2e" as exact tokens but those appear in ALL
-	// jobs, so there is no distinguisher. Assert it stays valid and loadable.
 	rules := InferCategories(jobs)
+	var ids []string
 	for _, r := range rules {
+		ids = append(ids, r.ID)
 		if strings.TrimSpace(r.ID) != r.ID || r.ID == "" {
 			t.Errorf("bad id %q", r.ID)
+		}
+	}
+	if want := []string{"capi", "api"}; !slices.Equal(ids, want) {
+		t.Fatalf("category IDs = %v, want %v", ids, want)
+	}
+	want := []string{"api", "api", "capi", "capi", "other"}
+	for i, job := range jobs {
+		if got := project.CategorizeJob(job, rules); got != want[i] {
+			t.Errorf("CategorizeJob(%q) = %q, want %q", job, got, want[i])
 		}
 	}
 }
@@ -511,6 +528,15 @@ func TestScaffold_K8sMode(t *testing.T) {
 	}, false, false, nil); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	for _, name := range []string{"project.yaml", "prompts/system.md", "deploy/values.yaml", "deploy/README.md"} {
+		path := filepath.Join(dir, name)
+		if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+			t.Fatalf("scaffold file %s was not created as a regular file: %v", name, err)
+		}
+		if strings.TrimSpace(string(mustReadFile(t, path))) == "" {
+			t.Errorf("scaffold file %s is empty", name)
+		}
+	}
 
 	cfg, gotPrompt, err := project.LoadDir(dir)
 	if err != nil {
@@ -668,9 +694,15 @@ func TestScaffold_K8sStaysFocused(t *testing.T) {
 			t.Errorf("Kubernetes scaffold missing %q:\n%s\n%s", want, values, readme)
 		}
 	}
-	for _, unwanted := range []string{"analysisRuntime:", "EMAIL_SMTP_PASSWORD", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN", "clientSecret:", "sessionKey:", "botToken:"} {
+	for _, unwanted := range []string{
+		"analysisRuntime:", "EMAIL_SMTP_PASSWORD", "--set ai.token", "ISSUE_TOKEN", "FIX_TOKEN",
+		"clientSecret:", "sessionKey:", "botToken:",
+		"CAPZ", "capz", "cluster-api-provider-azure", "prow-dashboard-demo",
+		"<expected-capz-job-name>", "aster kubernetes", "runtime/agent-sandbox", "ENGINE_DIR",
+		"insecure-skip-tls-verify=true", "kubectl config set-cluster", "az afd",
+	} {
 		if strings.Contains(values+readme, unwanted) {
-			t.Errorf("Kubernetes scaffold includes optional feature %q:\n%s\n%s", unwanted, values, readme)
+			t.Errorf("Kubernetes scaffold includes forbidden content %q:\n%s\n%s", unwanted, values, readme)
 		}
 	}
 }
@@ -688,7 +720,9 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`export ASTER="<verified-aster-path>"`,
 		`export CLI_VERSION="<published-engine-tag>"`,
 		`export CHART_VERSION="${CLI_VERSION#v}"`,
+		`--chart-version "$CHART_VERSION"`,
 		`export RELEASE="<application-release-from-platform-handoff>"`,
+		`--context "$CONTEXT"`,
 		`export EXECUTION_NAMESPACE=""`,
 		`export PUBLIC_URL=""`,
 		`export EXPECTED_JOB="<expected-job-name>"`,
@@ -702,9 +736,15 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`"$ASTER" kubernetes upgrade`,
 		`rollback "$RELEASE" "$PRIOR_HELM_REVISION" --wait`,
 		`--retry 60`,
-		`if [ -n "$PUBLIC_URL" ]`,
-		`if [ -n "$EXECUTION_NAMESPACE" ]`,
-		`/data/ai_cache.json)" = 404`,
+		`test -n "${CONTEXT:-}" && test -n "${NAMESPACE:-}" && test -n "${RELEASE:-}" &&`,
+		"(\nset -euo pipefail\n",
+		`test -n "${EXPECTED_JOB:-}"`,
+		`if [ -n "${PUBLIC_URL:-}" ]`,
+		`if [ -n "${EXECUTION_NAMESPACE:-}" ]`,
+		`PRIVATE_STATUS=$(curl --silent --show-error`,
+		`test "$PRIVATE_STATUS" = 404`,
+		`SANDBOXES=$(kubectl --context "$CONTEXT"`,
+		`test -z "$SANDBOXES"`,
 		"docs/kubernetes.md",
 		"docs/kubernetes-platform.md",
 		"docs/kubernetes-reference.md",
@@ -728,6 +768,8 @@ func TestK8sDeployReadmeGuidesSafeProjectSpecificInstall(t *testing.T) {
 		`DOWNLOAD_DIR=`,
 		`manifest_ready=`,
 		`for _ in`,
+		`test "$(curl`,
+		`test -z "$(kubectl`,
 	} {
 		if strings.Contains(readme, unwanted) {
 			t.Errorf("generated Kubernetes README contains duplicated or unsupported guidance %q:\n%s", unwanted, readme)
@@ -850,68 +892,6 @@ func TestWriteKubernetesCleanRoomFixture(t *testing.T) {
 		"deploy/README.md":   readme,
 	}, false, false, nil); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestKubernetesCleanRoomScaffoldContract(t *testing.T) {
-	data := buildScaffoldData(testOpts(), nil)
-	data.Mode = modeK8s
-	values, err := render(k8sValuesTmpl, data)
-	if err != nil {
-		t.Fatalf("render values: %v", err)
-	}
-	readme, err := render(k8sDeployReadmeTmpl, data)
-	if err != nil {
-		t.Fatalf("render readme: %v", err)
-	}
-	prompt, err := render(systemPromptTmpl, data)
-	if err != nil {
-		t.Fatalf("render prompt: %v", err)
-	}
-	projectYAML, err := renderProjectYAML(data)
-	if err != nil {
-		t.Fatalf("render project: %v", err)
-	}
-	dir := t.TempDir()
-	for name, content := range map[string]string{
-		"project.yaml":       projectYAML,
-		"prompts/system.md":  prompt,
-		"deploy/values.yaml": values,
-		"deploy/README.md":   readme,
-	} {
-		if strings.TrimSpace(content) == "" {
-			t.Errorf("clean-room scaffold file %s is empty", name)
-			continue
-		}
-		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-			t.Errorf("clean-room scaffold file %s was not created as a regular file", name)
-		}
-	}
-	for _, forbidden := range []string{
-		"clientSecret:", "sessionKey:", "botToken:", "--set ai.token",
-		"CAPZ", "capz", "cluster-api-provider-azure", "prow-dashboard-demo",
-		"<expected-capz-job-name>", "aster kubernetes", "runtime/agent-sandbox", "ENGINE_DIR",
-		"insecure-skip-tls-verify=true", "kubectl config set-cluster", "az afd",
-	} {
-		if strings.Contains(values+readme, forbidden) {
-			t.Errorf("clean-room scaffold contains forbidden assumption %q", forbidden)
-		}
-	}
-	for _, required := range []string{
-		"verified-aster-path", "kubernetes doctor", "--action install", "--action upgrade",
-		"kubernetes install", "kubernetes upgrade", "rollback",
-		"docs/kubernetes.md", "docs/kubernetes-platform.md", "docs/kubernetes-reference.md",
-	} {
-		if !strings.Contains(readme, required) {
-			t.Errorf("clean-room scaffold is missing %q", required)
-		}
 	}
 }
 

@@ -94,7 +94,7 @@ def self_test() -> None:
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp) / "repo"
         root.mkdir()
-        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "init", "-q", "--object-format=sha1"], check=True)
         (root / "tracked.txt").write_text("tracked\n")
         executable = root / "tool.sh"
         executable.write_text("#!/bin/sh\nexit 0\n")
@@ -108,15 +108,33 @@ def self_test() -> None:
             "commit", "-q", "-m", "fixture",
         ], check=True)
         (root / "untracked.txt").write_text("untracked\n")
+        (root / "link.txt").symlink_to("tracked.txt")
         first = snapshot(root)
         second = snapshot(root)
         if first != second:
             raise AssertionError("identical file state produced different manifests")
         by_path = {item["path"]: item for item in first["entries"]}
-        if set(by_path) != {"tool.sh", "tracked.txt", "untracked.txt"}:
+        if set(by_path) != {"tool.sh", "tracked.txt", "untracked.txt", "link.txt"}:
             raise AssertionError(f"unexpected manifest paths: {sorted(by_path)}")
         if by_path["tool.sh"]["mode"] != "100755":
             raise AssertionError("executable mode was not preserved")
+        expected_blob = git(root, "hash-object", "--no-filters", "tracked.txt").decode().strip()
+        if by_path["tracked.txt"]["git_blob_id"] != expected_blob:
+            raise AssertionError("regular-file blob ID differs from Git")
+        link_blob = subprocess.run(
+            ["git", "-C", str(root), "hash-object", "--stdin", "--no-filters"],
+            input=b"tracked.txt",
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.decode().strip()
+        if by_path["link.txt"] != {
+            "path": "link.txt",
+            "mode": "120000",
+            "git_blob_id": link_blob,
+            "sha256": hashlib.sha256(b"tracked.txt").hexdigest(),
+        }:
+            raise AssertionError("symlink mode or target-text identity was not preserved")
         (root / "untracked.txt").write_text("changed\n")
         if first == snapshot(root):
             raise AssertionError("content change was not detected")

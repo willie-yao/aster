@@ -3,12 +3,14 @@ package benchmarks
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"runtime"
 	"slices"
 	"sort"
@@ -22,7 +24,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-const benchmarkManifestVersion = 5
+const benchmarkManifestVersion = 6
 
 var benchmarkCaseIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 var benchmarkStableIDRE = regexp.MustCompile(`^[0-9a-f]{20}$`)
@@ -49,7 +51,6 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 	if len(cases) != 3 {
 		t.Fatalf("cases = %d, want 3", len(cases))
 	}
-	allowedUnavailable := 0
 	adversarialFailures := map[string][]string{
 		"secrets-store-csi-image-scan":        {"forbidden: temporary security-scanner attribution"},
 		"kueue-was-podgroup-api-mismatch":     {"forbidden: API mismatch treated as incidental", "forbidden: transient readiness as primary cause"},
@@ -91,12 +92,6 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 		sort.Strings(evidenceGroupIDs)
 		if !slices.Equal(evidenceGroupIDs, expectedEvidenceGroups[bc.name]) {
 			t.Fatalf("case %q evidence groups = %v, want %v", bc.name, evidenceGroupIDs, expectedEvidenceGroups[bc.name])
-		}
-		if bc.allowUnavailable {
-			allowedUnavailable++
-			if bc.name != "gcp-pd-csi-windows-mount-visibility" {
-				t.Fatalf("case %q unexpectedly allows unavailable", bc.name)
-			}
 		}
 		reference := &models.TestCase{
 			AISummary:  &models.AISummary{Summary: bc.referenceDiagnosis, IsTransient: bc.referenceTransient},
@@ -273,9 +268,6 @@ func TestCrossProjectEvaluationManifest(t *testing.T) {
 			}
 		}
 	}
-	if allowedUnavailable != 1 {
-		t.Fatalf("allow_unavailable cases = %d, want 1", allowedUnavailable)
-	}
 	if evidenceModeCounts[benchmarkEvidenceModeArtifactOnly] != 2 || evidenceModeCounts[benchmarkEvidenceModeArtifactAndSource] != 1 {
 		t.Fatalf("evidence mode counts = %v, want two artifact-only and one artifact-and-source", evidenceModeCounts)
 	}
@@ -308,7 +300,6 @@ type benchmarkManifestCase struct {
 	OppositeTransient    bool                             `json:"opposite_is_transient,omitempty"`
 	ReferenceDiagnosis   string                           `json:"reference_diagnosis,omitempty"`
 	ReferenceTransient   bool                             `json:"reference_is_transient,omitempty"`
-	AllowUnavailable     bool                             `json:"allow_unavailable,omitempty"`
 	ExpectedTransient    *bool                            `json:"expected_transient,omitempty"`
 	Forbidden            []benchmarkManifestSignal        `json:"forbidden,omitempty"`
 	ConsumerCommit       string                           `json:"consumer_commit,omitempty"`
@@ -598,7 +589,7 @@ func loadBenchmarkManifest(path string) ([]benchCase, error) {
 			junitFile: item.JUnitFile, failureMsg: item.FailureMessage, consecutiveFailures: item.ConsecutiveFailures,
 			oppositeDiagnosis: item.OppositeDiagnosis, oppositeTransient: item.OppositeTransient,
 			referenceDiagnosis: item.ReferenceDiagnosis, referenceTransient: item.ReferenceTransient,
-			allowUnavailable: item.AllowUnavailable, expectedTransient: item.ExpectedTransient, forbidden: forbidden,
+			expectedTransient: item.ExpectedTransient, forbidden: forbidden,
 			consumerCommit: item.ConsumerCommit, projectSHA256: item.ProjectSHA256, promptSHA256: item.PromptSHA256,
 			signals: signals, sourceRanges: sourceRanges, sourceSignals: sourceSignals,
 			evidenceGroups: evidenceGroups, oracleEvidenceSHA256: item.OracleEvidenceSHA256,
@@ -767,7 +758,6 @@ type benchmarkCacheVerification struct {
 	LookupAccepted         bool                    `json:"lookup_accepted"`
 	LookupRejectionReason  ai.CacheRejectionReason `json:"lookup_rejection_reason,omitempty"`
 	LookupHit              bool                    `json:"lookup_hit"`
-	UnavailableCooldownHit bool                    `json:"unavailable_cooldown_hit"`
 	ProviderRequests       int                     `json:"provider_requests"`
 	EvidencePlanCovered    bool                    `json:"evidence_plan_covered,omitempty"`
 	GCSFloorRetryExhausted bool                    `json:"gcs_floor_retry_exhausted,omitempty"`
@@ -1026,7 +1016,7 @@ func writeBenchmarkJSONL(t *testing.T, path string, bc benchCase, repetition int
 
 func TestLoadBenchmarkManifest(t *testing.T) {
 	valid := `{
-  "version": 5,
+  "version": 6,
   "cases": [{
     "id": "case-one",
     "stable_id": "0123456789abcdef0123",
@@ -1090,9 +1080,32 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 		t.Fatalf("multi-ref cases = %+v", multiRefCases)
 	}
 
+	t.Run("valid causal regexp", func(t *testing.T) {
+		value := strings.Replace(valid, `"content":["root cause"]`, `"content":["root cause"],"causal":[{"name":"cause","pattern":"(?i)root cause"}]`, 1)
+		path := filepath.Join(t.TempDir(), "manifest.json")
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cases, err := loadBenchmarkManifest(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cases) != 1 || len(cases[0].evidenceGroups) != 1 {
+			t.Fatalf("cases=%+v", cases)
+		}
+		signals := cases[0].evidenceGroups[0].causalSignals
+		if len(signals) != 1 || signals[0].name != "cause" || signals[0].re == nil ||
+			!signals[0].re.MatchString("ROOT CAUSE") || signals[0].re.MatchString("unrelated") {
+			t.Fatalf("causal signals=%+v", signals)
+		}
+	})
+
 	for name, mutate := range map[string]func(string) string{
+		"unsupported version": func(value string) string {
+			return strings.Replace(value, `"version": 6`, `"version": 0`, 1)
+		},
 		"unknown field": func(value string) string {
-			return strings.Replace(value, `"version": 5`, `"version": 5, "extra": true`, 1)
+			return strings.Replace(value, `"version": 6`, `"version": 6, "extra": true`, 1)
 		},
 		"bad stable id": func(value string) string { return strings.Replace(value, "0123456789abcdef0123", "model-name", 1) },
 		"unknown primary source": func(value string) string {
@@ -1121,7 +1134,7 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 			return strings.Replace(value, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"],"content":["root cause"]}]`, `"evidence_groups": [{"id":"initiating-error","paths":["build-log\\.txt$"]},{"id":"initiating-error","paths":["other"]}]`, 1)
 		},
 		"bad causal regexp": func(value string) string {
-			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"causal":["["]`, 1)
+			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"causal":[{"name":"cause","pattern":"["}]`, 1)
 		},
 		"oracle context without hash": func(value string) string {
 			return strings.Replace(value, `"content":["root cause"]`, `"content":["root cause"],"oracle_context_lines":1`, 1)
@@ -1145,8 +1158,19 @@ func TestLoadBenchmarkManifest(t *testing.T) {
 			if err := os.WriteFile(bad, []byte(mutate(valid)), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadBenchmarkManifest(bad); err == nil {
+			_, err := loadBenchmarkManifest(bad)
+			if err == nil {
 				t.Fatal("invalid manifest was accepted")
+			}
+			if name == "unsupported version" && !strings.Contains(err.Error(), "benchmark manifest version 0 is unsupported") {
+				t.Fatalf("expected unsupported manifest version error, got %v", err)
+			}
+			if name == "bad causal regexp" {
+				var syntaxErr *syntax.Error
+				if !strings.Contains(err.Error(), `evidence group "initiating-error" causal 0 pattern:`) ||
+					!errors.As(err, &syntaxErr) || syntaxErr.Code != syntax.ErrMissingBracket || syntaxErr.Expr != "[" {
+					t.Fatalf("expected causal pattern error wrapping missing-bracket syntax error, got %v", err)
+				}
 			}
 		})
 	}
@@ -1242,19 +1266,27 @@ func TestWriteBenchmarkJSONLIsBlindedAndPrivate(t *testing.T) {
 	}
 }
 
-func TestWriteBenchmarkJSONLRecordsCitationUnavailableOutcome(t *testing.T) {
+func TestWriteBenchmarkJSONLRecordsRejectedAnalysis(t *testing.T) {
 	t.Setenv("BENCH_MODEL_LABEL", "model-a")
 	path := filepath.Join(t.TempDir(), "results.jsonl")
 	bc := benchCase{
-		name: "case-unavailable", stableID: "abcdef0123456789abcd", evidenceMode: benchmarkEvidenceModeArtifactOnly, jobName: "job", buildID: "123", testName: "test",
+		name: "case-rejected", stableID: "abcdef0123456789abcd", evidenceMode: benchmarkEvidenceModeArtifactOnly, jobName: "job", buildID: "123", testName: "test",
 		commit: strings.Repeat("a", 40), repoVersion: strings.Repeat("a", 40), repoRefs: map[string]string{"example/project": strings.Repeat("a", 40)},
 		sourceRefs: []benchmarkSourceRef{{ID: "primary", Repository: "example/project", Revision: strings.Repeat("a", 40)}}, primarySourceID: "primary",
-		sourceRepo: [2]string{"example", "project"}, allowUnavailable: true,
+		sourceRepo: [2]string{"example", "project"},
 	}
-	tc := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: no validated artifact citation supports the analysis"}}
-	writeBenchmarkJSONL(t, path, bc, 1, tc, benchmarkOutcomeCitationPolicyUnavailable, time.Second, ai.AnalysisTraceFile{}, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
+	analysisErr := fmt.Errorf("analyze failure: %w", ai.ErrRejectedAnalysis)
+	unavailable := ai.UnavailableFailureAnalysisResult(models.TestCase{}, analysisErr)
+	tc := &models.TestCase{AISummary: unavailable.Summary, AIAnalysis: unavailable.Analysis}
+	outcome, outcomeErr := benchmarkOutcomeForAnalysisError(analysisErr)
+	if !errors.Is(outcomeErr, ai.ErrRejectedAnalysis) {
+		t.Fatalf("rejected analysis lost its failure: %v", outcomeErr)
+	}
+	snapshot := ai.AnalysisTraceFile{}
+	status := benchmarkTrialStatus(analysisErr, tc, snapshot)
+	writeBenchmarkJSONL(t, path, bc, 1, tc, outcome, time.Second, snapshot, nil, 0, benchmarkToolUsage{}, benchmarkTraceSummary{}, 1, "", ai.CritiqueCachePolicyHard, benchmarkCacheVerification{}, benchmarkRunIdentity{
 		Arm: "baseline", EngineCommit: strings.Repeat("b", 40), EffectivePromptSHA256: strings.Repeat("f", 64), SkillSetHash: strings.Repeat("1", 64), EffectiveInputSHA256: strings.Repeat("2", 64), EvidenceCondition: benchmarkEvidenceConditionFixture, EvidenceStageSHA256: benchmarkEvidenceStageSHA256(bc.evidenceGroups), APIMode: ai.APIChatCompletions,
-	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: "invalid_result"})
+	}, benchmarkEvidenceCoverage{}, benchmarkEvidenceStageReport{Condition: benchmarkEvidenceConditionFixture, TrialStatus: status})
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1263,7 +1295,7 @@ func TestWriteBenchmarkJSONLRecordsCitationUnavailableOutcome(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != string(benchmarkOutcomeCitationPolicyUnavailable) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
+	if result.Outcome != string(benchmarkOutcomeUnknown) || result.TrialStatus != "invalid_result" || result.EvidenceCondition != benchmarkEvidenceConditionFixture || result.Usable || result.IsTransient == nil || *result.IsTransient || result.Summary != tc.AISummary.Summary {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -1298,7 +1330,7 @@ func TestWriteBenchmarkJSONLRecordsFailedTrials(t *testing.T) {
 		wantUsable   bool
 	}{
 		{name: "no result", status: "no_result", outcome: benchmarkOutcomeUsable, wantOutcome: benchmarkOutcomeUnknown},
-		{name: "invalid result", status: "invalid_result", outcome: benchmarkOutcomeCitationPolicyUnavailable, result: invalid, modelRequest: true, wantOutcome: benchmarkOutcomeCitationPolicyUnavailable},
+		{name: "invalid result", status: "invalid_result", outcome: benchmarkOutcomeUnknown, result: invalid, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
 		{name: "timeout", status: "timeout", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
 		{name: "runtime failure", status: "runtime_failure", outcome: benchmarkOutcomeUnknown, modelRequest: true, wantOutcome: benchmarkOutcomeUnknown},
 		{name: "contract violation", status: "contract_violation", outcome: benchmarkOutcomeUsable, result: valid, modelRequest: true, wantOutcome: benchmarkOutcomeUsable, wantUsable: true},

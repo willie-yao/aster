@@ -4,34 +4,29 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import type { AIAnalysis } from "../src/types/dashboard.js";
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { AiAnalysisPanel, CapabilitiesContext, AuthContext, defaultTheme } = await withSSR(async (vite) => {
+  const { AiAnalysisPanel } = (await vite.ssrLoadModule("/src/components/AiAnalysisPanel.tsx")) as {
+    AiAnalysisPanel: (props: {
+      analysis: AIAnalysis;
+      fileCtx: Record<string, unknown>;
+      appearance?: "default" | "detail";
+      severityInHeader?: boolean;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
+    CapabilitiesContext: React.Context<Capabilities>;
+  };
+  const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
+    AuthContext: React.Context<AuthState>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
+  return { AiAnalysisPanel, CapabilitiesContext, AuthContext, defaultTheme };
 });
-const { AiAnalysisPanel } = (await vite.ssrLoadModule("/src/components/AiAnalysisPanel.tsx")) as {
-  AiAnalysisPanel: (props: {
-    analysis: AIAnalysis;
-    fileCtx: Record<string, unknown>;
-    appearance?: "default" | "detail";
-    severityInHeader?: boolean;
-  }) => ReturnType<typeof createElement>;
-};
-const { CapabilitiesContext } = (await vite.ssrLoadModule("/src/hooks/useCapabilities.ts")) as {
-  CapabilitiesContext: React.Context<Capabilities>;
-};
-const { AuthContext } = (await vite.ssrLoadModule("/src/hooks/useAuth.ts")) as {
-  AuthContext: React.Context<AuthState>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-await vite.close();
 
 const capabilities: Capabilities = { mode: "static", features: { actions: false } };
 const anonymous: AuthState = {

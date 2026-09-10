@@ -31,7 +31,7 @@ func newTwoGroupEvidenceInputs(t *testing.T, browser *fakeBrowser) AgenticInputs
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 6, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	})
-	in.Skills = loadAgenticSkillsForTest(t, map[string]string{"twogroup": twoGroupEvidenceSkill})
+	in.Skills = loadSkillsForTest(t, map[string]string{"twogroup": twoGroupEvidenceSkill})
 	in.FailureSignal = "two group failure"
 	return in
 }
@@ -299,7 +299,7 @@ func TestAgentic_EvidenceGateCoversDraftTriggeredGroups(t *testing.T) {
 	in := newTestAgenticInputs(t, browser, AgenticOptions{
 		MaxIters: 6, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
 	})
-	in.Skills = loadAgenticSkillsForTest(t, map[string]string{
+	in.Skills = loadSkillsForTest(t, map[string]string{
 		"signal": `
 id: signal
 triggers: ["one group failure"]

@@ -1,6 +1,6 @@
 # AI quality benchmark
 
-This directory is a separate Go module for opt-in quality benchmarks. The main backend module's `go build ./...`, `go test ./...`, `go vet ./...`, and CI do not compile it. Live benchmarks remain gated behind their own `RUN_*` or `BENCH_*` environment variable. The module's local `replace` directive binds its Aster dependency to the parent checkout. Run `go -C backend/benchmarks mod tidy` after changing benchmark-only dependencies.
+This directory is a separate Go module for opt-in quality benchmarks. The main backend module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. A separate CI job runs provider-free harness tests, tidy, and vet when backend or benchmark changes select it; live benchmarks remain disabled. The module's local `replace` directive binds its Aster dependency to the parent checkout. Run `go -C backend/benchmarks mod tidy` after changing benchmark-only dependencies.
 
 They live outside `backend/internal/e2e` on purpose: that package now holds only `pipeline_test.go`, the hermetic regression test that uses a scripted model and never calls a real endpoint.
 
@@ -12,6 +12,9 @@ For each case in `benchCases`, the benchmark runs `ai.Service` with the filesyst
 
 Run these commands from the repository root. The live benchmark is skipped unless `RUN_AI_BENCHMARK` is set and an endpoint is configured. It costs real model tokens or GPU. Provider-free harness tests can be run with `go -C backend/benchmarks test ./... -count=1`.
 
+Keep a Go toolchain at least as new as this module's declared version on `PATH`.
+Fixture verification launches its own `go test` subprocesses.
+
 ```bash
 RUN_AI_BENCHMARK=1 \
 AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
@@ -19,7 +22,7 @@ AI_MODEL=moonshotai/Kimi-K2.7-Code AI_TOKEN=x \
 go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
 ```
 
-The frozen cross-project evaluation cohort is available as an external manifest. Run each case separately with its matching consumer. The manifest validates the consumer commit plus `project.yaml` and `prompts/system.md` hashes before making provider requests:
+The frozen cross-project evaluation cohort is available as a version-6 external manifest. Run each case separately with its matching consumer. The manifest validates the consumer commit plus `project.yaml` and `prompts/system.md` hashes before making provider requests:
 
 ```bash
 manifest="$PWD/backend/benchmarks/testdata/benchmarks/cross-project-eval.json"
@@ -44,7 +47,7 @@ The pinned baseline consumer commits are:
 - Kueue: `e4257c64fc9c5344b01919488fc76aa3fb0618b7`
 - GCP PD CSI: `f74fc047a1f6de10eec334207c4e58ce743bdcac`
 
-The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be grounded in the frozen build evidence and are not source-grounding controls. The GCP PD CSI reference is medium confidence, so that case also accepts the engine's citation-policy unavailable result instead of rewarding an unsupported owner.
+The Secrets Store CSI and Kueue cases are artifact-only. Their diagnoses must be grounded in the frozen build evidence and are not source-grounding controls. The GCP PD CSI reference is medium confidence. Its evidence-grounded diagnosis may leave ownership unresolved; unsupported ownership claims and missing analysis fail.
 
 Options:
 
@@ -56,7 +59,7 @@ Options:
 - `BENCH_REPETITIONS=<count>` runs consecutive logical repetitions. Set `BENCH_REPETITION_START=<index>` when an isolated operation must retain its planned repetition number instead of restarting at 1.
 - `AI_CACHE_GENERATION=<value>` applies the same validated, hashed cache-key namespace used by production.
 - `BENCH_CACHE_DIR=<private-dir>` stores each case and repetition under a deterministic isolated subdirectory. The harness rejects a pre-existing `ai_cache.json` so a requested cold operation cannot silently become warm.
-- `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new client, and evaluates the exact current cache policy without a provider call. The private JSONL result separately records whether persistence was attempted and accepted, the policy rejection reason, whether lookup was attempted and accepted, the lookup rejection reason, restored floor markers, whether a hard-policy unavailable cooldown was found, and a provider-request count of zero.
+- `BENCH_VERIFY_CACHE_REUSE=1` saves the analysis cache, reloads it with a new client, and evaluates the exact current cache policy without a provider call. The private JSONL result separately records whether persistence was attempted and accepted, the policy rejection reason, whether lookup was attempted and accepted, the lookup rejection reason, restored floor markers, and a provider-request count of zero.
 - `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`, `BENCH_CRITIQUE_RETRIES` override the default (weak-model) floors so a stronger model can be benchmarked fairly, since the weak-model floors distort a strong model that answers concisely. Example for a strong hosted model: `BENCH_MIN_TOOL_CALLS=3 BENCH_MIN_GCS_BYTES=0`.
 - The harness derives and enforces the maximum provider requests admitted by the exact agentic configuration. The cap includes the configured loop, the single byte-floor extension, forced finalization, and one bounded critique repair. Transport retries count through each trace event's `attempts` value, and a truncated trace fails closed because request usage would be incomplete. Private JSONL records `provider_request_cap`, logical `model_requests`, actual `provider_attempts`, logical request bytes, separate Responses wire-request bytes, and `trace_truncated`.
 

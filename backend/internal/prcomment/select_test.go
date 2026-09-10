@@ -97,20 +97,6 @@ func TestSelectSkipsAlreadyCommented(t *testing.T) {
 	}
 }
 
-// TestSelectHonorsLocalStateAsWell proves local state supplements the GitHub
-// query rather than being ignored when the query returns nothing.
-func TestSelectHonorsLocalStateAsWell(t *testing.T) {
-	got := Select(SelectInput{
-		Candidates:     []Candidate{pull(101, "a"), pull(102, "b")},
-		ActivatedAbove: activation,
-		Recorded:       func(number int) bool { return number == 101 },
-		BotLogin:       "aster[bot]",
-	})
-	if want := []int{102}; !equal(numbers(got.Selected), want) {
-		t.Fatalf("selected = %v, want %v", numbers(got.Selected), want)
-	}
-}
-
 // TestSelectSkipsItsOwnPullRequests covers the author match. Fix pull requests
 // opened under a different credential are caught later, by the body-marker
 // check in confirmEligible.

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,8 @@ import (
 // fakePoster records every call so tests can assert that no write happened,
 // which is the property most of this package exists to guarantee.
 type fakePoster struct {
-	posted map[int]string
+	posted   map[int]string
+	attempts []int
 	// timeline is the authoritative per-pull-request comment view read
 	// immediately before each write.
 	timeline map[int]bool
@@ -89,6 +91,7 @@ func (f *fakePoster) HasCommentBy(_ context.Context, _, _ string, number int, _ 
 }
 
 func (f *fakePoster) CommentPullRequest(_ context.Context, _, _ string, number int, body string) error {
+	f.attempts = append(f.attempts, number)
 	if f.failOn[number] {
 		return fmt.Errorf("simulated failure on #%d", number)
 	}
@@ -244,6 +247,9 @@ func TestRunIsIdempotentAcrossPasses(t *testing.T) {
 		if _, err := Run(context.Background(), poster, pulls, opts); err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
 		}
+		if !slices.Equal(poster.attempts, []int{7}) {
+			t.Fatalf("pass %d: write attempts = %v, want [7]", pass, poster.attempts)
+		}
 	}
 	if len(poster.posted) != 1 {
 		t.Fatalf("posted %d comments across 5 passes, want 1", len(poster.posted))
@@ -261,6 +267,9 @@ func TestRunIsIdempotentAfterDataDirectoryReset(t *testing.T) {
 	pulls := []Candidate{{Number: 7, Author: "a"}}
 	if _, err := Run(context.Background(), poster, pulls, testOptions(t, dir, start.Add(time.Hour))); err != nil {
 		t.Fatalf("posting pass: %v", err)
+	}
+	if !slices.Equal(poster.attempts, []int{7}) {
+		t.Fatalf("write attempts before reset = %v, want [7]", poster.attempts)
 	}
 	if len(poster.posted) != 1 {
 		t.Fatalf("posted %d, want 1 before the reset", len(poster.posted))
@@ -281,9 +290,9 @@ func TestRunIsIdempotentAfterDataDirectoryReset(t *testing.T) {
 		if _, err := Run(context.Background(), poster, pulls, opts); err != nil {
 			t.Fatalf("post-reset pass %d: %v", pass, err)
 		}
-	}
-	if len(poster.posted) != 1 {
-		t.Fatalf("posted again after a data-directory reset: %d total", len(poster.posted))
+		if !slices.Equal(poster.attempts, []int{7}) {
+			t.Fatalf("post-reset pass %d: write attempts = %v, want [7]", pass, poster.attempts)
+		}
 	}
 }
 
@@ -838,6 +847,9 @@ func TestPruneCannotCauseADuplicate(t *testing.T) {
 	if _, err := Run(context.Background(), poster, pulls, testOptions(t, dir, start.Add(time.Hour))); err != nil {
 		t.Fatalf("posting pass: %v", err)
 	}
+	if !slices.Equal(poster.attempts, []int{11}) {
+		t.Fatalf("write attempts before expiry = %v, want [11]", poster.attempts)
+	}
 	if len(poster.posted) != 1 {
 		t.Fatalf("posted %d, want 1", len(poster.posted))
 	}
@@ -846,8 +858,8 @@ func TestPruneCannotCauseADuplicate(t *testing.T) {
 	if _, err := Run(context.Background(), poster, pulls, testOptions(t, dir, later)); err != nil {
 		t.Fatalf("post-expiry pass: %v", err)
 	}
-	if len(poster.posted) != 1 {
-		t.Fatalf("posted again after the record expired: %d total", len(poster.posted))
+	if !slices.Equal(poster.attempts, []int{11}) {
+		t.Fatalf("write attempts after expiry = %v, want [11]", poster.attempts)
 	}
 }
 

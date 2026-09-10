@@ -11,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,7 +118,6 @@ type benchCase struct {
 	oppositeTransient   bool
 	referenceDiagnosis  string
 	referenceTransient  bool
-	allowUnavailable    bool
 	expectedTransient   *bool
 	forbidden           []benchSignal
 	consumerCommit      string
@@ -176,9 +177,8 @@ func benchmarkSourceExpectationSHA256(bc benchCase) string {
 type benchmarkOutcome string
 
 const (
-	benchmarkOutcomeUsable                    benchmarkOutcome = "usable"
-	benchmarkOutcomeCitationPolicyUnavailable benchmarkOutcome = "citation_policy_unavailable"
-	benchmarkOutcomeUnknown                   benchmarkOutcome = "unknown"
+	benchmarkOutcomeUsable  benchmarkOutcome = "usable"
+	benchmarkOutcomeUnknown benchmarkOutcome = "unknown"
 )
 
 // fixtureReleaseBase is the download root for benchmark-fixtures release assets.
@@ -893,7 +893,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if selectedAttempt == 0 {
 		selectedAttempt = selectedBenchmarkDraftAttempt(draftObservations, tc)
 	}
-	trialStatus := benchmarkTrialStatus(outcome, analysisErr, tc, snapshot)
+	trialStatus := benchmarkTrialStatus(analysisErr, tc, snapshot)
 	if len(draftObservations) > 0 && selectedAttempt == 0 && (tc == nil || tc.AIAnalysis == nil) {
 		trialStatus = "contract_violation"
 	}
@@ -914,7 +914,7 @@ func runBenchCase(t *testing.T, bc benchCase, repetition int, resultsPath, apiMo
 	if traceSummary.modelRequests > requestCap.PerOperation || traceSummary.providerAttempts > requestCap.PerOperation {
 		t.Fatalf("provider request cap exceeded: model_requests=%d provider_attempts=%d cap=%d", traceSummary.modelRequests, traceSummary.providerAttempts, requestCap.PerOperation)
 	}
-	scoreBenchCase(t, bc, tc, outcome, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
+	scoreBenchCase(t, bc, tc, elapsed, "in-process", benchmarkMinGCSBytes(bc, agentic.MinGCSBytes), toolUsage, traceSummary, draftObservations, selectedAttempt)
 }
 
 func benchmarkOutcomeForAnalysisError(err error) (benchmarkOutcome, error) {
@@ -935,6 +935,7 @@ func TestBenchmarkOutcomeForAnalysisError(t *testing.T) {
 		{name: "provider", err: errors.New("provider 503"), outcome: benchmarkOutcomeUnknown},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: benchmarkOutcomeUnknown},
 		{name: "tools", err: ai.ErrToolsUnsupported, outcome: benchmarkOutcomeUnknown},
+		{name: "rejected", err: ai.ErrRejectedAnalysis, outcome: benchmarkOutcomeUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			outcome, err := benchmarkOutcomeForAnalysisError(tc.err)
@@ -1014,7 +1015,6 @@ func verifyBenchmarkCacheReuse(t *testing.T, client *ai.Client, clientOptions ai
 	policy := service.FailureCachePolicy(context.Background(), &http.Client{Timeout: 60 * time.Second}, run, fresh, bc.consecutiveFailures)
 	key := ai.AgenticCacheKeyForGeneration(universal.New().Name(), cacheGeneration, jobID, bc.buildID, bc.testName, fresh.FailureMessage)
 	result, reason := ai.LookupAgenticCache(reloadedClient.Cache(), key, policy)
-	out.UnavailableCooldownHit = ai.LookupPolicyUnavailableCooldown(reloadedClient.Cache(), ai.PolicyUnavailableCacheKey(key), policy, time.Now())
 	out.LookupRejectionReason = reason
 	out.LookupAccepted = reason == ai.CacheAccepted
 	if result.Analysis != nil {
@@ -1564,7 +1564,7 @@ func benchTestCase(bc benchCase) *models.TestCase {
 	}
 }
 
-func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, outcome benchmarkOutcome, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation, selectedAttempt int) {
+func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, elapsed time.Duration, backend string, minGCSBytes int, toolUsage benchmarkToolUsage, traceSummary benchmarkTraceSummary, draftObservations []benchmarkDraftObservation, selectedAttempt int) {
 	t.Helper()
 	t.Logf("\n===== %s (%s) =====", bc.name, backend)
 	for _, line := range benchmarkTelemetryLines(elapsed, tc.AIAnalysis, minGCSBytes, toolUsage, traceSummary) {
@@ -1574,10 +1574,6 @@ func scoreBenchCase(t *testing.T, bc benchCase, tc *models.TestCase, outcome ben
 		t.Log(line)
 	}
 	if tc.AIAnalysis == nil {
-		if benchmarkAllowsUnavailable(bc, tc, outcome) {
-			t.Logf("ALLOWED: %s produced a citation-policy unavailable result after %s", backend, elapsed)
-			return
-		}
 		t.Fatalf("%s analysis produced no AIAnalysis after %s (ai_summary_present=%v)", backend, elapsed, tc.AISummary != nil)
 	}
 	if tc.AISummary == nil {
@@ -1739,34 +1735,6 @@ func assessBenchmarkCase(bc benchCase, tc *models.TestCase) benchmarkAssessment 
 		}
 	}
 	return assessment
-}
-
-func benchmarkAllowsUnavailable(bc benchCase, tc *models.TestCase, outcome benchmarkOutcome) bool {
-	return bc.allowUnavailable && outcome == benchmarkOutcomeCitationPolicyUnavailable && tc != nil && tc.AIAnalysis == nil && tc.AISummary != nil && !tc.AISummary.IsTransient
-}
-
-func TestBenchmarkAllowsUnavailable(t *testing.T) {
-	valid := &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: evidence remained inconclusive"}}
-	if !benchmarkAllowsUnavailable(benchCase{allowUnavailable: true}, valid, benchmarkOutcomeCitationPolicyUnavailable) {
-		t.Fatal("allowed unavailable result was rejected")
-	}
-	for _, tc := range []struct {
-		name string
-		bc   benchCase
-		tc   *models.TestCase
-		out  benchmarkOutcome
-	}{
-		{name: "case disabled", tc: valid, out: benchmarkOutcomeCitationPolicyUnavailable},
-		{name: "wrong outcome", bc: benchCase{allowUnavailable: true}, tc: valid, out: benchmarkOutcomeUnknown},
-		{name: "transient", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: &models.AISummary{Summary: "AI analysis unavailable: x", IsTransient: true}}, out: benchmarkOutcomeCitationPolicyUnavailable},
-		{name: "analysis attached", bc: benchCase{allowUnavailable: true}, tc: &models.TestCase{AISummary: valid.AISummary, AIAnalysis: &models.AIAnalysis{RootCause: "cause"}}, out: benchmarkOutcomeCitationPolicyUnavailable},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if benchmarkAllowsUnavailable(tc.bc, tc.tc, tc.out) {
-				t.Fatal("unexpected allowed unavailable result")
-			}
-		})
-	}
 }
 
 // benchStorage returns the storage backend the analysis reads artifacts from.
@@ -2061,10 +2029,34 @@ func TestBenchmarkCacheGenerationFingerprint(t *testing.T) {
 	}
 }
 
-func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing.T) {
-	cacheDir := t.TempDir()
-	clientOptions := ai.Options{API: ai.APIChatCompletions, Endpoint: "https://example.invalid/v1/chat/completions", Model: "model", CacheDir: cacheDir}
+func newBenchmarkCacheTestClient(t *testing.T) (*ai.Client, ai.Options, *atomic.Int64) {
+	t.Helper()
+	requests := &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("provider request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"calibrated"},"finish_reason":"stop"}]}`)
+	}))
+	t.Cleanup(server.Close)
+	clientOptions := ai.Options{API: ai.APIChatCompletions, Endpoint: server.URL + "/v1/chat/completions", Model: "model", CacheDir: t.TempDir()}
 	client := ai.NewClientWithOptions(clientOptions)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := client.Complete(ctx, "sys", "calibrate provider request counter")
+	if err != nil {
+		t.Fatalf("calibrate provider request counter: %v", err)
+	}
+	if response != "calibrated" || requests.Load() != 1 {
+		t.Fatalf("calibration response=%q requests=%d, want calibrated and 1", response, requests.Load())
+	}
+	return client, clientOptions, requests
+}
+
+func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing.T) {
+	client, clientOptions, requests := newBenchmarkCacheTestClient(t)
 	const generation = "0123456789abcdef"
 	const jobID = "periodic:example"
 	bc := benchCase{
@@ -2095,7 +2087,11 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
 	result.Analysis.CachePersistenceAttempted = true
 	result.Analysis.CachePersistenceAccepted = true
+	requestsBefore := requests.Load()
 	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, generation, jobID, bc, run, result.Analysis)
+	if delta := requests.Load() - requestsBefore; delta != 0 {
+		t.Fatalf("cache verification made %d provider requests, want 0", delta)
+	}
 	if !got.PersistenceAttempted || !got.PersistenceAccepted || !got.CacheSaveSucceeded || !got.LookupAttempted || !got.LookupAccepted || !got.LookupHit ||
 		got.ProviderRequests != 0 || !got.GCSFloorRetryExhausted || got.PolicyRejectionReason != ai.CacheAccepted || got.LookupRejectionReason != ai.CacheAccepted {
 		t.Fatalf("verification = %+v", got)
@@ -2103,9 +2099,7 @@ func TestVerifyBenchmarkCacheReuseReloadsMarkerWithoutProviderRequest(t *testing
 }
 
 func TestVerifyBenchmarkCacheReusePreservesPolicyRejection(t *testing.T) {
-	cacheDir := t.TempDir()
-	clientOptions := ai.Options{API: ai.APIChatCompletions, Endpoint: "https://example.invalid/v1/chat/completions", Model: "model", CacheDir: cacheDir}
-	client := ai.NewClientWithOptions(clientOptions)
+	client, clientOptions, requests := newBenchmarkCacheTestClient(t)
 	service := ai.NewService(ai.ServiceConfig{
 		Client: client, Module: universal.New(), SystemPrompt: "sys", CacheGeneration: "generation",
 		AgenticOptions: ai.AgenticOptions{CritiqueCachePolicy: ai.CritiqueCachePolicyStrict},
@@ -2113,7 +2107,11 @@ func TestVerifyBenchmarkCacheReusePreservesPolicyRejection(t *testing.T) {
 	bc := benchCase{name: "case", stableID: "0123456789abcdef0123", jobName: "job", buildID: "1", testName: "test", failureMsg: "failed"}
 	run := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: bc.buildID, JobName: bc.jobName}}
 	analysis := &models.AIAnalysis{CachePolicyRejectionReason: string(ai.CacheRejectedCritiqueStrictWarning)}
+	requestsBefore := requests.Load()
 	got := verifyBenchmarkCacheReuse(t, client, clientOptions, service, "generation", "job", bc, run, analysis)
+	if delta := requests.Load() - requestsBefore; delta != 0 {
+		t.Fatalf("cache verification made %d provider requests, want 0", delta)
+	}
 	if got.PersistenceAttempted || got.PersistenceAccepted || !got.CacheSaveSucceeded || !got.LookupAttempted || got.LookupAccepted || got.LookupHit ||
 		got.PolicyRejectionReason != ai.CacheRejectedCritiqueStrictWarning || got.LookupRejectionReason != ai.CacheRejectedLookupMissing || got.ProviderRequests != 0 {
 		t.Fatalf("verification = %+v", got)

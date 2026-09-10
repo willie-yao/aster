@@ -15,12 +15,11 @@ func attentionRuns(testName string, pattern []bool) []models.BuildResult {
 		if passed {
 			status, msg = "passed", ""
 		}
-		runs = append(runs, makeFlakyBuild(
+		runs = append(runs, makeBuild(
 			string(rune('a'+i)),
-			flakyHoursAgo(i+1),
+			hoursAgo(i+1),
 			passed,
-			[]models.TestCase{makeTC(testName, status, 1.0, msg)},
-		))
+			[]models.TestCase{makeTC(testName, status, 1.0, msg)}))
 	}
 	return runs
 }
@@ -30,7 +29,7 @@ func attentionReport(t *testing.T, pattern []bool, settings Settings) models.Fla
 	return ComputeFlakinessReport(
 		map[string][]models.BuildResult{"test-job": attentionRuns("TestA", pattern)},
 		[]models.ProwJob{{Name: "test-job", JobID: "test-job"}},
-		flakyBaseTime,
+		baseTime,
 		settings,
 	)
 }
@@ -161,14 +160,14 @@ func TestLowPassRate_SortsWorstFirstAndCaps(t *testing.T) {
 			}
 			cases = append(cases, makeTC(name, status, 1.0, msg))
 		}
-		runs[i] = makeFlakyBuild(string(rune('a'+i)), flakyHoursAgo(i+1), false, cases)
+		runs[i] = makeBuild(string(rune('a'+i)), hoursAgo(i+1), false, cases)
 	}
 
 	settings := Settings{LowPassRate: &LowPassRateRule{Threshold: 1, MinRuns: 5}}
 	report := ComputeFlakinessReport(
 		map[string][]models.BuildResult{"test-job": runs},
 		[]models.ProwJob{{Name: "test-job", JobID: "test-job"}},
-		flakyBaseTime,
+		baseTime,
 		settings,
 	)
 	got := make([]string, 0, len(report.LowPassRate))
@@ -189,7 +188,7 @@ func TestLowPassRate_SortsWorstFirstAndCaps(t *testing.T) {
 	capped := ComputeFlakinessReport(
 		map[string][]models.BuildResult{"test-job": runs},
 		[]models.ProwJob{{Name: "test-job", JobID: "test-job"}},
-		flakyBaseTime,
+		baseTime,
 		settings,
 	)
 	if len(capped.LowPassRate) != 2 {

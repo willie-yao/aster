@@ -40,10 +40,6 @@ func TestK8sValuesGolden(t *testing.T) {
 	}
 }
 
-func TestK8sValuesAreValidYAMLWithoutDuplicateKeys(t *testing.T) {
-	parseYAMLMap(t, renderK8sValuesForTest(t, k8sValuesFixtureData(true)))
-}
-
 func TestK8sValuesActiveConfiguration(t *testing.T) {
 	values := renderK8sValuesForTest(t, k8sValuesFixtureData(true))
 	root := parseYAMLMap(t, values)

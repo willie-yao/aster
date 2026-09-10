@@ -117,7 +117,7 @@ backend/                         Go 1.25
     e2e/                         Hermetic end-to-end pipeline regression test
 
   benchmarks/                    Separate Go module for opt-in model-quality benchmarks;
-                                 gated by RUN_*/BENCH_* and excluded from main CI
+                                 live cases gated; provider-free harness tests run in CI
 
 frontend/                        React 19 + Vite 8 + MUI 9
   public/data/                   Fetcher writes JSON here; Vite serves it
@@ -216,7 +216,7 @@ Vite serves `frontend/public/` at the site root, so any JSON the fetcher writes 
 - **Format:** `cd backend && gofmt -l .` (then `gofmt -w .` to fix)
 - **Static analysis:** `cd backend && staticcheck ./...` (expected clean; any warning from code you touched is a regression).
 
-CI (`.github/workflows/ci.yml`) runs build + test + vet on the main backend module and build + lint on frontend. The separate benchmark module is excluded. CI does not run staticcheck; please still run it locally before opening a PR.
+CI (`.github/workflows/ci.yml`) runs build + test + vet on the main backend module and type check + test + lint + root/subpath builds on frontend. A separate job runs provider-free benchmark-module tests, tidy, and vet for backend or benchmark changes; live benchmarks stay disabled. CI does not run staticcheck; please still run it locally before opening a PR.
 
 ### Anchor pin tests
 

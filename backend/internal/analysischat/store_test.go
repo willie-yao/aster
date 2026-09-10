@@ -97,70 +97,42 @@ func TestWritePrivateJSONReportsDirectorySyncFailure(t *testing.T) {
 	}
 }
 
-func TestSessionStoreRejectsVersionOne(t *testing.T) {
-	dir := t.TempDir()
-	store, err := newSessionStore(dir, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writePrivateJSON(store.statePath, &persistedState{Version: 1, Sessions: map[string]*persistedSession{}}); err != nil {
-		t.Fatal(err)
-	}
-	state, migrated, err := store.load()
-	if err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 1") || state != nil || migrated {
-		t.Fatalf("load state=%+v migrated=%t err=%v", state, migrated, err)
+func TestSessionStoreRejectsUnsupportedVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version int
+		wantErr string
+	}{
+		{name: "version-1", version: 1, wantErr: "unsupported analysis chat state version 1"},
+		{name: "version-2", version: 2, wantErr: "unsupported analysis chat state version 2"},
+		{name: "version-3", version: 3, wantErr: "unsupported analysis chat state version 3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := newSessionStore(t.TempDir(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := &persistedState{Version: tc.version, Sessions: map[string]*persistedSession{}}
+			if tc.version == 2 {
+				state.Sessions = map[string]*persistedSession{
+					"first": {
+						Owner: "alice", View: SessionView{ID: "first"},
+						FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}},
+					},
+					"second": {Owner: "Bob", View: SessionView{ID: "second"}},
+				}
+			}
+			if err := writePrivateJSON(store.statePath, state); err != nil {
+				t.Fatal(err)
+			}
+			loaded, migrated, err := store.load()
+			if err == nil || err.Error() != tc.wantErr || loaded != nil || migrated {
+				t.Fatalf("load state=%+v migrated=%t err=%v, want %q", loaded, migrated, err, tc.wantErr)
+			}
+		})
 	}
 }
 
-func TestSessionStoreRejectsVersionTwoActorState(t *testing.T) {
-	dir := t.TempDir()
-	store, err := newSessionStore(dir, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
-		"session": {Owner: "Bob", View: SessionView{ID: "session"}},
-	}}
-	if err := writePrivateJSON(store.statePath, state); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
-		t.Fatalf("load error = %v", err)
-	}
-}
-func TestSessionStoreRejectsVersionTwoDuplicateSessions(t *testing.T) {
-	dir := t.TempDir()
-	store, err := newSessionStore(dir, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
-		"first":  {Owner: "alice", View: SessionView{ID: "first"}},
-		"second": {Owner: "bob", View: SessionView{ID: "second"}},
-	}}
-	if err := writePrivateJSON(store.statePath, state); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
-		t.Fatalf("load error = %v", err)
-	}
-}
-func TestSessionStoreRejectsVersionTwoFixBoundSessions(t *testing.T) {
-	dir := t.TempDir()
-	store, err := newSessionStore(dir, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := &persistedState{Version: 2, Sessions: map[string]*persistedSession{
-		"session": {Owner: "alice", FixSources: map[string]persistedTestFixSource{"request": {FailureRevision: "deadbeef"}}},
-	}}
-	if err := writePrivateJSON(store.statePath, state); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 2") {
-		t.Fatalf("load error = %v", err)
-	}
-}
 func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
 	dir := t.TempDir()
 	store, err := newSessionStore(dir, time.Second)
@@ -219,19 +191,6 @@ func TestSessionStoreBackfillsAttemptSummaries(t *testing.T) {
 	}
 }
 
-func TestSessionStoreRejectsVersionThree(t *testing.T) {
-	dir := t.TempDir()
-	store, err := newSessionStore(dir, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writePrivateJSON(store.statePath, &persistedState{Version: 3, Sessions: map[string]*persistedSession{}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.load(); err == nil || !strings.Contains(err.Error(), "unsupported analysis chat state version 3") {
-		t.Fatalf("load error = %v", err)
-	}
-}
 func TestPersistResolvedBoundsPatternEvidenceBuilds(t *testing.T) {
 	pattern := recurringPattern()
 	pattern.Subject = strings.Repeat("s", 8<<10)

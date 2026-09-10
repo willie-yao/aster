@@ -1,9 +1,6 @@
 package onboard
 
-import (
-	"fmt"
-	"io"
-)
+import "fmt"
 
 type promptPreparationRequest string
 
@@ -25,87 +22,10 @@ const (
 	promptOutputTemplate promptOutputKind = "todo-template"
 )
 
-type promptPreparationStage string
-
-const (
-	promptStageSourceRevision        promptPreparationStage = "source-revision-resolution"
-	promptStageFinalPromptValidation promptPreparationStage = "final-rendering-and-prompt-validation"
-)
-
-func (s promptPreparationStage) label() string {
-	switch s {
-	case promptStageSourceRevision:
-		return "source revision resolution"
-	case promptStageFinalPromptValidation:
-		return "final rendering and prompt validation"
-	default:
-		return "prompt preparation"
-	}
-}
-
-type promptFailureCategory string
-
-const (
-	promptFailureSourceUnavailable promptFailureCategory = "source-unavailable"
-	promptFailurePromptValidation  promptFailureCategory = "prompt-validation-failed"
-	promptFailureTimedOut          promptFailureCategory = "timed-out"
-)
-
-func (c promptFailureCategory) reason() string {
-	switch c {
-	case promptFailureSourceUnavailable:
-		return "the source revision could not be resolved"
-	case promptFailurePromptValidation:
-		return "the generated prompt failed deterministic validation"
-	case promptFailureTimedOut:
-		return "prompt preparation exceeded its time limit"
-	default:
-		return "prompt preparation could not complete safely"
-	}
-}
-
-func (c promptFailureCategory) action() string {
-	switch c {
-	case promptFailureSourceUnavailable:
-		return "Verify GitHub repository access and the default branch, then retry or use the handoff bundle."
-	case promptFailurePromptValidation:
-		return "Use the handoff bundle and inspect the generated prompt against the deterministic validation contract."
-	case promptFailureTimedOut:
-		return "Retry with a larger --prompt-timeout or use the handoff bundle."
-	default:
-		return "Continue with the reviewable TODO template and handoff bundle."
-	}
-}
-
-type promptPreparationFailure struct {
-	Stage    promptPreparationStage
-	Category promptFailureCategory
-	cause    error
-}
-
-func (f *promptPreparationFailure) Error() string {
-	if f == nil {
-		return "prompt preparation failed"
-	}
-	return fmt.Sprintf("%s: %s", f.Stage.label(), f.Category.reason())
-}
-
-func (f *promptPreparationFailure) Format(state fmt.State, _ rune) {
-	_, _ = io.WriteString(state, f.Error())
-}
-
-func (f *promptPreparationFailure) Unwrap() error {
-	if f == nil {
-		return nil
-	}
-	return f.cause
-}
-
 type promptPreparationResult struct {
 	Requested promptPreparationRequest
 	Status    promptPreparationStatus
 	Output    promptOutputKind
-	Failure   *promptPreparationFailure
 	Handoff   string
 }
 
@@ -120,19 +40,13 @@ func (r promptPreparationResult) reviewLabel() string {
 	return "TODO template"
 }
 
-func (r promptPreparationResult) promptPlan(opts Options) PromptPlan {
-	plan := PromptPlan{
+func (r promptPreparationResult) promptPlan() PromptPlan {
+	return PromptPlan{
 		RequestedMode: string(r.Requested),
 		FinalStatus:   string(r.Status),
 		Output:        string(r.Output),
 		Source:        r.reviewLabel(),
 	}
-	if r.Failure != nil {
-		plan.FailureStage = string(r.Failure.Stage)
-		plan.FailureCategory = string(r.Failure.Category)
-		plan.FailureAction = r.Failure.Category.action()
-	}
-	return plan
 }
 
 func validatePromptPlan(plan PromptPlan) error {
@@ -171,25 +85,9 @@ func validatePromptPlan(plan PromptPlan) error {
 	if plan.Runtime != "" || plan.Model != "" || plan.AgentRef != "" {
 		return fmt.Errorf("onboarding plan prompt result retained agent coordinates")
 	}
-	if plan.FailureStage != "" || plan.FailureCategory != "" || plan.FailureAction != "" {
-		return fmt.Errorf("onboarding plan successful prompt result retained failure diagnostics")
-	}
 	return nil
 }
 
 func promptPlanIncludesHandoff(plan PromptPlan) bool {
 	return plan.FinalStatus == string(promptStatusHandoff)
-}
-
-func writePromptFailure(out io.Writer, title string, failure *promptPreparationFailure, fallback string) {
-	if out == nil || failure == nil {
-		return
-	}
-	fmt.Fprintf(out, "[warn] %s\n", title)
-	fmt.Fprintf(out, "       stage: %s\n", failure.Stage.label())
-	fmt.Fprintf(out, "       reason: %s\n", failure.Category.reason())
-	fmt.Fprintf(out, "       fallback: %s\n", fallback)
-	if action := failure.Category.action(); action != "" {
-		fmt.Fprintf(out, "       action: %s\n", action)
-	}
 }

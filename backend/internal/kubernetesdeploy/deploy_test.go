@@ -51,9 +51,13 @@ func TestRunRequiresExplicitKubeContext(t *testing.T) {
 	opts := baseOptions(dir)
 	opts.KubeContext = ""
 
-	err := run(context.Background(), opts, &recordingRunner{}, io.Discard, io.Discard)
+	runner := &recordingRunner{}
+	err := run(context.Background(), opts, runner, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "--kube-context is required") {
 		t.Fatalf("error = %v, want missing kube context", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("missing kube context reached Helm: %q", runner.commands)
 	}
 }
 
@@ -113,9 +117,13 @@ func TestRunRejectsMissingAndMalformedBundleFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := tt.prepare(t)
-			err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+			runner := &recordingRunner{}
+			err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+			if len(runner.commands) != 0 {
+				t.Fatalf("invalid bundle reached Helm: %q", runner.commands)
 			}
 		})
 	}
@@ -273,18 +281,26 @@ func TestRunIncludesValidatedConsumerSkillsAndClearsStaleValues(t *testing.T) {
 func TestRunRejectsReservedSkillFilename(t *testing.T) {
 	dir := writeBundle(t, minimalProject, "prompt")
 	writeFile(t, filepath.Join(dir, "skills", "project.yaml"), "id: reserved-project\ntriggers: [failure]\n")
-	err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+	runner := &recordingRunner{}
+	err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "is reserved by the project ConfigMap") {
 		t.Fatalf("error = %v, want reserved filename failure", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("reserved skill filename reached Helm: %q", runner.commands)
 	}
 }
 
 func TestRunRejectsSkillFilenameThatCannotBeMounted(t *testing.T) {
 	dir := writeBundle(t, minimalProject, "prompt")
 	writeFile(t, filepath.Join(dir, "skills", "bad name.yaml"), "id: bad-name\ntriggers: [failure]\n")
-	err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+	runner := &recordingRunner{}
+	err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "not a valid ConfigMap key") {
 		t.Fatalf("error = %v, want ConfigMap key failure", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("invalid skill filename reached Helm: %q", runner.commands)
 	}
 }
 
@@ -292,18 +308,26 @@ func TestRunRejectsMalformedAndMissingRequiredSkills(t *testing.T) {
 	t.Run("malformed", func(t *testing.T) {
 		dir := writeBundle(t, minimalProject, "prompt")
 		writeFile(t, filepath.Join(dir, "skills", "bad.yaml"), "id: [")
-		err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+		runner := &recordingRunner{}
+		err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "validate project skills") {
 			t.Fatalf("error = %v, want skill validation failure", err)
+		}
+		if len(runner.commands) != 0 {
+			t.Fatalf("malformed skill reached Helm: %q", runner.commands)
 		}
 	})
 
 	t.Run("required", func(t *testing.T) {
 		projectYAML := minimalProject + "ai:\n  consumer_skills:\n    required: true\n"
 		dir := writeBundle(t, projectYAML, "prompt")
-		err := run(context.Background(), baseOptions(dir), &recordingRunner{}, io.Discard, io.Discard)
+		runner := &recordingRunner{}
+		err := run(context.Background(), baseOptions(dir), runner, io.Discard, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "consumer skill bundle is required but not present") {
 			t.Fatalf("error = %v, want required skill failure", err)
+		}
+		if len(runner.commands) != 0 {
+			t.Fatalf("missing required skills reached Helm: %q", runner.commands)
 		}
 	})
 }

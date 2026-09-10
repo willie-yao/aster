@@ -507,7 +507,7 @@ def semantic_benchmark(benchmark: dict[str, Any], cases: dict[str, dict[str, Any
                 add(errors, f"{path}.post_reveal_causal_kind", f"must aggregate event kinds to {expected_kind}")
         elif trial["post_reveal_causal_kind"] != "not_applicable" or trial["post_reveal_event_kinds"] != ["not_applicable"]:
             add(errors, path, "control trials must use not_applicable causal fields")
-    unique(list(dashboard_ids), errors, "benchmark_results.dashboard_trials.id")
+    unique([trial["id"] for trial in benchmark["dashboard_trials"]], errors, "benchmark_results.dashboard_trials.id")
 
     conditions = benchmark["condition_manifests"]
     unique([item["id"] for item in conditions], errors, "benchmark_results.condition_manifests.id")
@@ -1185,6 +1185,41 @@ def self_test(schema: dict[str, Any]) -> None:
     corpus, benchmark = fixtures()
     if errors := validate(corpus, benchmark, schema):
         raise AssertionError(f"valid fixture failed: {errors}")
+
+    dashboard_trial = {
+        "id": "dashboard-a",
+        "condition": "A",
+        "case_id": "holdout-a",
+        "repetition": 1,
+        "status": "not_run",
+        "cache_mode": "cold",
+        "result_path": None,
+        "result_sha256": None,
+        "critique_passed": None,
+        "locked_score": None,
+        "semantic_score": None,
+        "post_reveal_causal_kind": "unresolved",
+        "post_reveal_event_kinds": ["unresolved"],
+    }
+    duplicate_id_error = "benchmark_results.dashboard_trials.id: must contain unique values"
+    dashboard_cases = [
+        ("single", [dashboard_trial], []),
+        ("distinct", [dashboard_trial, {**dashboard_trial, "id": "dashboard-b"}], []),
+        ("distinct-condition-repetition", [dashboard_trial, {**dashboard_trial, "id": "dashboard-b", "condition": "B", "repetition": 2}], []),
+        ("duplicate-identical", [dashboard_trial, {**dashboard_trial}], [duplicate_id_error]),
+        ("duplicate-condition", [dashboard_trial, {**dashboard_trial, "condition": "B"}], [duplicate_id_error]),
+        ("duplicate-repetition", [dashboard_trial, {**dashboard_trial, "repetition": 2}], [duplicate_id_error]),
+        ("duplicate-condition-repetition", [dashboard_trial, {**dashboard_trial, "condition": "B", "repetition": 2}], [duplicate_id_error]),
+    ]
+    for name, trials, expected in dashboard_cases:
+        trial_corpus, trial_benchmark = copy.deepcopy(corpus), copy.deepcopy(benchmark)
+        trial_benchmark["dashboard_trials"] = copy.deepcopy(trials)
+        before = copy.deepcopy((trial_corpus, trial_benchmark))
+        errors = validate(trial_corpus, trial_benchmark, schema)
+        if (trial_corpus, trial_benchmark) != before:
+            raise AssertionError(f"dashboard {name} validation mutated input reports")
+        if errors != expected:
+            raise AssertionError(f"dashboard {name} fixture expected {expected}, got {errors}")
 
     nongit_corpus = copy.deepcopy(corpus)
     nongit_benchmark = copy.deepcopy(benchmark)

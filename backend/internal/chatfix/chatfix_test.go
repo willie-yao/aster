@@ -125,13 +125,6 @@ func (f *fakeFixPreviewer) PreviewFixWithContext(
 	return actions.PreviewResult{Token: "preview", Kind: "fix"}, nil
 }
 
-func (f *fakeFixPreviewer) PreviewAnalysisFix(
-	_ context.Context, input actions.AnalysisFixInput, owner, userToken, instruction string,
-) (actions.PreviewResult, error) {
-	f.analysisInput, f.owner, f.userToken, f.instruction, f.called = input, owner, userToken, instruction, true
-	return actions.PreviewResult{Token: "preview", Kind: "fix"}, nil
-}
-
 func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
 	input actions.AnalysisFixInput, owner, userToken, instruction string, _ ...string,
 ) (actions.ActionRequestView, error) {

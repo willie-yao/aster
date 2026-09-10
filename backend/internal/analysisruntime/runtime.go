@@ -450,10 +450,7 @@ func NewReusePlanner(project *Project) *ai.Service {
 		API: project.Provider.API, Endpoint: project.Provider.Endpoint, Model: project.Provider.Model,
 		ReasoningEffort: project.Provider.ReasoningEffort,
 	})
-	// The planner decides reuse by comparing prompt hashes, so it must resolve
-	// the source repository exactly as the analyzing service does. A planner
-	// that omitted it would hash a different prompt and treat every published
-	// analysis as stale.
+	// Preserve the analyzer's source repository for prompt provenance.
 	sourceRepo := project.AnalysisSource
 	if sourceRepo.Owner == "" || sourceRepo.Name == "" {
 		sourceRepo = project.Config.EffectiveAnalysisSourceRepo()

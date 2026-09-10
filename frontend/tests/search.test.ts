@@ -5,34 +5,29 @@ import { test } from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 
 import { createSearchFuse, searchIndexPath } from "../src/lib/search.js";
 import type { SearchEntry } from "../src/types/dashboard.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
-});
-const searchBar = (await vite.ssrLoadModule(
-  "/src/components/SearchBar.tsx",
-)) as {
-  SearchResultButton: ((props: {
-    entry: SearchEntry;
-    filePrefix: string;
-    onSelect: (entry: SearchEntry) => void;
-  }) => ReturnType<typeof createElement>) & {
-    accessibleName: (entry: SearchEntry, filePrefix: string) => string;
-    path: (entry: SearchEntry) => string;
+const { searchBar, defaultTheme } = await withSSR(async (vite) => {
+  const searchBar = (await vite.ssrLoadModule(
+    "/src/components/SearchBar.tsx",
+  )) as {
+    SearchResultButton: ((props: {
+      entry: SearchEntry;
+      filePrefix: string;
+      onSelect: (entry: SearchEntry) => void;
+    }) => ReturnType<typeof createElement>) & {
+      accessibleName: (entry: SearchEntry, filePrefix: string) => string;
+      path: (entry: SearchEntry) => string;
+    };
   };
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-  defaultTheme: Theme;
-};
-await vite.close();
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
+    defaultTheme: Theme;
+  };
+  return { searchBar, defaultTheme };
+});
 
 const { SearchResultButton } = searchBar;
 const searchResultAccessibleName = SearchResultButton.accessibleName;

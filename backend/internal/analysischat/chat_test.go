@@ -132,6 +132,15 @@ func requireAttempt(t *testing.T, view SessionView, requestID string) Attempt {
 	return Attempt{}
 }
 
+func newTestService(t *testing.T, ctx context.Context, dataDir string, runner Runner, opts Options) *Service {
+	t.Helper()
+	service, err := NewService(ctx, dataDir, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
 func TestServiceCreateAndSend(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit_01.xml", "2026-07-23T12:00:00Z")))
@@ -142,10 +151,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 		ToolCalls:        2, GCSBytes: 1024, ElapsedMs: 50,
 	}}
 	now := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
-	service, err := NewService(t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
 
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
@@ -214,10 +220,7 @@ func TestServiceFindSharedSessionAcrossInstances(t *testing.T) {
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
-	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
 	older, err := first.Create(ref, "alice", "create-older")
 	if err != nil {
 		t.Fatal(err)
@@ -228,10 +231,7 @@ func TestServiceFindSharedSessionAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{Now: now, MaxSessions: 1, MaxSessionsPerOwner: 1})
 	found, err := second.Find(ref, "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -253,10 +253,7 @@ func TestServiceFindReflectsActiveSharedSession(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
-	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	created, err := service.Create(ref, "alice", "create-shared-active")
 	if err != nil {
@@ -275,10 +272,7 @@ func TestServiceFindReflectsActiveSharedSession(t *testing.T) {
 	if found.Active == nil || found.Active.Actor != "bob" || found.Active.RequestID != "turn-shared-active" || found.Active.Question != "question" {
 		t.Fatalf("shared active turn = %+v", found.Active)
 	}
-	replica, err := NewService(t.Context(), dir, &fakeRunner{}, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	replica := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{PollInterval: 10 * time.Millisecond})
 	fromReplica, err := replica.Get(created.ID, "carol")
 	if err != nil || fromReplica.Active == nil || fromReplica.Active.Actor != "bob" {
 		t.Fatalf("replica active turn = %+v err=%v", fromReplica.Active, err)
@@ -294,10 +288,7 @@ func TestServiceFindRejectsChangedAnalysis(t *testing.T) {
 	oldGenerated := "2026-07-23T12:00:00Z"
 	newGenerated := "2026-07-26T12:00:00Z"
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", oldGenerated)))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	oldRef := AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", AnalysisGeneratedAt: oldGenerated,
 	}
@@ -326,10 +317,7 @@ func TestServiceFindExpiresAndCreatesNewSession(t *testing.T) {
 	start := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{SessionTTL: time.Minute, Now: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{SessionTTL: time.Minute, Now: now})
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	expired, err := service.Create(ref, "alice", "create-expired")
 	if err != nil {
@@ -354,12 +342,9 @@ func TestServiceResolveRejectsAmbiguousAndChangedAnalysis(t *testing.T) {
 		analyzedTest("TestCluster", "junit_01.xml", "2026-07-23T12:00:00Z"),
 		analyzedTest("TestCluster", "junit_02.xml", "2026-07-23T12:00:00Z"),
 	))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 
-	_, err = service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
+	_, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ambiguous Create error = %v", err)
 	}
@@ -380,13 +365,10 @@ func TestServiceBoundsSessionsTurnsAndQuestions(t *testing.T) {
 		analyzedTest("TestOther", "junit.xml", "2026-07-23T12:00:00Z"),
 	))
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
-	service, err := NewService(t.Context(), dir, runner, Options{
+	service := newTestService(t, t.Context(), dir, runner, Options{
 		MaxSessions: 2, MaxSessionsPerOwner: 1, MaxTurns: 1, MaxQuestionBytes: 8,
 	})
 
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
@@ -421,10 +403,7 @@ func TestServiceSerializesTurns(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
@@ -456,10 +435,7 @@ func TestServiceResolvesPresubmitBuildPrefix(t *testing.T) {
 	detail.Runs[0].PullNumber = "42"
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{})
 	created, err := service.Create(AnalysisRef{JobID: detail.JobID, BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
@@ -479,10 +455,7 @@ func TestServiceRunnerErrorClearsBusy(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{err: errors.New("model unavailable")}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
@@ -500,11 +473,8 @@ func TestServiceRunnerErrorClearsBusy(t *testing.T) {
 }
 
 func TestServiceRejectsOversizedAnalysisReference(t *testing.T) {
-	service, err := NewService(t.Context(), t.TempDir(), &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.Create(AnalysisRef{JobID: strings.Repeat("x", maxJobIDBytes+1), BuildID: "1", TestName: "Test"}, "alice", testRequestID(t))
+	service := newTestService(t, t.Context(), t.TempDir(), &fakeRunner{}, Options{})
+	_, err := service.Create(AnalysisRef{JobID: strings.Repeat("x", maxJobIDBytes+1), BuildID: "1", TestName: "Test"}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("oversized reference error = %v", err)
 	}
@@ -518,10 +488,7 @@ func TestServiceResolvesStrongJUnitIdentity(t *testing.T) {
 	second.SuiteName, second.ClassName = "suite", "second"
 	second.AIAnalysis.RootCause = "the second class failed"
 	writeJobDetail(t, dir, testDetail(first, second))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 
 	if _, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
@@ -548,13 +515,10 @@ func TestServiceExpiryReleasesCapacity(t *testing.T) {
 	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
-	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
+	service := newTestService(t, t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
 		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
 	})
 
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
@@ -586,13 +550,10 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{
+	service := newTestService(t, t.Context(), dir, runner, Options{
 		SessionTTL: time.Minute, MaxSessions: 1, MaxSessionsPerOwner: 1, Now: now,
 	})
 
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
@@ -635,12 +596,9 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 func TestServiceDeleteRemovesSharedConversationAndReleasesCapacity(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
+	service := newTestService(t, t.Context(), dir, &fakeRunner{reply: Reply{Answer: "answer", Assessment: "explains"}}, Options{
 		MaxSessions: 2, MaxSessionsPerOwner: 1,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	created, err := service.Create(ref, "alice", testRequestID(t))
 	if err != nil {
@@ -685,14 +643,8 @@ func TestServiceDeleteRejectsActiveSharedSessionAcrossInstances(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "explains"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	first, err := NewService(t.Context(), dir, runner, Options{PollInterval: 5 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, runner, Options{PollInterval: 5 * time.Millisecond})
+	second := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cross-delete")
 	if err != nil {
 		t.Fatal(err)
@@ -726,10 +678,7 @@ func TestServiceResolvesTrimmedPublishedTestName(t *testing.T) {
 	dir := t.TempDir()
 	testCase := analyzedTest(" TestCluster ", "junit.xml", "2026-07-23T12:00:00Z")
 	writeJobDetail(t, dir, testDetail(testCase))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
 	}, "alice", testRequestID(t))
@@ -746,10 +695,7 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{err: errors.New("model unavailable")}
-	service, err := NewService(t.Context(), dir, runner, Options{MaxTurns: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{MaxTurns: 2})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
@@ -791,9 +737,7 @@ func TestServiceRejectsPublicStateDirectory(t *testing.T) {
 	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, "chat")}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
 		t.Fatalf("visible state directory error = %v", err)
 	}
-	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")}); err != nil {
-		t.Fatalf("hidden state directory: %v", err)
-	}
+	newTestService(t, t.Context(), dataDir, &fakeRunner{}, Options{StateDir: filepath.Join(dataDir, ".private", "chat")})
 	hiddenTarget := filepath.Join(dataDir, ".hidden-target")
 	if err := os.MkdirAll(hiddenTarget, 0o700); err != nil {
 		t.Fatal(err)
@@ -805,9 +749,7 @@ func TestServiceRejectsPublicStateDirectory(t *testing.T) {
 	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: visibleLink}); err == nil || !strings.Contains(err.Error(), "dot-prefixed") {
 		t.Fatalf("visible symlink state directory error = %v", err)
 	}
-	if _, err := NewService(t.Context(), dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()}); err != nil {
-		t.Fatalf("external state directory: %v", err)
-	}
+	newTestService(t, t.Context(), dataDir, &fakeRunner{}, Options{StateDir: t.TempDir()})
 }
 
 func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
@@ -815,10 +757,7 @@ func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	firstRunner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
-	first, err := NewService(t.Context(), dir, firstRunner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, firstRunner, Options{})
 	created, err := first.Create(ref, "alice", "create-persist")
 	if err != nil {
 		t.Fatal(err)
@@ -828,10 +767,7 @@ func TestServicePersistsSessionsAndIdempotentResults(t *testing.T) {
 	}
 
 	secondRunner := &fakeRunner{reply: Reply{Answer: "duplicate", Assessment: "explains"}}
-	second, err := NewService(t.Context(), dir, secondRunner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := newTestService(t, t.Context(), dir, secondRunner, Options{})
 	got, err := second.Get(created.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
@@ -882,14 +818,8 @@ func TestServiceSerializesTurnsAcrossInstances(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	first, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, runner, Options{})
+	second := newTestService(t, t.Context(), dir, runner, Options{})
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-shared")
 	if err != nil {
 		t.Fatal(err)
@@ -929,10 +859,7 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	failing := &fakeRunner{err: errors.New("model unavailable")}
-	first, err := NewService(t.Context(), dir, failing, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, failing, Options{})
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-failure")
 	if err != nil {
 		t.Fatal(err)
@@ -949,10 +876,7 @@ func TestServicePersistsFailedRequestOutcome(t *testing.T) {
 	}
 
 	succeeding := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
-	second, err := NewService(t.Context(), dir, succeeding, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := newTestService(t, t.Context(), dir, succeeding, Options{})
 	if _, err := second.Send(context.Background(), created.ID, "alice", "turn-failure", "question"); !errors.Is(err, ErrRequestFailed) {
 		t.Fatalf("replayed failed request error = %v", err)
 	}
@@ -996,10 +920,7 @@ func TestServiceRestoresSafeFailureAttemptCategories(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-			service, err := NewService(t.Context(), dir, &fakeRunner{err: testCase.err}, Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			service := newTestService(t, t.Context(), dir, &fakeRunner{err: testCase.err}, Options{})
 			created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-"+testCase.name)
 			if err != nil {
 				t.Fatal(err)
@@ -1033,10 +954,7 @@ func TestServiceRestoresTimedOutAttempt(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
-	service, err := NewService(t.Context(), dir, runner, Options{TurnTimeout: 20 * time.Millisecond, PollInterval: 5 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{TurnTimeout: 20 * time.Millisecond, PollInterval: 5 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-timeout")
 	if err != nil {
 		t.Fatal(err)
@@ -1084,14 +1002,8 @@ func TestServiceRecoversExpiredTurnLease(t *testing.T) {
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
 	opts := Options{Now: now, SessionTTL: time.Minute, TurnTimeout: 30 * time.Second, TurnLeaseTTL: time.Minute}
-	first, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, runner, opts)
+	second := newTestService(t, t.Context(), dir, runner, opts)
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-lease")
 	if err != nil {
 		t.Fatal(err)
@@ -1151,14 +1063,8 @@ func TestServiceExpiredCancelledTurnRestoresCancellation(t *testing.T) {
 		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreContext: true,
 	}
 	opts := Options{Now: now, SessionTTL: time.Minute, TurnTimeout: 30 * time.Second, TurnLeaseTTL: time.Minute, PollInterval: 10 * time.Millisecond}
-	first, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, runner, opts)
+	second := newTestService(t, t.Context(), dir, runner, opts)
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-expired-cancel")
 	if err != nil {
 		t.Fatal(err)
@@ -1200,22 +1106,17 @@ func TestServiceStartupCleanupRemovesExpiredPersistence(t *testing.T) {
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
 	firstCtx, cancel := context.WithCancel(t.Context())
-	first, err := NewService(firstCtx, dir, &fakeRunner{}, Options{
+	first := newTestService(t, firstCtx, dir, &fakeRunner{}, Options{
 		Now: now, SessionTTL: time.Minute, CleanupInterval: time.Hour,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-startup-cleanup"); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
 	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
-	if _, err := NewService(t.Context(), dir, &fakeRunner{}, Options{
+	newTestService(t, t.Context(), dir, &fakeRunner{}, Options{
 		Now: now, SessionTTL: time.Minute, CleanupInterval: time.Hour,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if got := persistedSessionCount(t, dir); got != 0 {
 		t.Fatalf("persisted sessions after startup cleanup = %d", got)
 	}
@@ -1228,12 +1129,9 @@ func TestServicePeriodicCleanupBoundsPersistenceRetention(t *testing.T) {
 	start := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{
 		Now: now, SessionTTL: time.Minute, CleanupInterval: 10 * time.Millisecond,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-periodic-cleanup"); err != nil {
 		t.Fatal(err)
 	}
@@ -1267,10 +1165,7 @@ func TestServiceTurnContinuesAfterWaiterDisconnect(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-disconnect")
 	if err != nil {
 		t.Fatal(err)
@@ -1308,10 +1203,7 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 		phases: []string{PhaseReadingEvidence, PhaseValidationRetrying, PhaseEvaluating},
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-stream")
 	if err != nil {
 		t.Fatal(err)
@@ -1385,14 +1277,8 @@ func TestServiceCancelAcrossInstances(t *testing.T) {
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
 	opts := Options{PollInterval: 10 * time.Millisecond}
-	first, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, runner, opts)
+	second := newTestService(t, t.Context(), dir, runner, opts)
 	created, err := first.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cancel")
 	if err != nil {
 		t.Fatal(err)
@@ -1447,10 +1333,7 @@ func TestServiceOwnerActiveTurnAndRateLimits(t *testing.T) {
 		MaxActiveTurnsPerOwner:       1,
 		MaxRequestsPerOwnerPerMinute: 2,
 	}
-	service, err := NewService(t.Context(), dir, runner, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, opts)
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	first, err := service.Create(ref, "alice", "create-limit-1")
 	if err != nil {
@@ -1486,10 +1369,7 @@ func TestServiceLifecycleCancelsActiveTurn(t *testing.T) {
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	runner := &fakeRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
 	lifecycle, cancelLifecycle := context.WithCancel(t.Context())
-	service, err := NewService(lifecycle, dir, runner, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, lifecycle, dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-lifecycle")
 	if err != nil {
 		t.Fatal(err)
@@ -1519,12 +1399,9 @@ func TestServiceRateLimitWindowExpires(t *testing.T) {
 	nowNanos.Store(start.UnixNano())
 	now := func() time.Time { return time.Unix(0, nowNanos.Load()) }
 	runner := &fakeRunner{reply: Reply{Answer: "answer", Assessment: "supports"}}
-	service, err := NewService(t.Context(), dir, runner, Options{
+	service := newTestService(t, t.Context(), dir, runner, Options{
 		Now: now, PollInterval: 10 * time.Millisecond, MaxRequestsPerOwnerPerMinute: 1,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-rate-window")
 	if err != nil {
 		t.Fatal(err)
@@ -1548,10 +1425,7 @@ func TestServicePersistedCancellationWinsOverSuccessfulReply(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreContext: true,
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{PollInterval: 10 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-cancel-race")
 	if err != nil {
 		t.Fatal(err)
@@ -1585,10 +1459,7 @@ func TestServiceLocalNotificationAvoidsPollDelay(t *testing.T) {
 		reply:   Reply{Answer: "answer", Assessment: "supports"},
 		started: make(chan struct{}, 1), release: make(chan struct{}),
 	}
-	service, err := NewService(t.Context(), dir, runner, Options{PollInterval: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{PollInterval: time.Hour})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-local-notify")
 	if err != nil {
 		t.Fatal(err)
@@ -1636,10 +1507,7 @@ func TestServiceFindSeparatesTestAndPatternSessions(t *testing.T) {
 	detail := patternDetail()
 	detail.Runs[0].TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-07-26T12:00:00Z")}
 	writeJobDetail(t, dir, detail)
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	testRef := AnalysisRef{JobID: "periodic-demo", BuildID: "104", TestName: "TestCluster"}
 	testSession, err := service.Create(testRef, "alice", "create-test-session")
 	if err != nil {
@@ -1690,10 +1558,7 @@ func TestServicePatternChatUsesBoundedAffectedBuilds(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, patternDetail())
 	runner := &fakeRunner{reply: Reply{Answer: "The pattern spans the three newest retained builds.", Assessment: "explains"}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{})
 	pattern := recurringPattern()
 	created, err := service.Create(AnalysisRef{
 		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
@@ -1725,14 +1590,11 @@ func TestServicePatternChatRejectsStaleContentHash(t *testing.T) {
 	detail := patternDetail()
 	pattern := detail.PatternAnalyses[0]
 	writeJobDetail(t, dir, detail)
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	detail.PatternAnalyses[0].SuggestedFix = "replace the controller"
 	detail.PatternAnalyses[0].ContentHash = models.PatternHash(detail.PatternAnalyses[0])
 	writeJobDetail(t, dir, detail)
-	_, err = service.Create(AnalysisRef{
+	_, err := service.Create(AnalysisRef{
 		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
 	}, "alice", testRequestID(t))
 	if !errors.Is(err, ErrPatternChanged) {
@@ -1744,10 +1606,7 @@ func TestPatternChatSnapshotPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, patternDetail())
 	stateDir := filepath.Join(dir, ".pattern-chat")
-	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	pattern := recurringPattern()
 	created, err := first.Create(AnalysisRef{
 		Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash,
@@ -1756,10 +1615,7 @@ func TestPatternChatSnapshotPersistsAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{reply: Reply{Answer: "persisted", Assessment: "explains"}}
-	restarted, err := NewService(t.Context(), dir, runner, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	restarted := newTestService(t, t.Context(), dir, runner, Options{StateDir: stateDir})
 	if _, err := restarted.Send(t.Context(), created.ID, "Alice", testRequestID(t), "What persisted?"); err != nil {
 		t.Fatal(err)
 	}
@@ -1772,10 +1628,7 @@ func TestPatternChatSnapshotPersistsAcrossRestart(t *testing.T) {
 }
 
 func TestPatternChatRejectsTestOnlyExtensions(t *testing.T) {
-	service, err := NewService(t.Context(), t.TempDir(), &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), t.TempDir(), &fakeRunner{}, Options{})
 	for _, ref := range []AnalysisRef{
 		{Scope: ScopePattern, JobID: "job", PatternID: "pattern"},
 		{Scope: ScopePattern, JobID: "job", BuildID: "123", PatternID: "pattern", PatternHash: "hash"},
@@ -1795,10 +1648,7 @@ func TestVersionTwoDuplicateSessionsAreRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	stateDir := filepath.Join(dir, ".shared-chat")
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	ref := AnalysisRef{Scope: ScopeTest, JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	resolved, err := service.resolve(ref)
 	if err != nil {
@@ -1824,10 +1674,7 @@ func TestCreateIdempotencyRejectsLegacyHash(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
 	stateDir := filepath.Join(dir, ".idempotency-chat")
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	ref := AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}
 	resolved, err := service.resolve(ref)
 	if err != nil {
@@ -1863,10 +1710,7 @@ func TestCreateIdempotencyRejectsLegacyHash(t *testing.T) {
 	if err := writePrivateJSON(service.store.statePath, state); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	restarted := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	if _, err := restarted.Create(ref, "Alice", "existing-create"); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("Create error = %v", err)
 	}
@@ -1877,12 +1721,9 @@ func TestRetainedPatternChatRequiresCompleteEvidence(t *testing.T) {
 	detail.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: false}
 	detail.Runs = detail.Runs[:1]
 	writeJobDetail(t, dir, detail)
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	pattern := recurringPattern()
-	_, err = service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
+	_, err := service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
 	if !errors.Is(err, ErrAnalysisNotFound) {
 		t.Fatalf("Create error = %v", err)
 	}
@@ -1893,10 +1734,7 @@ func TestServiceCreateBuildAnalysisWithoutJUnitFile(t *testing.T) {
 	build := analyzedTest("Prow job execution", "", "2026-07-30T12:00:00Z")
 	build.Source = models.TestCaseSourceBuild
 	writeJobDetail(t, dir, testDetail(build))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 
 	created, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: build.Name,
@@ -1934,10 +1772,7 @@ func TestServiceRecordsTurnUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(t.Context(), dir, usageTestRunner{}, Options{UsageRecorder: usage, PollInterval: 5 * time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, usageTestRunner{}, Options{UsageRecorder: usage, PollInterval: 5 * time.Millisecond})
 	created, err := service.Create(AnalysisRef{JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster"}, "alice", "create-usage")
 	if err != nil {
 		t.Fatal(err)
@@ -2033,19 +1868,13 @@ func TestServicePatternChatPersistsCurrentCausalContext(t *testing.T) {
 	pattern.ContentHash = models.PatternHash(pattern)
 	writeJobDetail(t, dir, causalPatternDetail(pattern, "104", "103", "102", "101", "100", "99"))
 	stateDir := filepath.Join(dir, ".causal-pattern-chat")
-	first, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{StateDir: stateDir})
 	created, err := first.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{reply: Reply{Answer: "persisted", Assessment: "explains"}}
-	restarted, err := NewService(t.Context(), dir, runner, Options{StateDir: stateDir})
-	if err != nil {
-		t.Fatal(err)
-	}
+	restarted := newTestService(t, t.Context(), dir, runner, Options{StateDir: stateDir})
 	if _, err := restarted.Send(t.Context(), created.ID, "Alice", testRequestID(t), "What persisted?"); err != nil {
 		t.Fatal(err)
 	}
@@ -2095,10 +1924,7 @@ func TestServiceCauseChatAddsNewestCompletedComparisonBuild(t *testing.T) {
 	slices.Reverse(detail.Runs)
 	writeJobDetail(t, dir, detail)
 	runner := &fakeRunner{reply: Reply{Answer: "The selected cause spans two builds.", Assessment: "explains"}}
-	service, err := NewService(t.Context(), dir, runner, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, runner, Options{})
 	group := pattern.CausalGroups[1]
 	created, err := service.Create(AnalysisRef{
 		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
@@ -2173,10 +1999,7 @@ func TestServiceCauseChatDoesNotReuseSessionAfterComparisonChanges(t *testing.T)
 		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
 		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
 	}
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	first, err := service.Create(ref, "alice", "create-one")
 	if err != nil {
 		t.Fatal(err)
@@ -2236,10 +2059,7 @@ func TestServiceCauseChatRejectsChangedIdentityAndMissingEvidence(t *testing.T) 
 			testCase.edit(&detail, &caseRef)
 			dir := t.TempDir()
 			writeJobDetail(t, dir, detail)
-			service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 			if _, err := service.Create(caseRef, "alice", testRequestID(t)); !errors.Is(err, testCase.want) {
 				t.Fatalf("error = %v, want %v", err, testCase.want)
 			}
@@ -2252,10 +2072,7 @@ func TestServicePatternChatRejectsChangedCausalGroupHash(t *testing.T) {
 	pattern := causalPatternForChat([]models.PatternCausalGroup{{ID: "group", Builds: []string{"2", "1"}, RootCause: "original", Confidence: "high"}}, nil)
 	detail := causalPatternDetail(pattern, "2", "1")
 	writeJobDetail(t, dir, detail)
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	ref := AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}
 	detail.PatternAnalyses[0].CausalGroups[0].RootCause = "changed"
 	detail.PatternAnalyses[0].ContentHash = models.PatternHash(detail.PatternAnalyses[0])
@@ -2269,11 +2086,8 @@ func TestServicePatternChatRejectsOversizedCausalShape(t *testing.T) {
 	dir := t.TempDir()
 	pattern := causalPatternForChat(make([]models.PatternCausalGroup, maxPatternChatCausalGroups+1), nil)
 	writeJobDetail(t, dir, causalPatternDetail(pattern, "1"))
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
+	_, err := service.Create(AnalysisRef{Scope: ScopePattern, JobID: "periodic-demo", PatternID: pattern.ID, PatternHash: pattern.ContentHash}, "Alice", testRequestID(t))
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("error = %v", err)
 	}
@@ -2282,12 +2096,9 @@ func TestServicePatternChatRejectsOversizedCausalShape(t *testing.T) {
 func TestServiceReportsValidationGateToTheCaller(t *testing.T) {
 	dir := t.TempDir()
 	writeJobDetail(t, dir, testDetail(analyzedTest("TestCluster", "junit.xml", "2026-07-23T12:00:00Z")))
-	service, err := NewService(t.Context(), dir, &fakeRunner{err: &ValidationError{Gate: GateJSON}}, Options{
+	service := newTestService(t, t.Context(), dir, &fakeRunner{err: &ValidationError{Gate: GateJSON}}, Options{
 		StateDir: filepath.Join(dir, ".private-chat"), PollInterval: time.Millisecond,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	session, err := service.Create(AnalysisRef{
 		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster",
 		AnalysisGeneratedAt: "2026-07-23T12:00:00Z",
@@ -2322,10 +2133,7 @@ func TestServicePatternChatTurnsOnEvidenceNotRefreshState(t *testing.T) {
 	retained := patternDetail()
 	retained.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained, EvidenceAvailable: true}
 	writeJobDetail(t, dir, retained)
-	service, err := NewService(t.Context(), dir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{})
 	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
 		t.Fatalf("retained pattern with readable evidence: %v", err)
 	}
@@ -2336,10 +2144,7 @@ func TestServicePatternChatTurnsOnEvidenceNotRefreshState(t *testing.T) {
 	expired.PatternRefresh = &models.PatternRefreshStatus{State: models.PatternRefreshRetained}
 	expired.Runs = []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "999", JobName: "periodic-demo"}}}
 	writeJobDetail(t, expiredDir, expired)
-	expiredService, err := NewService(t.Context(), expiredDir, &fakeRunner{}, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	expiredService := newTestService(t, t.Context(), expiredDir, &fakeRunner{}, Options{})
 	if _, err := expiredService.Create(ref, "alice", testRequestID(t)); !errors.Is(err, ErrAnalysisNotFound) {
 		t.Fatalf("retained pattern with expired evidence err=%v", err)
 	}

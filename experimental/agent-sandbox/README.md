@@ -14,8 +14,8 @@ The final August 8, 2026 structured-command productionization fixture completed 
 
 ## Executor image contract
 
-The engine workflow publishes a generic Linux/amd64 executor containing OpenCode, Git, and CA certificates. It does not contain Go, `make`, or arbitrary repository toolchains. The retained README fixture validates patch generation and `git diff --cached --check`; it is not CAPZ validation.
+The engine workflow publishes a generic Linux/amd64 executor containing OpenCode, Git, CA certificates, and Go 1.25.12 with `GOTOOLCHAIN=local`. It does not contain `make` or arbitrary repository toolchains. The retained README fixture validates patch generation and `git diff --cached --check`; it is not CAPZ validation.
 
 A consumer that needs repository-specific validators must derive its own image from the engine executor stage, install only the required tools, and publish it independently. The derived image must preserve UID/GID 65532, the `/usr/local/bin/fixexecutor` entrypoint, the credential-free OpenCode config, read-only-root compatibility, and the same runtime security contract. Deployment must use the resulting OCI digest. A mutable tag is discovery metadata only.
 
-Validation commands are exact `argv` arrays with explicit timeouts. They run after the single OpenCode request. A failed or unavailable validator returns a terminal failure, produces no actionable Fix PR preview, and never triggers a second model request.
+Validation commands are exact `argv` arrays with explicit timeouts. They run after the single OpenCode request. Ordinary validator failures and bounded timeouts preserve the validation results and generated patch for maintainer review. Missing executables, crashes, cancellation, and safety violations remain terminal failures with no actionable Fix PR preview. Validation never triggers a second model request.

@@ -93,18 +93,21 @@ func TestCompactMessages_ElidesOldestKeepsRecentAndPreamble(t *testing.T) {
 
 func TestCompactMessages_PreservesToolPairing(t *testing.T) {
 	msgs := conversation(8, 3000)
-	out, _ := compactMessages(msgs, 0, 6000)
-	// Every tool message must still carry its ToolCallID, and every
-	// assistant tool_calls entry must keep its ID, so the chat protocol
-	// stays valid after compaction.
-	for i := range out {
-		if out[i].Role == "tool" && out[i].ToolCallID == "" {
-			t.Errorf("msg %d: tool message lost its ToolCallID", i)
+	out, elided := compactMessages(msgs, 0, 6000)
+	wantIDs := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	if elided == 0 {
+		t.Fatal("expected compaction")
+	}
+	if len(out) != 2+2*len(wantIDs) {
+		t.Fatalf("messages = %d, want preamble and %d pairs", len(out), len(wantIDs))
+	}
+	for i, id := range wantIDs {
+		call, result := out[2+2*i], out[3+2*i]
+		if call.Role != "assistant" || len(call.ToolCalls) != 1 || call.ToolCalls[0].ID != id {
+			t.Errorf("pair %d: role=%q calls=%+v, want assistant call %q", i, call.Role, call.ToolCalls, id)
 		}
-		for _, tc := range out[i].ToolCalls {
-			if tc.ID == "" {
-				t.Errorf("msg %d: assistant tool_call lost its ID", i)
-			}
+		if result.Role != "tool" || result.ToolCallID != id {
+			t.Errorf("pair %d: role=%q result ID=%q, want tool result %q", i, result.Role, result.ToolCallID, id)
 		}
 	}
 }

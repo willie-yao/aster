@@ -130,31 +130,68 @@ func TestSignalRootContextCancelsThenRestoresDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = stdout.Close() })
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	lines := make(chan string, 2)
+	readDone := make(chan error, 1)
+	done := make(chan error, 1)
+	reaped := make(chan struct{})
 	t.Cleanup(func() {
-		if cmd.ProcessState == nil {
+		select {
+		case <-reaped:
+			return
+		default:
 			_ = cmd.Process.Kill()
 		}
+		_ = stdout.Close()
+		select {
+		case <-reaped:
+		case <-time.After(5 * time.Second):
+			t.Error("signal helper was not reaped after cleanup")
+		}
 	})
-	scanner := bufio.NewScanner(stdout)
-	if !scanner.Scan() || scanner.Text() != "ready" {
-		t.Fatalf("ready output = %q, err=%v", scanner.Text(), scanner.Err())
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for range 2 {
+			if !scanner.Scan() {
+				break
+			}
+			lines <- scanner.Text()
+		}
+		close(lines)
+		// Finish reading before Wait closes the pipe.
+		for scanner.Scan() {
+		}
+		readDone <- scanner.Err()
+		done <- cmd.Wait()
+		close(reaped)
+	}()
+	waitLine := func(want string, timeout time.Duration) {
+		t.Helper()
+		select {
+		case got, ok := <-lines:
+			if !ok || got != want {
+				t.Fatalf("output = %q, open=%t, want %q", got, ok, want)
+			}
+		case <-time.After(timeout):
+			t.Fatalf("timed out waiting for %q output", want)
+		}
 	}
+	waitLine("ready", 30*time.Second)
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
-	if !scanner.Scan() || scanner.Text() != "cancelled" {
-		t.Fatalf("cancel output = %q, err=%v", scanner.Text(), scanner.Err())
-	}
+	waitLine("cancelled", 5*time.Second)
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
+		if readErr := <-readDone; readErr != nil {
+			t.Fatalf("read helper output: %v", readErr)
+		}
 		if _, ok := err.(*exec.ExitError); !ok {
 			t.Fatalf("second signal did not terminate process: %v", err)
 		}

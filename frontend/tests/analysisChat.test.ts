@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, test } from "node:test";
+import { MemoryStorage } from "./helpers/memoryStorage.js";
 
 import {
   analysisChatAttemptStatus,
@@ -370,20 +371,15 @@ test("a rejected turn is not retried", async () => {
 });
 
 test("pending-turn storage retains only request identity and recording state", () => {
-  const values = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => { values.set(key, value); },
-    removeItem: (key: string) => { values.delete(key); },
-  };
+  const storage = new MemoryStorage();
   saveAnalysisChatPendingIntent(storage, {
     analysisIdentity: "analysis", sessionID: "session-1", requestID: "request-fix", requestRecorded: true,
   });
   assert.equal(loadAnalysisChatPendingIntent(storage, "analysis", "session-1", "request-fix"), true);
   assert.equal(loadAnalysisChatPendingIntent(storage, "other", "session-1", "request-fix"), undefined);
-  assert.doesNotMatch(Array.from(values.values())[0] ?? "", /token|cookie|question/i);
+  assert.doesNotMatch(Array.from(storage.values.values())[0] ?? "", /token|cookie|question/i);
   clearAnalysisChatPendingIntent(storage, "session-1", "request-fix");
-  assert.equal(values.size, 0);
+  assert.equal(storage.values.size, 0);
 });
 
 test("turn usage comes only from authoritative session fields", () => {

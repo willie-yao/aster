@@ -156,20 +156,7 @@ func TestPlanArtifactRejectsDigestMismatch(t *testing.T) {
 func TestPlanArtifactRejectsInvalidPlanWithMatchingDigest(t *testing.T) {
 	plan, _, _ := testReviewedPlan(t)
 	plan.Deployment.Mode = "invalid"
-	planCopy := *plan
-	planCopy.Files = nil
-	artifact := planArtifact{SchemaVersion: planArtifactSchemaVersion, Plan: planCopy, Files: copyPlanFiles(plan.Files)}
-	data, err := json.Marshal(artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "plan.json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil || !strings.Contains(err.Error(), "mode") {
-		t.Fatalf("error = %v", err)
-	}
+	writeAndReadInvalidPlanArtifact(t, plan, "mode")
 }
 
 func TestPlanArtifactRejectsRelativeLocalDestination(t *testing.T) {
@@ -341,18 +328,27 @@ func TestPlanArtifactRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tests := map[string][]byte{
-		"unknown field":  append(valid[:len(valid)-1], []byte(`,"unknown":true}`)...),
-		"trailing value": append(append([]byte(nil), valid...), []byte(` {}`)...),
+	type artifactCase struct {
+		name string
+		data []byte
+		want string
 	}
-	for name, data := range tests {
-		t.Run(name, func(t *testing.T) {
+	tests := []artifactCase{
+		{"unknown field", append(append([]byte(nil), valid[:len(valid)-1]...), []byte(`,"unknown":true}`)...), `json: unknown field "unknown"`},
+		{"trailing value", append(append([]byte(nil), valid...), []byte(` {}`)...), "contains multiple JSON values"},
+	}
+	for _, field := range []string{"failure_stage", "failure_category", "failure_action"} {
+		data := bytes.Replace(valid, []byte(`"prompt":{`), []byte(`"prompt":{"`+field+`":"unused",`), 1)
+		tests = append(tests, artifactCase{field, data, `json: unknown field "` + field + `"`})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "plan.json")
-			if err := os.WriteFile(path, data, 0o600); err != nil {
+			if err := os.WriteFile(path, test.data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := ReadPlanArtifact(path, planArtifactDigest(data)); err == nil {
-				t.Fatal("invalid plan artifact was accepted")
+			if _, err := ReadPlanArtifact(path, planArtifactDigest(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
 	}

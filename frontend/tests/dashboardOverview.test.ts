@@ -6,7 +6,7 @@ import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { createServer } from "vite";
+import { withSSR } from "./helpers/ssr.js";
 import {
   attentionSignal,
   countLabel,
@@ -24,64 +24,59 @@ import {
 } from "../src/lib/dashboardOverview.js";
 import type { BuildResult, JobSummary, PatternAnalysis } from "../src/types/dashboard.js";
 
-const vite = await createServer({
-  root: process.cwd(),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent",
-  ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
+const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, RunHistory, defaultTheme } = await withSSR(async (vite) => {
+  const { HealthPanel } = (await vite.ssrLoadModule("/src/components/HealthPanel.tsx")) as {
+    HealthPanel: (props: {
+      jobs: JobSummary[];
+      onFilterClick?: (status: string) => void;
+      activeFilter?: string;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { JobHealthTable } = (await vite.ssrLoadModule("/src/components/JobHealthTable.tsx")) as {
+    JobHealthTable: (props: { sections: Array<{ id: string; label?: string; jobs: JobSummary[] }> }) => ReturnType<typeof createElement>;
+  };
+  const {
+    AttentionRow,
+    DisclosureButton,
+    FeaturedPatternRow,
+  } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
+    AttentionRow: (props: {
+      to: string;
+      destinationLabel: string;
+      subject: string;
+      summary: string;
+      detail?: string;
+      count?: string;
+      signal?: string;
+      statusColor?: "success" | "warning" | "error";
+      muted?: boolean;
+    }) => ReturnType<typeof createElement>;
+    DisclosureButton: (props: {
+      label: string;
+      open: boolean;
+      controls: string;
+      onClick: () => void;
+    }) => ReturnType<typeof createElement>;
+    FeaturedPatternRow: (props: {
+      pattern: PatternAnalysis;
+      rank: number;
+      prefix: string;
+      stale: boolean;
+      job?: JobSummary;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
+    RunHistory: (props: {
+      runs: BuildResult[];
+      selectedBuildId?: string;
+      onSelect: (buildId: string) => void;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
+    defaultTheme: Theme;
+  };
+  return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, RunHistory, defaultTheme };
 });
-const { HealthPanel } = (await vite.ssrLoadModule("/src/components/HealthPanel.tsx")) as {
-  HealthPanel: (props: {
-    jobs: JobSummary[];
-    onFilterClick?: (status: string) => void;
-    activeFilter?: string;
-  }) => ReturnType<typeof createElement>;
-};
-const { JobHealthTable } = (await vite.ssrLoadModule("/src/components/JobHealthTable.tsx")) as {
-  JobHealthTable: (props: { sections: Array<{ id: string; label?: string; jobs: JobSummary[] }> }) => ReturnType<typeof createElement>;
-};
-const {
-  AttentionRow,
-  DisclosureButton,
-  FeaturedPatternRow,
-} = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
-  AttentionRow: (props: {
-    to: string;
-    destinationLabel: string;
-    subject: string;
-    summary: string;
-    detail?: string;
-    count?: string;
-    signal?: string;
-    statusColor?: "success" | "warning" | "error";
-    muted?: boolean;
-  }) => ReturnType<typeof createElement>;
-  DisclosureButton: (props: {
-    label: string;
-    open: boolean;
-    controls: string;
-    onClick: () => void;
-  }) => ReturnType<typeof createElement>;
-  FeaturedPatternRow: (props: {
-    pattern: PatternAnalysis;
-    rank: number;
-    prefix: string;
-    stale: boolean;
-    job?: JobSummary;
-  }) => ReturnType<typeof createElement>;
-};
-const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
-  RunHistory: (props: {
-    runs: BuildResult[];
-    selectedBuildId?: string;
-    onSelect: (buildId: string) => void;
-  }) => ReturnType<typeof createElement>;
-};
-const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-  defaultTheme: Theme;
-};
-await vite.close();
 
 function job(overrides: Partial<JobSummary> = {}): JobSummary {
   return {

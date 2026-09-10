@@ -808,56 +808,35 @@ func TestEffectiveFixPRsPreservesAgentSandboxCommands(t *testing.T) {
 }
 
 func TestValidateFixPRsRequiresAuthor(t *testing.T) {
-	base := func() *Config {
-		c, err := parse(strings.NewReader(validYAML))
-		if err != nil {
-			t.Fatalf("parse: %v", err)
-		}
-		return c
-	}
 	// Enabled without author identity is rejected.
-	c := base()
+	c := validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "author_name and author_email") {
-		t.Errorf("expected author requirement error, got %v", err)
-	}
+	assertValidate(t, c, "author_name and author_email")
 	// Enabled with author identity passes.
-	c = base()
+	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com"}}
-	if err := c.Validate(); err != nil {
-		t.Errorf("unexpected error with author set: %v", err)
-	}
+	assertValidate(t, c, "")
 	// Invalid confidence fails closed even when batch fix PRs are disabled.
-	c = base()
+	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{MinConfidence: "hgh"}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "min_confidence") {
-		t.Errorf("expected invalid min_confidence error, got %v", err)
-	}
+	assertValidate(t, c, "min_confidence")
 	// Partial repo is rejected.
-	c = base()
+	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", Repo: &SourceRepo{Owner: "x"}}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "fix_prs.repo requires both") {
-		t.Errorf("expected partial-repo error, got %v", err)
-	}
+	assertValidate(t, c, "fix_prs.repo requires both")
 	// Negative critique_retries is rejected (0 disables, not negatives).
-	c = base()
+	c = validConfig()
 	neg := -1
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", CritiqueRetries: &neg}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "critique_retries must be >= 0") {
-		t.Errorf("expected negative-critique_retries error, got %v", err)
-	}
+	assertValidate(t, c, "critique_retries must be >= 0")
 	// An unsupported agent_runtime.type is rejected.
-	c = base()
+	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "claude"}}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.type") {
-		t.Errorf("expected unsupported agent_runtime.type error, got %v", err)
-	}
+	assertValidate(t, c, "agent_runtime.type")
 	// A bad agent_runtime.timeout is rejected.
-	c = base()
+	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Timeout: "soon"}}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "agent_runtime.timeout") {
-		t.Errorf("expected bad-timeout error, got %v", err)
-	}
+	assertValidate(t, c, "agent_runtime.timeout")
 }
 
 func TestEffectiveEmailNotifications(t *testing.T) {
@@ -1123,14 +1102,6 @@ func TestEffectiveAIUsage(t *testing.T) {
 }
 
 func TestValidateAIUsage(t *testing.T) {
-	base := func() *Config {
-		cfg, err := parse(strings.NewReader(validYAML))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cfg.AI = &AI{}
-		return cfg
-	}
 	tests := []struct {
 		name    string
 		usage   *AIUsage
@@ -1152,18 +1123,9 @@ func TestValidateAIUsage(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			cfg := base()
-			cfg.AI.Usage = testCase.usage
-			err := cfg.Validate()
-			if testCase.wantErr == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
-				t.Fatalf("error = %v, want substring %q", err, testCase.wantErr)
-			}
+			cfg := validConfig()
+			cfg.AI = &AI{Usage: testCase.usage}
+			assertValidate(t, cfg, testCase.wantErr)
 		})
 	}
 }
@@ -1295,79 +1257,65 @@ func validAgentSandboxModelProvider() FixModelProvider {
 }
 
 func TestValidateAgentSandboxFixRuntime(t *testing.T) {
-	c := validConfig()
-	no := false
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{
-		Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
-		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-		ModelProvider:   validAgentSandboxModelProvider(),
-	}}}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("valid agent-sandbox runtime rejected: %v", err)
+	newRuntime := func() *FixAgentRuntime {
+		no := false
+		return &FixAgentRuntime{
+			Type: "agent-sandbox", AllowBash: &no, MaxTurns: 30, Timeout: "90s", OutputLimitBytes: 131072,
+			AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
+			ModelProvider:   validAgentSandboxModelProvider(),
+		}
 	}
-	yes := true
-	c.AI.FixPRs.AgentRuntime.AllowBash = &yes
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "allow_bash") {
-		t.Fatalf("agent-sandbox allow_bash error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.AllowBash = &no
-	c.AI.FixPRs.AgentRuntime.AllowedCommands = nil
-	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 0
-	if err := c.Validate(); err != nil {
-		t.Fatalf("agent-sandbox defaults rejected: %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
-	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 131072
-	c.AI.FixPRs.AgentRuntime.ModelProvider.API = "responses"
-	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
-	if err := c.Validate(); err != nil {
-		t.Fatalf("agent-sandbox Responses provider rejected: %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortMax
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "OpenCode 1.18.2") {
-		t.Fatalf("agent-sandbox max reasoning effort error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
-	c.AI.FixPRs.AgentRuntime.ModelProvider.Endpoint = "https://api.githubcopilot.com/chat/completions"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "responses endpoint") {
-		t.Fatalf("agent-sandbox API path mismatch error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
-	c.AI.FixPRs.AgentRuntime.ModelProvider.Auth.Type = "none"
-	if err := c.Validate(); err != nil {
-		t.Fatalf("agent-sandbox unauthenticated direct provider rejected: %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider = FixModelProvider{
-		CredentialMode: "gateway", API: "chat_completions",
-		Endpoint: "https://gateway.fixture.svc.cluster.local/v1/chat/completions", Model: "fixture-model",
-		Auth: FixModelProviderAuth{Type: "none"},
-	}
-	if err := c.Validate(); err != nil {
-		t.Fatalf("agent-sandbox gateway provider rejected: %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider.Auth.Type = "bearer"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "gateway credential mode") {
-		t.Fatalf("agent-sandbox gateway bearer error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
-	c.AI.FixPRs.AgentRuntime.ModelProvider.PublicCAPrivateDNS = true
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "gateway credential mode") {
-		t.Fatalf("agent-sandbox direct trust option error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.ModelProvider = validAgentSandboxModelProvider()
-	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"go", "test", "./..."}, Timeout: "30s"}}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must end") {
-		t.Fatalf("agent-sandbox final diff command error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.AllowedCommands = []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}}
-	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 1024
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "output_limit_bytes") {
-		t.Fatalf("agent-sandbox output limit error = %v", err)
-	}
-	c.AI.FixPRs.AgentRuntime.OutputLimitBytes = 131072
-	c.AI.FixPRs.AgentRuntime.Timeout = "31m"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "at most 30m") {
-		t.Fatalf("agent-sandbox timeout error = %v", err)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*FixAgentRuntime)
+		wantSub string
+	}{
+		{"valid", func(r *FixAgentRuntime) {}, ""},
+		{"allow bash", func(r *FixAgentRuntime) { *r.AllowBash = true }, "allow_bash"},
+		{"command and output defaults", func(r *FixAgentRuntime) {
+			r.AllowedCommands = nil
+			r.OutputLimitBytes = 0
+		}, ""},
+		{"Responses provider", func(r *FixAgentRuntime) {
+			r.ModelProvider.API = "responses"
+			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+		}, ""},
+		{"Responses max reasoning effort", func(r *FixAgentRuntime) {
+			r.ModelProvider.API = "responses"
+			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+			r.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortMax
+		}, "OpenCode 1.18.2"},
+		{"Responses endpoint mismatch", func(r *FixAgentRuntime) {
+			r.ModelProvider.API = "responses"
+		}, "responses endpoint"},
+		{"unauthenticated direct provider", func(r *FixAgentRuntime) { r.ModelProvider.Auth.Type = "none" }, ""},
+		{"gateway provider", func(r *FixAgentRuntime) {
+			r.ModelProvider = FixModelProvider{
+				CredentialMode: "gateway", API: "chat_completions",
+				Endpoint: "https://gateway.fixture.svc.cluster.local/v1/chat/completions", Model: "fixture-model",
+				Auth: FixModelProviderAuth{Type: "none"},
+			}
+		}, ""},
+		{"gateway bearer", func(r *FixAgentRuntime) {
+			r.ModelProvider = FixModelProvider{
+				CredentialMode: "gateway", API: "chat_completions",
+				Endpoint: "https://gateway.fixture.svc.cluster.local/v1/chat/completions", Model: "fixture-model",
+				Auth: FixModelProviderAuth{Type: "bearer"},
+			}
+		}, "gateway credential mode"},
+		{"direct trust option", func(r *FixAgentRuntime) { r.ModelProvider.PublicCAPrivateDNS = true }, "gateway credential mode"},
+		{"final diff command", func(r *FixAgentRuntime) {
+			r.AllowedCommands = []FixAgentCommand{{Argv: []string{"go", "test", "./..."}, Timeout: "30s"}}
+		}, "must end"},
+		{"output limit", func(r *FixAgentRuntime) { r.OutputLimitBytes = 1024 }, "output_limit_bytes"},
+		{"timeout", func(r *FixAgentRuntime) { r.Timeout = "31m" }, "at most 30m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validConfig()
+			c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: newRuntime()}}
+			tc.mutate(c.AI.FixPRs.AgentRuntime)
+			assertValidate(t, c, tc.wantSub)
+		})
 	}
 }
 
@@ -1649,19 +1597,7 @@ func TestValidate_PullRequestComment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validConfig()
 			tc.mutate(c)
-			err := c.Validate()
-			if tc.wantSub == "" {
-				if err != nil {
-					t.Fatalf("valid config rejected: %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("expected an error containing %q", tc.wantSub)
-			}
-			if !strings.Contains(err.Error(), tc.wantSub) {
-				t.Fatalf("error = %v, want it to contain %q", err, tc.wantSub)
-			}
+			assertValidate(t, c, tc.wantSub)
 		})
 	}
 }

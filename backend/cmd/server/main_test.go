@@ -290,9 +290,9 @@ func TestAnalysisChatTimeoutFromEnv(t *testing.T) {
 		}
 	})
 	t.Run("slow provider", func(t *testing.T) {
-		t.Setenv("ANALYSIS_CHAT_TIMEOUT", "10m")
+		t.Setenv("ANALYSIS_CHAT_TIMEOUT", "15m")
 		got, err := analysisChatTimeoutFromEnv()
-		if err != nil || got != 10*time.Minute {
+		if err != nil || got != 15*time.Minute {
 			t.Fatalf("timeout=%v err=%v", got, err)
 		}
 	})

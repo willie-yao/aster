@@ -440,7 +440,7 @@ func TestDoctor_PullRequestTriageCredentialStaysSilent(t *testing.T) {
 		files  map[string]string
 	}{
 		{name: "triage disabled", files: map[string]string{"/consumer/deploy/values.yaml": "persistence:\n  existingClaim: data\nai:\n  enabled: false\n"}},
-		{name: "no deployment profile"},
+		{name: "no deployment profile", triage: true},
 		{
 			name:   "pages workflow misses the reusable deploy",
 			triage: true,
@@ -468,10 +468,17 @@ func TestDoctor_PullRequestTriageCredentialStaysSilent(t *testing.T) {
 			if tc.triage {
 				files["/consumer/project.yaml"] = triageProjectYAML
 			}
+			sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 			report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
 				files:   files,
-				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}},
+				sweeper: sweeper,
 			})
+			if tc.name == "no deployment profile" {
+				if sweeper.calls != 1 || !hasDoctorCheck(report, "Prow discovery", DoctorPass) ||
+					!hasDoctorCheck(report, "deployment", DoctorFail) {
+					t.Fatalf("discovery calls = %d, checks = %+v", sweeper.calls, report.Checks)
+				}
+			}
 			for _, check := range report.Checks {
 				if check.Name == "pull request triage credential" {
 					t.Fatalf("unexpected credential check: %+v", check)

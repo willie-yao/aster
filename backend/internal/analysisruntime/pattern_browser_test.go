@@ -18,7 +18,12 @@ func (f patternBrowserFactoryStub) ForBuild(prefix, _ string) artifacts.Browser 
 	return f.browsers[prefix]
 }
 
-type patternBrowserStub struct{ content []byte }
+type patternBrowserStub struct {
+	content                []byte
+	readPath               string
+	readOffset, readLength int
+	readCalls              int
+}
 
 func (b *patternBrowserStub) BuildRoot() string { return "build" }
 func (b *patternBrowserStub) List(context.Context, string) (*artifacts.Listing, error) {
@@ -27,7 +32,9 @@ func (b *patternBrowserStub) List(context.Context, string) (*artifacts.Listing, 
 func (b *patternBrowserStub) ListTree(context.Context, int) ([]string, bool, error) {
 	return []string{"build-log.txt"}, false, nil
 }
-func (b *patternBrowserStub) Read(_ context.Context, _ string, _, _ int) ([]byte, int64, error) {
+func (b *patternBrowserStub) Read(_ context.Context, file string, offset, length int) ([]byte, int64, error) {
+	b.readPath, b.readOffset, b.readLength = file, offset, length
+	b.readCalls++
 	return b.content, int64(len(b.content)), nil
 }
 func (b *patternBrowserStub) Tail(context.Context, string, int, int) (*artifacts.TailResult, error) {
@@ -50,12 +57,19 @@ func TestPatternBrowserRoutesBuildPrefixedPaths(t *testing.T) {
 	if err != nil || truncated || len(paths) != 2 || paths[0] != "builds/103/build-log.txt" || paths[1] != "builds/104/build-log.txt" {
 		t.Fatalf("paths=%v truncated=%t err=%v", paths, truncated, err)
 	}
-	content, _, err := browser.Read(t.Context(), "builds/104/build-log.txt", 0, 100)
+	content, _, err := browser.Read(t.Context(), "builds/104/build-log.txt", 7, 17)
 	if err != nil || string(content) != "build 104" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
+	selected := factory.browsers["logs/job/104/"]
+	if selected.readPath != "build-log.txt" || selected.readOffset != 7 || selected.readLength != 17 {
+		t.Fatalf("Read(%q, %d, %d), want Read(build-log.txt, 7, 17)", selected.readPath, selected.readOffset, selected.readLength)
+	}
 	if _, _, err := browser.Read(t.Context(), "/builds/104/build-log.txt", 0, 100); err == nil {
 		t.Fatal("absolute pattern artifact path was accepted")
+	}
+	if selected.readCalls != 1 || factory.browsers["logs/job/103/"].readCalls != 0 {
+		t.Fatalf("read calls: selected=%d other=%d", selected.readCalls, factory.browsers["logs/job/103/"].readCalls)
 	}
 	listing, err := browser.List(t.Context(), "builds")
 	if err != nil || len(listing.Dirs) != 2 {
