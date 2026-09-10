@@ -24,12 +24,14 @@ import (
 // stubModule satisfies ai.Module for service tests. The prompt is returned
 // verbatim by AnalysisPrompt.
 type stubModule struct {
-	name   string
-	prompt string
+	name        string
+	prompt      string
+	promptCalls atomic.Int32
 }
 
 func (m *stubModule) Name() string { return m.name }
 func (m *stubModule) AnalysisPrompt(_ context.Context, _ *http.Client, _ *models.BuildResult, _ *models.TestCase, _ int) string {
+	m.promptCalls.Add(1)
 	return m.prompt
 }
 
@@ -198,7 +200,7 @@ func TestService_ReusesTransientVerdictAfterPersistence(t *testing.T) {
 		Disposition: models.AnalysisDispositionCitationsVerified,
 	}
 
-	if s.NeedsAnalysis(t.Context(), &http.Client{}, newRun("j", "1"), tc, transientPersistThreshold) {
+	if s.NeedsAnalysis(tc) {
 		t.Fatal("persistent streak made the cached transient verdict stale")
 	}
 	s.Analyze(context.Background(), &http.Client{}, "j", "logs/j/1/", newRun("j", "1"), tc)
@@ -237,6 +239,78 @@ func TestService_CacheKeyShape(t *testing.T) {
 	s.cacheGeneration = ""
 	if got := s.agenticCacheKey("job1", "build1", "Test A", "boom"); got != a1 {
 		t.Fatalf("returning to empty generation changed key: %q vs %q", got, a1)
+	}
+}
+
+func TestServiceReusePlanningSkipsPromptBuilderAndFreshAnalysisPreservesProvenance(t *testing.T) {
+	shrinkCallDelay(t)
+	for _, source := range []string{"", models.TestCaseSourceBuild} {
+		t.Run("source="+source, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			srv.push(200, chatRespFinal(`{"summary":"failure","is_transient":false,"root_cause":"build configuration is incorrect","severity":"High","suggested_fix":"Correct the build configuration.","relevant_files":[]}`))
+			module := &stubModule{name: "universal", prompt: "inspect this failure"}
+			client := newAgenticTestClient(t, srv.URL)
+			set := loadSkillsForTest(t, map[string]string{
+				"unrelated": "id: unrelated-recipe\ntriggers: [never-matches-this-draft]\nrequired_evidence:\n  - id: g\n    any_of: [x]\n",
+			})
+			service := NewService(ServiceConfig{
+				Client: client, Module: module, SystemPrompt: "sys", Skills: set,
+				SourceRepoOwner: "example", SourceRepoName: "project", CacheGeneration: "generation",
+			})
+			registry, enabled := newTestRegistry(t)
+			configureAgenticTestService(service, AgenticOptions{
+				MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+			}, &fakeFactory{}, registry, enabled)
+			tc := newFailedTC("failure", "build failed")
+			tc.Source = source
+			if !service.NeedsAnalysis(tc) {
+				t.Fatal("missing analysis should need work")
+			}
+			cached := reusablePublishedTestCase(&models.AIAnalysis{
+				Mode: AgenticMode, CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
+				CacheGeneration: "generation", ModelHash: "old-model", PromptHash: "old-prompt", SkillSetHash: "old-skills",
+			})
+			cached.Source = source
+			if service.NeedsAnalysis(cached) {
+				t.Fatal("valid attached analysis should be reusable")
+			}
+			cached.AIAnalysis.CritiqueVersion--
+			if !service.NeedsAnalysis(cached) {
+				t.Fatal("stale attached analysis should need work")
+			}
+			if calls := module.promptCalls.Load(); calls != 0 {
+				t.Fatalf("planning built %d prompts, want 0", calls)
+			}
+
+			service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", newRun("job", "1"), tc)
+			if calls := module.promptCalls.Load(); calls != 1 {
+				t.Fatalf("fresh analysis built %d prompts, want 1", calls)
+			}
+			effectivePrompt := "sys" + agToolDocs + agenticSourceContextSection(nil, "example", "project")
+			if source == models.TestCaseSourceBuild {
+				effectivePrompt += "\x00" + module.prompt
+			}
+			checkProvenance := func(analysis *models.AIAnalysis) {
+				t.Helper()
+				if analysis == nil || analysis.Model != client.model || analysis.ModelHash != client.modelFingerprint() ||
+					analysis.PromptHash != PromptFingerprint(effectivePrompt) || analysis.SkillSetHash != set.Hash() || analysis.CacheGeneration != "generation" {
+					t.Fatalf("incorrect analysis provenance: %+v", analysis)
+				}
+			}
+			checkProvenance(tc.AIAnalysis)
+			if err := client.cache.Save(); err != nil {
+				t.Fatal(err)
+			}
+			key := service.agenticCacheKey("job", "1", tc.Name, tc.FailureMessage)
+			persisted, reason := LookupAgenticCache(NewCache(client.cache.dir), key, service.agenticCachePolicyFor(tc))
+			if reason != CacheAccepted {
+				t.Fatalf("persisted analysis rejected: %s", reason)
+			}
+			checkProvenance(persisted.Analysis)
+			if calls := atomic.LoadInt32(&srv.calls); calls != 1 {
+				t.Fatalf("model calls = %d, want 1", calls)
+			}
+		})
 	}
 }
 
@@ -773,6 +847,13 @@ func TestServiceBuildPromptChangeReusesPublishedAndAgenticCaches(t *testing.T) {
 	service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", run, tc)
 	oldHash := tc.AIAnalysis.PromptHash
 	module.prompt = "use the build log and select the earliest causal error before cleanup"
+	published := *tc.AIAnalysis
+	published.Disposition = models.AnalysisDispositionCitationsVerified
+	publishedTC := *tc
+	publishedTC.AIAnalysis = &published
+	if service.NeedsAnalysis(&publishedTC) {
+		t.Fatal("build prompt change forced planned reanalysis")
+	}
 	service.Analyze(t.Context(), &http.Client{}, "job", "logs/job/1/", run, tc)
 
 	if tc.AIAnalysis.RootCause != "old cleanup explanation" {
@@ -891,22 +972,22 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 	}
 
 	preliminary := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionPreliminary))
-	if !s.reanalysisRequired(preliminary, promptHash, false) {
+	if !s.reanalysisRequired(preliminary, false) {
 		t.Fatal("preliminary analysis with budget remaining should be re-analyzed")
 	}
-	if s.reanalysisRequired(preliminary, promptHash, true) {
+	if s.reanalysisRequired(preliminary, true) {
 		t.Fatal("preliminary analysis with a spent budget should be reused")
 	}
 
 	verified := reusablePublishedTestCase(newAnalysis(models.AnalysisDispositionCitationsVerified))
-	if s.reanalysisRequired(verified, promptHash, false) {
+	if s.reanalysisRequired(verified, false) {
 		t.Fatal("citation-verified analysis should be reused")
 	}
 
 	// A spent budget must not resurrect an analysis that fails a current floor.
 	stale := newAnalysis(models.AnalysisDispositionPreliminary)
 	stale.CritiqueVersion = currentCritiqueVersion - 1
-	if !s.reanalysisRequired(reusablePublishedTestCase(stale), promptHash, true) {
+	if !s.reanalysisRequired(reusablePublishedTestCase(stale), true) {
 		t.Fatal("analysis below the current critique contract must be re-analyzed")
 	}
 
@@ -919,7 +1000,7 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 	fromGenerationA := newAnalysis(models.AnalysisDispositionPreliminary)
 	fromGenerationA.CritiquePassed = false
 	fromGenerationA.CacheGeneration = "gen-a"
-	if !otherGeneration.reanalysisRequired(reusablePublishedTestCase(fromGenerationA), promptHash, true) {
+	if !otherGeneration.reanalysisRequired(reusablePublishedTestCase(fromGenerationA), true) {
 		t.Fatal("analysis from a superseded cache generation must be re-analyzed")
 	}
 }
@@ -941,7 +1022,7 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	}
 
 	s := &Service{client: client}
-	if !s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
+	if !s.preliminaryBudgetSpent(&models.TestCase{}, key) {
 		t.Fatalf("budget should be spent at %d attempts", maxPreliminaryAttempts)
 	}
 
@@ -949,7 +1030,7 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	if got := client.preliminaryAttempts(key); got != 0 {
 		t.Fatalf("attempts after a citation-verified result = %d, want 0", got)
 	}
-	if s.preliminaryBudgetSpent(&models.TestCase{}, key, "") {
+	if s.preliminaryBudgetSpent(&models.TestCase{}, key) {
 		t.Fatal("a citation-verified result must clear the spent budget")
 	}
 }
@@ -1009,10 +1090,10 @@ func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
 	for i := range maxPreliminaryAttempts {
 		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, i)
 	}
-	if !s.preliminaryBudgetSpent(&models.TestCase{}, first, "") {
+	if !s.preliminaryBudgetSpent(&models.TestCase{}, first) {
 		t.Fatal("first build budget should be spent")
 	}
-	if s.preliminaryBudgetSpent(&models.TestCase{}, second, "") {
+	if s.preliminaryBudgetSpent(&models.TestCase{}, second) {
 		t.Fatal("a new build must start with a fresh budget")
 	}
 }
@@ -1050,7 +1131,7 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 		Mode: AgenticMode, Disposition: models.AnalysisDispositionPreliminary,
 		CritiqueVersion: currentCritiqueVersion, ModelHash: client.modelFingerprint(), PromptHash: promptHash,
 	})
-	if !s.preliminaryBudgetSpent(published, key, promptHash) {
+	if !s.preliminaryBudgetSpent(published, key) {
 		t.Fatal("budget should be spent while the cache holds nothing servable")
 	}
 
@@ -1070,24 +1151,11 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 	}
 	client.cache.entries[key] = entry
 
-	if s.preliminaryBudgetSpent(published, key, promptHash) {
+	if s.preliminaryBudgetSpent(published, key) {
 		t.Fatal("an accepted cache entry must outrank the published preliminary analysis")
 	}
-	if !s.reanalysisRequired(published, promptHash, false) {
+	if !s.reanalysisRequired(published, false) {
 		t.Fatal("the flow must proceed so the accepted entry is served without a model call")
-	}
-}
-
-func TestFailureCachePolicyNormalizesZeroConsecutiveFailures(t *testing.T) {
-	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: "https://provider.example.invalid/chat/completions", Model: "model"})
-	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
-	configureAgenticTestService(service, AgenticOptions{CritiqueCachePolicy: CritiqueCachePolicyHard}, nil, nil, nil)
-	run := newRun("job", "1")
-	tc := newFailedTC("Test A", "failure")
-	zero := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 0)
-	one := service.FailureCachePolicy(t.Context(), &http.Client{}, run, tc, 1)
-	if zero.ConsecutiveFailures != 1 || zero != one {
-		t.Fatalf("zero policy = %+v, one policy = %+v", zero, one)
 	}
 }
 

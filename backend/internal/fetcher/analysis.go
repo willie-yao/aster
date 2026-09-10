@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,7 +30,7 @@ var (
 )
 
 type analysisPlanner interface {
-	NeedsAnalysis(context.Context, *http.Client, *models.BuildResult, *models.TestCase, int) bool
+	NeedsAnalysis(*models.TestCase) bool
 }
 
 type aiWork struct {
@@ -63,7 +62,7 @@ const (
 	aiWorkReusable
 )
 
-func collectAIWork(ctx context.Context, httpClient *http.Client, details []models.JobDetail, consecutiveMap map[string]int, planner analysisPlanner) []aiWork {
+func collectAIWork(details []models.JobDetail, planner analysisPlanner) []aiWork {
 	var work []aiWork
 	for i := range details {
 		d := &details[i]
@@ -81,14 +80,13 @@ func collectAIWork(ctx context.Context, httpClient *http.Client, details []model
 				if tc.Status != "failed" {
 					continue
 				}
-				consecutive := consecutiveMap[d.JobID+"::"+tc.Name]
 				item := aiWork{
 					jobID: d.JobID, buildPrefix: loc.BuildPath(), run: run, tc: tc,
 					prowJob: ai.ProwJobContext{
 						Name: d.Name, JobType: d.JobType, ConfigFile: d.ConfigFile, ConfigRevision: d.ConfigRevision,
 					},
 				}
-				item.priority = classifyAIWork(ctx, httpClient, item, consecutive, planner)
+				item.priority = classifyAIWork(item, planner)
 				work = append(work, item)
 			}
 		}
@@ -97,10 +95,10 @@ func collectAIWork(ctx context.Context, httpClient *http.Client, details []model
 	return work
 }
 
-func classifyAIWork(ctx context.Context, httpClient *http.Client, item aiWork, consecutive int, planner analysisPlanner) aiWorkPriority {
+func classifyAIWork(item aiWork, planner analysisPlanner) aiWorkPriority {
 	needsWork := analysisNeedsWork(item.tc)
 	if planner != nil {
-		needsWork = planner.NeedsAnalysis(ctx, httpClient, item.run, item.tc, max(1, consecutive))
+		needsWork = planner.NeedsAnalysis(item.tc)
 	}
 	if needsWork {
 		if item.tc.Source == models.TestCaseSourceBuild {
@@ -131,7 +129,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	consecutiveMap := aggregator.ConsecutiveFailureCounts(details)
 
 	planner := analysisruntime.NewReusePlanner(p.aiProject)
-	work := collectAIWork(ctx, p.client, details, consecutiveMap, planner)
+	work := collectAIWork(details, planner)
 	logicalTotal := len(work)
 	var err error
 	buildSubjects := 0

@@ -28,14 +28,9 @@ const (
 
 // AgenticCachePolicy contains the current cache acceptance contract.
 type AgenticCachePolicy struct {
-	MinToolCalls        int
-	MinGCSBytes         int
-	ConsecutiveFailures int
-	SkillSetHash        string
-	Model               string
-	ModelHash           string
-	PromptHash          string
-	CacheGeneration     string
+	MinToolCalls    int
+	MinGCSBytes     int
+	CacheGeneration string
 	// CritiquePolicy independently controls deterministic critique enforcement.
 	// The version is always required so cached output satisfies the current
 	// publication contract.
@@ -179,20 +174,12 @@ func NewAgenticCacheEntry(key string, result FailureAnalysisResult, createdAt ti
 	return CacheEntry{Key: key, CreatedAt: createdAt, Data: raw}, nil
 }
 
-func agenticCachePolicy(client *Client, opts AgenticOptions, skillSetHash, promptHash string, consecutiveFailures int) AgenticCachePolicy {
-	policy := AgenticCachePolicy{
-		MinToolCalls:        opts.MinToolCalls,
-		MinGCSBytes:         opts.MinGCSBytes,
-		ConsecutiveFailures: consecutiveFailures,
-		CritiquePolicy:      effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy),
-		SkillSetHash:        skillSetHash,
-		PromptHash:          promptHash,
+func agenticCachePolicy(opts AgenticOptions) AgenticCachePolicy {
+	return AgenticCachePolicy{
+		MinToolCalls:   opts.MinToolCalls,
+		MinGCSBytes:    opts.MinGCSBytes,
+		CritiquePolicy: effectiveCritiqueCachePolicy(opts.CritiqueCachePolicy),
 	}
-	if client != nil {
-		policy.Model = client.model
-		policy.ModelHash = client.modelFingerprint()
-	}
-	return policy
 }
 
 func critiqueCacheRejection(analysis *models.AIAnalysis, policy CritiqueCachePolicy) CacheRejectionReason {

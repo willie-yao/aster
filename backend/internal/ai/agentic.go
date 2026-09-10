@@ -552,10 +552,8 @@ type agentState struct {
 	// a persistent failure.
 	consecutiveFailures int
 
-	// promptHash is the fingerprint of the composed system prompt for this
-	// run. Stamped onto the accepted analysis and the cache entry so a later
-	// prompt edit invalidates them on read. Held on state so the stamp and
-	// cache-write paths reuse it without re-threading sysPrompt.
+	// promptHash records the effective prompt provenance on the analysis and
+	// cache entry. Prompt changes do not invalidate reusable entries.
 	promptHash     string
 	promptCacheKey string
 
@@ -689,15 +687,9 @@ func effectiveAgenticPromptHash(in AgenticInputs, sysPrompt string) string {
 // cachedAgenticAnalysis serves one accepted cache entry. It also reports the
 // preliminary retry budget already spent on this key so a miss can carry it
 // forward into the analysis that replaces it.
-func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey, sysPrompt string, start time.Time) (*models.AISummary, *models.AIAnalysis, int, bool) {
-	skillSetHash := ""
-	if in.Skills != nil {
-		skillSetHash = in.Skills.Hash()
-	}
+func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey string, start time.Time) (*models.AISummary, *models.AIAnalysis, int, bool) {
 	attempts := c.preliminaryAttempts(cacheKey)
-	record, reason := lookupAgenticCacheRecord(c.cache, cacheKey, agenticCachePolicy(
-		c, in.Opts, skillSetHash, effectiveAgenticPromptHash(in, sysPrompt), in.ConsecutiveFailures,
-	))
+	record, reason := lookupAgenticCacheRecord(c.cache, cacheKey, agenticCachePolicy(in.Opts))
 	if reason != CacheAccepted {
 		return nil, nil, attempts, false
 	}
@@ -741,7 +733,7 @@ func (c *Client) doAnalyzeAgentic(
 	cacheKey, sysPrompt, userPrompt string,
 ) (*models.AISummary, *models.AIAnalysis, error) {
 	start := time.Now()
-	cachedSummary, cachedAnalysis, priorPreliminaryAttempts, ok := c.cachedAgenticAnalysis(in, cacheKey, sysPrompt, start)
+	cachedSummary, cachedAnalysis, priorPreliminaryAttempts, ok := c.cachedAgenticAnalysis(in, cacheKey, start)
 	if ok {
 		return cachedSummary, cachedAnalysis, nil
 	}
