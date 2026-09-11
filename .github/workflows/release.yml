@@ -25,6 +25,10 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # Provenance signs via Sigstore with an OIDC token and records the
+      # attestation against the repository.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,4 +60,15 @@ jobs:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
           GOTOOLCHAIN: local
+          RELEASE_CHECKSUMS_OUT: ${{ runner.temp }}/SHA256SUMS
         run: hack/publish-release.sh
+
+      # Attests every asset named in the published SHA256SUMS: both charts, the
+      # four CLI binaries, the source archive, and the release manifest. A
+      # consumer can then verify where a downloaded binary was built with
+      # `gh attestation verify <file> --repo ${{ github.repository }}` instead of
+      # trusting a checksum they recorded by hand.
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: ${{ runner.temp }}/SHA256SUMS

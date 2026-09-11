@@ -403,6 +403,22 @@ fi
 grep -Fq 'refusing to move stable alias backward from v1.10.0 to v1.9.5' "$tmp/lexical-backward.out"
 
 : > "$log"
+rm -f "$tmp/exported.SHA256SUMS"
+(cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example \
+  RELEASE_CHECKSUMS_OUT="$tmp/exported.SHA256SUMS" "$script") >"$tmp/checksums-export.out"
+grep -Fq "wrote published checksums to $tmp/exported.SHA256SUMS" "$tmp/checksums-export.out"
+# The exported file is what provenance attests, so it must name exactly the
+# assets the release attached, not a stale or partial list.
+if ! cmp -s "$tmp/exported.SHA256SUMS" "$RELEASE_TEST_SHA_COPY"; then
+  echo 'exported checksums differ from the published SHA256SUMS' >&2
+  exit 1
+fi
+if [[ $(wc -l < "$tmp/exported.SHA256SUMS") -ne 8 ]]; then
+  echo 'exported checksums do not cover all eight release assets' >&2
+  exit 1
+fi
+
+: > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script")
 grep -Eq '^git-argv <tag> <-f> <v1> <refs/aster-release/[0-9]+/root>$' "$log"
 if grep -Fq 'git-argv <tag> <-f> <v1> <v1.2.3>' "$log"; then
@@ -612,6 +628,11 @@ grep -Fq 'RELEASE_ALLOW_BACKWARD must be true or false' "$tmp/bad-override.out"
 
 for workflow in "$root/.github/workflows/release.yml" "$root/.github/workflows/image.yml"; do
   grep -Fq -- '- "v*.*.*"' "$workflow"
+  # Provenance signing needs both an OIDC token and attestation write access.
+  # Without them the attest step fails at publication time rather than in CI.
+  grep -Fq 'attest-build-provenance' "$workflow"
+  grep -Fq 'id-token: write' "$workflow"
+  grep -Fq 'attestations: write' "$workflow"
   if grep -Fq 'backend/v*.*.*' "$workflow"; then
     echo "module tag triggers duplicate workflow publication: $workflow" >&2
     exit 1
@@ -623,6 +644,48 @@ if [[ $(grep -Fc 'needs: tag-pair' "$root/.github/workflows/image.yml") -ne 3 ]]
   echo 'not all release image jobs require paired-tag validation' >&2
   exit 1
 fi
+
+# Every published image must attest its own name at the digest that was just
+# pushed, and push the attestation to the registry so a deployment pinned by
+# digest can be verified. A copy-paste that reuses one image name would silently
+# attest the wrong subject.
+python3 - "$root/.github/workflows/image.yml" "$root/.github/workflows/release.yml" <<'PY'
+import sys
+
+import yaml
+
+image = yaml.safe_load(open(sys.argv[1]))
+expected = {
+    "image": "ghcr.io/${{ github.repository }}",
+    "remote-fixer-image": "ghcr.io/${{ github.repository }}/remote-fixer",
+    "agent-sandbox-fix-executor-image": "ghcr.io/${{ github.repository }}/agent-sandbox-fix-executor",
+}
+for job, subject in expected.items():
+    steps = image["jobs"][job]["steps"]
+    attest = [s for s in steps if "attest-build-provenance" in str(s.get("uses", ""))]
+    assert len(attest) == 1, (job, attest)
+    with_ = attest[0]["with"]
+    assert with_["subject-name"] == subject, (job, with_["subject-name"])
+    assert with_["subject-digest"] == "${{ steps.push.outputs.digest }}", (job, with_)
+    assert with_["push-to-registry"] is True, (job, with_)
+    pushes = [s for s in steps if s.get("id") == "push"]
+    assert len(pushes) == 1, (job, pushes)
+# tag-pair declares its own permissions and must not gain signing rights it
+# does not use.
+assert "attestations" not in image["jobs"]["tag-pair"]["permissions"], image["jobs"]["tag-pair"]
+
+release = yaml.safe_load(open(sys.argv[2]))
+steps = release["jobs"]["release"]["steps"]
+attest = [s for s in steps if "attest-build-provenance" in str(s.get("uses", ""))]
+assert len(attest) == 1, attest
+# Attesting the published SHA256SUMS keeps provenance tied to exactly the
+# assets the release attached, with no second list to drift.
+assert attest[0]["with"]["subject-checksums"] == "${{ runner.temp }}/SHA256SUMS", attest
+publish = next(s for s in steps if s.get("run") == "hack/publish-release.sh")
+assert publish["env"]["RELEASE_CHECKSUMS_OUT"] == "${{ runner.temp }}/SHA256SUMS", publish["env"]
+assert steps.index(publish) < steps.index(attest[0]), "assets attested before they are published"
+print("provenance wiring checks passed")
+PY
 
 fixture=$tmp/tag-fixture
 mkdir -p "$fixture"

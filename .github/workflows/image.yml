@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
   packages: write
+  # Provenance signs via Sigstore with an OIDC token and records the attestation
+  # against the repository. The tag-pair job below declares its own narrower
+  # permissions and does not inherit these.
+  id-token: write
+  attestations: write
 
 jobs:
   tag-pair:
@@ -75,6 +80,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -88,6 +94,16 @@ jobs:
             IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Attests the digest a deployment pins. Also pushed to the registry
+      # beside the image, so it can be fetched either from GitHub or, with
+      # `gh attestation verify --bundle-from-oci`, from the registry itself.
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   remote-fixer-image:
     needs: tag-pair
@@ -132,6 +148,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -146,6 +163,16 @@ jobs:
             IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }}
           cache-from: type=gha,scope=remote-fixer
           cache-to: type=gha,mode=max,scope=remote-fixer
+
+      # Attests the digest a deployment pins. Also pushed to the registry
+      # beside the image, so it can be fetched either from GitHub or, with
+      # `gh attestation verify --bundle-from-oci`, from the registry itself.
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/remote-fixer
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   agent-sandbox-fix-executor-image:
     needs: tag-pair
@@ -207,6 +234,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -221,3 +249,13 @@ jobs:
             IMAGE_TAG=${{ steps.build_identity.outputs.image_tag }}
           cache-from: type=gha,scope=agent-sandbox-fix-executor
           cache-to: type=gha,mode=max,scope=agent-sandbox-fix-executor
+
+      # Attests the digest a deployment pins. Also pushed to the registry
+      # beside the image, so it can be fetched either from GitHub or, with
+      # `gh attestation verify --bundle-from-oci`, from the registry itself.
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/agent-sandbox-fix-executor
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
