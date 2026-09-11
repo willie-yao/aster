@@ -39,6 +39,7 @@ export function navDestinations({
     pathname === "/pull-requests" || pathname.startsWith("/pull-requests/");
   const healthActive = pathname === "/analysis-health";
   const usageActive = pathname === "/ai-usage";
+  const historyActive = pathname === "/investigations" || pathname.startsWith("/investigations/");
 
   const destinations: NavDestination[] = [
     {
@@ -47,7 +48,7 @@ export function navDestinations({
       label: "Overview",
       title: "Overview",
       scope: "signal",
-      active: !flakyActive && !pullRequestsActive && !healthActive && !usageActive,
+      active: !flakyActive && !pullRequestsActive && !healthActive && !usageActive && !historyActive,
     },
     {
       id: "flaky",

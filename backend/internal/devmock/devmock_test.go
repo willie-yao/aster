@@ -384,3 +384,35 @@ func readJSON(t *testing.T, path string, into any) {
 		t.Fatalf("decoding %s: %v", path, err)
 	}
 }
+
+func TestChatArchiveListsDefaultTestScopeWithoutInheritingHistory(t *testing.T) {
+	chat, _ := newTestChat()
+	ref := analysischat.AnalysisRef{JobID: "job", BuildID: "123", TestName: "TestCluster"}
+	created, err := chat.Create(ref, "alice", "create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := chat.Find(ref, "alice"); err != nil || found.ID != created.ID {
+		t.Fatalf("default scope lookup: %+v %v", found, err)
+	}
+	if _, err := chat.Send(t.Context(), created.ID, "alice", "ask", "question"); err != nil {
+		t.Fatal(err)
+	}
+	if err := chat.Archive(created.ID, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := chat.List(analysischat.HistoryQuery{JobID: "job", Scope: analysischat.ScopeTest}, "alice")
+	if err != nil || len(page.Sessions) != 1 || !page.Sessions[0].Archived {
+		t.Fatalf("archived history: %+v %v", page, err)
+	}
+	if got, err := chat.Get(created.ID, "alice"); err != nil || len(got.Messages) != 2 || !got.ReadOnly {
+		t.Fatalf("saved transcript: %+v %v", got, err)
+	}
+	if _, err := chat.Find(ref, "alice"); err != analysischat.ErrSessionNotFound {
+		t.Fatalf("archived lookup: %v", err)
+	}
+	fresh, err := chat.Create(ref, "alice", "new")
+	if err != nil || fresh.ID == created.ID || len(fresh.Messages) != 0 {
+		t.Fatalf("fresh chat: %+v %v", fresh, err)
+	}
+}

@@ -184,7 +184,7 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 | `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth, concurrency, and discovery or artifact budget. Fetch depth also sets the window every aggregation, correlation, and AI pass reads. The run history strip plots a longer arc than this: builds that age out of the window are kept for display, without their test results, up to 40 runs per job. |
 | `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. Carries `ISSUE_TOKEN` for issue recovery and `ASTER_APP_ID` / `ASTER_APP_PRIVATE_KEY` for the optional bot comment on new pull requests. |
 | `server.replicaCount` | Server replicas. Persistent private state requires a suitable shared filesystem. |
-| `server.chat.*` | Authenticated analysis conversation settings. Each model turn defaults to `10m`; `server.chat.timeout` accepts values up to `30m`. |
+| `server.chat.*` | Authenticated analysis conversation settings. Each model turn defaults to `10m`; `server.chat.timeout` accepts values up to `30m`. `sessionTTL` defaults to `2h`; `historyRetention` retains operator conversations for `4320h` (180 days) after activity. |
 | `server.pullRequestEscalation.enabled` | Authenticated on-demand analysis of one unexplained pull request failure. Requires `ai.enabled` and `pull_requests.enabled` in `project.yaml`. Does not enable writes. |
 | `server.security.hsts.enabled` | Helm HSTS behavior. Keep enabled for deployed HTTPS origins. |
 | `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |

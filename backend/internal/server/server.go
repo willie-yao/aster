@@ -249,6 +249,8 @@ func Handler(opts Options) (http.Handler, error) {
 		}
 		trusted := trustedOriginSet(opts.TrustedOrigins)
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
+		mux.Handle("GET /api/analysis-chat/sessions", auth.Middleware(opts.Auth, listAnalysisChatSessionsHandler(opts.AnalysisChat)))
+		mux.Handle("POST /api/analysis-chat/sessions/{id}/archive", auth.Middleware(opts.Auth, guard(archiveAnalysisChatSessionHandler(opts.AnalysisChat))))
 		mux.Handle("POST /api/analysis-chat/sessions",
 			auth.Middleware(opts.Auth, guard(createAnalysisChatSessionHandler(opts.AnalysisChat))))
 		mux.Handle("POST /api/analysis-chat/sessions/lookup",

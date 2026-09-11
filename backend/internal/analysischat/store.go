@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateVersion    = 4
+	stateVersion    = 5
 	stateFileName   = "sessions.json"
 	stateLockName   = "sessions.lock"
 	maxStateBytes   = 64 << 20
@@ -38,6 +38,8 @@ type persistedSession struct {
 	Resolved          persistedResolvedAnalysis   `json:"resolved"`
 	Turns             int                         `json:"turns"`
 	ExpiresAt         time.Time                   `json:"expires_at"`
+	HistoryExpiresAt  time.Time                   `json:"history_expires_at,omitempty"`
+	Archived          bool                        `json:"archived,omitempty"`
 	CreateRequestID   string                      `json:"create_request_id"`
 	CreateRequestHash string                      `json:"create_request_hash"`
 	Requests          map[string]persistedRequest `json:"requests,omitempty"`
@@ -126,10 +128,11 @@ const (
 )
 
 type sessionStore struct {
-	statePath   string
-	lockPath    string
-	lockTimeout time.Duration
-	local       chan struct{}
+	statePath        string
+	lockPath         string
+	lockTimeout      time.Duration
+	historyRetention time.Duration
+	local            chan struct{}
 }
 
 func newSessionStore(dir string, lockTimeout time.Duration) (*sessionStore, error) {
@@ -138,10 +141,11 @@ func newSessionStore(dir string, lockTimeout time.Duration) (*sessionStore, erro
 	}
 	_ = os.Chmod(dir, 0o700)
 	return &sessionStore{
-		statePath:   filepath.Join(dir, stateFileName),
-		lockPath:    filepath.Join(dir, stateLockName),
-		lockTimeout: lockTimeout,
-		local:       make(chan struct{}, 1),
+		statePath:        filepath.Join(dir, stateFileName),
+		lockPath:         filepath.Join(dir, stateLockName),
+		lockTimeout:      lockTimeout,
+		historyRetention: DefaultHistoryRetention,
+		local:            make(chan struct{}, 1),
 	}, nil
 }
 
@@ -233,10 +237,27 @@ func (s *sessionStore) load() (*persistedState, bool, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, false, fmt.Errorf("decoding analysis chat state: %w", err)
 	}
-	if state.Version != stateVersion {
+	if state.Version != 4 && state.Version != stateVersion {
 		return nil, false, fmt.Errorf("unsupported analysis chat state version %d", state.Version)
 	}
 	migrated := false
+	if state.Version == 4 {
+		backup := s.statePath + ".v4.bak"
+		if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
+			if err := writePrivateJSON(backup, json.RawMessage(data)); err != nil {
+				return nil, false, fmt.Errorf("backing up analysis chat state: %w", err)
+			}
+		} else if err != nil {
+			return nil, false, fmt.Errorf("checking analysis chat backup: %w", err)
+		}
+		for _, current := range state.Sessions {
+			if activity := operatorActivity(current); !activity.IsZero() {
+				current.HistoryExpiresAt = activity.Add(s.historyRetention)
+			}
+		}
+		state.Version = stateVersion
+		migrated = true
+	}
 	if state.Sessions == nil {
 		state.Sessions = map[string]*persistedSession{}
 	}

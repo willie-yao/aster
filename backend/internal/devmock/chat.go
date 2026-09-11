@@ -3,6 +3,7 @@ package devmock
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,9 @@ func (c *Chat) PreparedAvailable(refs []analysischat.AnalysisRef) []bool {
 }
 
 func (c *Chat) create(ref analysischat.AnalysisRef, login string, prepared bool) (analysischat.SessionView, error) {
+	if ref.Scope == "" {
+		ref.Scope = analysischat.ScopeTest
+	}
 	if strings.TrimSpace(ref.JobID) == "" {
 		return analysischat.SessionView{}, analysischat.ErrInvalidRequest
 	}
@@ -106,7 +110,7 @@ func (c *Chat) Find(ref analysischat.AnalysisRef, login string) (analysischat.Se
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, session := range c.sessions {
-		if refKey(session.view.Analysis) == key && strings.EqualFold(session.view.CreatedBy, login) {
+		if !session.view.Archived && !session.view.ReadOnly && refKey(session.view.Analysis) == key && strings.EqualFold(session.view.CreatedBy, login) {
 			return session.view, nil
 		}
 	}
@@ -201,6 +205,9 @@ func (c *Chat) beginTurn(id, login, requestID, question string) error {
 	if err != nil {
 		return err
 	}
+	if session.view.ReadOnly || session.view.Archived {
+		return analysischat.ErrSessionInactive
+	}
 	if session.view.Active != nil {
 		return analysischat.ErrSessionBusy
 	}
@@ -217,6 +224,7 @@ func (c *Chat) beginTurn(id, login, requestID, question string) error {
 		Phase: analysischat.PhaseQueued, StartedAt: timestamp(now), UpdatedAt: timestamp(now),
 	}
 	session.view.UpdatedAt = timestamp(now)
+	session.view.HistoryExpiresAt = timestamp(now.Add(analysischat.DefaultHistoryRetention))
 	return nil
 }
 
@@ -351,8 +359,60 @@ func (c *Chat) reply(analysis publishedAnalysis, question string, now time.Time)
 
 // refKey identifies the analysis a session is about.
 func refKey(ref analysischat.AnalysisRef) string {
+	if ref.Scope == "" {
+		ref.Scope = analysischat.ScopeTest
+	}
 	return strings.Join([]string{
 		ref.Scope, ref.JobID, ref.BuildID, ref.TestName,
 		ref.PatternID, ref.CausalGroupID,
 	}, "\x00")
+}
+
+// Archive keeps the mock transcript while starting a separate conversation.
+func (c *Chat) Archive(id, login string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, err := c.ownedLocked(id, login)
+	if err != nil {
+		return err
+	}
+	if session.view.Active != nil {
+		return analysischat.ErrSessionBusy
+	}
+	session.view.Archived, session.view.ReadOnly = true, true
+	return nil
+}
+
+// List serves saved mock conversations to the history UI.
+func (c *Chat) List(query analysischat.HistoryQuery, login string) (analysischat.HistoryPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	page := analysischat.HistoryPage{Sessions: []analysischat.SessionSummary{}}
+	for _, session := range c.sessions {
+		v := session.view
+		if !strings.EqualFold(v.CreatedBy, login) || v.HistoryExpiresAt == "" || (query.JobID != "" && v.Analysis.JobID != query.JobID) || (query.Scope != "" && v.Analysis.Scope != query.Scope) {
+			continue
+		}
+		page.Sessions = append(page.Sessions, analysischat.SessionSummary{ID: v.ID, Analysis: v.Analysis, CreatedBy: v.CreatedBy, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, HistoryExpiresAt: v.HistoryExpiresAt, Archived: v.Archived, ReadOnly: v.ReadOnly, Title: v.Analysis.TestName, BuildIDs: []string{v.Analysis.BuildID}})
+	}
+	slices.SortFunc(page.Sessions, func(a, b analysischat.SessionSummary) int {
+		if n := strings.Compare(b.UpdatedAt, a.UpdatedAt); n != 0 {
+			return n
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	if query.Cursor != "" {
+		if i := slices.IndexFunc(page.Sessions, func(v analysischat.SessionSummary) bool { return v.ID == query.Cursor }); i >= 0 {
+			page.Sessions = page.Sessions[i+1:]
+		}
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if len(page.Sessions) > limit {
+		page.Sessions = page.Sessions[:limit]
+		page.NextCursor = page.Sessions[limit-1].ID
+	}
+	return page, nil
 }
