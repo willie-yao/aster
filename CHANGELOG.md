@@ -14,6 +14,7 @@ See [the release guide](docs/releasing.md#versioning) for the release process an
 
 Each release has its own notes file, named for its tag. See [the release guide](docs/releasing.md#release-notes) for how those notes are assembled.
 
+- [v0.10.0-rc.2](changelog/v0.10.0-rc.2.md) - 2026-09-10
 - [v0.10.0-rc.1](changelog/v0.10.0-rc.1.md) - 2026-09-10
 
 Release notes carried over from `prow-ai-dashboard`, the repository Aster was migrated from, are archived in [changelog/legacy.md](changelog/legacy.md). None of those tags exist in this repository.
