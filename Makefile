@@ -109,6 +109,7 @@ helm-check:
 	bash deploy/helm/aster-platform/test-release.sh
 	bash deploy/helm/aster-platform/test-kind-cleanup.sh
 	bash hack/test-publish-release.sh
+	bash hack/test-prepare-release-tag.sh
 	bash hack/test-verify-release-images.sh
 	bash hack/test-kubernetes-cleanroom.sh
 	bash deploy/helm/test-upgrade.sh

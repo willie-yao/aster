@@ -1,0 +1,57 @@
+name: Release tag
+
+# Creates the release tag pair after validating everything that can be checked
+# before the tags exist. Pushing tags by hand skips these checks; use this
+# instead. The Release and Image workflows then run on the pushed tag.
+#
+# The push must not use the job's default GITHUB_TOKEN: GitHub suppresses
+# workflow runs triggered by it, so the tags would exist and nothing would
+# publish. This mints a GitHub App installation token instead, and fails closed
+# when the App is not configured rather than creating tags that publish nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to create, e.g. v1.0.0-rc.1
+        required: true
+        type: string
+      dry_run:
+        description: Validate only, without creating the tags
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Shares the publication group so a tag is never created while an earlier
+# release is still publishing. queue: max is required: the default queue,
+# single, cancels the existing pending run, so a second dispatch would displace
+# the Release run created by the first tag.
+concurrency:
+  group: release-publication
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint a tag-push token
+        id: token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ASTER_APP_ID }}
+          private-key: ${{ secrets.ASTER_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Create release tag pair
+        env:
+          TAG: ${{ inputs.version }}
+          PREPARE_DRY_RUN: ${{ inputs.dry_run }}
+        run: hack/prepare-release-tag.sh
