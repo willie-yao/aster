@@ -103,7 +103,6 @@ backend/                         Go 1.26
     auth/                        Admin auth seam (dev / proxy / oauth / mock)
     devmock/                     In-memory stand-ins behind `server -mock`
     runtime/                     Swappable agent-execution abstraction
-    githubsource/                Small read-only GitHub source reader
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
     onboard/                     `aster onboard`: discovery, presets, doctor, scaffold
     project/                     project.yaml load + validate

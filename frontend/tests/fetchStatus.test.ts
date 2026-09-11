@@ -22,7 +22,7 @@ import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetc
 const fetchStatusSource = readFileSync(resolve(process.cwd(), "src/components/FetchStatus.tsx"), "utf8");
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 13,
+  schema_version: 14,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -38,36 +38,11 @@ const activeStatus: FetchProgressStatus = {
   builds: { cached: 241, fetched: 29 },
   analyses: {
     logical_total: 126,
-    accepted_cache_hits: 68,
-    compatible_results_reused: 2,
-    exact_results_reused: 12,
-    same_failure_results_reused: 5,
-    same_failure_groups: 3,
-    same_failure_candidates: 9,
-    potential_tasks_saved: 6,
-    largest_same_failure_group: 4,
-    new_work: 44,
-    stale_work: 0,
-    cache_rejections: {
-      missing: 44,
-      expired: 0,
-      tool_floor: 0,
-      evidence_floor: 0,
-      critique: 0,
-      malformed: 0,
-    },
     queued: 40,
     running: 2,
     completed: 84,
     failed: 0,
     cancelled: 0,
-    task_attempts: 4,
-    retries: 0,
-    existing_tasks_adopted: 0,
-    new_tasks_created: 4,
-    results_retrieved: 2,
-    fresh_analyses_completed: 2,
-    result_retrieval_retries: 0,
   },
   pattern_phase: "pending",
   publication_phase: "pending",
@@ -179,23 +154,11 @@ const statusFixtures = {
   }),
 };
 
-test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
+test("analysis progress reports only logical result states", () => {
   const progress = analysisProgressBreakdown(activeStatus);
   assert.deepEqual(progress, {
     total: 126,
     ready: 84,
-    reusedFromCache: 68,
-    compatibleResults: 2,
-    reused: 70,
-    exactResultsReused: 12,
-    sameFailureResultsReused: 5,
-    sameFailureGroups: 3,
-    sameFailureCandidates: 9,
-    potentialTasksSaved: 6,
-    largestSameFailureGroup: 4,
-    lateTasksAdopted: 0,
-    newTasksCreated: 4,
-    freshAnalysesCompleted: 2,
     analyzing: 2,
     waiting: 40,
     failed: 0,
@@ -204,42 +167,16 @@ test("analysis progress distinguishes reuse, adoption, and new Tasks", () => {
   });
   assert.equal(
     analysisProgressAccessibleDetail(progress),
-    "84 of 126 results ready: 70 reused, 12 exact results reused, 5 same-failure results reused, 0 existing Tasks adopted, 2 newly analyzed, 2 running, 40 waiting, 6 potential same-failure Task savings",
+    "84 of 126 results ready: 2 running, 40 waiting",
   );
 });
 
-test("late Task adoption stays separate from exact reuse and fresh work", () => {
-  const progress = analysisProgressBreakdown({
-    ...activeStatus,
-    analyses: {
-      ...activeStatus.analyses,
-      exact_results_reused: 5,
-      existing_tasks_adopted: 1,
-      new_tasks_created: 3,
-      fresh_analyses_completed: 2,
-    },
-  });
-  assert.equal(progress.exactResultsReused, 5);
-  assert.equal(progress.lateTasksAdopted, 1);
-  assert.equal(progress.newTasksCreated, 3);
-  assert.equal(progress.freshAnalysesCompleted, 2);
-});
-
-test("analysis progress keeps exact counters non-negative", () => {
+test("analysis progress keeps logical counters non-negative", () => {
   const progress = analysisProgressBreakdown({
     ...activeStatus,
     analyses: {
       ...activeStatus.analyses,
       logical_total: -1,
-      accepted_cache_hits: -2,
-      compatible_results_reused: -3,
-      task_attempts: -8,
-      retries: -2,
-      existing_tasks_adopted: -3,
-      new_tasks_created: -4,
-      results_retrieved: -1,
-      fresh_analyses_completed: -2,
-      exact_results_reused: -5,
       completed: -4,
       running: -5,
       queued: -6,
@@ -248,11 +185,6 @@ test("analysis progress keeps exact counters non-negative", () => {
     },
   });
   assert.equal(progress.total, 0);
-  assert.equal(progress.reused, 0);
-  assert.equal(progress.exactResultsReused, 0);
-  assert.equal(progress.lateTasksAdopted, 0);
-  assert.equal(progress.newTasksCreated, 0);
-  assert.equal(progress.freshAnalysesCompleted, 0);
   assert.equal(progress.ready, 0);
   assert.equal(progress.analyzing, 0);
   assert.equal(progress.waiting, 0);
@@ -513,7 +445,7 @@ test("refresh pipeline details keep the operator diagnostics off the popover", (
   // labels below are legitimate there but were dropped from the summary rows.
   const lastPassSource = detailsSource.slice(0, detailsSource.indexOf("Debug identifiers"));
 
-  for (const label of ["Timing", "Analysis", "Cache", "Patterns", "Follow-up", "Retries", "Failures and cancellations"]) {
+  for (const label of ["Timing", "Analysis", "Patterns", "Follow-up", "Failures and cancellations"]) {
     assert.match(lastPassSource, new RegExp(`label="${label}"`));
   }
   // These were deliberately dropped as noise and must not creep back in.
@@ -521,9 +453,11 @@ test("refresh pipeline details keep the operator diagnostics off the popover", (
     "Phase", "Pattern stage", "Publication stage", "Follow-up stage", "Phase began", "Last checked",
     "Compatible results", "Exact results reused", "Same-failure results reused", "Existing Tasks adopted",
     "New analyzer Tasks", "Task attempts", "Same-failure candidates", "Cache rejections", "Phase durations",
+    "Cache", "Retries",
   ]) {
     assert.doesNotMatch(lastPassSource, new RegExp(`label="${removed}"`));
   }
+  assert.doesNotMatch(lastPassSource, /reused|newly analyzed|accepted · .*rejected/i);
   // Debug identifiers are what an operator pastes into a bug report, so they
   // survive the move and stay copyable.
   for (const id of ["Run ID", "Pass ID", "Engine version", "Follow-up code"]) {

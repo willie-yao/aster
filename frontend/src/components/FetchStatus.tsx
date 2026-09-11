@@ -226,12 +226,6 @@ function recentPassDetail(pass: FetchPassSummary): string {
   return `${outcome} · ${formatPassDuration(pass.duration_ms)} · ${pass.published ? "published" : "not published"}`;
 }
 
-function cacheRejectionCount(status: FetchProgressStatus): number {
-  const rejections = status.analyses.cache_rejections;
-  if (!rejections) return 0;
-  return rejections.missing + rejections.expired + rejections.tool_floor
-    + rejections.evidence_floor + rejections.critique + rejections.malformed;
-}
 
 function timingDetail(status: FetchProgressStatus): string | null {
   const durations = status.phase_durations_ms ?? {};
@@ -255,14 +249,7 @@ function analysisDetail(status: FetchProgressStatus): string | null {
   const analysis = analysisProgressBreakdown(status);
   if (analysis.total <= 0) return null;
   const unavailable = analysis.failed + analysis.cancelled;
-  return `${analysis.ready} ready · ${unavailable} unavailable · ${analysis.reused} reused · ${analysis.analyzing} running`;
-}
-
-function cacheDetail(status: FetchProgressStatus): string | null {
-  const accepted = Math.max(0, status.analyses.accepted_cache_hits);
-  const rejected = cacheRejectionCount(status);
-  if (accepted === 0 && rejected === 0) return null;
-  return `${accepted} accepted · ${rejected} rejected`;
+  return `${analysis.ready} ready · ${unavailable} unavailable · ${analysis.analyzing} running · ${analysis.waiting} waiting`;
 }
 
 function failureDetail(status: FetchProgressStatus): string | null {
@@ -756,7 +743,7 @@ export function FetchStatusStrip({ response, dismissedKey, onDismiss }: FetchSta
 }
 
 /**
- * Refresh pipeline diagnostics: phase timing, analysis and cache counts,
+ * Refresh pipeline diagnostics: phase timing and analysis counts,
  * copyable run identifiers, and recent passes. These live on the Analysis
  * Health page rather than in the status popover, which is anchored to a 44px
  * control and has no room to grow.
@@ -767,11 +754,8 @@ export function RefreshPipelineDetails({ response }: { response: FetchStatusResp
 
   const timing = timingDetail(status);
   const analysisSummary = analysisDetail(status);
-  const cacheSummary = cacheDetail(status);
   const patternsSummary = patternDetail(status);
   const followUpSummary = followUpDetail(status);
-  const retryCount =
-    Math.max(0, status.analyses.retries) + Math.max(0, status.analyses.result_retrieval_retries);
   const failures = failureDetail(status);
   const failureCodes = followUpFailureCodes(status);
   const history = response.history ?? [];
@@ -784,10 +768,8 @@ export function RefreshPipelineDetails({ response }: { response: FetchStatusResp
         </Typography>
         {timing && <DetailRow label="Timing" value={timing} />}
         {analysisSummary && <DetailRow label="Analysis" value={analysisSummary} />}
-        {cacheSummary && <DetailRow label="Cache" value={cacheSummary} />}
         {patternsSummary && <DetailRow label="Patterns" value={patternsSummary} />}
         {followUpSummary && <DetailRow label="Follow-up" value={followUpSummary} />}
-        {retryCount > 0 && <DetailRow label="Retries" value={retryCount} />}
         {failures && <DetailRow label="Failures and cancellations" value={failures} />}
       </Stack>
 

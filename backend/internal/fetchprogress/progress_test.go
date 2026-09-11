@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -127,33 +126,54 @@ func TestReadRejectsPreviousSchemaAndRetiredFields(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatal(err)
 	}
+	analyses := raw["analyses"].(map[string]any)
+	for _, retired := range []string{
+		"accepted_cache_hits", "compatible_results_reused", "exact_results_reused",
+		"same_failure_results_reused", "same_failure_groups", "same_failure_candidates",
+		"potential_tasks_saved", "largest_same_failure_group", "new_work", "stale_work",
+		"cache_rejections", "task_attempts", "retries", "existing_tasks_adopted",
+		"new_tasks_created", "results_retrieved", "fresh_analyses_completed",
+		"result_retrieval_retries",
+	} {
+		if _, ok := analyses[retired]; ok {
+			t.Fatalf("status analyses still contain retired field %q: %s", retired, data)
+		}
+	}
+	if _, ok := raw["current_tasks"]; ok {
+		t.Fatalf("status still contains retired current_tasks: %s", data)
+	}
 
-	previous := maps.Clone(raw)
+	previous := cloneJSONMap(t, raw)
 	previous["schema_version"] = float64(SchemaVersion - 1)
-	cacheField := cloneJSONMap(t, raw)
-	cacheField["analyses"].(map[string]any)["cache_rejections"].(map[string]any)["skill"] = float64(1)
+	assertStatusRejected(t, "previous schema", previous)
+	for _, field := range []string{"accepted_cache_hits", "same_failure_groups", "task_attempts", "results_retrieved"} {
+		value := cloneJSONMap(t, raw)
+		value["analyses"].(map[string]any)[field] = float64(0)
+		assertStatusRejected(t, "retired "+field, value)
+	}
+	currentTasks := cloneJSONMap(t, raw)
+	currentTasks["current_tasks"] = []any{}
+	assertStatusRejected(t, "retired current_tasks", currentTasks)
 	followUpField := cloneJSONMap(t, raw)
 	followUpField["follow_up"].(map[string]any)["remediation"] = map[string]any{"state": "disabled"}
+	assertStatusRejected(t, "retired follow-up component", followUpField)
+}
 
-	for name, value := range map[string]map[string]any{
-		"previous schema":             previous,
-		"retired cache counter":       cacheField,
-		"retired follow-up component": followUpField,
-	} {
-		t.Run(name, func(t *testing.T) {
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(t.TempDir(), "status.json")
-			if err := os.WriteFile(path, encoded, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Read(path); err == nil {
-				t.Fatalf("Read accepted %s", encoded)
-			}
-		})
-	}
+func assertStatusRejected(t *testing.T, name string, value map[string]any) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "status.json")
+		if err := os.WriteFile(path, encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Read(path); err == nil {
+			t.Fatalf("Read accepted %s", encoded)
+		}
+	})
 }
 
 func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
@@ -169,11 +189,64 @@ func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
 	return clone
 }
 
-func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
+func TestNewTrackerRetiresPreviousSchemasWithoutMigration(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	status := testStatus(now.Add(-time.Minute))
+	statusData, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawStatus map[string]any
+	if err := json.Unmarshal(statusData, &rawStatus); err != nil {
+		t.Fatal(err)
+	}
+	rawStatus["schema_version"] = float64(SchemaVersion - 1)
+	statusData, err = json.Marshal(rawStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(Path(dir)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(dir), statusData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldHistory := fmt.Sprintf(`{"schema_version":%d,"passes":[]}`, HistorySchemaVersion-1)
+	if err := os.WriteFile(HistoryPath(dir), []byte(oldHistory), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker := newTracker(dir, "sha-new", trackerOptions{
+		now:   func() time.Time { return now },
+		newID: func() string { return "0123456789abcdef01234567" },
+		logf:  func(string, ...any) {},
+	})
+	if got := tracker.Snapshot(); got.RunID != "" || got.PassID != "" {
+		t.Fatalf("previous status was migrated: %+v", got)
+	}
+	tracker.StartPass(PassOneShot)
+	tracker.FinishSuccess(false)
+	gotStatus, err := Read(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStatus.SchemaVersion != SchemaVersion || gotStatus.RunID == "run" {
+		t.Fatalf("new status = %+v", gotStatus)
+	}
+	gotHistory, err := ReadHistory(HistoryPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotHistory.SchemaVersion != HistorySchemaVersion || len(gotHistory.Passes) != 1 {
+		t.Fatalf("new history = %+v", gotHistory)
+	}
+}
+
+func TestNewTrackerMarksSameVersionRunningStatusInterrupted(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	status := testStatus(now.Add(-time.Minute))
-	status.Analyses.StaleWork = 4
 	if err := Write(Path(dir), status); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +260,7 @@ func TestNewTrackerMarksRunningStatusInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Outcome != OutcomeInterrupted || got.Phase != PhaseInterrupted || got.FailureCategory != FailureInterrupted || got.PhaseStartedAt != now ||
-		got.Analyses.StaleWork != 4 {
+		got.Analyses != (AnalysisProgress{LogicalTotal: 2, Cancelled: 2}) {
 		t.Fatalf("recovered status = %+v", got)
 	}
 	if tracker.Snapshot().Outcome != OutcomeInterrupted || len(logs) != 1 {
@@ -370,74 +443,6 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	}
 }
 
-func TestWorkItemIDAndCorrelationAreLabelSafe(t *testing.T) {
-	first := WorkItemID("private/job/build/test/path")
-	second := WorkItemID("private/job/build/test/path")
-	if first != second || len(first) != 16 {
-		t.Fatalf("work item ids = %q %q", first, second)
-	}
-	for _, r := range first {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			t.Fatalf("work item id contains unsafe rune %q", r)
-		}
-	}
-	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
-		now:   func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
-		newID: func() string { return "0123456789abcdef01234567" },
-		logf:  func(string, ...any) {},
-	})
-	tracker.StartPass(PassLightweightWatch)
-	correlation, ok := tracker.Correlation()
-	if !ok || correlation.RunID != "0123456789abcdef01234567" || correlation.PassID != correlation.RunID || correlation.PassType != PassLightweightWatch {
-		t.Fatalf("correlation = %+v, ok=%t", correlation, ok)
-	}
-}
-
-func TestTrackerTaskAttemptRetryAndCacheAccounting(t *testing.T) {
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
-		now:           func() time.Time { return now },
-		newID:         func() string { return "0123456789abcdef01234567" },
-		write:         func(string, Status) error { return nil },
-		writeHistory:  func(string, History) error { return nil },
-		logf:          func(string, ...any) {},
-		writeInterval: time.Hour,
-	})
-	tracker.StartPass(PassLightweightWatch)
-	tracker.PlanAnalyses(3, 0)
-	tracker.RecordTaskPlanned("work-new", "task-new", false, false)
-	tracker.RecordTaskState("work-new", "Running", 1, false)
-	tracker.RecordTaskState("work-new", "Running", 2, false)
-	tracker.RecordTaskState("work-new", "Running", 2, false)
-	tracker.RecordResultAttempt("work-new", false, false)
-	tracker.RecordResultAttempt("work-new", true, false)
-	tracker.RecordResultAttempt("work-new", true, true)
-	tracker.RecordFreshAnalysisCompleted("work-new")
-	tracker.RecordFreshAnalysisCompleted("work-new")
-
-	tracker.RecordTaskPlanned("work-cached", "task-cached", true, false)
-	tracker.RecordTaskState("work-cached", "Succeeded", 1, true)
-	tracker.RecordCacheDisposition("work-cached", true)
-	tracker.RecordCacheDisposition("work-cached", true)
-	tracker.RecordTaskPlanned("work-stale", "task-stale", true, false)
-	tracker.RecordCacheDisposition("work-stale", false)
-	tracker.MarkAnalysisCheckpoint()
-
-	status := tracker.Snapshot()
-	if status.Analyses.TaskAttempts != 3 || status.Analyses.Retries != 1 {
-		t.Fatalf("attempt accounting = %+v", status.Analyses)
-	}
-	if status.Analyses.NewWork != 1 || status.Analyses.AcceptedCacheHits != 1 || status.Analyses.StaleWork != 1 || !status.Analyses.CheckpointCommitted {
-		t.Fatalf("work accounting = %+v", status.Analyses)
-	}
-	if status.Analyses.ExistingTasksAdopted != 1 || status.Analyses.NewTasksCreated != 1 || status.Analyses.ResultsRetrieved != 1 || status.Analyses.FreshAnalysesCompleted != 1 || status.Analyses.ResultRetrievalRetries != 2 {
-		t.Fatalf("adoption/result accounting = %+v", status.Analyses)
-	}
-	if len(status.CurrentTasks) != 3 || !status.CurrentTasks[1].Adopted || status.CurrentTasks[0].Attempts != 2 {
-		t.Fatalf("Task mappings = %+v", status.CurrentTasks)
-	}
-}
-
 func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -452,9 +457,6 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		now = now.Add(2 * time.Second)
 		tracker.CompletePhase()
 		tracker.PlanAnalyses(1, 0)
-		tracker.RecordTaskPlanned(fmt.Sprintf("work-%d", pass), fmt.Sprintf("task-%d", pass), false, false)
-		tracker.RecordTaskState(fmt.Sprintf("work-%d", pass), "Succeeded", 2, false)
-		tracker.RecordFreshAnalysisCompleted(fmt.Sprintf("work-%d", pass))
 		tracker.StartAnalysis(false)
 		tracker.FinishAnalysis(false, OutcomeSucceeded)
 		tracker.MarkAnalysisCheckpoint()
@@ -481,8 +483,8 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 	first, last := history.Passes[0], history.Passes[len(history.Passes)-1]
-	if first.PassID == "000000000000000000000002" || last.TaskAttempts != 2 || last.Retries != 1 || last.NewTasksCreated != 1 || last.FreshAnalysesCompleted != 1 || !last.Published ||
-		!last.CheckpointCommitted || last.PatternCacheHits != 1 {
+	if first.PassID == "000000000000000000000002" || !last.Published ||
+		!last.CheckpointCommitted || last.PatternCacheHits != 1 || last.LogicalCount != 1 {
 		t.Fatalf("bounded summaries first=%+v last=%+v", first, last)
 	}
 	if last.PhaseDurationsMS[string(PhaseSetup)] != 2000 || last.Outcome != OutcomeSucceeded {
@@ -490,18 +492,53 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 	}
 }
 
-func TestReadHistoryRejectsUnknownSchemaAndCorruption(t *testing.T) {
+func TestReadHistoryRejectsUnknownSchemaCorruptionAndRetiredFields(t *testing.T) {
 	path := HistoryPath(t.TempDir())
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, body := range []string{`{"schema_version":99,"passes":[]}`, `{"schema_version":4,"passes":[]}`, `{"schema_version":1`} {
+	for _, body := range []string{
+		`{"schema_version":99,"passes":[]}`,
+		fmt.Sprintf(`{"schema_version":%d,"passes":[]}`, HistorySchemaVersion-1),
+		`{"schema_version":1`,
+	} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ReadHistory(path); err == nil {
 			t.Fatalf("ReadHistory accepted %s", body)
 		}
+	}
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	history := History{SchemaVersion: HistorySchemaVersion, Passes: []PassSummary{{
+		RunID: "run", PassID: "pass", PassType: PassOneShot, StartedAt: now, CompletedAt: now.Add(time.Second),
+		LogicalCount: 1, Outcome: OutcomeSucceeded,
+	}}}
+	data, err := json.Marshal(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, retired := range []string{"cache_hits", "task_attempts", "retries", "fresh_analyses_completed"} {
+		if strings.Contains(string(data), `"`+retired+`"`) {
+			t.Fatalf("history still contains retired field %q: %s", retired, data)
+		}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	passes := raw["passes"].([]any)
+	passes[0].(map[string]any)["cache_hits"] = float64(0)
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadHistory(path); err == nil {
+		t.Fatalf("ReadHistory accepted retired field: %s", encoded)
 	}
 }
 
@@ -541,12 +578,10 @@ func TestSnapshotDeepCopiesMutableProgress(t *testing.T) {
 		logf:         func(string, ...any) {},
 	})
 	tracker.StartPass(PassLightweightWatch)
-	tracker.RecordTaskPlanned("work", "task", false, false)
 	snapshot := tracker.Snapshot()
 	snapshot.PhaseDurationsMS[string(PhaseSetup)] = 999
-	snapshot.CurrentTasks[0].Phase = "Failed"
 	current := tracker.Snapshot()
-	if current.PhaseDurationsMS[string(PhaseSetup)] == 999 || current.CurrentTasks[0].Phase == "Failed" {
+	if current.PhaseDurationsMS[string(PhaseSetup)] == 999 {
 		t.Fatalf("Snapshot shared mutable storage: snapshot=%+v current=%+v", snapshot, current)
 	}
 }
@@ -621,16 +656,11 @@ func TestTrackerBuildAnalysisCountersRemainAggregateOnly(t *testing.T) {
 	tracker.StartPass(PassInitialWatch)
 	tracker.PlanAnalyses(2, 1)
 	tracker.StartAnalysis(true)
-	tracker.RecordTaskPlanned("work-build", "task-build", true, true)
-	tracker.RecordTaskState("work-build", "Running", 1, true)
-	tracker.RecordCacheDisposition("work-build", true)
 	tracker.FinishAnalysis(true, OutcomeSucceeded)
 	tracker.CancelQueuedAnalyses()
 
 	status := tracker.Snapshot()
-	want := BuildAnalysisProgress{
-		LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1, ExistingTasksAdopted: 1,
-	}
+	want := BuildAnalysisProgress{LogicalTotal: 1, Completed: 1}
 	if status.Analyses.BuildSubjects != want {
 		t.Fatalf("build analysis counters = %+v, want %+v", status.Analyses.BuildSubjects, want)
 	}
@@ -656,86 +686,6 @@ func TestTrackerTerminalFailureCancelsBuildAnalysisCounters(t *testing.T) {
 	}
 	if status.Analyses.Queued != 0 || status.Analyses.Running != 0 || status.Analyses.Cancelled != 2 {
 		t.Fatalf("overall analysis counters = %+v", status.Analyses)
-	}
-}
-
-func TestTrackerFinalizesPostCacheAnalysisPlan(t *testing.T) {
-	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
-		now:          func() time.Time { return time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC) },
-		newID:        func() string { return "0123456789abcdef01234567" },
-		write:        func(string, Status) error { return nil },
-		writeHistory: func(string, History) error { return nil },
-		logf:         func(string, ...any) {},
-	})
-	tracker.StartPass(PassInitialWatch)
-	rejections := CacheRejectionProgress{Missing: 1, Critique: 1}
-	tracker.PlanAnalysisWork(AnalysisPlan{
-		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1,
-		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2,
-		NewWork: 1, StaleWork: 1, Queued: 2,
-		CacheRejections: rejections,
-		BuildSubjects: BuildAnalysisProgress{
-			LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1,
-		},
-	})
-
-	tracker.RecordTaskPlanned("new", "task-new", false, false)
-	tracker.RecordTaskPlanned("stale", "task-stale", true, false)
-	tracker.RecordCacheDisposition("stale", false)
-	tracker.StartAnalysis(false)
-	tracker.RecordTaskState("new", "Running", 1, false)
-	tracker.FinishAnalysis(false, OutcomeSucceeded)
-	tracker.RecordSameFailureReused(1)
-
-	got := tracker.Snapshot().Analyses
-	want := AnalysisProgress{
-		LogicalTotal: 4, AcceptedCacheHits: 1, CompatibleResultsReused: 1,
-		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2, SameFailureReused: 1,
-		NewWork: 1, StaleWork: 1, CacheRejections: rejections,
-		Queued: 1, Completed: 3, TaskAttempts: 1, NewTasksCreated: 1,
-		BuildSubjects: BuildAnalysisProgress{LogicalTotal: 1, Completed: 1, AcceptedCacheHits: 1},
-	}
-	if got != want {
-		t.Fatalf("analysis progress = %+v, want %+v", got, want)
-	}
-}
-
-func TestStatusRejectsInconsistentSameFailureCohorts(t *testing.T) {
-	status := testStatus(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC))
-	status.Analyses.SameFailureGroups = 1
-	status.Analyses.SameFailureCandidates = 3
-	status.Analyses.PotentialTasksSaved = 1
-	status.Analyses.LargestSameFailureGroup = 3
-	if err := status.validate(); err == nil || !strings.Contains(err.Error(), "same-failure") {
-		t.Fatalf("validate error = %v", err)
-	}
-}
-
-func TestTrackerExactReuseCompletesWithoutTaskActivity(t *testing.T) {
-	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
-		write:        func(string, Status) error { return nil },
-		writeHistory: func(string, History) error { return nil },
-		logf:         func(string, ...any) {},
-	})
-	tracker.StartPass(PassInitialWatch)
-	tracker.PlanAnalysisWork(AnalysisPlan{LogicalTotal: 1, ExactResultsReused: 1})
-	got := tracker.Snapshot().Analyses
-	if got.LogicalTotal != 1 || got.Completed != 1 || got.ExactResultsReused != 1 || got.Queued != 0 || got.TaskAttempts != 0 || got.NewTasksCreated != 0 || got.ExistingTasksAdopted != 0 || got.ResultsRetrieved != 0 || got.FreshAnalysesCompleted != 0 {
-		t.Fatalf("exact reuse progress = %+v", got)
-	}
-}
-
-func TestTrackerCompatibleReuseDoesNotCountTaskActivity(t *testing.T) {
-	tracker := newTracker(t.TempDir(), "sha-test", trackerOptions{
-		write:        func(string, Status) error { return nil },
-		writeHistory: func(string, History) error { return nil },
-		logf:         func(string, ...any) {},
-	})
-	tracker.StartPass(PassInitialWatch)
-	tracker.PlanAnalysisWork(AnalysisPlan{LogicalTotal: 1, CompatibleResultsReused: 1})
-	got := tracker.Snapshot().Analyses
-	if got.LogicalTotal != 1 || got.Completed != 1 || got.CompatibleResultsReused != 1 || got.Queued != 0 || got.TaskAttempts != 0 || got.ExistingTasksAdopted != 0 || got.ResultsRetrieved != 0 {
-		t.Fatalf("compatible reuse progress = %+v", got)
 	}
 }
 

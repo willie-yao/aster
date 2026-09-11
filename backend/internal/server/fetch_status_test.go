@@ -22,16 +22,10 @@ func serverFetchStatus(now time.Time) fetchprogress.Status {
 		EngineVersion: "sha-safe", Phase: fetchprogress.PhaseAnalysis,
 		RunStartedAt: now.Add(-time.Hour), PassStartedAt: now.Add(-time.Minute),
 		PhaseStartedAt: now.Add(-30 * time.Second), LastProgressAt: now,
-		Outcome: fetchprogress.OutcomeRunning,
-		Jobs:    fetchprogress.JobProgress{Total: 28, Completed: 28},
-		Builds:  fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
-		Analyses: fetchprogress.AnalysisProgress{
-			LogicalTotal: 61, CompatibleResultsReused: 4, ExactResultsReused: 2,
-			SameFailureGroups: 3, SameFailureCandidates: 9, PotentialTasksSaved: 6, LargestSameFailureGroup: 4, SameFailureReused: 5,
-			NewWork: 20, StaleWork: 3, Queued: 35, Running: 2, Completed: 24, Retries: 3,
-			NewTasksCreated: 4, FreshAnalysesCompleted: 2,
-			CacheRejections: fetchprogress.CacheRejectionProgress{Missing: 20, Critique: 3},
-		},
+		Outcome:  fetchprogress.OutcomeRunning,
+		Jobs:     fetchprogress.JobProgress{Total: 28, Completed: 28},
+		Builds:   fetchprogress.BuildProgress{Cached: 241, Fetched: 29},
+		Analyses: fetchprogress.AnalysisProgress{LogicalTotal: 61, Queued: 35, Running: 2, Completed: 24},
 		Patterns: fetchprogress.PatternProgress{
 			Eligible: 2, Completed: 1, Failed: 1, Attempts: 3, Retries: 1,
 			FailureCategory: fetchprogress.PatternFailureAmbiguous,
@@ -46,7 +40,6 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	dataDir := t.TempDir()
 	now := time.Now().UTC()
 	status := serverFetchStatus(now)
-	status.CurrentTasks = []fetchprogress.TaskMapping{{WorkItem: "safe-work", TaskName: "private-task-name", Phase: "Running"}}
 	status.FollowUp = &fetchprogress.FollowUpProgress{
 		Notifications: &fetchprogress.FollowUpComponentStatus{
 			State: fetchprogress.FollowUpFailed, Code: fetchprogress.FollowUpFailureNotificationDelivery,
@@ -62,10 +55,7 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 	history := fetchprogress.History{SchemaVersion: fetchprogress.HistorySchemaVersion, Passes: []fetchprogress.PassSummary{{
 		RunID: "safe-run", PassID: "previous-pass", PassType: fetchprogress.PassLightweightWatch,
 		StartedAt: now.Add(-2 * time.Minute), CompletedAt: now.Add(-time.Minute),
-		LogicalCount: 3, CompatibleResultsReused: 1, ExactResultsReused: 1,
-		SameFailureGroups: 1, SameFailureCandidates: 2, PotentialTasksSaved: 1, LargestSameFailureGroup: 2, SameFailureReused: 1,
-		NewTasksCreated: 1, FreshAnalysesCompleted: 1,
-		TaskAttempts: 4, Retries: 1, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
+		LogicalCount: 3, Outcome: fetchprogress.OutcomeSucceeded, Published: true,
 	}}}
 	if err := fetchprogress.WriteHistory(fetchprogress.HistoryPath(dataDir), history); err != nil {
 		t.Fatal(err)
@@ -100,11 +90,13 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if !got.Available || got.State != "active" || got.Status == nil || got.Status.Analyses.Retries != 3 || got.Status.Analyses.CompatibleResultsReused != 4 || got.Status.Analyses.ExactResultsReused != 2 || got.Status.Analyses.PotentialTasksSaved != 6 || got.Status.Analyses.LargestSameFailureGroup != 4 || got.Status.Analyses.SameFailureReused != 5 || got.Status.Analyses.NewTasksCreated != 4 || got.Status.Analyses.FreshAnalysesCompleted != 2 || got.Status.Analyses.CacheRejections.Missing != 20 ||
-		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
+	if !got.Available || got.State != "active" || got.Status == nil ||
+		got.Status.Analyses != (fetchprogress.AnalysisProgress{LogicalTotal: 61, Queued: 35, Running: 2, Completed: 24}) ||
+		got.Status.Patterns.Attempts != 3 || got.Status.Patterns.Retries != 1 || got.Status.Patterns.FailureCategory != fetchprogress.PatternFailureAmbiguous {
 		t.Fatalf("GET response = %+v", got)
 	}
-	if len(got.Status.CurrentTasks) != 0 || got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 || got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].ExactResultsReused != 1 || got.History[0].PotentialTasksSaved != 1 || got.History[0].LargestSameFailureGroup != 2 || got.History[0].SameFailureReused != 1 || got.History[0].NewTasksCreated != 1 || got.History[0].FreshAnalysesCompleted != 1 {
+	if got.HistorySchemaVersion != fetchprogress.HistorySchemaVersion || len(got.History) != 1 ||
+		got.History[0].DurationMS != int64(time.Minute/time.Millisecond) || got.History[0].LogicalCount != 3 {
 		t.Fatalf("safe status/history response = %+v", got)
 	}
 	if got.Status.FollowUp == nil || got.Status.FollowUp.Notifications == nil ||
@@ -114,7 +106,18 @@ func TestFetchStatusEndpointAuthenticationMethodsAndPrivacy(t *testing.T) {
 		t.Fatalf("safe follow-up response = %+v", got.Status.FollowUp)
 	}
 	body, _ := json.Marshal(got)
-	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "private-task-name", "previous-pass"} {
+	for _, retired := range []string{
+		"accepted_cache_hits", "compatible_results_reused", "exact_results_reused",
+		"same_failure_results_reused", "same_failure_groups", "same_failure_candidates",
+		"potential_tasks_saved", "largest_same_failure_group", "new_work", "stale_work",
+		"cache_rejections", "task_attempts", "existing_tasks_adopted", "new_tasks_created",
+		"results_retrieved", "fresh_analyses_completed", "result_retrieval_retries", "current_tasks",
+	} {
+		if bytes.Contains(body, []byte(`"`+retired+`"`)) {
+			t.Fatalf("response retained unsupported telemetry %q: %s", retired, body)
+		}
+	}
+	for _, sensitive := range []string{"/private/", "token-value", "provider-body", "test-name", "job-name", "build-id", "previous-pass"} {
 		if string(body) != "" && bytes.Contains(body, []byte(sensitive)) {
 			t.Fatalf("response exposed %q: %s", sensitive, body)
 		}

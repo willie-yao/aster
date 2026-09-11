@@ -98,18 +98,6 @@ const macroStageStateLabels: Record<FetchMacroStageState, string> = {
 export interface AnalysisProgressBreakdown {
   total: number;
   ready: number;
-  reusedFromCache: number;
-  compatibleResults: number;
-  reused: number;
-  exactResultsReused: number;
-  sameFailureResultsReused: number;
-  sameFailureGroups: number;
-  sameFailureCandidates: number;
-  potentialTasksSaved: number;
-  largestSameFailureGroup: number;
-  lateTasksAdopted: number;
-  newTasksCreated: number;
-  freshAnalysesCompleted: number;
   analyzing: number;
   waiting: number;
   failed: number;
@@ -127,26 +115,12 @@ function sentence(value: string): string {
 
 export function analysisProgressBreakdown(status: FetchProgressStatus): AnalysisProgressBreakdown {
   const analyses = status.analyses;
-  const reusedFromCache = nonNegative(analyses.accepted_cache_hits);
-  const compatibleResults = nonNegative(analyses.compatible_results_reused);
   const ready = nonNegative(analyses.completed);
   const failed = nonNegative(analyses.failed);
   const cancelled = nonNegative(analyses.cancelled);
   return {
     total: nonNegative(analyses.logical_total),
     ready,
-    reusedFromCache,
-    compatibleResults,
-    reused: reusedFromCache + compatibleResults,
-    exactResultsReused: nonNegative(analyses.exact_results_reused),
-    sameFailureResultsReused: nonNegative(analyses.same_failure_results_reused),
-    sameFailureGroups: nonNegative(analyses.same_failure_groups),
-    sameFailureCandidates: nonNegative(analyses.same_failure_candidates),
-    potentialTasksSaved: nonNegative(analyses.potential_tasks_saved),
-    largestSameFailureGroup: nonNegative(analyses.largest_same_failure_group),
-    lateTasksAdopted: nonNegative(analyses.existing_tasks_adopted),
-    newTasksCreated: nonNegative(analyses.new_tasks_created),
-    freshAnalysesCompleted: nonNegative(analyses.fresh_analyses_completed),
     analyzing: nonNegative(analyses.running),
     waiting: nonNegative(analyses.queued),
     failed,
@@ -159,10 +133,7 @@ export function analysisProgressAccessibleDetail(progress: AnalysisProgressBreak
   const failureDetail = progress.failed > 0 || progress.cancelled > 0
     ? `, ${progress.failed} failed, ${progress.cancelled} cancelled`
     : "";
-  const cohortDetail = progress.potentialTasksSaved > 0
-    ? `, ${progress.potentialTasksSaved} potential same-failure Task savings`
-    : "";
-  return `${progress.ready} of ${progress.total} results ready: ${progress.reused} reused, ${progress.exactResultsReused} exact results reused, ${progress.sameFailureResultsReused} same-failure results reused, ${progress.lateTasksAdopted} existing Tasks adopted, ${progress.freshAnalysesCompleted} newly analyzed, ${progress.analyzing} running, ${progress.waiting} waiting${cohortDetail}${failureDetail}`;
+  return `${progress.ready} of ${progress.total} results ready: ${progress.analyzing} running, ${progress.waiting} waiting${failureDetail}`;
 }
 
 function analysisReadyDetail(progress: AnalysisProgressBreakdown): string {
