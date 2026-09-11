@@ -42,6 +42,7 @@ Because the notes are published verbatim as the release body, relative paths in 
    - creates the GitHub Release from `changelog/<tag>.md` (marked **pre-release** when the tag has a `-beta`/`-rc` suffix),
    - packages the application and platform Helm charts at the release version, pushes them to `oci://ghcr.io/<owner>/charts/aster` and `oci://ghcr.io/<owner>/charts/aster-platform`, and attaches `aster-<version>.tgz` and `aster-platform-<version>.tgz` to the release,
    - cross-compiles the `aster` CLI for Linux and macOS on amd64 and arm64, attaches `aster-<tag>-<target>` for each target, an exact source archive, a machine-readable release manifest, and `SHA256SUMS`,
+   - attests build provenance for every asset named in `SHA256SUMS` and, from the image workflow, for each published image digest,
    - waits for the matching engine, remote-fixer, and Agent Sandbox Fix executor images and verifies their embedded source revision before publishing charts, the GitHub Release, or the stable major alias,
    - for a **stable** tag only, fast-forwards the `vMAJOR` alias after both charts are packaged, pushed, and attached successfully.
 
@@ -62,6 +63,32 @@ v1.0.0-beta.1  ->  v1.0.0-beta.2  ->  v1.0.0-rc.1  ->  v1.0.0
 Pre-releases never move the `vMAJOR` alias and are never marked "latest", so a consumer on `@v1` is unaffected until `v1.0.0` ships. Test a pre-release by pinning a consumer to the exact tag (e.g. `@v1.0.0-beta.1`).
 
 Each tag must move the line forward. The publisher rejects a version that is not the newest in the repository, so an accidental return to an older line, or a prerelease of a version that already shipped, fails before anything is published.
+
+## Verifying a release
+
+Every release payload named in `SHA256SUMS`, and every published image, carries a signed build provenance attestation, so a consumer can check where an artifact was built rather than trusting a checksum they recorded by hand. `SHA256SUMS` itself is not attested, since it cannot contain its own digest.
+
+A downloaded CLI binary, chart, or source archive:
+
+```bash
+gh attestation verify aster-v1.0.0-linux-amd64 \
+  --repo willie-yao/aster \
+  --signer-workflow willie-yao/aster/.github/workflows/release.yml
+```
+
+An image, by the digest a deployment pins:
+
+```bash
+gh attestation verify oci://ghcr.io/willie-yao/aster@sha256:<digest> \
+  --repo willie-yao/aster \
+  --signer-workflow willie-yao/aster/.github/workflows/image.yml
+```
+
+`--repo` alone only proves some workflow in this repository signed the artifact. `--signer-workflow` is what pins it to the release automation, so prefer both. Add `--source-ref refs/tags/<tag>` to additionally require a specific release.
+
+Both commands fetch the attestation from GitHub. Image attestations are also pushed to the registry beside the image; pass `--bundle-from-oci` to fetch from there instead, which needs registry access rather than access to this repository.
+
+Provenance records the workflow, repository, and commit that produced the artifact. It does not assert the artifact is correct or safe, only where it came from.
 
 ## Release branches (backports)
 

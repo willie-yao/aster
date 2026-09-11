@@ -315,6 +315,15 @@ if [[ $TAG == *-* ]]; then
 fi
 gh release create "${release_args[@]}"
 
+# Hand the published checksums to the caller so the workflow can attest exactly
+# the payloads that were attached. SHA256SUMS already names every one of them,
+# so provenance needs no second list that could drift from the release. The
+# checksums file itself is not covered, since it cannot contain its own digest.
+if [[ -n ${RELEASE_CHECKSUMS_OUT:-} ]]; then
+  cp "$tmp/SHA256SUMS" "$RELEASE_CHECKSUMS_OUT"
+  echo "wrote published checksums to $RELEASE_CHECKSUMS_OUT"
+fi
+
 if [[ $TAG != *-* ]]; then
   git tag -f "$major" "$root_remote_ref"
   git push origin -f "refs/tags/$major"
