@@ -79,7 +79,7 @@ When `smtp.username` is configured, pass the password through the reusable workf
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.1
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.2
     with:
       project_dir: .
     secrets:

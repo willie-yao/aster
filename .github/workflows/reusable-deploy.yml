@@ -9,7 +9,7 @@ name: Reusable Deploy
 # Example consumer workflow:
 #   jobs:
 #     deploy:
-#       uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.1
+#       uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.2
 #       with:
 #         # Provider coordinates are deployment-owned. Source them from
 #         # repository variables (`gh variable set AI_MODEL ...`).
