@@ -26,7 +26,7 @@ For private repositories, export `GITHUB_TOKEN`. It is used for bounded GitHub A
 Inspect inferred inputs without rendering files:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.1 \
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.2 \
   onboard discover \
   -source-repo owner/name
 ```
@@ -160,7 +160,7 @@ Use `--prompt-mode=todo-template` when automation should not emit the prompt han
 ```bash
 export GITHUB_TOKEN="..."
 aster onboard \
-  -engine-ref v0.10.0-rc.1 \
+  -engine-ref v0.10.0-rc.2 \
   -non-interactive \
   -testgrid "<testgrid-dashboard>" \
   -dashboard-repo "<owner>/<existing-dashboard-repo>" \
