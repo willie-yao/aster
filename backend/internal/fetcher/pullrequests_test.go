@@ -6,13 +6,16 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 const (
@@ -46,6 +50,182 @@ func TestPullRequestsEnabled(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPullRequestDiscoveryIndependentOfFixConfiguration(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	backend := triageDiscoveryBackend(t)
+	aiConfigs := []struct {
+		name string
+		ai   *project.AI
+	}{
+		{name: "AI absent"},
+		{name: "Fix absent", ai: &project.AI{}},
+		{name: "Fix disabled", ai: &project.AI{FixPRs: &project.FixPRs{}}},
+		{name: "Fix enabled", ai: &project.AI{FixPRs: &project.FixPRs{Enabled: true}}},
+		{name: "Fix targets another repository", ai: &project.AI{FixPRs: &project.FixPRs{
+			Enabled: true, Repo: &project.SourceRepo{Owner: "other", Name: "project"},
+		}}},
+	}
+	triageConfigs := []struct {
+		name   string
+		config *project.PullRequests
+	}{
+		{name: "triage absent"},
+		{name: "triage disabled", config: &project.PullRequests{}},
+		{name: "triage enabled", config: &project.PullRequests{Enabled: true}},
+	}
+	for _, aiConfig := range aiConfigs {
+		for _, triage := range triageConfigs {
+			for _, includePresubmits := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/include_presubmits=%t", aiConfig.name, triage.name, includePresubmits), func(t *testing.T) {
+					cfg := &project.Config{
+						Discovery: project.Discovery{
+							Source: project.DiscoveryTestGrid, TestGridDashboard: "project-ci",
+							TestInfraRevision: triageDiscoveryRevision,
+						},
+						Branding:     project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "project"}},
+						PullRequests: triage.config,
+						AI:           aiConfig.ai,
+					}
+					p := &pipeline{
+						cfg: cfg, backend: backend, includePresubmits: includePresubmits,
+						client: &http.Client{Transport: triageDiscoveryTransport{t: t}},
+						opts:   Options{OutDir: t.TempDir(), Workers: 2},
+					}
+					jobs, err := p.discover(t.Context())
+					if err != nil {
+						t.Fatal(err)
+					}
+					var jobNames []string
+					for _, job := range jobs {
+						jobNames = append(jobNames, job.Name)
+					}
+					slices.Sort(jobNames)
+					wantJobs := []string{basePeriodic}
+					if includePresubmits {
+						wantJobs = append(wantJobs, "pull-project-pass")
+					}
+					if !slices.Equal(jobNames, wantJobs) {
+						t.Fatalf("dashboard jobs = %v, want %v", jobNames, wantJobs)
+					}
+
+					var catalogNames []string
+					for _, job := range p.jobCatalog.Jobs {
+						catalogNames = append(catalogNames, job.Name)
+					}
+					slices.Sort(catalogNames)
+					wantCatalog := []string{basePeriodic, "pull-project-pass"}
+					if triage.config != nil && triage.config.Enabled {
+						wantCatalog = []string{basePeriodic, "pull-project-fail", "pull-project-pass"}
+					}
+					if !slices.Equal(catalogNames, wantCatalog) {
+						t.Errorf("catalog jobs = %v, want %v", catalogNames, wantCatalog)
+					}
+					if triage.config == nil || !triage.config.Enabled {
+						return
+					}
+					if _, err := p.refreshPullRequests(t.Context(), nil); err != nil {
+						t.Fatal(err)
+					}
+
+					var index models.PullRequestIndex
+					var detail models.PullRequestDetail
+					for name, target := range map[string]any{
+						"pull-requests.json":   &index,
+						"pull-requests/1.json": &detail,
+					} {
+						data, err := os.ReadFile(filepath.Join(p.opts.OutDir, name))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := json.Unmarshal(data, target); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if len(index.PullRequests) != 1 {
+						t.Fatalf("published pull requests = %d, want 1", len(index.PullRequests))
+					}
+					for name, summary := range map[string]models.PullRequestSummary{
+						"index": index.PullRequests[0], "detail": detail.PullRequestSummary,
+					} {
+						if summary.CIState != models.PullRequestCIFailing || summary.ChecksObserved != 2 || summary.ChecksFailing != 1 {
+							t.Errorf("%s: CI=%s observed=%d failing=%d, want FAILING, 2, 1", name, summary.CIState, summary.ChecksObserved, summary.ChecksFailing)
+						}
+					}
+					var checkNames []string
+					for _, check := range detail.Checks {
+						checkNames = append(checkNames, check.JobName)
+					}
+					slices.Sort(checkNames)
+					if !slices.Equal(checkNames, []string{"pull-project-fail", "pull-project-pass"}) {
+						t.Errorf("published checks = %v", checkNames)
+					}
+				})
+			}
+		}
+	}
+}
+
+const triageDiscoveryRevision = "1111111111111111111111111111111111111111"
+
+type triageDiscoveryTransport struct{ t *testing.T }
+
+func (f triageDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.t.Helper()
+	var body string
+	if req.Method == http.MethodGet {
+		const pull = `{"number":1,"state":"open","draft":false,"title":"Fixture PR","user":{"login":"tester"},"head":{"sha":"1111111111111111111111111111111111111111"},"base":{"ref":"main","sha":"2222222222222222222222222222222222222222"}}`
+		switch req.URL.Host + req.URL.Path {
+		case "api.github.com/repos/kubernetes/test-infra/git/trees/" + triageDiscoveryRevision:
+			body = `{"tree":[{"path":"config/jobs/project.yaml","type":"blob"}],"truncated":false}`
+		case "raw.githubusercontent.com/kubernetes/test-infra/" + triageDiscoveryRevision + "/config/jobs/project.yaml":
+			body = `periodics:
+- name: periodic-project-e2e
+  annotations:
+    testgrid-dashboards: project-ci
+presubmits:
+  example/project:
+  - name: pull-project-pass
+    annotations:
+      testgrid-dashboards: project-ci
+  - name: pull-project-fail
+`
+		case "api.github.com/repos/example/project/pulls":
+			body = "[" + pull + "]"
+		case "api.github.com/repos/example/project/pulls/1":
+			body = pull
+		case "api.github.com/repos/example/project/pulls/1/files":
+			body = `[]`
+		}
+	}
+	if body == "" {
+		err := fmt.Errorf("unexpected fixture request: %s %s", req.Method, req.URL)
+		f.t.Error(err)
+		return nil, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+}
+
+func triageDiscoveryBackend(t *testing.T) storage.Backend {
+	t.Helper()
+	root := t.TempDir()
+	for _, job := range []string{"pull-project-pass", "pull-project-fail"} {
+		dir := filepath.Join("pr-logs", "pull", "example_project", "1", job, "100")
+		writeFixtureFile(t, root, filepath.Join(dir, "started.json"), `{"timestamp":1700000000,"repos":{"example/project":"main:2222222222222222222222222222222222222222,1:1111111111111111111111111111111111111111"}}`)
+		finished := `{"timestamp":1700000600,"passed":true,"result":"SUCCESS"}`
+		if job == "pull-project-fail" {
+			finished = `{"timestamp":1700000600,"passed":false,"result":"FAILURE"}`
+			writeFixtureFile(t, root, filepath.Join(dir, "artifacts", "junit.xml"), `<testsuite name="fixture" tests="1" failures="1"><testcase name="fails"><failure message="failed">fixture failure</failure></testcase></testsuite>`)
+		}
+		writeFixtureFile(t, root, filepath.Join(dir, "finished.json"), finished)
+	}
+	backend, err := storage.NewLocalBackend(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return backend
 }
 
 // The warning is the only signal that anonymous GitHub reads will throttle
