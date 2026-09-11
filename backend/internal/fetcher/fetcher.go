@@ -237,7 +237,11 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 		}
 	default:
 		log.Println("Fetching job configs from test-infra...")
-		targetRepo := configuredFixRepo(cfg)
+		targetRepo := ""
+		if p.pullRequestsEnabled() {
+			repo := cfg.Branding.SourceRepo
+			targetRepo = repo.Owner + "/" + repo.Name
+		}
 		var catalog *jobconfig.Catalog
 		jobs, catalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
 		if err != nil {
@@ -1259,17 +1263,6 @@ func eligibleForBuildFailure(result *models.BuildResult) bool {
 
 func newBuildFailure(result *models.BuildResult) models.TestCase {
 	return models.NewProwJobExecutionFailure(result.DurationSeconds)
-}
-
-func configuredFixRepo(cfg *project.Config) string {
-	if cfg == nil || cfg.AI == nil || cfg.AI.FixPRs == nil {
-		return ""
-	}
-	eff := cfg.EffectiveFixPRs()
-	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
-		return ""
-	}
-	return eff.Repo.Owner + "/" + eff.Repo.Name
 }
 
 var newEmailSender = func(config notify.SMTPConfig) (notify.Sender, error) {
