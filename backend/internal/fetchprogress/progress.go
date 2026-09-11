@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 13
+	SchemaVersion = 14
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -174,103 +174,24 @@ type BuildProgress struct {
 
 // BuildAnalysisProgress tracks build-level subjects without source identity.
 type BuildAnalysisProgress struct {
-	LogicalTotal           int `json:"logical_total"`
-	Queued                 int `json:"queued"`
-	Running                int `json:"running"`
-	Completed              int `json:"completed"`
-	Failed                 int `json:"failed"`
-	Cancelled              int `json:"cancelled"`
-	AcceptedCacheHits      int `json:"accepted_cache_hits"`
-	ExactResultsReused     int `json:"exact_results_reused"`
-	ExistingTasksAdopted   int `json:"existing_tasks_adopted"`
-	NewTasksCreated        int `json:"new_tasks_created"`
-	FreshAnalysesCompleted int `json:"fresh_analyses_completed"`
+	LogicalTotal int `json:"logical_total"`
+	Queued       int `json:"queued"`
+	Running      int `json:"running"`
+	Completed    int `json:"completed"`
+	Failed       int `json:"failed"`
+	Cancelled    int `json:"cancelled"`
 }
 
-// CacheRejectionProgress reports aggregate private-cache rejection reasons.
-type CacheRejectionProgress struct {
-	Missing       int `json:"missing"`
-	Expired       int `json:"expired"`
-	ToolFloor     int `json:"tool_floor"`
-	EvidenceFloor int `json:"evidence_floor"`
-	Critique      int `json:"critique"`
-	Malformed     int `json:"malformed"`
-}
-
-// Add increments one known privacy-safe rejection category.
-func (p *CacheRejectionProgress) Add(reason string) {
-	if p == nil {
-		return
-	}
-	switch reason {
-	case "missing", "lookup_missing", "cache_generation":
-		p.Missing++
-	case "expired":
-		p.Expired++
-	case "tool_floor":
-		p.ToolFloor++
-	case "evidence_floor":
-		p.EvidenceFloor++
-	case "critique", "critique_hard_failure", "critique_strict_warning", "critique_unclassified":
-		p.Critique++
-	case "malformed":
-		p.Malformed++
-	}
-}
-
-func (p CacheRejectionProgress) total() int {
-	return p.Missing + p.Expired + p.ToolFloor + p.EvidenceFloor + p.Critique + p.Malformed
-}
-
-func (p CacheRejectionProgress) valid() bool {
-	return p.Missing >= 0 && p.Expired >= 0 && p.ToolFloor >= 0 && p.EvidenceFloor >= 0 && p.Critique >= 0 && p.Malformed >= 0
-}
-
-// AnalysisPlan is the finalized pre-execution logical workload.
-type AnalysisPlan struct {
-	LogicalTotal            int
-	AcceptedCacheHits       int
-	CompatibleResultsReused int
-	ExactResultsReused      int
-	SameFailureGroups       int
-	SameFailureCandidates   int
-	PotentialTasksSaved     int
-	LargestSameFailureGroup int
-	NewWork                 int
-	StaleWork               int
-	Queued                  int
-	CacheRejections         CacheRejectionProgress
-	BuildSubjects           BuildAnalysisProgress
-}
-
-// AnalysisProgress separates logical analyses from Task attempts.
+// AnalysisProgress tracks logical analysis results.
 type AnalysisProgress struct {
-	LogicalTotal            int                    `json:"logical_total"`
-	AcceptedCacheHits       int                    `json:"accepted_cache_hits"`
-	CompatibleResultsReused int                    `json:"compatible_results_reused"`
-	ExactResultsReused      int                    `json:"exact_results_reused"`
-	SameFailureReused       int                    `json:"same_failure_results_reused"`
-	SameFailureGroups       int                    `json:"same_failure_groups"`
-	SameFailureCandidates   int                    `json:"same_failure_candidates"`
-	PotentialTasksSaved     int                    `json:"potential_tasks_saved"`
-	LargestSameFailureGroup int                    `json:"largest_same_failure_group"`
-	NewWork                 int                    `json:"new_work"`
-	StaleWork               int                    `json:"stale_work"`
-	CacheRejections         CacheRejectionProgress `json:"cache_rejections"`
-	Queued                  int                    `json:"queued"`
-	Running                 int                    `json:"running"`
-	Completed               int                    `json:"completed"`
-	Failed                  int                    `json:"failed"`
-	Cancelled               int                    `json:"cancelled"`
-	TaskAttempts            int                    `json:"task_attempts"`
-	Retries                 int                    `json:"retries"`
-	ExistingTasksAdopted    int                    `json:"existing_tasks_adopted"`
-	NewTasksCreated         int                    `json:"new_tasks_created"`
-	ResultsRetrieved        int                    `json:"results_retrieved"`
-	FreshAnalysesCompleted  int                    `json:"fresh_analyses_completed"`
-	ResultRetrievalRetries  int                    `json:"result_retrieval_retries"`
-	CheckpointCommitted     bool                   `json:"checkpoint_committed,omitempty"`
-	BuildSubjects           BuildAnalysisProgress  `json:"build_subjects"`
+	LogicalTotal        int                   `json:"logical_total"`
+	Queued              int                   `json:"queued"`
+	Running             int                   `json:"running"`
+	Completed           int                   `json:"completed"`
+	Failed              int                   `json:"failed"`
+	Cancelled           int                   `json:"cancelled"`
+	CheckpointCommitted bool                  `json:"checkpoint_committed,omitempty"`
+	BuildSubjects       BuildAnalysisProgress `json:"build_subjects"`
 }
 
 // PatternFailureCategory is a privacy-safe final correlation failure class.
@@ -359,7 +280,6 @@ type Status struct {
 	Analyses         AnalysisProgress `json:"analyses"`
 	Patterns         PatternProgress  `json:"patterns"`
 	PhaseDurationsMS map[string]int64 `json:"phase_durations_ms,omitempty"`
-	CurrentTasks     []TaskMapping    `json:"current_tasks,omitempty"`
 	SourceGrounding  SourceGrounding  `json:"source_grounding,omitempty"`
 	SkillBundle      SkillBundle      `json:"skill_bundle,omitempty"`
 
@@ -414,17 +334,9 @@ func (s Status) validate() error {
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
-		s.Analyses.AcceptedCacheHits < 0 || s.Analyses.CompatibleResultsReused < 0 || s.Analyses.ExactResultsReused < 0 || s.Analyses.SameFailureReused < 0 ||
-		s.Analyses.SameFailureGroups < 0 || s.Analyses.SameFailureCandidates < 0 || s.Analyses.PotentialTasksSaved < 0 || s.Analyses.LargestSameFailureGroup < 0 ||
-		s.Analyses.NewWork < 0 || s.Analyses.StaleWork < 0 ||
-		!s.Analyses.CacheRejections.valid() ||
-		s.Analyses.TaskAttempts < 0 || s.Analyses.Retries < 0 || s.Analyses.ExistingTasksAdopted < 0 || s.Analyses.NewTasksCreated < 0 ||
-		s.Analyses.ResultsRetrieved < 0 || s.Analyses.FreshAnalysesCompleted < 0 || s.Analyses.ResultRetrievalRetries < 0 ||
 		s.Analyses.BuildSubjects.LogicalTotal < 0 || s.Analyses.BuildSubjects.Queued < 0 ||
 		s.Analyses.BuildSubjects.Running < 0 || s.Analyses.BuildSubjects.Completed < 0 ||
 		s.Analyses.BuildSubjects.Failed < 0 || s.Analyses.BuildSubjects.Cancelled < 0 ||
-		s.Analyses.BuildSubjects.AcceptedCacheHits < 0 || s.Analyses.BuildSubjects.ExactResultsReused < 0 || s.Analyses.BuildSubjects.ExistingTasksAdopted < 0 ||
-		s.Analyses.BuildSubjects.NewTasksCreated < 0 || s.Analyses.BuildSubjects.FreshAnalysesCompleted < 0 ||
 		s.Patterns.Eligible < 0 || s.Patterns.Completed < 0 || s.Patterns.Failed < 0 ||
 		s.Patterns.Attempts < 0 || s.Patterns.Retries < 0 || s.Patterns.CacheHits < 0 || s.Patterns.Suppressed < 0 || s.Patterns.FreshRetries < 0 ||
 		s.Patterns.Repairs < 0 || s.Patterns.RepairSucceeded < 0 || s.Patterns.RepairFailed < 0 ||
@@ -439,40 +351,13 @@ func (s Status) validate() error {
 	if accounted > s.Analyses.LogicalTotal || (s.Outcome != OutcomeRunning && accounted != s.Analyses.LogicalTotal) {
 		return errors.New("fetch status has inconsistent analysis counters")
 	}
-	if s.Analyses.CacheRejections.total() > s.Analyses.NewWork+s.Analyses.StaleWork {
-		return errors.New("fetch status has inconsistent cache counters")
-	}
-	if s.Analyses.AcceptedCacheHits+s.Analyses.CompatibleResultsReused+s.Analyses.ExactResultsReused+s.Analyses.SameFailureReused > s.Analyses.Completed ||
-		s.Analyses.SameFailureReused > s.Analyses.PotentialTasksSaved {
-		return errors.New("fetch status has inconsistent analysis reuse counters")
-	}
-	if (s.Analyses.SameFailureGroups == 0) != (s.Analyses.SameFailureCandidates == 0) ||
-		s.Analyses.PotentialTasksSaved != s.Analyses.SameFailureCandidates-s.Analyses.SameFailureGroups ||
-		(s.Analyses.SameFailureGroups > 0 && (s.Analyses.SameFailureCandidates < 2*s.Analyses.SameFailureGroups ||
-			s.Analyses.LargestSameFailureGroup < 2 || s.Analyses.LargestSameFailureGroup > s.Analyses.SameFailureCandidates)) ||
-		(s.Analyses.SameFailureGroups == 0 && s.Analyses.LargestSameFailureGroup != 0) {
-		return errors.New("fetch status has inconsistent same-failure cohort counters")
-	}
 	buildAccounted := s.Analyses.BuildSubjects.Queued + s.Analyses.BuildSubjects.Running + s.Analyses.BuildSubjects.Completed + s.Analyses.BuildSubjects.Failed + s.Analyses.BuildSubjects.Cancelled
 	if s.Analyses.BuildSubjects.LogicalTotal > s.Analyses.LogicalTotal || buildAccounted > s.Analyses.BuildSubjects.LogicalTotal ||
-		(s.Outcome != OutcomeRunning && buildAccounted != s.Analyses.BuildSubjects.LogicalTotal) ||
-		s.Analyses.BuildSubjects.AcceptedCacheHits > s.Analyses.AcceptedCacheHits ||
-		s.Analyses.BuildSubjects.ExactResultsReused > s.Analyses.ExactResultsReused ||
-		s.Analyses.BuildSubjects.ExistingTasksAdopted > s.Analyses.ExistingTasksAdopted ||
-		s.Analyses.BuildSubjects.NewTasksCreated > s.Analyses.NewTasksCreated ||
-		s.Analyses.BuildSubjects.FreshAnalysesCompleted > s.Analyses.FreshAnalysesCompleted {
+		(s.Outcome != OutcomeRunning && buildAccounted != s.Analyses.BuildSubjects.LogicalTotal) {
 		return errors.New("fetch status has inconsistent build analysis counters")
-	}
-	if len(s.CurrentTasks) > currentTaskLimit {
-		return errors.New("fetch status has too many Task mappings")
 	}
 	if s.SkillBundle.EngineCount < 0 || s.SkillBundle.ConsumerCount < 0 {
 		return errors.New("fetch status has invalid skill counts")
-	}
-	for _, task := range s.CurrentTasks {
-		if task.WorkItem == "" || task.TaskName == "" || task.Attempts < 0 {
-			return errors.New("fetch status has invalid Task mapping")
-		}
 	}
 	for _, duration := range s.PhaseDurationsMS {
 		if duration < 0 {
@@ -630,25 +515,16 @@ type trackerOptions struct {
 type Tracker struct {
 	mu sync.Mutex
 
-	path                  string
-	engineVersion         string
-	runID                 string
-	runStartedAt          time.Time
-	status                Status
-	history               History
-	phaseCompleted        bool
-	publishedThisPass     bool
-	plannedTasks          map[string]bool
-	taskBuildSubjects     map[string]bool
-	taskAttempts          map[string]int
-	taskAdopted           map[string]bool
-	taskCreated           map[string]bool
-	taskResults           map[string]bool
-	freshResults          map[string]bool
-	cacheDisposition      map[string]string
-	analysisPlanFinalized bool
-	sourceGrounding       SourceGrounding
-	skillBundle           SkillBundle
+	path              string
+	engineVersion     string
+	runID             string
+	runStartedAt      time.Time
+	status            Status
+	history           History
+	phaseCompleted    bool
+	publishedThisPass bool
+	sourceGrounding   SourceGrounding
+	skillBundle       SkillBundle
 
 	now               func() time.Time
 	newID             func() string
@@ -769,20 +645,11 @@ func (t *Tracker) StartPass(passType PassType) {
 		LastCheckedAt:               t.status.LastCheckedAt,
 		LastSuccessfulPublicationAt: t.status.LastSuccessfulPublicationAt,
 		PatternPhase:                StagePending, PublicationPhase: StagePending, SideEffectPhase: StagePending,
-		PhaseDurationsMS: map[string]int64{}, CurrentTasks: []TaskMapping{},
-		SourceGrounding: t.sourceGrounding, SkillBundle: cloneSkillBundle(t.skillBundle),
+		PhaseDurationsMS: map[string]int64{},
+		SourceGrounding:  t.sourceGrounding, SkillBundle: cloneSkillBundle(t.skillBundle),
 	}
 	t.phaseCompleted = false
 	t.publishedThisPass = false
-	t.plannedTasks = map[string]bool{}
-	t.taskBuildSubjects = map[string]bool{}
-	t.taskAttempts = map[string]int{}
-	t.taskAdopted = map[string]bool{}
-	t.taskCreated = map[string]bool{}
-	t.taskResults = map[string]bool{}
-	t.freshResults = map[string]bool{}
-	t.cacheDisposition = map[string]string{}
-	t.analysisPlanFinalized = false
 	t.lastHeartbeat = now
 	t.persistLocked(true)
 	t.logPhaseStartedLocked()
@@ -881,33 +748,9 @@ func (t *Tracker) MarkChecked() {
 // PlanAnalyses initializes logical analysis progress.
 func (t *Tracker) PlanAnalyses(total, buildSubjects int) {
 	t.update(true, func(status *Status) {
-		t.analysisPlanFinalized = false
 		status.Analyses = AnalysisProgress{
 			LogicalTotal: total, Queued: total,
 			BuildSubjects: BuildAnalysisProgress{LogicalTotal: buildSubjects, Queued: buildSubjects},
-		}
-	})
-}
-
-// PlanAnalysisWork records the complete post-cache workload before execution.
-func (t *Tracker) PlanAnalysisWork(plan AnalysisPlan) {
-	t.update(true, func(status *Status) {
-		t.analysisPlanFinalized = true
-		status.Analyses = AnalysisProgress{
-			LogicalTotal:            plan.LogicalTotal,
-			AcceptedCacheHits:       plan.AcceptedCacheHits,
-			CompatibleResultsReused: plan.CompatibleResultsReused,
-			ExactResultsReused:      plan.ExactResultsReused,
-			SameFailureGroups:       plan.SameFailureGroups,
-			SameFailureCandidates:   plan.SameFailureCandidates,
-			PotentialTasksSaved:     plan.PotentialTasksSaved,
-			LargestSameFailureGroup: plan.LargestSameFailureGroup,
-			NewWork:                 plan.NewWork,
-			StaleWork:               plan.StaleWork,
-			CacheRejections:         plan.CacheRejections,
-			Queued:                  plan.Queued,
-			Completed:               plan.AcceptedCacheHits + plan.CompatibleResultsReused + plan.ExactResultsReused,
-			BuildSubjects:           plan.BuildSubjects,
 		}
 	})
 }
@@ -1226,10 +1069,9 @@ func (t *Tracker) Heartbeat() {
 	t.persistLocked(true)
 	if t.status.Phase == PhaseAnalysis {
 		done := t.status.Analyses.Completed + t.status.Analyses.Failed + t.status.Analyses.Cancelled
-		t.logf("analysis progress: completed=%d/%d running=%d queued=%d retries=%d elapsed=%s",
+		t.logf("analysis progress: completed=%d/%d running=%d queued=%d elapsed=%s",
 			done, t.status.Analyses.LogicalTotal, t.status.Analyses.Running,
-			t.status.Analyses.Queued, t.status.Analyses.Retries,
-			formatDuration(now.Sub(t.status.PhaseStartedAt)))
+			t.status.Analyses.Queued, formatDuration(now.Sub(t.status.PhaseStartedAt)))
 		return
 	}
 	t.logf("fetch progress: phase=%s pass=%s jobs=%d/%d cached_builds=%d fetched_builds=%d elapsed=%s",
@@ -1258,7 +1100,6 @@ func (t *Tracker) Snapshot() Status {
 	defer t.mu.Unlock()
 	snapshot := t.status
 	snapshot.PhaseDurationsMS = maps.Clone(t.status.PhaseDurationsMS)
-	snapshot.CurrentTasks = append([]TaskMapping(nil), t.status.CurrentTasks...)
 	snapshot.SkillBundle = cloneSkillBundle(t.status.SkillBundle)
 	snapshot.FollowUp = cloneFollowUp(t.status.FollowUp)
 	return snapshot

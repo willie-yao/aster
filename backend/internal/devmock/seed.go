@@ -158,10 +158,7 @@ func seedFetchProgress(dataDir string, now time.Time) error {
 	}
 	status.Jobs = fetchprogress.JobProgress{Total: 28, Completed: 28}
 	status.Builds = fetchprogress.BuildProgress{Cached: 61, Fetched: 23}
-	status.Analyses = fetchprogress.AnalysisProgress{
-		LogicalTotal: 46, AcceptedCacheHits: 39, NewWork: 7,
-		Completed: 46, FreshAnalysesCompleted: 7, ResultsRetrieved: 7,
-	}
+	status.Analyses = fetchprogress.AnalysisProgress{LogicalTotal: 46, Completed: 46}
 	status.Patterns = fetchprogress.PatternProgress{Eligible: 7, Completed: 7, Attempts: 7, Current: 7}
 	return fetchprogress.Write(fetchprogress.Path(dataDir), status)
 }

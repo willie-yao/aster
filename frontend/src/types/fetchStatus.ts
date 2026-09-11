@@ -53,36 +53,11 @@ export interface FetchProgressStatus {
   builds: { cached: number; fetched: number };
   analyses: {
     logical_total: number;
-    accepted_cache_hits: number;
-    compatible_results_reused?: number;
-    exact_results_reused?: number;
-    same_failure_results_reused?: number;
-    same_failure_groups?: number;
-    same_failure_candidates?: number;
-    potential_tasks_saved?: number;
-    largest_same_failure_group?: number;
-    new_work: number;
-    stale_work: number;
-    cache_rejections?: {
-      missing: number;
-      expired: number;
-      tool_floor: number;
-      evidence_floor: number;
-      critique: number;
-      malformed: number;
-    };
     queued: number;
     running: number;
     completed: number;
     failed: number;
     cancelled: number;
-    task_attempts: number;
-    retries: number;
-    existing_tasks_adopted: number;
-    new_tasks_created?: number;
-    results_retrieved: number;
-    fresh_analyses_completed?: number;
-    result_retrieval_retries: number;
     checkpoint_committed?: boolean;
     build_subjects?: {
       logical_total: number;
@@ -91,11 +66,6 @@ export interface FetchProgressStatus {
       completed: number;
       failed: number;
       cancelled: number;
-      accepted_cache_hits: number;
-      exact_results_reused?: number;
-      existing_tasks_adopted: number;
-      new_tasks_created?: number;
-      fresh_analyses_completed?: number;
     };
   };
   patterns?: {
@@ -146,17 +116,6 @@ export interface FetchPassSummary {
   completed_at: string;
   duration_ms: number;
   logical_count: number;
-  cache_hits: number;
-  compatible_results_reused: number;
-  exact_results_reused: number;
-  same_failure_results_reused?: number;
-  same_failure_groups?: number;
-  same_failure_candidates?: number;
-  potential_tasks_saved?: number;
-  largest_same_failure_group?: number;
-  new_tasks_created: number;
-  fresh_analyses_completed: number;
-  retries: number;
   outcome: FetchOutcome;
   published: boolean;
 }

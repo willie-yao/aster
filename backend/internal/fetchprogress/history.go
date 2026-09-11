@@ -13,7 +13,7 @@ import (
 
 const (
 	// HistorySchemaVersion is the current private pass history schema.
-	HistorySchemaVersion = 5
+	HistorySchemaVersion = 6
 	// HistoryFilename stores bounded terminal pass summaries.
 	HistoryFilename = "history.json"
 	// HistoryLimit bounds retained pass summaries.
@@ -22,30 +22,18 @@ const (
 
 // PassSummary is one safe terminal fetch-pass summary.
 type PassSummary struct {
-	RunID                   string           `json:"run_id"`
-	PassID                  string           `json:"pass_id"`
-	PassType                PassType         `json:"pass_type"`
-	StartedAt               time.Time        `json:"started_at"`
-	CompletedAt             time.Time        `json:"completed_at"`
-	PhaseDurationsMS        map[string]int64 `json:"phase_durations_ms,omitempty"`
-	LogicalCount            int              `json:"logical_count"`
-	CacheHits               int              `json:"cache_hits"`
-	CompatibleResultsReused int              `json:"compatible_results_reused,omitempty"`
-	ExactResultsReused      int              `json:"exact_results_reused,omitempty"`
-	SameFailureReused       int              `json:"same_failure_results_reused,omitempty"`
-	SameFailureGroups       int              `json:"same_failure_groups,omitempty"`
-	SameFailureCandidates   int              `json:"same_failure_candidates,omitempty"`
-	PotentialTasksSaved     int              `json:"potential_tasks_saved,omitempty"`
-	LargestSameFailureGroup int              `json:"largest_same_failure_group,omitempty"`
-	NewTasksCreated         int              `json:"new_tasks_created,omitempty"`
-	FreshAnalysesCompleted  int              `json:"fresh_analyses_completed,omitempty"`
-	TaskAttempts            int              `json:"task_attempts"`
-	Retries                 int              `json:"retries"`
-	CheckpointCommitted     bool             `json:"checkpoint_committed,omitempty"`
-	PatternCacheHits        int              `json:"pattern_cache_hits,omitempty"`
-	Outcome                 Outcome          `json:"outcome"`
-	FailureCategory         FailureCategory  `json:"failure_category,omitempty"`
-	Published               bool             `json:"published"`
+	RunID               string           `json:"run_id"`
+	PassID              string           `json:"pass_id"`
+	PassType            PassType         `json:"pass_type"`
+	StartedAt           time.Time        `json:"started_at"`
+	CompletedAt         time.Time        `json:"completed_at"`
+	PhaseDurationsMS    map[string]int64 `json:"phase_durations_ms,omitempty"`
+	LogicalCount        int              `json:"logical_count"`
+	CheckpointCommitted bool             `json:"checkpoint_committed,omitempty"`
+	PatternCacheHits    int              `json:"pattern_cache_hits,omitempty"`
+	Outcome             Outcome          `json:"outcome"`
+	FailureCategory     FailureCategory  `json:"failure_category,omitempty"`
+	Published           bool             `json:"published"`
 }
 
 // History is the bounded private pass history file.
@@ -84,10 +72,7 @@ func ReadHistory(path string) (History, error) {
 		if summary.RunID == "" || summary.PassID == "" || !validPassType(summary.PassType) ||
 			!validOutcome(summary.Outcome) || summary.Outcome == OutcomeRunning || !validFailureCategory(summary.FailureCategory) ||
 			summary.StartedAt.IsZero() || summary.CompletedAt.IsZero() || summary.CompletedAt.Before(summary.StartedAt) ||
-			summary.LogicalCount < 0 || summary.CacheHits < 0 || summary.CompatibleResultsReused < 0 || summary.ExactResultsReused < 0 ||
-			summary.SameFailureReused < 0 || summary.SameFailureGroups < 0 || summary.SameFailureCandidates < 0 || summary.PotentialTasksSaved < 0 || summary.LargestSameFailureGroup < 0 ||
-			summary.NewTasksCreated < 0 || summary.FreshAnalysesCompleted < 0 || summary.TaskAttempts < 0 || summary.Retries < 0 || summary.PatternCacheHits < 0 ||
-			summary.SameFailureReused > summary.PotentialTasksSaved {
+			summary.LogicalCount < 0 || summary.PatternCacheHits < 0 {
 			return History{}, errors.New("fetch history has invalid pass summary")
 		}
 		for phase, duration := range summary.PhaseDurationsMS {
@@ -123,22 +108,10 @@ func (t *Tracker) appendHistoryLocked(now time.Time) {
 	summary := PassSummary{
 		RunID: t.status.RunID, PassID: t.status.PassID, PassType: t.status.PassType,
 		StartedAt: t.status.PassStartedAt, CompletedAt: now, PhaseDurationsMS: durations,
-		LogicalCount:            t.status.Analyses.LogicalTotal,
-		CacheHits:               t.status.Analyses.AcceptedCacheHits,
-		CompatibleResultsReused: t.status.Analyses.CompatibleResultsReused,
-		ExactResultsReused:      t.status.Analyses.ExactResultsReused,
-		SameFailureReused:       t.status.Analyses.SameFailureReused,
-		SameFailureGroups:       t.status.Analyses.SameFailureGroups,
-		SameFailureCandidates:   t.status.Analyses.SameFailureCandidates,
-		PotentialTasksSaved:     t.status.Analyses.PotentialTasksSaved,
-		LargestSameFailureGroup: t.status.Analyses.LargestSameFailureGroup,
-		NewTasksCreated:         t.status.Analyses.NewTasksCreated,
-		FreshAnalysesCompleted:  t.status.Analyses.FreshAnalysesCompleted,
-		TaskAttempts:            t.status.Analyses.TaskAttempts,
-		Retries:                 t.status.Analyses.Retries,
-		CheckpointCommitted:     t.status.Analyses.CheckpointCommitted,
-		PatternCacheHits:        t.status.Patterns.CacheHits,
-		Outcome:                 t.status.Outcome, FailureCategory: t.status.FailureCategory,
+		LogicalCount:        t.status.Analyses.LogicalTotal,
+		CheckpointCommitted: t.status.Analyses.CheckpointCommitted,
+		PatternCacheHits:    t.status.Patterns.CacheHits,
+		Outcome:             t.status.Outcome, FailureCategory: t.status.FailureCategory,
 		Published: t.publishedThisPass || publicationInPass(t.status),
 	}
 	t.history.SchemaVersion = HistorySchemaVersion

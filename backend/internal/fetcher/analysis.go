@@ -228,12 +228,10 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			select {
 			case sem <- struct{}{}:
 			case <-analysisCtx.Done():
-				p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
 				return
 			}
 			defer func() { <-sem }()
 			if analysisCtx.Err() != nil {
-				p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, fetchprogress.OutcomeCancelled)
 				return
 			}
 			p.startProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild)
