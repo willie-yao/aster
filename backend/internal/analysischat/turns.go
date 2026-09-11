@@ -178,6 +178,9 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 				return changed, nil
 			}
 		}
+		if !sessionLive(current, now) {
+			return changed, ErrSessionInactive
+		}
 		if current.Active != nil {
 			return changed, ErrSessionBusy
 		}
@@ -191,6 +194,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 			return changed, ErrRateLimit
 		}
 
+		current.HistoryExpiresAt = now.Add(s.opts.HistoryRetention)
 		current.Turns++
 		stamp := now.Format(time.RFC3339)
 		state.OwnerRequests[owner] = append(state.OwnerRequests[owner], now)
@@ -291,6 +295,7 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 		}
 		current.Active = nil
 		extendSessionExpiry(current, finishedAt.Add(s.opts.SessionTTL))
+		current.HistoryExpiresAt = finishedAt.Add(s.opts.HistoryRetention)
 		stamp := finishedAt.Format(time.RFC3339)
 		if previous.Question == "" {
 			previous.Question = question

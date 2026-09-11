@@ -839,16 +839,20 @@
             },
             "sessionTTL": {
               "type": "string",
-              "description": "Persisted chat session lifetime."
+              "description": "Idle lifetime of a live chat session."
+            },
+            "historyRetention": {
+              "type": "string",
+              "description": "Operator conversation retention after inactivity. Defaults to 4320h (180 days)."
             },
             "maxSessions": {
               "type": "integer",
-              "description": "Maximum stored chat sessions.",
+              "description": "Maximum live chat sessions, excluding retained history.",
               "minimum": 1
             },
             "maxSessionsPerOwner": {
               "type": "integer",
-              "description": "Maximum stored chat sessions per owner.",
+              "description": "Maximum live chat sessions per owner, excluding retained history.",
               "minimum": 1
             },
             "maxActiveTurnsPerOwner": {
@@ -867,6 +871,7 @@
             "enabled",
             "timeout",
             "sessionTTL",
+            "historyRetention",
             "maxSessions",
             "maxSessionsPerOwner",
             "maxActiveTurnsPerOwner",

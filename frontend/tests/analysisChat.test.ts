@@ -5,6 +5,9 @@ import { afterEach, test } from "node:test";
 import { MemoryStorage } from "./helpers/memoryStorage.js";
 
 import {
+  archiveAnalysisChatSession,
+  analysisChatHistoryQuery,
+  listAnalysisChatSessions,
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
   analysisChatHistory,
@@ -244,7 +247,7 @@ test("an open panel speaks for itself instead of carrying a marker", () => {
 
 test("shared observer refresh cannot overwrite a conversation reset", () => {
   const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
-  assert.match(chat, /sessionGenerationRef\.current \+= 1;[\s\S]*await deleteAnalysisChatSession/);
+  assert.match(chat, /sessionGenerationRef\.current \+= 1;[\s\S]*await archiveAnalysisChatSession/);
   assert.match(chat, /generation !== sessionGenerationRef\.current/);
   assert.match(chat, /identityRef\.current !== refreshIdentity/);
   assert.match(chat, /busy \|\| restoring \|\| resetting/);
@@ -677,4 +680,49 @@ test("build analysis lookup keeps the source discriminator and omits JUnit ident
     return new Response(null, { status: 204 });
   };
   assert.equal(await findAnalysisChatSession(buildAnalysis), null);
+});
+
+
+test("archiving starts a new conversation without deleting history", async () => {
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), "/api/analysis-chat/sessions/session%2F1/archive");
+    assert.equal(init?.method, "POST");
+    assert.equal(init?.credentials, "same-origin");
+    assert.equal(init?.cache, "no-store");
+    return new Response(null, { status: 204 });
+  };
+  await archiveAnalysisChatSession("session/1");
+  globalThis.fetch = async () => new Response(null, { status: 404 });
+  await archiveAnalysisChatSession("missing");
+  globalThis.fetch = async () => new Response("analysis chat session is busy", { status: 409 });
+  await assert.rejects(() => archiveAnalysisChatSession("busy"), AnalysisChatAPIError);
+});
+
+test("history requests encode filters and keep cursor pagination private", async () => {
+  const query = analysisChatHistoryQuery(" job/name ", "cause", "next/+?");
+  const params = new URLSearchParams(query);
+  assert.equal(params.get("job_id"), "job/name");
+  assert.equal(params.get("scope"), "cause");
+  assert.equal(params.get("cursor"), "next/+?");
+  globalThis.fetch = async (input, init) => {
+    assert.equal(String(input), `/api/analysis-chat/sessions?${query}`);
+    assert.equal(init?.credentials, "same-origin");
+    assert.equal(init?.cache, "no-store");
+    return new Response(JSON.stringify({ sessions: [], next_cursor: "next" }), { status: 200 });
+  };
+  assert.deepEqual(await listAnalysisChatSessions(query), { sessions: [], next_cursor: "next" });
+  globalThis.fetch = async () => new Response("unauthorized", { status: 401 });
+  await assert.rejects(() => listAnalysisChatSessions(""), AnalysisChatAPIError);
+});
+
+test("history reuses the transcript and remains separate from the current chat", () => {
+  const chat = readFileSync(resolve("src/components/AnalysisChat.tsx"), "utf8");
+  const history = readFileSync(resolve("src/pages/InvestigationHistoryPage.tsx"), "utf8");
+  assert.match(chat, /export function AnalysisChatTranscript/);
+  assert.match(chat, /<AnalysisChatHistory jobID=/);
+  assert.match(history, /<AnalysisChatTranscript session=\{session\}/);
+  assert.match(history, /auth\.status !== "authenticated"/);
+  assert.match(history, /!features\.analysis_chat/);
+  assert.doesNotMatch(history, /streamAnalysisChatMessage|createAnalysisChatSession/);
+  assert.doesNotMatch(chat, /await deleteAnalysisChatSession/);
 });

@@ -7,6 +7,8 @@ const pageRoutes = [
   { path: "/pull-requests", title: "Pull Requests" },
   { path: "/pull-requests/:number", title: "Pull request checks" },
   { path: "/analysis-health", title: "Analysis Health" },
+  { path: "/investigations", title: "Investigation history" },
+  { path: "/investigations/:sessionID", title: "Saved conversation" },
   { path: "/ai-usage", title: "AI Usage" },
   { path: "/job/:jobName", title: "Job details" },
   { path: "/job/:jobName/test/:testName", title: "Test details" },

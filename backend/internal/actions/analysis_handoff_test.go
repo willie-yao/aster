@@ -47,7 +47,7 @@ func (handoffChatRunner) Reply(context.Context, analysischat.Turn) (analysischat
 func capturedHandoff(t *testing.T, service *Service, now func() time.Time) (*analysischat.Service, AnalysisFixInput) {
 	t.Helper()
 	chat, err := analysischat.NewService(t.Context(), service.dataDir, handoffChatRunner{}, analysischat.Options{
-		StateDir: filepath.Join(service.dataDir, ".chat"), SessionTTL: time.Minute, Now: now,
+		StateDir: filepath.Join(service.dataDir, ".chat"), SessionTTL: time.Minute, HistoryRetention: time.Minute, Now: now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func installHandoffTestGenerator(t *testing.T, service *Service, calls *atomic.I
 }
 
 func TestActionOwnedHandoffSurvivesChatLifecycle(t *testing.T) {
-	for _, lifecycle := range []string{"delete-after-capture", "delete-pending", "expire-pending"} {
+	for _, lifecycle := range []string{"delete-after-capture", "delete-pending", "expire-pending", "archive-pending"} {
 		t.Run(lifecycle, func(t *testing.T) {
 			service, _ := analysisRequestTestService(t)
 			var clock atomic.Int64
@@ -154,8 +154,17 @@ func TestActionOwnedHandoffSurvivesChatLifecycle(t *testing.T) {
 				}
 			case "expire-pending":
 				clock.Add(120)
+			case "archive-pending":
+				if err := chat.Archive(input.ChatSessionID, "bob"); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if _, err := chat.Get(input.ChatSessionID, "alice"); !errors.Is(err, analysischat.ErrSessionNotFound) {
+			chatView, err := chat.Get(input.ChatSessionID, "alice")
+			if lifecycle == "archive-pending" {
+				if err != nil || !chatView.Archived || !chatView.ReadOnly {
+					t.Fatalf("archived chat = %+v, %v", chatView, err)
+				}
+			} else if !errors.Is(err, analysischat.ErrSessionNotFound) {
 				t.Fatalf("chat error = %v", err)
 			}
 			close(release)

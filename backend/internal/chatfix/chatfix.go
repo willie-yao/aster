@@ -15,6 +15,7 @@ import (
 type chatStore interface {
 	FixCandidate(sessionID, owner, requestID, patternID, patternHash string) (analysischat.FixCandidate, error)
 	AnalysisFixCandidate(sessionID, owner, requestID string) (analysischat.FixCandidate, error)
+	RetainForFix(sessionID, owner, requestID string) error
 }
 
 type fixPreviewer interface {
@@ -105,6 +106,9 @@ func (s *Service) CreateAnalysisFixRequest(
 	}
 	candidate, err := s.chat.AnalysisFixCandidate(sessionID, owner, requestID)
 	if err != nil {
+		return actions.ActionRequestView{}, err
+	}
+	if err := s.chat.RetainForFix(sessionID, owner, requestID); err != nil {
 		return actions.ActionRequestView{}, err
 	}
 	return s.requests.CreateAnalysisFixRequest(ctx, exactAnalysisFixInput(candidate, instruction), owner, userToken, instruction, replacesRequestIDs...)
