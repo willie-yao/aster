@@ -68,6 +68,7 @@ backend/                         Go 1.26
       critique.go                Deterministic judge that gates drafts
       compose.go                 BasePrompt + consumer system.md + ResponseFormatFooter
       cache.go / cache_acceptance.go  On-disk cache and its acceptance floors
+      transport/                 Provider messages, tool schemas, HTTP codecs, retries, model discovery
       evidenceplan/              Ranked evidence planning + deterministic repair
       tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})

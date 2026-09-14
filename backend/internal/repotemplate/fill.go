@@ -13,11 +13,12 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/actiondraft"
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // Completer is the subset of the AI client this package needs.
 type Completer interface {
-	CompleteStructured(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) error
+	CompleteStructured(ctx context.Context, system, user string, format transport.ResponseFormat, validate ai.StructuredValidator) error
 }
 
 // fillTimeout bounds the optional reformat call so a slow or hung template fill
@@ -111,8 +112,8 @@ func FillIssue(ctx context.Context, c Completer, templates []Template, title, bo
 	return result.Title, result.Body
 }
 
-func bodyResponseFormat(name string) ai.ResponseFormat {
-	return ai.ResponseFormat{Name: name, Description: "Return the validated GitHub markdown body.", Schema: map[string]any{
+func bodyResponseFormat(name string) transport.ResponseFormat {
+	return transport.ResponseFormat{Name: name, Description: "Return the validated GitHub markdown body.", Schema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"body": map[string]any{"type": "string"},
@@ -121,8 +122,8 @@ func bodyResponseFormat(name string) ai.ResponseFormat {
 	}}
 }
 
-func issueResponseFormat() ai.ResponseFormat {
-	return ai.ResponseFormat{Name: "format_issue", Description: "Return the validated issue title and GitHub markdown body.", Schema: map[string]any{
+func issueResponseFormat() transport.ResponseFormat {
+	return transport.ResponseFormat{Name: "format_issue", Description: "Return the validated issue title and GitHub markdown body.", Schema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{"type": "string"},

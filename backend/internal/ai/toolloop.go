@@ -7,14 +7,15 @@ import (
 	"os"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
-func appendToolsFreeAssistant(messages []modelMessage, msg modelMessage) []modelMessage {
+func appendToolsFreeAssistant(messages []transport.Message, msg transport.Message) []transport.Message {
 	if msg.Content == nil && len(msg.ProviderItems) == 0 {
 		return messages
 	}
-	return append(messages, modelMessage{Role: "assistant", Content: msg.Content, Phase: msg.Phase, ProviderItems: msg.ProviderItems})
+	return append(messages, transport.Message{Role: "assistant", Content: msg.Content, Phase: msg.Phase, ProviderItems: msg.ProviderItems})
 }
 
 // dispatchToolCall runs one registry tool under the given byte limits and
@@ -24,7 +25,7 @@ func dispatchToolCall(
 	ctx context.Context,
 	reg *tools.Registry,
 	env *tools.Env,
-	tc modelToolCall,
+	tc transport.ToolCall,
 	modelLimit, gcsLimit int,
 ) tools.Result {
 	env.RemainingModelBytes = modelLimit
@@ -42,7 +43,7 @@ func dispatchToolCall(
 
 // traceToolCall logs one dispatch when AGENTIC_TRACE_TOOLS is set, so
 // production logs stay clean by default.
-func traceToolCall(tc modelToolCall, bytesFetched int, failed bool) {
+func traceToolCall(tc transport.ToolCall, bytesFetched int, failed bool) {
 	if os.Getenv("AGENTIC_TRACE_TOOLS") == "" {
 		return
 	}

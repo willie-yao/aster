@@ -11,26 +11,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 type scriptedTransportResult struct {
-	response *modelResponse
+	response *transport.Response
 	err      error
 }
 
 type scriptedTransport struct {
-	requests []modelRequest
+	requests []transport.Request
 	results  []scriptedTransportResult
 }
 
-func (t *scriptedTransport) Complete(_ context.Context, request modelRequest) (*modelResponse, error) {
+func (t *scriptedTransport) Complete(_ context.Context, request transport.Request) (*transport.Response, error) {
 	t.requests = append(t.requests, request)
 	result := t.results[len(t.requests)-1]
 	return result.response, result.err
 }
 
-func structuredBodyFormat() ResponseFormat {
-	return ResponseFormat{Name: "return_body", Description: "Return a body.", Schema: map[string]any{
+func structuredBodyFormat() transport.ResponseFormat {
+	return transport.ResponseFormat{Name: "return_body", Description: "Return a body.", Schema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"body": map[string]any{"type": "string"},
@@ -55,54 +57,54 @@ func bodyValidator(want string) StructuredValidator {
 }
 
 func TestCompleteStructuredFallsBackToForcedTool(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{HasMessage: true, Message: modelMessage{Content: strPtr(`{"body":"unsafe"}`)}}},
-		{response: &modelResponse{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"unsafe"}`)}}},
+		{response: &transport.Response{
 			HasMessage: true,
-			Message: modelMessage{ToolCalls: []modelToolCall{{
-				ID: "call-1", Type: "function", Function: modelFunction{Name: "return_body", Arguments: `{"body":"safe"}`},
+			Message: transport.Message{ToolCalls: []transport.ToolCall{{
+				ID: "call-1", Type: "function", Function: transport.FunctionCall{Name: "return_body", Arguments: `{"body":"safe"}`},
 			}}},
 		}},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	if err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe")); err != nil {
 		t.Fatal(err)
 	}
-	if len(transport.requests) != 2 {
-		t.Fatalf("requests = %d, want 2", len(transport.requests))
+	if len(provider.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(provider.requests))
 	}
-	if transport.requests[0].ResponseFormat == nil || transport.requests[0].ToolChoice != nil || !transport.requests[0].OmitReasoning {
-		t.Fatalf("strict request = %+v", transport.requests[0])
+	if provider.requests[0].ResponseFormat == nil || provider.requests[0].ToolChoice != nil || !provider.requests[0].OmitReasoning {
+		t.Fatalf("strict request = %+v", provider.requests[0])
 	}
-	forced := transport.requests[1]
+	forced := provider.requests[1]
 	if forced.ToolChoice == nil || forced.ToolChoice.Name != "return_body" || len(forced.Tools) != 1 || !forced.Tools[0].Function.Strict {
 		t.Fatalf("forced request = %+v", forced)
 	}
 }
 
 func TestCompleteStructuredUsesBoundedExtractorFallback(t *testing.T) {
-	unsupported := newModelHTTPError("chat", 400, "unsupported", http.Header{})
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	unsupported := transport.NewHTTPError("chat", 400, "unsupported", http.Header{})
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{err: unsupported},
 		{err: unsupported},
-		{response: &modelResponse{HasMessage: true, Message: modelMessage{Content: strPtr("planning text\n{\"body\":\"safe\"}\n")}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr("planning text\n{\"body\":\"safe\"}\n")}}},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	if err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe")); err != nil {
 		t.Fatal(err)
 	}
-	if len(transport.requests) != 3 {
-		t.Fatalf("requests = %d, want 3", len(transport.requests))
+	if len(provider.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(provider.requests))
 	}
 }
 
 func TestCompleteStructuredRejectsConflictingCandidates(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{HasMessage: true, Message: modelMessage{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
-		{response: &modelResponse{HasMessage: true, Message: modelMessage{Content: strPtr("missing tool call")}}},
-		{response: &modelResponse{HasMessage: true, Message: modelMessage{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr("missing tool call")}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	validator := func(raw json.RawMessage) error {
 		var value struct {
 			Body string `json:"body"`
@@ -121,32 +123,12 @@ func TestValidateStructuredCandidatesRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
-func TestStructuredWireMappings(t *testing.T) {
-	format := structuredBodyFormat()
-	chatFormat := encodeChatResponseFormat(&format)
-	if chatFormat == nil || chatFormat.Type != "json_schema" || !chatFormat.JSONSchema.Strict || chatFormat.JSONSchema.Name != format.Name {
-		t.Fatalf("chat response format = %+v", chatFormat)
-	}
-	chatChoice := encodeChatToolChoice(&ToolChoice{Name: format.Name})
-	if chatChoice == nil || chatChoice.Type != "function" || chatChoice.Function.Name != format.Name {
-		t.Fatalf("chat tool choice = %+v", chatChoice)
-	}
-	responsesText := encodeResponsesText(&format)
-	if responsesText == nil || responsesText.Format.Type != "json_schema" || !responsesText.Format.Strict || responsesText.Format.Name != format.Name {
-		t.Fatalf("responses text format = %+v", responsesText)
-	}
-	responsesChoice := encodeResponsesToolChoice(&ToolChoice{Name: format.Name})
-	if responsesChoice == nil || responsesChoice.Type != "function" || responsesChoice.Name != format.Name {
-		t.Fatalf("responses tool choice = %+v", responsesChoice)
-	}
-}
-
 func TestSafeProviderErrorMetadataExcludesProviderBody(t *testing.T) {
 	const sentinel = "private provider body with model output"
 	headers := http.Header{}
 	headers.Set("Retry-After", "12")
 	headers.Set("X-GitHub-Request-Id", "request-123")
-	cause := newModelHTTPError("responses", 429, sentinel, headers)
+	cause := transport.NewHTTPError("responses", 429, sentinel, headers)
 	err := structuredFailureAt("provider request failed", "forced-function", cause)
 	metadata, ok := SafeProviderErrorMetadata(err)
 	if !ok {
@@ -166,7 +148,7 @@ func TestSafeProviderErrorMetadataRejectsUnsafeHeaders(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("Retry-After", "private response text")
 	headers.Set("X-Request-Id", "request with spaces and source text")
-	err := structuredFailureAt("provider request failed", "json-schema", newModelHTTPError("chat", 500, "body", headers))
+	err := structuredFailureAt("provider request failed", "json-schema", transport.NewHTTPError("chat", 500, "body", headers))
 	metadata, ok := SafeProviderErrorMetadata(err)
 	if !ok {
 		t.Fatal("structured attempt metadata was not available")
@@ -244,19 +226,19 @@ func codedBodyValidator(want, code string) StructuredValidator {
 	}
 }
 
-func structuredContent(content string) *modelResponse {
-	return &modelResponse{HasMessage: true, Attempts: 1, Message: modelMessage{Content: strPtr(content)}}
+func structuredContent(content string) *transport.Response {
+	return &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: strPtr(content)}}
 }
 
-func structuredFunction(name, arguments string) *modelResponse {
-	return &modelResponse{HasMessage: true, Attempts: 1, Message: modelMessage{ToolCalls: []modelToolCall{{
-		ID: "call-1", Type: "function", Function: modelFunction{Name: name, Arguments: arguments},
+func structuredFunction(name, arguments string) *transport.Response {
+	return &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{ToolCalls: []transport.ToolCall{{
+		ID: "call-1", Type: "function", Function: transport.FunctionCall{Name: name, Arguments: arguments},
 	}}}}
 }
 
 func TestCompleteStructuredResponseFormatSuccessMetadata(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{{response: structuredContent(`{"body":"safe"}`)}}}
-	client := &Client{model: "model", transport: transport}
+	provider := &scriptedTransport{results: []scriptedTransportResult{{response: structuredContent(`{"body":"safe"}`)}}}
+	client := &Client{model: "model", transport: provider}
 	ctx := WithStructuredCompletionPhase(t.Context(), "target_extraction_initial")
 	metadata, err := client.CompleteStructuredWithMetadata(ctx, "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "invalid_target_extraction"))
 	if err != nil {
@@ -272,12 +254,12 @@ func TestCompleteStructuredResponseFormatSuccessMetadata(t *testing.T) {
 }
 
 func TestCompleteStructuredProviderRejectionThenForcedFunctionSuccess(t *testing.T) {
-	unsupported := newModelHTTPError("responses", 400, "private provider body", http.Header{})
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: unsupported},
+	unsupported := transport.NewHTTPError("responses", 400, "private provider body", http.Header{})
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: unsupported},
 		{response: structuredFunction("return_body", `{"body":"safe"}`)},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "invalid_target_extraction"))
 	if err != nil {
 		t.Fatal(err)
@@ -288,11 +270,11 @@ func TestCompleteStructuredProviderRejectionThenForcedFunctionSuccess(t *testing
 }
 
 func TestCompleteStructuredValidatorRejectionThenForcedFunctionSuccess(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: structuredContent(`{"body":"wrong"}`)},
 		{response: structuredFunction("return_body", `{"body":"safe"}`)},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "candidate_kind"))
 	if err != nil {
 		t.Fatal(err)
@@ -304,12 +286,12 @@ func TestCompleteStructuredValidatorRejectionThenForcedFunctionSuccess(t *testin
 }
 
 func TestCompleteStructuredForcedFunctionNotReturned(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: structuredContent(`{"body":"wrong"}`)},
 		{response: structuredContent("not a function call")},
 		{response: structuredContent(`{"body":"safe"}`)},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "candidate_kind"))
 	if err != nil {
 		t.Fatal(err)
@@ -320,12 +302,12 @@ func TestCompleteStructuredForcedFunctionNotReturned(t *testing.T) {
 }
 
 func TestCompleteStructuredForcedFunctionArgumentsRejected(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: structuredContent(`{"body":"wrong"}`)},
 		{response: structuredFunction("return_body", `{"body":"still-wrong"}`)},
 		{response: structuredContent(`{"body":"safe"}`)},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "required_call_target"))
 	if err != nil {
 		t.Fatal(err)
@@ -337,13 +319,13 @@ func TestCompleteStructuredForcedFunctionArgumentsRejected(t *testing.T) {
 }
 
 func TestCompleteStructuredPlainFallbackAcceptedMetadata(t *testing.T) {
-	unsupported := newModelHTTPError("chat", 400, "unsupported", http.Header{})
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: unsupported},
-		{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: unsupported},
+	unsupported := transport.NewHTTPError("chat", 400, "unsupported", http.Header{})
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: unsupported},
+		{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: unsupported},
 		{response: structuredContent("text\n{\"body\":\"safe\"}\n")},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "decode"))
 	if err != nil {
 		t.Fatal(err)
@@ -355,12 +337,12 @@ func TestCompleteStructuredPlainFallbackAcceptedMetadata(t *testing.T) {
 }
 
 func TestCompleteStructuredAllAttemptsRejectedMetadata(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: structuredContent(`{"body":"wrong"}`)},
 		{response: structuredContent("missing function")},
 		{response: structuredContent("not json")},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), codedBodyValidator("safe", "invalid_version"))
 	if err == nil {
 		t.Fatal("all rejected attempts succeeded")
@@ -381,15 +363,15 @@ func TestCompleteStructuredProviderFailureOnEachAttemptPath(t *testing.T) {
 		path    StructuredAttemptPath
 		status  int
 	}{
-		{name: "response format", results: []scriptedTransportResult{{response: &modelResponse{Attempts: 1, HTTPStatus: 500}, err: newModelHTTPError("responses", 500, "body", http.Header{})}}, path: StructuredAttemptResponseFormat, status: 500},
+		{name: "response format", results: []scriptedTransportResult{{response: &transport.Response{Attempts: 1, HTTPStatus: 500}, err: transport.NewHTTPError("responses", 500, "body", http.Header{})}}, path: StructuredAttemptResponseFormat, status: 500},
 		{name: "forced function", results: []scriptedTransportResult{
-			{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: newModelHTTPError("responses", 400, "body", http.Header{})},
-			{response: &modelResponse{Attempts: 1, HTTPStatus: 500}, err: newModelHTTPError("responses", 500, "body", http.Header{})},
+			{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: transport.NewHTTPError("responses", 400, "body", http.Header{})},
+			{response: &transport.Response{Attempts: 1, HTTPStatus: 500}, err: transport.NewHTTPError("responses", 500, "body", http.Header{})},
 		}, path: StructuredAttemptForcedFunction, status: 500},
 		{name: "plain fallback", results: []scriptedTransportResult{
-			{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: newModelHTTPError("responses", 400, "body", http.Header{})},
-			{response: &modelResponse{Attempts: 1, HTTPStatus: 400}, err: newModelHTTPError("responses", 400, "body", http.Header{})},
-			{response: &modelResponse{Attempts: 1, HTTPStatus: 503}, err: newModelHTTPError("responses", 503, "body", http.Header{})},
+			{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: transport.NewHTTPError("responses", 400, "body", http.Header{})},
+			{response: &transport.Response{Attempts: 1, HTTPStatus: 400}, err: transport.NewHTTPError("responses", 400, "body", http.Header{})},
+			{response: &transport.Response{Attempts: 1, HTTPStatus: 503}, err: transport.NewHTTPError("responses", 503, "body", http.Header{})},
 		}, path: StructuredAttemptPlainFallback, status: 503},
 	}
 	for _, tt := range tests {
@@ -409,9 +391,9 @@ func TestCompleteStructuredProviderFailureOnEachAttemptPath(t *testing.T) {
 
 type contextTransport struct{}
 
-func (contextTransport) Complete(ctx context.Context, _ modelRequest) (*modelResponse, error) {
+func (contextTransport) Complete(ctx context.Context, _ transport.Request) (*transport.Response, error) {
 	<-ctx.Done()
-	return &modelResponse{Attempts: 1}, ctx.Err()
+	return &transport.Response{Attempts: 1}, ctx.Err()
 }
 
 func TestCompleteStructuredCancellationMetadata(t *testing.T) {
@@ -443,8 +425,8 @@ func TestCompleteStructuredDeadlineMetadata(t *testing.T) {
 }
 
 func TestCompleteStructuredRecordsContentFreeTraceEvent(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{{response: structuredContent(`{"body":"wrong"}`)}, {response: structuredFunction("return_body", `{"body":"safe"}`)}}}
-	client := &Client{model: "model", transport: transport}
+	provider := &scriptedTransport{results: []scriptedTransportResult{{response: structuredContent(`{"body":"wrong"}`)}, {response: structuredFunction("return_body", `{"body":"safe"}`)}}}
+	client := &Client{model: "model", transport: provider}
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "build", TestName: "test", APIMode: APIResponses})
 	ctx := withAnalysisTrace(WithStructuredCompletionPhase(t.Context(), "target_extraction_initial"), trace)
@@ -471,12 +453,12 @@ func TestCompleteStructuredRecordsContentFreeTraceEvent(t *testing.T) {
 }
 
 func TestCompleteStructuredEmptyResponseOutcome(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{HasMessage: true, Attempts: 1, Message: modelMessage{Content: strPtr(" ")}}},
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: strPtr(" ")}}},
 		{response: structuredContent("missing function")},
-		{response: &modelResponse{HasMessage: false, Attempts: 1}},
+		{response: &transport.Response{HasMessage: false, Attempts: 1}},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	metadata, err := client.CompleteStructuredWithMetadata(t.Context(), "system", "user", structuredBodyFormat(), bodyValidator("safe"))
 	if err == nil {
 		t.Fatal("empty responses succeeded")
@@ -487,12 +469,12 @@ func TestCompleteStructuredEmptyResponseOutcome(t *testing.T) {
 }
 
 func TestCompleteStructuredConflictingCandidatesAreNoCandidate(t *testing.T) {
-	transport := &scriptedTransport{results: []scriptedTransportResult{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: structuredContent(`{"body":"one"}{"body":"two"}`)},
 		{response: structuredContent("missing function")},
 		{response: structuredContent(`{"body":"one"}{"body":"two"}`)},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	validator := func(raw json.RawMessage) error {
 		var value struct {
 			Body string `json:"body"`
@@ -509,14 +491,14 @@ func TestCompleteStructuredConflictingCandidatesAreNoCandidate(t *testing.T) {
 }
 
 func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr("published context")},
 		{
 			Role: "assistant", Content: strPtr("checking"),
-			ToolCalls: []modelToolCall{{
+			ToolCalls: []transport.ToolCall{{
 				ID: "artifact-call", Type: "function",
-				Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
+				Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
 			}},
 			ProviderItems: []json.RawMessage{
 				json.RawMessage(`{"type":"reasoning","id":"reason-1","encrypted_content":"opaque-marker"}`),
@@ -525,20 +507,20 @@ func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
 		},
 		{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: strPtr(`{"content":"evidence"}`)},
 	}
-	transport := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &modelResponse{
+	provider := &scriptedTransport{results: []scriptedTransportResult{
+		{response: &transport.Response{
 			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 2,
-			Message: modelMessage{Content: strPtr(`{"body":"unsafe"}`)},
+			Message: transport.Message{Content: strPtr(`{"body":"unsafe"}`)},
 		}},
-		{response: &modelResponse{
+		{response: &transport.Response{
 			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 1,
-			Message: modelMessage{ToolCalls: []modelToolCall{{
+			Message: transport.Message{ToolCalls: []transport.ToolCall{{
 				ID: "final-call", Type: "function",
-				Function: modelFunction{Name: "return_body", Arguments: `{"body":"safe"}`},
+				Function: transport.FunctionCall{Name: "return_body", Arguments: `{"body":"safe"}`},
 			}}},
 		}},
 	}}
-	client := &Client{model: "model", transport: transport}
+	client := &Client{model: "model", transport: provider}
 	result, err := client.completeStructuredMessagesWithMetadata(
 		WithStructuredCompletionPhase(t.Context(), "analysis_chat_finalize"),
 		messages, structuredBodyFormat(), analysisChatMaxResponseBytes, true,
@@ -557,12 +539,12 @@ func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
 		result.Metadata.Attempts[1].Outcome != StructuredOutcomeAccepted {
 		t.Fatalf("attempt metadata = %+v", result.Metadata.Attempts)
 	}
-	for index, request := range transport.requests {
+	for index, request := range provider.requests {
 		if !reflect.DeepEqual(request.Messages, messages) {
 			t.Fatalf("request %d messages changed:\n got: %#v\nwant: %#v", index, request.Messages, messages)
 		}
 	}
-	forced := transport.requests[1]
+	forced := provider.requests[1]
 	if forced.ToolChoice == nil || forced.ToolChoice.Name != "return_body" || forced.ParallelToolCalls == nil || *forced.ParallelToolCalls || len(forced.Tools) != 1 || !forced.Tools[0].Function.Strict {
 		t.Fatalf("forced request = %+v", forced)
 	}
@@ -587,14 +569,14 @@ func TestCompleteStructuredMessagesPreservesChatAndResponsesWireHistory(t *testi
 			}))
 			defer server.Close()
 
-			messages := []modelMessage{
+			messages := []transport.Message{
 				{Role: "system", Content: strPtr("system-marker")},
 				{Role: "user", Content: strPtr("question-marker")},
 				{
 					Role: "assistant", Content: strPtr("assistant-marker"),
-					ToolCalls: []modelToolCall{{
+					ToolCalls: []transport.ToolCall{{
 						ID: "artifact-call", Type: "function",
-						Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
+						Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
 					}},
 					ProviderItems: []json.RawMessage{
 						json.RawMessage(`{"type":"reasoning","id":"reason-1","encrypted_content":"opaque-marker"}`),

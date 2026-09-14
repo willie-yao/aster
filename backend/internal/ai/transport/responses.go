@@ -1,4 +1,4 @@
-package ai
+package transport
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
@@ -38,7 +37,7 @@ type responsesRequest struct {
 }
 
 type responsesReasoning struct {
-	Effort ReasoningEffort `json:"effort"`
+	Effort modelprovider.ReasoningEffort `json:"effort"`
 }
 
 type responsesTextConfig struct {
@@ -90,7 +89,7 @@ type responsesOutputTokenDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-func responsesRequestFor(req modelRequest, serviceTier string) responsesRequest {
+func responsesRequestFor(req Request, serviceTier string) responsesRequest {
 	include := []string{"reasoning.encrypted_content"}
 	if req.OmitReasoning {
 		include = nil
@@ -117,9 +116,7 @@ type responsesOutputItem struct {
 	} `json:"content"`
 }
 
-func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
-	time.Sleep(callDelay)
-
+func (t *responsesTransport) Complete(ctx context.Context, req Request) (*Response, error) {
 	serviceTier := t.api.serviceTier
 	var resp *http.Response
 	var raw []byte
@@ -133,17 +130,17 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		responseRead = false
 		body, err := json.Marshal(responsesRequestFor(req, serviceTier))
 		if err != nil {
-			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("marshal request: %w", err)
+			return &Response{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("marshal request: %w", err)
 		}
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("build request: %w", err)
+			return &Response{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("build request: %w", err)
 		}
 		t.api.setRequestHeaders(httpReq)
 		wireRequestBytes += len(body)
 		resp, err = t.api.httpClient.Do(httpReq)
 		if err != nil {
-			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("post: %w", err)
+			return &Response{Attempts: attempts, WireRequestBytes: wireRequestBytes}, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode != http.StatusTooManyRequests {
 			break
@@ -165,11 +162,13 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		_ = resp.Body.Close()
 		if serviceTier == modelprovider.ServiceTierFlex && consecutiveFlexUnavailable >= 2 && attempt == 1 {
 			serviceTier = modelprovider.ServiceTierAuto
-			recordTrace(ctx, TraceEvent{Kind: "service_tier", Outcome: "fallback", Status: serviceTier})
+			if t.api.onServiceTierFallback != nil {
+				t.api.onServiceTierFallback(ctx, serviceTier)
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return &modelResponse{Attempts: attempts, WireRequestBytes: wireRequestBytes}, ctx.Err()
+			return &Response{Attempts: attempts, WireRequestBytes: wireRequestBytes}, ctx.Err()
 		case <-time.After(wait):
 		}
 	}
@@ -178,18 +177,18 @@ func (t *responsesTransport) Complete(ctx context.Context, req modelRequest) (*m
 		var err error
 		raw, err = readModelResponseBody(resp.Body, req.MaxResponseBytes)
 		if err != nil {
-			return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("read response: %w", err)
+			return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("read response: %w", err)
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, newModelHTTPError("responses", resp.StatusCode, string(raw), resp.Header)
+		return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, NewHTTPError("responses", resp.StatusCode, string(raw), resp.Header)
 	}
 	var wire responsesResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w", err)
+		return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode, WireRequestBytes: wireRequestBytes}, fmt.Errorf("decode response: %w", err)
 	}
 	if wire.Status != "completed" {
-		return &modelResponse{ResponseID: wire.ID, Status: wire.Status, ServiceTier: wire.ServiceTier, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q", wire.Status)
+		return &Response{ResponseID: wire.ID, Status: wire.Status, ServiceTier: wire.ServiceTier, Attempts: attempts, HTTPStatus: resp.StatusCode, Usage: responsesTokenUsage(wire.Usage), WireRequestBytes: wireRequestBytes}, fmt.Errorf("responses status %q", wire.Status)
 	}
 	out := decodeResponsesResponse(wire)
 	out.Attempts = attempts
@@ -203,7 +202,7 @@ func flexResourceUnavailable(raw []byte) bool {
 	return strings.Contains(text, "resource unavailable")
 }
 
-func encodeResponsesInput(messages []modelMessage) []any {
+func encodeResponsesInput(messages []Message) []any {
 	if messages == nil {
 		return nil
 	}
@@ -247,8 +246,9 @@ func encodeResponsesInput(messages []modelMessage) []any {
 	return items
 }
 
-func responsesAssistantMessagesFromProviderItems(items []json.RawMessage) []modelMessage {
-	var messages []modelMessage
+// ResponsesAssistantMessagesFromProviderItems decodes assistant text for compaction.
+func ResponsesAssistantMessagesFromProviderItems(items []json.RawMessage) []Message {
+	var messages []Message
 	for _, raw := range items {
 		var item struct {
 			Type    string          `json:"type"`
@@ -281,12 +281,13 @@ func responsesAssistantMessagesFromProviderItems(items []json.RawMessage) []mode
 		if text == "" {
 			continue
 		}
-		messages = append(messages, modelMessage{Role: "assistant", Content: strPtr(text), Phase: item.Phase})
+		messages = append(messages, Message{Role: "assistant", Content: &text, Phase: item.Phase})
 	}
 	return messages
 }
 
-func responsesPhaseFromProviderItems(items []json.RawMessage) string {
+// ResponsesPhaseFromProviderItems returns the last reported assistant phase.
+func ResponsesPhaseFromProviderItems(items []json.RawMessage) string {
 	for i := len(items) - 1; i >= 0; i-- {
 		var item responsesOutputItem
 		if json.Unmarshal(items[i], &item) == nil && item.Phase != "" {
@@ -296,7 +297,8 @@ func responsesPhaseFromProviderItems(items []json.RawMessage) string {
 	return ""
 }
 
-func responsesAssistantProviderItem(content, phase string) []json.RawMessage {
+// ResponsesAssistantProviderItem encodes assistant text for continuation.
+func ResponsesAssistantProviderItem(content, phase string) []json.RawMessage {
 	item := map[string]any{"role": "assistant", "content": content}
 	if phase != "" {
 		item["phase"] = phase
@@ -308,7 +310,7 @@ func responsesAssistantProviderItem(content, phase string) []json.RawMessage {
 	return []json.RawMessage{raw}
 }
 
-func encodeResponsesTools(schemas []tools.Schema) []responsesTool {
+func encodeResponsesTools(schemas []ToolSchema) []responsesTool {
 	if schemas == nil {
 		return nil
 	}
@@ -339,8 +341,8 @@ func responsesTokenUsage(usage *responsesUsage) aiusage.TokenUsage {
 	}
 }
 
-func decodeResponsesResponse(resp responsesResponse) *modelResponse {
-	message := modelMessage{Role: "assistant"}
+func decodeResponsesResponse(resp responsesResponse) *Response {
+	message := Message{Role: "assistant"}
 	var text string
 	for _, raw := range resp.Output {
 		message.ProviderItems = append(message.ProviderItems, append(json.RawMessage(nil), raw...))
@@ -353,9 +355,9 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		}
 		switch item.Type {
 		case "function_call":
-			message.ToolCalls = append(message.ToolCalls, modelToolCall{
+			message.ToolCalls = append(message.ToolCalls, ToolCall{
 				ID: item.CallID, Type: "function",
-				Function: modelFunction{Name: item.Name, Arguments: item.Arguments},
+				Function: FunctionCall{Name: item.Name, Arguments: item.Arguments},
 			})
 		case "message":
 			for _, content := range item.Content {
@@ -369,7 +371,7 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 		}
 	}
 	if text != "" {
-		message.Content = strPtr(text)
+		message.Content = &text
 	}
 	finish := resp.Status
 	if len(message.ToolCalls) > 0 {
@@ -377,14 +379,14 @@ func decodeResponsesResponse(resp responsesResponse) *modelResponse {
 	} else if finish == "completed" {
 		finish = "stop"
 	}
-	return &modelResponse{
+	return &Response{
 		Message: message, FinishReason: finish, ResponseID: resp.ID, Status: resp.Status, ServiceTier: resp.ServiceTier,
 		Usage:      responsesTokenUsage(resp.Usage),
 		HasMessage: len(resp.Output) > 0,
 	}
 }
 
-func encodeResponsesReasoning(effort ReasoningEffort) *responsesReasoning {
+func encodeResponsesReasoning(effort modelprovider.ReasoningEffort) *responsesReasoning {
 	if effort == "" {
 		return nil
 	}

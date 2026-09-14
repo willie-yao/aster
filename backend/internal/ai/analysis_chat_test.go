@@ -19,8 +19,10 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -565,7 +567,7 @@ func TestAnalysisChatResponseOmitsEmptyValidationDetail(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	recordAnalysisChatResponseFailure(
-		context.Background(), "tool_loop_request", 1, 1, &modelResponse{HTTPStatus: 500},
+		context.Background(), "tool_loop_request", 1, 1, &transport.Response{HTTPStatus: 500},
 		analysisChatParseStats{}, "provider_request",
 	)
 	if strings.Contains(logs.String(), "validation_detail") {
@@ -581,7 +583,7 @@ func TestAnalysisChatResponseOmitsStaleValidationDetail(t *testing.T) {
 	// A provider failure after a rejected candidate reports its own category
 	// while the earlier candidate's detail is still in stats.
 	recordAnalysisChatResponseFailure(
-		context.Background(), "finalize_request", 3, 3, &modelResponse{HTTPStatus: 200},
+		context.Background(), "finalize_request", 3, 3, &transport.Response{HTTPStatus: 200},
 		analysisChatParseStats{
 			Category:         analysisChatValidationContract,
 			ValidationDetail: "response requires answer and citations",
@@ -600,10 +602,10 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
 	ctx := withAnalysisTrace(context.Background(), trace)
-	recordAnalysisChatResponseFailure(ctx, "finalize_validation", 9, 11, &modelResponse{HTTPStatus: 200}, analysisChatParseStats{
+	recordAnalysisChatResponseFailure(ctx, "finalize_validation", 9, 11, &transport.Response{HTTPStatus: 200}, analysisChatParseStats{
 		CandidateCount: 4,
 	}, analysisChatValidationCitation)
-	recordAnalysisChatResponseFailure(ctx, "tool_loop_validation", 2, 2, &modelResponse{HTTPStatus: 200}, analysisChatParseStats{
+	recordAnalysisChatResponseFailure(ctx, "tool_loop_validation", 2, 2, &transport.Response{HTTPStatus: 200}, analysisChatParseStats{
 		CandidateCount: 2,
 	}, analysisChatValidationReference)
 	trace.Finish("error", analysischat.ErrResponseValidationFailed)
@@ -633,7 +635,7 @@ func TestAnalysisChatResponseTelemetryIsContentFree(t *testing.T) {
 	if got := modelResponseAttempts(nil); got != 0 {
 		t.Fatalf("nil response attempts = %d", got)
 	}
-	if got := modelResponseAttempts(&modelResponse{}); got != 1 {
+	if got := modelResponseAttempts(&transport.Response{}); got != 1 {
 		t.Fatalf("response without metadata attempts = %d", got)
 	}
 }
@@ -809,9 +811,9 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope := dispatchAgenticTool(t.Context(), state, modelToolCall{
+	envelope := dispatchAgenticTool(t.Context(), state, transport.ToolCall{
 		ID: "repo-read", Type: "function",
-		Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)},
+		Function: transport.FunctionCall{Name: "read_repo_file", Arguments: string(arguments)},
 	})
 	visible := modelVisibleToolPayload(envelope)
 	if visible == nil {
@@ -1178,7 +1180,7 @@ func TestAnalysisChatOptionsUseFallbackContextBudget(t *testing.T) {
 
 func TestAnalysisChatCitationLineValidation(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{}
-	recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+	recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
 	}}, map[string]interface{}{"matches": []interface{}{map[string]interface{}{
 		"line": float64(42), "context": []interface{}{"  41: before", "> 42: controller stopped", "  43: after"},
@@ -1516,15 +1518,15 @@ func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 
 func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T) {
 	toolContent := strings.Repeat("x", 12<<10)
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr("question")},
-		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1", Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{}`}}}},
+		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1", Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{}`}}}},
 		{Role: "tool", ToolCallID: "call-1", Content: &toolContent},
 	}
 	before := requestSizeEstimate(messages, 0)
 	budget := before + len(analysisChatFinalizePrompt)/2
-	complete := append(slices.Clone(messages), modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	complete := append(slices.Clone(messages), transport.Message{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
 	if requestSizeEstimate(complete, 0) <= budget {
 		t.Fatal("test setup did not cross the context budget")
 	}
@@ -1620,7 +1622,7 @@ func TestAnalysisChatEvidenceOverflowIsAtomicAndReportsRoom(t *testing.T) {
 	beforeBytes := evidence["build-log.txt"].Bytes
 	beforeSegments := len(evidence["build-log.txt"].Segments)
 
-	roomLeft, recorded := recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+	roomLeft, recorded := recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
 	}}, map[string]interface{}{"content": strings.Repeat("b", 100)}, budget)
 
@@ -1635,7 +1637,7 @@ func TestAnalysisChatEvidenceOverflowIsAtomicAndReportsRoom(t *testing.T) {
 		t.Fatalf("overflow mutated evidence: bytes=%d segments=%d", entry.Bytes, len(entry.Segments))
 	}
 	// A read that fits is still recorded, and reports the room it left.
-	roomLeft, recorded = recordAnalysisChatEvidence(evidence, modelToolCall{Function: modelFunction{
+	roomLeft, recorded = recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
 	}}, map[string]interface{}{"content": strings.Repeat("c", 40)}, budget)
 	if !recorded || roomLeft != budget-190 {
@@ -3105,7 +3107,7 @@ func TestRecordSourceContentKeepsCurrentEvidenceSeparateFromPrimaryGrounding(t *
 		sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 		readSourceFull: map[string]bool{},
 	}
-	call := modelToolCall{Function: modelFunction{
+	call := transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_repo_file", Arguments: `{"source_id":"current","path":"pkg/same.go"}`,
 	}}
 	payload := map[string]interface{}{

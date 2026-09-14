@@ -9,6 +9,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -235,7 +236,7 @@ func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
 		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
 	})
 	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
-	state.recordSourceContent(modelToolCall{Function: modelFunction{Name: "grep_repo", Arguments: `{"source_id":"primary"}`}}, map[string]interface{}{
+	state.recordSourceContent(transport.ToolCall{Function: transport.FunctionCall{Name: "grep_repo", Arguments: `{"source_id":"primary"}`}}, map[string]interface{}{
 		"source_id": tools.PrimarySourceID,
 		"matches": []interface{}{map[string]interface{}{
 			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
@@ -259,7 +260,7 @@ func TestRecordSourceContentMapsOnlyObservedCompleteReadLines(t *testing.T) {
 	byteEnd := strings.Index(content, "trailing")
 	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
 	state.recordSourceContent(
-		modelToolCall{Function: modelFunction{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
+		transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
 		map[string]interface{}{"source_id": tools.PrimarySourceID, "content": content, "length": len(content)},
 		repotree.ReadObservation{
 			SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 11,
@@ -294,7 +295,7 @@ func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
 		t.Fatalf("test did not exercise JSON UTF-8 replacement: raw=%d visible=%d", len(raw), len(visibleContent))
 	}
 	state.recordSourceContent(
-		modelToolCall{Function: modelFunction{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"path.go"}`}},
+		transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"path.go"}`}},
 		visible,
 		repotree.ReadObservation{
 			SourceID: tools.PrimarySourceID, Path: "path.go", LineStart: 2, LineEnd: 4,
@@ -450,7 +451,7 @@ func TestCappedToolPayloadCannotGroundHiddenEvidence(t *testing.T) {
 	}
 	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, payload))
 	evidence := map[string]*analysisChatEvidence{}
-	call := modelToolCall{Function: modelFunction{Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`}}
+	call := transport.ToolCall{Function: transport.FunctionCall{Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`}}
 	recordAnalysisChatEvidence(evidence, call, visible, analysisChatEvidenceFallbackMaxBytes)
 	if issue := evidenceCitationIssue(models.EvidenceCitation{Path: "build-log.txt", LineStart: 2494, LineEnd: 2494, Quote: "hidden evidence"}, evidence); issue == "" {
 		t.Fatal("hidden capped evidence was accepted")

@@ -133,11 +133,14 @@ The analyzer publishes evidence and diagnosis. Other packages consume that outpu
 
 ## Contributor map
 
+`ai/transport` owns the provider-neutral messages and tool schemas, HTTP adapters, and model probe. Both `ai` and `ai/tools` depend on it; transport does not depend on the tool registry or analysis policy. `ai.Client` retains configuration validation, throttling, structured fallback orchestration, tracing, and usage accounting.
+
 | Change | Start here |
 | --- | --- |
 | Fetcher entry and runtime wiring | `backend/internal/fetcher/analysis.go`, `backend/internal/analysisruntime/runtime.go` |
 | Per-failure contract | `backend/internal/ai/runner.go`, `backend/internal/ai/service.go` |
-| Provider wire format | `backend/internal/ai/transport.go`, `backend/internal/ai/transport_chat.go`, `backend/internal/ai/transport_responses.go` |
+| Provider messages, tool schemas, HTTP codecs, retries, and model discovery | `backend/internal/ai/transport/` |
+| Provider configuration validation, throttling, trace enrichment, and usage accounting | `backend/internal/ai/ai.go`, `backend/internal/ai/transport.go` |
 | Authoritative provider loop and finalization | `backend/internal/ai/agent_loop.go`, `backend/internal/ai/agentic.go`, `backend/internal/ai/finalization.go` |
 | Context and agentic tool execution | `backend/internal/ai/context.go`, `backend/internal/ai/tool_execution.go`, `backend/internal/ai/tools/` |
 | Shared downstream tool and structured execution | `backend/internal/ai/toolloopcore.go`, `backend/internal/ai/structured.go` |

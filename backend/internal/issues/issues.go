@@ -19,6 +19,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/actiondraft"
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -203,7 +204,7 @@ var ErrRevisionRejected = errors.New("issue revision rejected")
 
 // Completer runs a schema-bound model completion.
 type Completer interface {
-	CompleteStructured(ctx context.Context, system, user string, format ai.ResponseFormat, validate ai.StructuredValidator) error
+	CompleteStructured(ctx context.Context, system, user string, format transport.ResponseFormat, validate ai.StructuredValidator) error
 }
 
 // ReviseBody asks the completer to revise a rendered issue's body per a
@@ -219,7 +220,7 @@ func ReviseBody(ctx context.Context, c Completer, spec IssueSpec, instruction st
 	const sys = "You revise the body of a GitHub issue to satisfy a maintainer's instruction. Return one JSON object with a single body field containing the revised GitHub-flavored markdown. Do not add commentary or code fences outside the JSON object, echo instructions, or invent facts."
 	user := "Maintainer instruction: " + instruction + "\n\nCurrent issue body:\n" + bodyNoMarker
 	var revised string
-	format := ai.ResponseFormat{Name: "revise_issue", Description: "Return the validated revised issue body.", Schema: map[string]any{
+	format := transport.ResponseFormat{Name: "revise_issue", Description: "Return the validated revised issue body.", Schema: map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"body": map[string]any{"type": "string"},

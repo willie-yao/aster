@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // Register adds every k8s tool to the registry. Tools are keyed in the
@@ -58,10 +59,10 @@ type discoverClustersTool struct{}
 
 func (*discoverClustersTool) Name() string  { return "discover_clusters" }
 func (*discoverClustersTool) Group() string { return Group }
-func (*discoverClustersTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*discoverClustersTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "discover_clusters",
 			Description: "List workload Kubernetes clusters whose debug artifacts were captured under artifacts/clusters/ for this build. Excludes the management ('bootstrap') cluster. Returns an empty list if the build did not capture per-cluster artifacts.",
 			Parameters: map[string]interface{}{
@@ -96,10 +97,10 @@ type findMyClusterTool struct{}
 
 func (*findMyClusterTool) Name() string  { return "find_my_cluster" }
 func (*findMyClusterTool) Group() string { return Group }
-func (*findMyClusterTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*findMyClusterTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "find_my_cluster",
 			Description: "Resolve which workload cluster a failed test most likely ran against. Uses provider-agnostic flavor-substring matching (cluster dir name minus random ID appears in normalized test name) with a CAPZ keyword-rules fallback. Returns the chosen cluster plus reason and the full candidate list so you can override.",
 			Parameters: map[string]interface{}{
@@ -170,10 +171,10 @@ type listMachinesTool struct{}
 
 func (*listMachinesTool) Name() string  { return "list_cluster_machines" }
 func (*listMachinesTool) Group() string { return Group }
-func (*listMachinesTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*listMachinesTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "list_cluster_machines",
 			Description: "List the per-machine (per-VM/node) debug directories under a discovered cluster. Returns machine names and their dir paths; use list_machine_logs to see which log files each machine has.",
 			Parameters: map[string]interface{}{
@@ -220,10 +221,10 @@ type listMachineLogsTool struct{}
 
 func (*listMachineLogsTool) Name() string  { return "list_machine_logs" }
 func (*listMachineLogsTool) Group() string { return Group }
-func (*listMachineLogsTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*listMachineLogsTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "list_machine_logs",
 			Description: "List the known log files actually present in a machine's debug directory (boot.log, kubelet.log, journal.log, etc.). Use this resolver before tail_artifact/grep_artifact so you don't fetch missing files. Returns files in priority order.",
 			Parameters: map[string]interface{}{
@@ -271,10 +272,10 @@ type discoverControllersTool struct{}
 
 func (*discoverControllersTool) Name() string  { return "discover_controllers" }
 func (*discoverControllersTool) Group() string { return Group }
-func (*discoverControllersTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*discoverControllersTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "discover_controllers",
 			Description: "List management-cluster controller deployments captured under artifacts/clusters/bootstrap/logs/. Returns one entry per (namespace, deployment) pair. Pass a namespace to scope; omit for all namespaces.",
 			Parameters: map[string]interface{}{
@@ -336,10 +337,10 @@ type resolveControllerLogTool struct{}
 
 func (*resolveControllerLogTool) Name() string  { return "resolve_controller_log" }
 func (*resolveControllerLogTool) Group() string { return Group }
-func (*resolveControllerLogTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*resolveControllerLogTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "resolve_controller_log",
 			Description: "Find the concrete pod-level container-log path for a controller deployment. Returns the first pod (filtered by optional pod_name_regex) whose container_log file is present. Use the returned path with tail_artifact or grep_artifact.",
 			Parameters: map[string]interface{}{

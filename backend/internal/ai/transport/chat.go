@@ -1,4 +1,4 @@
-package ai
+package transport
 
 import (
 	"bytes"
@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
 
 type chatCompletionsTransport struct {
@@ -43,14 +43,14 @@ type chatCompletionsFunction struct {
 }
 
 type chatCompletionsRequest struct {
-	Model           string                   `json:"model"`
-	Messages        []chatCompletionsMessage `json:"messages"`
-	Tools           []tools.Schema           `json:"tools,omitempty"`
-	ResponseFormat  *chatResponseFormat      `json:"response_format,omitempty"`
-	ToolChoice      *chatToolChoice          `json:"tool_choice,omitempty"`
-	ReasoningEffort ReasoningEffort          `json:"reasoning_effort,omitempty"`
-	MaxTokens       int                      `json:"max_tokens,omitempty"`
-	PromptCacheKey  string                   `json:"prompt_cache_key,omitempty"`
+	Model           string                        `json:"model"`
+	Messages        []chatCompletionsMessage      `json:"messages"`
+	Tools           []ToolSchema                  `json:"tools,omitempty"`
+	ResponseFormat  *chatResponseFormat           `json:"response_format,omitempty"`
+	ToolChoice      *chatToolChoice               `json:"tool_choice,omitempty"`
+	ReasoningEffort modelprovider.ReasoningEffort `json:"reasoning_effort,omitempty"`
+	MaxTokens       int                           `json:"max_tokens,omitempty"`
+	PromptCacheKey  string                        `json:"prompt_cache_key,omitempty"`
 
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
@@ -105,9 +105,7 @@ type chatCompletionsChoice struct {
 	Message      chatCompletionsMessage `json:"message"`
 }
 
-func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelRequest) (*modelResponse, error) {
-	time.Sleep(callDelay)
-
+func (t *chatCompletionsTransport) Complete(ctx context.Context, req Request) (*Response, error) {
 	body, err := json.Marshal(chatCompletionsRequest{
 		Model:             req.Model,
 		Messages:          encodeChatMessages(req.Messages),
@@ -129,12 +127,12 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 		attempts = attempt + 1
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return &modelResponse{Attempts: attempts}, fmt.Errorf("build request: %w", err)
+			return &Response{Attempts: attempts}, fmt.Errorf("build request: %w", err)
 		}
 		t.api.setRequestHeaders(httpReq)
 		resp, err = t.api.httpClient.Do(httpReq)
 		if err != nil {
-			return &modelResponse{Attempts: attempts}, fmt.Errorf("post: %w", err)
+			return &Response{Attempts: attempts}, fmt.Errorf("post: %w", err)
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			if attempt == 2 {
@@ -144,7 +142,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 			_ = resp.Body.Close()
 			select {
 			case <-ctx.Done():
-				return &modelResponse{Attempts: attempts}, ctx.Err()
+				return &Response{Attempts: attempts}, ctx.Err()
 			case <-time.After(wait):
 			}
 			continue
@@ -154,14 +152,14 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 	defer resp.Body.Close()
 	raw, err := readModelResponseBody(resp.Body, req.MaxResponseBytes)
 	if err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
+		return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, newModelHTTPError("chat", resp.StatusCode, string(raw), resp.Header)
+		return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode}, NewHTTPError("chat", resp.StatusCode, string(raw), resp.Header)
 	}
 	var wire chatCompletionsResponse
 	if err := json.Unmarshal(raw, &wire); err != nil {
-		return &modelResponse{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w", err)
+		return &Response{Attempts: attempts, HTTPStatus: resp.StatusCode}, fmt.Errorf("decode response: %w", err)
 	}
 	out := decodeChatResponse(wire)
 	out.Attempts = attempts
@@ -169,7 +167,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req modelReques
 	return out, nil
 }
 
-func encodeChatMessages(messages []modelMessage) []chatCompletionsMessage {
+func encodeChatMessages(messages []Message) []chatCompletionsMessage {
 	if messages == nil {
 		return nil
 	}
@@ -186,7 +184,7 @@ func encodeChatMessages(messages []modelMessage) []chatCompletionsMessage {
 	return out
 }
 
-func encodeChatToolCalls(calls []modelToolCall) []chatCompletionsToolCall {
+func encodeChatToolCalls(calls []ToolCall) []chatCompletionsToolCall {
 	if calls == nil {
 		return nil
 	}
@@ -204,17 +202,17 @@ func encodeChatToolCalls(calls []modelToolCall) []chatCompletionsToolCall {
 	return out
 }
 
-func decodeChatResponse(resp chatCompletionsResponse) *modelResponse {
+func decodeChatResponse(resp chatCompletionsResponse) *Response {
 	if len(resp.Choices) == 0 {
-		return &modelResponse{ResponseID: resp.ID, Usage: chatTokenUsage(resp.Usage)}
+		return &Response{ResponseID: resp.ID, Usage: chatTokenUsage(resp.Usage)}
 	}
 	choice := resp.Choices[0]
-	return &modelResponse{
+	return &Response{
 		HasMessage:   true,
 		FinishReason: choice.FinishReason,
 		ResponseID:   resp.ID,
 		Usage:        chatTokenUsage(resp.Usage),
-		Message: modelMessage{
+		Message: Message{
 			Role:       choice.Message.Role,
 			Content:    choice.Message.Content,
 			Name:       choice.Message.Name,
@@ -266,16 +264,16 @@ func checkedWireTokenSum(values ...int) int {
 	return total
 }
 
-func decodeChatToolCalls(calls []chatCompletionsToolCall) []modelToolCall {
+func decodeChatToolCalls(calls []chatCompletionsToolCall) []ToolCall {
 	if calls == nil {
 		return nil
 	}
-	out := make([]modelToolCall, len(calls))
+	out := make([]ToolCall, len(calls))
 	for i, call := range calls {
-		out[i] = modelToolCall{
+		out[i] = ToolCall{
 			ID:   call.ID,
 			Type: call.Type,
-			Function: modelFunction{
+			Function: FunctionCall{
 				Name:      call.Function.Name,
 				Arguments: call.Function.Arguments,
 			},

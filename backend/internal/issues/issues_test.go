@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
@@ -519,7 +520,7 @@ type structuredCompleter struct {
 	err error
 }
 
-func (c structuredCompleter) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
+func (c structuredCompleter) CompleteStructured(_ context.Context, _, _ string, _ transport.ResponseFormat, validate ai.StructuredValidator) error {
 	if c.err != nil {
 		return c.err
 	}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/textutil"
@@ -299,7 +300,7 @@ func safePatternProviderError(err error) error {
 	if provider, ok := SafeProviderErrorMetadata(err); ok && provider.StatusCode != 0 {
 		return &PatternProviderError{StatusCode: provider.StatusCode}
 	}
-	var httpErr *modelHTTPError
+	var httpErr *transport.HTTPError
 	if errors.As(err, &httpErr) {
 		return &PatternProviderError{StatusCode: httpErr.StatusCode}
 	}
@@ -309,9 +310,9 @@ func safePatternProviderError(err error) error {
 // patternSystemPrompt is frozen from the promoted causal-group evaluation.
 const patternSystemPrompt = `You analyze failed builds of one CI job and return causal groups, not a product recurrence label. Put every failed build exactly once in one causal group or unclassified_builds. Group builds only when they share the same specific causal mechanism. Use singleton groups for failures whose individual cause is supported but does not repeat. Use unclassified_builds only when the evidence is insufficient to assign a cause. Recent passing runs are prevalence and lifecycle context and never group members. Root causes must be specific and non-empty. Call submit_causal_groups exactly once. Return no remediation, suggested fix, target, action, source-change, issue, or Fix PR field.`
 
-func patternResponseFormat() ResponseFormat {
+func patternResponseFormat() transport.ResponseFormat {
 	stringProperty := func() map[string]any { return map[string]any{"type": "string"} }
-	return ResponseFormat{
+	return transport.ResponseFormat{
 		Name:        "submit_causal_groups",
 		Description: "Submit causal groups only.",
 		Schema: map[string]any{

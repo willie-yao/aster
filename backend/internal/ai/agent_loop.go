@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 type agentLoopResult struct {
-	messages            []modelMessage
+	messages            []transport.Message
 	parsed              analysisResponse
 	finalContent        string
 	finalProviderItems  []json.RawMessage
@@ -23,7 +23,7 @@ type agentLoopResult struct {
 }
 
 // runAgenticLoop executes the bounded model and tool investigation and returns one parseable draft.
-func (c *Client) runAgenticLoop(ctx context.Context, state *agentState, messages []modelMessage, schemas []tools.Schema) (agentLoopResult, error) {
+func (c *Client) runAgenticLoop(ctx context.Context, state *agentState, messages []transport.Message, schemas []transport.ToolSchema) (agentLoopResult, error) {
 	var finalContent string
 	var finalProviderItems []json.RawMessage
 	// The raw GCS byte floor gets at most one retry after all other floors pass.
@@ -85,7 +85,7 @@ agentLoop:
 				outcome, unread := evidence.decide(state, coverage.UnmetGroups)
 				if outcome == evidenceGateNudge {
 					nudgeMessages := slices.Clone(messages)
-					nudgeMessages = append(nudgeMessages, modelMessage{Role: "user", Content: strPtr(formatEvidenceHeadroomNudge(unread))})
+					nudgeMessages = append(nudgeMessages, transport.Message{Role: "user", Content: strPtr(formatEvidenceHeadroomNudge(unread))})
 					if prepared, nudgeFits := prepareContextRequest(ctx, nudgeMessages, schemaBytes, headroom, "evidence_nudge"); nudgeFits {
 						messages = prepared
 						evidence.recordNudge(state)
@@ -99,14 +99,14 @@ agentLoop:
 			}
 		}
 		requestStart := time.Now()
-		resp, err := c.callModelRequest(ctx, modelRequest{
+		resp, err := c.callModelRequest(ctx, transport.Request{
 			Model: c.model, Messages: messages, Tools: schemas,
 			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
 		})
 		state.recentModelRequest = time.Since(requestStart)
 		if err != nil {
 			// Detect "tools not supported" on the first call only.
-			if iter == 0 && isToolsUnsupportedError(err) {
+			if iter == 0 && transport.IsToolsUnsupportedError(err) {
 				return agentLoopResult{}, fmt.Errorf("%w: %v", ErrToolsUnsupported, err)
 			}
 			// A retained parseable draft is better output than losing the whole
@@ -184,11 +184,11 @@ agentLoop:
 					progressed = true
 				}
 				if progressed {
-					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
+					echo := transport.Message{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
-					messages = append(messages, echo, modelMessage{
+					messages = append(messages, echo, transport.Message{
 						Role:    "user",
 						Content: strPtr(formatFloorsNudge(state, state.opts)),
 					})
@@ -250,11 +250,11 @@ agentLoop:
 					if candidateDraft != nil {
 						state.considerDraft(candidateDraft)
 					}
-					echo := modelMessage{Role: "assistant", ProviderItems: msg.ProviderItems}
+					echo := transport.Message{Role: "assistant", ProviderItems: msg.ProviderItems}
 					if msg.Content != nil {
 						echo.Content = msg.Content
 					}
-					messages = append(messages, echo, modelMessage{
+					messages = append(messages, echo, transport.Message{
 						Role:    "user",
 						Content: strPtr(formatEvidenceNudge(unread)),
 					})
@@ -319,7 +319,7 @@ agentLoop:
 		}
 
 		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
-		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
+		echo := transport.Message{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
@@ -330,7 +330,7 @@ agentLoop:
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(ctx, state, tc)
 			state.modelBytes += len(result)
-			messages = append(messages, modelMessage{
+			messages = append(messages, transport.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Content:    strPtr(result),

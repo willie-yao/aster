@@ -11,6 +11,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
@@ -20,13 +21,13 @@ import (
 const agenticToolBudget = 32 * 1024
 
 // dispatchAgenticTool routes one tool call and returns its model-bound envelope.
-func dispatchAgenticTool(ctx context.Context, s *agentState, tc modelToolCall) string {
+func dispatchAgenticTool(ctx context.Context, s *agentState, tc transport.ToolCall) string {
 	envelope, _ := dispatchAgenticToolWithPayload(ctx, s, tc)
 	return envelope
 }
 
 // dispatchAgenticToolWithPayload also returns the uncapped structured payload.
-func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc modelToolCall) (string, map[string]interface{}) {
+func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc transport.ToolCall) (string, map[string]interface{}) {
 	s.calls++
 	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
 		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
@@ -148,7 +149,7 @@ func grepCallObservation(observation any) *tools.GrepCallObservation {
 	return &value
 }
 
-func undispatchedGrepObservation(tc modelToolCall) *tools.GrepCallObservation {
+func undispatchedGrepObservation(tc transport.ToolCall) *tools.GrepCallObservation {
 	switch tc.Function.Name {
 	case "grep_artifact":
 		args := struct {
@@ -284,7 +285,7 @@ func emitSourceEvidenceObservations(observer SourceEvidenceObserver, tool string
 	}
 }
 
-func visibleRepoReadPaths(tc modelToolCall, payload map[string]interface{}) []string {
+func visibleRepoReadPaths(tc transport.ToolCall, payload map[string]interface{}) []string {
 	if payload == nil {
 		return nil
 	}
@@ -521,7 +522,7 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 	return casePath, NormalizeArtifactCitation(casePath)
 }
 
-func (s *agentState) recordSourceContent(tc modelToolCall, payload map[string]interface{}, observation any) bool {
+func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[string]interface{}, observation any) bool {
 	if payload == nil || s.sources == nil {
 		return false
 	}

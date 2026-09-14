@@ -155,6 +155,7 @@ HELM_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
     "backend/internal/ai/skills",
     "backend/internal/ai/tools",
+    "backend/internal/ai/transport",
     "backend/internal/agentsandbox",
     "backend/internal/artifacts",
     "backend/internal/fix/executor",
@@ -483,6 +484,11 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                         },
+        ),
+        (
+            "transport schema clean-room dependency",
+            ["backend/internal/ai/transport/types.go"],
+            {"backend", "benchmarks", "helm_static", "remote_fixer"},
         ),
         (
             "tools clean-room dependency",

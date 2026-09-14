@@ -2,30 +2,34 @@ package ai
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
-func sysAndTask() []modelMessage {
-	return []modelMessage{
+func sysAndTask() []transport.Message {
+	return []transport.Message{
 		{Role: "system", Content: strPtr("system prompt")},
 		{Role: "user", Content: strPtr("analyze this failure")},
 	}
 }
 
-func toolMsg(id string, n int) modelMessage {
-	return modelMessage{Role: "tool", ToolCallID: id, Content: strPtr(strings.Repeat("x", n))}
+func toolMsg(id string, n int) transport.Message {
+	return transport.Message{Role: "tool", ToolCallID: id, Content: strPtr(strings.Repeat("x", n))}
 }
 
-func asstToolCall(id, reasoning string) modelMessage {
-	return modelMessage{
+func asstToolCall(id, reasoning string) transport.Message {
+	return transport.Message{
 		Role:      "assistant",
 		Content:   strPtr(reasoning),
-		ToolCalls: []modelToolCall{{ID: id, Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"a"}`}}},
+		ToolCalls: []transport.ToolCall{{ID: id, Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"a"}`}}},
 	}
 }
 
-func conversation(numTools, toolSize int) []modelMessage {
+func conversation(numTools, toolSize int) []transport.Message {
 	msgs := sysAndTask()
 	for i := 0; i < numTools; i++ {
 		id := string(rune('a' + i))
@@ -34,7 +38,7 @@ func conversation(numTools, toolSize int) []modelMessage {
 	return msgs
 }
 
-func countStubbed(msgs []modelMessage) int {
+func countStubbed(msgs []transport.Message) int {
 	n := 0
 	for i := range msgs {
 		if isStubbed(msgs[i].Content) {
@@ -167,12 +171,12 @@ func TestRequestSizeEstimate_IncludesSchemaBytes(t *testing.T) {
 }
 
 func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
-	small := []modelMessage{{Role: "assistant"}}
-	large := []modelMessage{{Role: "assistant", ToolCalls: []modelToolCall{{ID: "c", Type: "function", Function: modelFunction{Name: "read", Arguments: "{}"}}}, ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
+	small := []transport.Message{{Role: "assistant"}}
+	large := []transport.Message{{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "c", Type: "function", Function: transport.FunctionCall{Name: "read", Arguments: "{}"}}}, ProviderItems: []json.RawMessage{json.RawMessage(strings.Repeat("x", 1024))}}}
 	if requestSizeEstimate(large, 0) < requestSizeEstimate(small, 0)+1024 {
 		t.Fatal("provider items were not counted")
 	}
-	duplicate := append([]modelMessage(nil), large...)
+	duplicate := append([]transport.Message(nil), large...)
 	duplicate[0].Content = strPtr(strings.Repeat("x", 1024))
 	if requestSizeEstimate(duplicate, 0) != requestSizeEstimate(large, 0) {
 		t.Fatal("assistant content was double-counted beside provider items")
@@ -184,9 +188,9 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 }
 
 func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
-		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
 		{Role: "tool", ToolCallID: "call-1", Content: strPtr(strings.Repeat("y", 1000))},
 		{Role: "user", Content: strPtr("continue")},
 	}
@@ -199,7 +203,7 @@ func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 }
 
 func TestCompactMessagesPreservesMultipleAssistantPhases(t *testing.T) {
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
 		{Role: "assistant", Content: strPtr("commentaryfinal"), ProviderItems: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"commentary"}]}`),
@@ -218,7 +222,7 @@ func TestCompactMessagesPreservesMultipleAssistantPhases(t *testing.T) {
 }
 
 func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
 		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","padding":"` + strings.Repeat("x", 2000) + `","content":[{"type":"output_text","text":"draft"}]}`)}},
 		{Role: "user", Content: strPtr("revise")},
@@ -230,7 +234,20 @@ func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
 	if len(got[2].ProviderItems) != 0 || got[2].Content == nil || *got[2].Content != "draft" || got[2].Phase != "analysis" {
 		t.Fatalf("tools-free Responses turn was not reduced to phased text: %+v", got[2])
 	}
-	item := encodeResponsesInput(got)[2].(map[string]any)
+	shrinkCallDelay(t)
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		writeReasoningTestFinal(w, APIResponses, "ok")
+	}))
+	defer server.Close()
+	client := NewClientWithOptions(Options{API: APIResponses, Endpoint: server.URL, Model: "m"})
+	if _, err := client.callModel(t.Context(), got, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	item := request["input"].([]any)[2].(map[string]any)
 	if item["phase"] != "analysis" {
 		t.Fatalf("replayed assistant phase = %#v", item)
 	}

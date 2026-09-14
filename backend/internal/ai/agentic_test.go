@@ -24,6 +24,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -547,29 +548,6 @@ func TestAgentic_BudgetExhaustedRejectsUnstructuredFallback(t *testing.T) {
 	summary, analysis, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, &fakeBrowser{}, opts), "agentic:test:fallback", "sys", "user")
 	if !errors.Is(err, ErrRejectedAnalysis) || summary != nil || analysis != nil {
 		t.Fatalf("result = summary:%+v analysis:%+v err:%v", summary, analysis, err)
-	}
-}
-
-func TestIsToolsUnsupportedError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"plain 500", fmt.Errorf("chat returned 500: server error"), false},
-		{"400 no tools msg", fmt.Errorf("chat returned 400: bad request"), false},
-		{"400 + tools", fmt.Errorf("chat returned 400: tools_choice not supported"), true},
-		{"400 + tools are unsupported", fmt.Errorf("chat returned 400: tools are not supported by this model"), true},
-		{"400 + function calling", fmt.Errorf("chat returned 400: function calling not supported"), true},
-		{"422 + function_call", fmt.Errorf("chat returned 422: function_call invalid"), true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isToolsUnsupportedError(tc.err); got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
-			}
-		})
 	}
 }
 
@@ -1155,8 +1133,8 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 				opts:                  AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000},
 				evidenceArtifactsFull: map[string]bool{},
 			}
-			dispatchAgenticTool(context.Background(), state, modelToolCall{
-				ID: "call", Type: "function", Function: modelFunction{Name: tc.tool, Arguments: string(arguments)},
+			dispatchAgenticTool(context.Background(), state, transport.ToolCall{
+				ID: "call", Type: "function", Function: transport.FunctionCall{Name: tc.tool, Arguments: string(arguments)},
 			})
 			path, _ := tc.args["path"].(string)
 			got := state.evidenceArtifactsFull[NormalizeArtifactCitation(path)]
@@ -2768,7 +2746,7 @@ required_evidence:
 }
 
 func TestLimitToolCalls(t *testing.T) {
-	three := []modelToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	three := []transport.ToolCall{{ID: "a"}, {ID: "b"}, {ID: "c"}}
 	t.Run("disabled passes through", func(t *testing.T) {
 		kept, dropped := limitToolCalls(three, false)
 		if len(kept) != 3 || dropped != 0 {
@@ -3316,11 +3294,6 @@ func TestChatClient_BoundedByContextNotFixedTimeout(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := newAgenticTestClient(t, srv.URL)
 
-	// The client must carry no fixed timeout; the context is the only bound.
-	if c.api.httpClient.Timeout != 0 {
-		t.Fatalf("chat client must have no fixed Timeout, got %v", c.api.httpClient.Timeout)
-	}
-
 	// Tight deadline (< server delay): the context must cancel the call.
 	tightCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -3636,8 +3609,8 @@ func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
 		registry: registry, enabledTools: []string{"list_artifacts"},
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000},
 	}
-	envelope, payload := dispatchAgenticToolWithPayload(context.Background(), state, modelToolCall{
-		ID: "call", Type: "function", Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`},
+	envelope, payload := dispatchAgenticToolWithPayload(context.Background(), state, transport.ToolCall{
+		ID: "call", Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`},
 	})
 	if _, ok := payload["error"]; !ok || !strings.Contains(envelope, "not enabled") {
 		t.Fatalf("disabled tool result: envelope=%q payload=%v", envelope, payload)
@@ -3850,8 +3823,8 @@ func TestTruncatedToolEnvelopeCreatesNoInvisibleEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope := dispatchAgenticTool(context.Background(), state, modelToolCall{
-		ID: "call", Type: "function", Function: modelFunction{Name: "grep_artifact", Arguments: string(arguments)},
+	envelope := dispatchAgenticTool(context.Background(), state, transport.ToolCall{
+		ID: "call", Type: "function", Function: transport.FunctionCall{Name: "grep_artifact", Arguments: string(arguments)},
 	})
 	if len(envelope) <= agenticToolBudget || modelVisibleToolPayload(envelope) != nil {
 		t.Fatalf("expected a truncated non-decodable envelope, length=%d", len(envelope))
@@ -3972,7 +3945,7 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
 	}
 	arguments, _ := json.Marshal(map[string]interface{}{"source_id": tools.PrimarySourceID, "path": "test/e2e/capi_test.go"})
-	dispatchAgenticTool(context.Background(), state, modelToolCall{ID: "repo", Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
+	dispatchAgenticTool(context.Background(), state, transport.ToolCall{ID: "repo", Type: "function", Function: transport.FunctionCall{Name: "read_repo_file", Arguments: string(arguments)}})
 	if state.gcsBytes != 0 {
 		t.Fatalf("repo bytes counted as GCS: %d", state.gcsBytes)
 	}
@@ -4467,7 +4440,7 @@ func TestRepoReadsObserveAllSourcesButOnlyPrimaryGroundsProjectPaths(t *testing.
 	}
 	call := func(sourceID string) {
 		arguments, _ := json.Marshal(map[string]interface{}{"source_id": sourceID, "path": "same.go"})
-		dispatchAgenticTool(context.Background(), state, modelToolCall{ID: sourceID, Type: "function", Function: modelFunction{Name: "read_repo_file", Arguments: string(arguments)}})
+		dispatchAgenticTool(context.Background(), state, transport.ToolCall{ID: sourceID, Type: "function", Function: transport.FunctionCall{Name: "read_repo_file", Arguments: string(arguments)}})
 	}
 	call("dependency")
 	if state.readSourceFull["same.go"] {

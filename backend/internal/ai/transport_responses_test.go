@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,125 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
+	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
-
-func TestResponsesTransportToolRoundTrip(t *testing.T) {
-	shrinkCallDelay(t)
-	var requests []map[string]any
-	responses := []string{
-		`{"id":"resp-1","status":"completed","usage":{"input_tokens":21,"output_tokens":8,"input_tokens_details":{"cached_tokens":5,"cache_write_tokens":2},"output_tokens_details":{"reasoning_tokens":3}},"output":[{"id":"rs-1","type":"reasoning","encrypted_content":"encrypted-state","summary":[]},{"type":"function_call","call_id":"call-1","name":"read_artifact","arguments":"{\"path\":\"log.txt\"}"}]}`,
-		`{"id":"resp-2","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`,
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
-		}
-		requests = append(requests, request)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(responses[len(requests)-1]))
-	}))
-	defer server.Close()
-	client := NewClientWithOptions(Options{API: APIResponses, Endpoint: server.URL, Model: "model", Token: "token"})
-	messages := []modelMessage{{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("inspect")}}
-	first, err := client.callModel(context.Background(), messages, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(first.Message.ToolCalls) != 1 || len(first.Message.ProviderItems) != 2 {
-		t.Fatalf("first response = %+v", first)
-	}
-	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || !first.Usage.CacheWriteInputTokensReported || first.Usage.CacheWriteInputTokens != 2 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 || first.WireRequestBytes == 0 {
-		t.Fatalf("first metadata = %+v", first)
-	}
-	messages = append(messages, first.Message, modelMessage{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})
-	second, err := client.callModel(context.Background(), messages, nil, nil)
-	if err != nil || second.Message.Content == nil || *second.Message.Content != "done" {
-		t.Fatalf("second response = %+v, err = %v", second, err)
-	}
-	include := requests[0]["include"].([]any)
-	if len(include) != 1 || include[0] != "reasoning.encrypted_content" {
-		t.Fatalf("include = %#v", include)
-	}
-	if store, ok := requests[0]["store"].(bool); !ok || store {
-		t.Fatalf("store = %#v, want false", requests[0]["store"])
-	}
-	if _, ok := requests[0]["service_tier"]; ok {
-		t.Fatalf("default request included service_tier: %#v", requests[0])
-	}
-	input := requests[1]["input"].([]any)
-	var reasoning, call, output bool
-	for _, raw := range input {
-		item := raw.(map[string]any)
-		switch item["type"] {
-		case "reasoning":
-			reasoning = item["encrypted_content"] == "encrypted-state"
-		case "function_call":
-			call = item["call_id"] == "call-1"
-		case "function_call_output":
-			output = item["call_id"] == "call-1"
-		}
-	}
-	if !reasoning || !call || !output {
-		t.Fatalf("second input missing continuation items: %#v", input)
-	}
-}
-
-func TestResponsesTokenUsageDistinguishesCacheWriteAbsentZeroAndPositive(t *testing.T) {
-	if got := responsesTokenUsage(nil); got.Reported {
-		t.Fatalf("absent usage = %+v", got)
-	}
-	if got := responsesTokenUsage(&responsesUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 || got.CacheWriteInputTokensReported {
-		t.Fatalf("absent cache write = %+v", got)
-	}
-	zero := 0
-	if got := responsesTokenUsage(&responsesUsage{InputTokensDetails: responsesInputTokenDetails{CacheWriteTokens: &zero}}); !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 0 {
-		t.Fatalf("explicit zero cache write = %+v", got)
-	}
-	positive := 7
-	if got := responsesTokenUsage(&responsesUsage{InputTokensDetails: responsesInputTokenDetails{CacheWriteTokens: &positive}}); !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 7 {
-		t.Fatalf("positive cache write = %+v", got)
-	}
-}
-
-func TestResponsesAssistantPhaseRoundTrip(t *testing.T) {
-	response := responsesResponse{
-		ID: "response", Status: "completed",
-		Output: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","content":[{"type":"output_text","text":"draft"}]}`)},
-	}
-	decoded := decodeResponsesResponse(response)
-	if decoded.Message.Phase != "analysis" || decoded.Message.Content == nil || *decoded.Message.Content != "draft" {
-		t.Fatalf("decoded message = %+v", decoded.Message)
-	}
-	decoded.Message.ProviderItems = nil
-	input := encodeResponsesInput([]modelMessage{decoded.Message})
-	item := input[0].(map[string]any)
-	if item["phase"] != "analysis" {
-		t.Fatalf("encoded assistant = %#v", item)
-	}
-}
-
-func TestResponsesTransportFlattensTools(t *testing.T) {
-	schemas := []tools.Schema{{Type: "function", Function: tools.FunctionDecl{Name: "read", Description: "read", Parameters: map[string]any{"type": "object"}}}}
-	got := encodeResponsesTools(schemas)
-	if len(got) != 1 || got[0].Name != "read" || got[0].Type != "function" || got[0].Strict {
-		t.Fatalf("tools = %+v", got)
-	}
-}
-
-func TestResponsesTransportRejectsIncomplete(t *testing.T) {
-	shrinkCallDelay(t)
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"r","status":"incomplete","output":[{"type":"function_call","call_id":"c","name":"read","arguments":"{}"}]}`))
-	}))
-	defer s.Close()
-	c := NewClientWithOptions(Options{API: APIResponses, Endpoint: s.URL, Model: "m"})
-	if _, err := c.callModel(context.Background(), nil, nil, nil); err == nil || !strings.Contains(err.Error(), "incomplete") {
-		t.Fatalf("error = %v", err)
-	}
-}
 
 func TestResponsesTraceRecordsRetryCount(t *testing.T) {
 	shrinkCallDelay(t)
@@ -182,10 +68,12 @@ func TestResponsesFlexFallsBackToAutoAndTracesEchoedTier(t *testing.T) {
 	}))
 	defer server.Close()
 
-	api := newHTTPAPIClient(server.URL, "", nil)
-	api.serviceTier = modelprovider.ServiceTierFlex
+	api := transport.NewClient(
+		modelprovider.Config{API: APIResponses, Endpoint: server.URL, Model: "m"},
+		"", nil, modelprovider.ServiceTierFlex, recordServiceTierFallback,
+	)
 	client := &Client{
-		api: api, transport: newResponsesTransport(api), apiMode: APIResponses,
+		api: api, transport: throttledTransport{api}, apiMode: APIResponses,
 		model: "m", serviceTier: modelprovider.ServiceTierFlex, cache: NewCache(t.TempDir()),
 	}
 	store := NewTraceStore()
@@ -202,56 +90,92 @@ func TestResponsesFlexFallsBackToAutoAndTracesEchoedTier(t *testing.T) {
 	if want := []string{modelprovider.ServiceTierFlex, modelprovider.ServiceTierFlex, modelprovider.ServiceTierAuto}; !slices.Equal(tiers, want) {
 		t.Fatalf("tiers = %v, want %v", tiers, want)
 	}
-	var sawFallback, sawEcho bool
-	for _, event := range store.Snapshot().Traces[0].Events {
-		if event.Kind == "service_tier" && event.Outcome == "fallback" && event.Status == modelprovider.ServiceTierAuto {
-			sawFallback = true
-		}
-		if event.Kind == "model_request" && event.ServiceTier == modelprovider.ServiceTierAuto {
-			sawEcho = true
-		}
-	}
-	if !sawFallback || !sawEcho {
-		t.Fatalf("trace = %+v", store.Snapshot().Traces[0].Events)
+	events := store.Snapshot().Traces[0].Events
+	if len(events) != 2 || events[0].Kind != "service_tier" || events[0].Outcome != "fallback" ||
+		events[0].Status != modelprovider.ServiceTierAuto || events[1].Kind != "model_request" ||
+		events[1].ServiceTier != modelprovider.ServiceTierAuto {
+		t.Fatalf("trace = %+v", events)
 	}
 }
 
-func TestResponsesFlexRequiresConsecutiveCapacityResponses(t *testing.T) {
+func TestResponsesFlexFallbackTracesFailedAndCancelledRetries(t *testing.T) {
 	shrinkCallDelay(t)
-	for _, tc := range []struct {
-		name   string
-		bodies []string
-	}{
-		{name: "capacity then rate limit", bodies: []string{"Resource unavailable, try again later", "rate limited"}},
-		{name: "rate limit then capacity", bodies: []string{"rate limited", "Resource unavailable, try again later"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		name := "provider failure"
+		if cancelled {
+			name = "cancelled before retry"
+		}
+		t.Run(name, func(t *testing.T) {
 			var tiers []string
-			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-					t.Fatal(err)
+					t.Error(err)
 				}
 				tiers = append(tiers, request["service_tier"].(string))
-				if calls < len(tc.bodies) {
+				if len(tiers) <= 2 {
 					w.Header().Set("Retry-After", "0")
-					w.WriteHeader(http.StatusTooManyRequests)
-					_, _ = w.Write([]byte(tc.bodies[calls]))
-					calls++
+					if cancelled && len(tiers) == 2 {
+						w.Header().Set("Retry-After", "60")
+					}
+					http.Error(w, "Resource unavailable", http.StatusTooManyRequests)
 					return
 				}
-				_, _ = w.Write([]byte(`{"id":"resp-flex","status":"completed","service_tier":"flex","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`))
+				http.Error(w, "private provider body", http.StatusServiceUnavailable)
 			}))
 			defer server.Close()
-			api := newHTTPAPIClient(server.URL, "", nil)
-			api.serviceTier = modelprovider.ServiceTierFlex
-			transport := newResponsesTransport(api)
-			if _, err := transport.Complete(context.Background(), modelRequest{Model: "m"}); err != nil {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			callbacks := 0
+			api := transport.NewClient(
+				modelprovider.Config{API: APIResponses, Endpoint: server.URL, Model: "m"},
+				"", nil, modelprovider.ServiceTierFlex,
+				func(ctx context.Context, tier string) {
+					callbacks++
+					recordServiceTierFallback(ctx, tier)
+					if cancelled {
+						cancel()
+					}
+				},
+			)
+			client := &Client{model: "m", apiMode: APIResponses, transport: throttledTransport{api}}
+			recorder, err := aiusage.NewRecorder("", aiusage.RecorderOptions{})
+			if err != nil {
 				t.Fatal(err)
 			}
-			if want := []string{modelprovider.ServiceTierFlex, modelprovider.ServiceTierFlex, modelprovider.ServiceTierFlex}; !slices.Equal(tiers, want) {
-				t.Fatalf("tiers = %v, want %v", tiers, want)
+			ctx, operation := aiusage.Begin(ctx, recorder, aiusage.Metadata{
+				LogicalID: "fallback", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis,
+			})
+			store := NewTraceStore()
+			trace := store.Start(TraceMetadata{JobID: "job", APIMode: APIResponses})
+			response, err := client.callModel(withAnalysisTrace(ctx, trace), nil, nil, nil)
+			if err == nil || callbacks != 1 {
+				t.Fatalf("error=%v callbacks=%d", err, callbacks)
+			}
+			wantAttempts, wantStatus, wantCode := 3, http.StatusServiceUnavailable, "http_error"
+			wantTiers := []string{modelprovider.ServiceTierFlex, modelprovider.ServiceTierFlex, modelprovider.ServiceTierAuto}
+			if cancelled {
+				wantAttempts, wantStatus, wantCode = 2, 0, "context_canceled"
+				wantTiers = wantTiers[:2]
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("error = %v, want context cancellation", err)
+				}
+			}
+			if response == nil || response.Attempts != wantAttempts || response.HTTPStatus != wantStatus ||
+				!slices.Equal(tiers, wantTiers) {
+				t.Fatalf("response=%+v tiers=%v", response, tiers)
+			}
+			trace.Finish("error", err)
+			operation.Finish(aiusage.OutcomeError)
+			events := store.Snapshot().Traces[0].Events
+			if len(events) != 2 || events[0].Kind != "service_tier" || events[0].Outcome != "fallback" ||
+				events[0].Status != modelprovider.ServiceTierAuto || events[1].Kind != "model_request" ||
+				events[1].Outcome != "error" || events[1].ErrorCode != wantCode || events[1].Attempts != wantAttempts {
+				t.Fatalf("trace = %+v", events)
+			}
+			totals := recorder.Snapshot().Days[0].Totals
+			if totals.ModelRequests != 1 || totals.UnreportedRequests != 1 || totals.Failures != 1 {
+				t.Fatalf("usage totals = %+v", totals)
 			}
 		})
 	}
