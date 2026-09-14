@@ -208,6 +208,7 @@ func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
 	for _, name := range []string{
 		"ANALYSIS_CHAT_STATE_DIR",
 		"ANALYSIS_CHAT_SESSION_TTL",
+		"ANALYSIS_CHAT_HISTORY_RETENTION",
 		"ANALYSIS_CHAT_MAX_SESSIONS",
 		"ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER",
 		"ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER",
@@ -219,7 +220,7 @@ func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.StateDir != filepath.Join("/data", ".analysis-chat") || opts.SessionTTL != 2*time.Hour ||
+	if opts.StateDir != filepath.Join("/data", ".analysis-chat") || opts.SessionTTL != 2*time.Hour || opts.HistoryRetention != 180*24*time.Hour ||
 		opts.MaxSessions != 128 || opts.MaxSessionsPerOwner != 8 || opts.TurnLeaseTTL != 90*time.Second ||
 		opts.TurnTimeout != time.Minute || opts.MaxActiveTurnsPerOwner != 2 || opts.MaxRequestsPerOwnerPerMinute != 10 {
 		t.Fatalf("default options = %+v", opts)
@@ -227,6 +228,7 @@ func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
 
 	t.Setenv("ANALYSIS_CHAT_STATE_DIR", "/state/chat")
 	t.Setenv("ANALYSIS_CHAT_SESSION_TTL", "45m")
+	t.Setenv("ANALYSIS_CHAT_HISTORY_RETENTION", "720h")
 	t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS", "24")
 	t.Setenv("ANALYSIS_CHAT_MAX_SESSIONS_PER_OWNER", "3")
 	t.Setenv("ANALYSIS_CHAT_MAX_ACTIVE_TURNS_PER_OWNER", "4")
@@ -235,7 +237,7 @@ func TestAnalysisChatServiceOptionsFromEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.StateDir != "/state/chat" || opts.SessionTTL != 45*time.Minute ||
+	if opts.StateDir != "/state/chat" || opts.SessionTTL != 45*time.Minute || opts.HistoryRetention != 720*time.Hour ||
 		opts.MaxSessions != 24 || opts.MaxSessionsPerOwner != 3 || opts.TurnLeaseTTL != time.Minute ||
 		opts.TurnTimeout != 30*time.Second || opts.MaxActiveTurnsPerOwner != 4 || opts.MaxRequestsPerOwnerPerMinute != 20 {
 		t.Fatalf("configured options = %+v", opts)
@@ -353,6 +355,17 @@ func TestFixActionsEnabledRequiresAgentSandbox(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := fixActionsEnabled(testCase.cfg); got != testCase.want {
 				t.Fatalf("enabled=%t want=%t", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatHistoryRetentionRejectsInvalidDuration(t *testing.T) {
+	for _, value := range []string{"0s", "-1h", "180d", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ANALYSIS_CHAT_HISTORY_RETENTION", value)
+			if _, err := analysisChatServiceOptionsFromEnv(t.TempDir(), time.Minute); err == nil {
+				t.Fatal("invalid history retention accepted")
 			}
 		})
 	}

@@ -21,8 +21,8 @@ test("exact JUnit chat fix requires only a completed answer on a structural targ
   assert.match(chat, /features\.junit_chat_fix/);
   assert.match(chat, /analysisRef\.source !== "build"/);
   assert.match(chat, /analysisRef\.junit_file/);
-  assert.match(chat, /completedFinding = Boolean\(message\.request_id && message\.content\.trim\(\)\)/);
-  assert.match(chat, /exactFixEligible = exactFixEnabled && completedFinding/);
+  assert.match(chat, /fixEligible=\{fixEligible && Boolean\(message\.request_id && message\.content\.trim\(\)\)/);
+  assert.match(chat, /fixEligible=\{exactFixEnabled \|\|/);
   assert.doesNotMatch(chat, /chatFixVerifiedCitationRequestIDs|chatFixVerifiedSourcePaths/);
   assert.doesNotMatch(chat, /hasArtifactEvidence|hasVerifiedSourcePaths|fixSourceUnavailable/);
 });
@@ -127,7 +127,8 @@ test("one chat serves questions and fix proposals with no separate mode", () => 
   assert.doesNotMatch(chat, /fixIntentMode|startFixInvestigation|returnToNormalChat/);
   assert.doesNotMatch(chat, /beginAnalysisChatFixInvestigation/);
   // A finding in the one conversation still opens a fix proposal.
-  assert.match(chat, /onUseForFix=\{\(\) => openFix\(message\)\}/);
+  assert.match(chat, /onUseForFix=\{openFix\}/);
+  assert.match(chat, /onUseForFix\?\.\(message\)/);
   assert.doesNotMatch(chat, /fixSourceUnavailable/);
 });
 

@@ -136,6 +136,7 @@ grep -A1 -F 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat.yaml" | grep -Fq 'value: "t
 grep -A1 -F 'strategy:' "$tmp/chat.yaml" | grep -Fq 'type: Recreate'
 test "$(grep -Fc 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml")" -eq 1
 grep -A1 -F 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml" | grep -Fq 'value: "10m"'
+grep -A1 -F 'name: ANALYSIS_CHAT_HISTORY_RETENTION' "$tmp/chat.yaml" | grep -Fq 'value: "4320h"'
 grep -A1 -F 'name: AUTH_MODE' "$tmp/chat.yaml" | grep -Fq 'value: "oauth"'
 if grep -Fq 'name: BOT_TOKEN' "$tmp/chat.yaml" || grep -Fq 'name: ACTIONS_ENABLED' "$tmp/chat.yaml"; then
   echo 'chat-only OAuth rendered write-action credentials' >&2

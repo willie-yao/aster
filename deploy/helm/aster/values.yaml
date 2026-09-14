@@ -268,7 +268,9 @@ server:
     enabled: false
     # Per-turn model timeout. The server accepts values up to 30m.
     timeout: 10m
+    # Idle sessions become read-only; operator history is retained separately.
     sessionTTL: 2h
+    historyRetention: 4320h
     maxSessions: 128
     maxSessionsPerOwner: 8
     maxActiveTurnsPerOwner: 2

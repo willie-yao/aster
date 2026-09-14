@@ -829,3 +829,74 @@ func TestHandlerPreparedFindingLookup(t *testing.T) {
 	}
 	_ = oversized.Body.Close()
 }
+
+func (f *fakeAnalysisChatRunner) List(query analysischat.HistoryQuery, owner string) (analysischat.HistoryPage, error) {
+	f.foundOwner = owner
+	f.foundRef = analysischat.AnalysisRef{JobID: query.JobID, Scope: query.Scope}
+	return analysischat.HistoryPage{Sessions: []analysischat.SessionSummary{}}, f.findErr
+}
+func (f *fakeAnalysisChatRunner) Archive(id, owner string) error {
+	f.deleteID, f.deleteOwner = id, owner
+	return f.deleteErr
+}
+
+func TestHandlerAnalysisChatHistoryAccess(t *testing.T) {
+	runner := &fakeAnalysisChatRunner{}
+	handler, err := Handler(Options{DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AnalysisChat: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, method, path, token, origin string
+		want                              int
+	}{
+		{"anonymous list", "GET", "/api/analysis-chat/sessions", "", "", http.StatusUnauthorized},
+		{"anonymous archive", "POST", "/api/analysis-chat/sessions/old/archive", "", "", http.StatusUnauthorized},
+		{"history list", "GET", "/api/analysis-chat/sessions?job_id=periodic-demo&scope=cause&limit=2", "ok", "", http.StatusOK},
+		{"invalid limit", "GET", "/api/analysis-chat/sessions?limit=101", "ok", "", http.StatusBadRequest},
+		{"archive", "POST", "/api/analysis-chat/sessions/old/archive", "ok", "", http.StatusNoContent},
+		{"cross origin archive", "POST", "/api/analysis-chat/sessions/old/archive", "ok", "https://evil.example", http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "https://dashboard.example"+tc.path, nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", tc.token)
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			out := httptest.NewRecorder()
+			handler.ServeHTTP(out, req)
+			if out.Code != tc.want {
+				t.Fatalf("status=%d body=%s", out.Code, out.Body.String())
+			}
+			if tc.want == http.StatusOK || tc.want == http.StatusNoContent {
+				if !strings.Contains(out.Header().Get("Cache-Control"), "no-store") {
+					t.Fatalf("private response headers: %v", out.Header())
+				}
+			}
+		})
+	}
+	if runner.foundOwner != "alice" || runner.foundRef.JobID != "periodic-demo" || runner.foundRef.Scope != "cause" || runner.deleteID != "old" || runner.deleteOwner != "alice" {
+		t.Fatalf("history runner: %+v", runner)
+	}
+}
+
+func TestHandlerAnalysisChatHistoryArchiveErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{{analysischat.ErrSessionBusy, http.StatusConflict}, {analysischat.ErrSessionNotFound, http.StatusNotFound}} {
+		handler, err := Handler(Options{DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev", AnalysisChat: &fakeAnalysisChatRunner{deleteErr: tc.err}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("POST", "https://dashboard.example/api/analysis-chat/sessions/old/archive", nil)
+		req.Header.Set("Authorization", "ok")
+		out := httptest.NewRecorder()
+		handler.ServeHTTP(out, req)
+		if out.Code != tc.want {
+			t.Fatalf("archive %v: %d %s", tc.err, out.Code, out.Body.String())
+		}
+	}
+}

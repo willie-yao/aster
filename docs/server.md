@@ -16,6 +16,8 @@ The server reads data written by the authoritative in-process fetcher or worker.
 | `GET /api/analysis-health/download` | Attachment form of the same filtered report. |
 | `GET /api/ai-usage` | Admin-only private usage report with optional date and feature filters. |
 | `GET /api/ai-usage/download` | Attachment form of the same usage report. |
+| `GET /api/analysis-chat/sessions` | List retained operator conversations, filtered by `job_id` and `scope`, with `cursor` pagination and `limit` from 1 to 100 (default 20). |
+| `POST /api/analysis-chat/sessions/{id}/archive` | Archive an idle conversation without deleting its transcript. |
 | `POST /api/analysis-chat/sessions` | Start or restore the shared chat for one current published analysis. |
 | `POST /api/analysis-chat/sessions/lookup` | Restore the shared non-expired conversation for one current analysis. |
 | `POST /api/analysis-chat/prepared/lookup` | Read-only batch check of which causes already have a prepared finding waiting, so a collapsed cause control can say so without opening a shared session. |
@@ -100,7 +102,13 @@ After each initial or reconciliation AI publication, the fetcher prepares up to 
 
 A proposed revision or Fix finding is still inert model output. Source compatibility, patch generation, and GitHub writes remain user-triggered. Exact-JUnit Fix handoff requires the separate lifecycle in [Fix PR generation](fix-prs.md#exact-junit-analysis-handoff).
 
-Sessions are stored in private shared state, have bounded admitted turns, and expire after inactivity. Fix requests retain their own bounded evidence snapshot, so deleting or expiring a conversation does not cancel an admitted Fix. Use the separate action cancellation endpoint to cancel a pending or ready proposal. The Helm chart uses a `Recreate` server rollout when chat is enabled so old and new binaries never write different chat-state schemas at the same time. Equivalent manual deployments must stop old server replicas before starting the new version. User questions and attempts retain the initiating operator for attribution. The state contains transcripts and selected failure context, so the RWX volume and backups are operator-private. Replicas require advisory locking, atomic rename, and file and directory synchronization.
+Sessions are stored in private shared state and have bounded admitted turns. After `server.chat.sessionTTL` of inactivity (default `2h`), a session becomes read-only and releases its live-session slot. Operator questions, failed attempts, and explicit Fix investigation requests retain their original conversations for `server.chat.historyRetention` (default `4320h`, or 180 days) after activity. Set `ANALYSIS_CHAT_HISTORY_RETENTION` for deployments without Helm. Reads, polling, and scheduled preparation do not extend retention. Prepared-only conversations keep the short session lifetime.
+
+**New conversation** archives the shared session and starts without its previous discussion. **Earlier conversations** and the authenticated **Investigation history** page keep saved findings accessible across analysis refreshes and publication-window changes. History is grouped by job and scope, not automatically matched to a durable cause. Its citations describe the original evidence, not newer runs. Explicit deletion remains available through the session API. Retained history does not consume live-session limits; the private store still rejects writes over its size limit without replacing existing history.
+
+The server upgrades version-4 chat state before cleanup, preserving session and request IDs, messages, and evidence. Retention is calculated from recorded operator activity rather than upgrade time. The one-time private `sessions.json.v4.bak` backup is operator-managed and is not pruned by history retention. Restoring it is required to roll back to a version-4 server and does not preserve conversations created after the upgrade. Already deleted conversations cannot be recovered.
+
+ Fix requests retain their own bounded evidence snapshot, so deleting or expiring a conversation does not cancel an admitted Fix. Use the separate action cancellation endpoint to cancel a pending or ready proposal. The Helm chart uses a `Recreate` server rollout when chat is enabled so old and new binaries never write different chat-state schemas at the same time. Equivalent manual deployments must stop old server replicas before starting the new version. User questions and attempts retain the initiating operator for attribution. The state contains transcripts and selected failure context, so the RWX volume and backups are operator-private. Replicas require advisory locking, atomic rename, and file and directory synchronization.
 
 ## Admin-gated actions
 

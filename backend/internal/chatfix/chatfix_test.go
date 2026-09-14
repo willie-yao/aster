@@ -17,6 +17,8 @@ import (
 type fakeChatStore struct {
 	candidate    analysischat.FixCandidate
 	candidateErr error
+	retainErr    error
+	retained     bool
 	onReturn     func()
 	sessionID    string
 	owner        string
@@ -358,5 +360,21 @@ func TestCreateAnalysisFixRequestReconnectsWithoutChat(t *testing.T) {
 	view, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "deleted", "Alice", "answer", "token", "")
 	if err != nil || view.ID != "admitted" || fixes.requestCalled || chat.sessionID != "" {
 		t.Fatalf("view=%+v err=%v chat=%+v", view, err, chat)
+	}
+}
+
+func (f *fakeChatStore) RetainForFix(_, _, _ string) error { f.retained = true; return f.retainErr }
+
+func TestCreateAnalysisFixRetainsSelectedFindingBeforeAdmission(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		chat := &fakeChatStore{candidate: analysischat.FixCandidate{SessionID: "session", RequestID: "finding", Analysis: analysischat.AnalysisRef{Scope: analysischat.ScopeTest}}}
+		if fail {
+			chat.retainErr = errors.New("history storage failed")
+		}
+		fixes := &fakeFixPreviewer{}
+		_, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "session", "alice", "finding", "token", "")
+		if !chat.retained || (fail && (!errors.Is(err, chat.retainErr) || fixes.requestCalled)) || (!fail && !fixes.requestCalled) {
+			t.Fatalf("retention: chat=%+v called=%v err=%v", chat, fixes.requestCalled, err)
+		}
 	}
 }

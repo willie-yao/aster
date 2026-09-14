@@ -585,8 +585,8 @@ func TestServiceBusySessionCompletesAcrossExpiry(t *testing.T) {
 		t.Fatalf("completed turn did not refresh session expiry: %v", err)
 	}
 	nowNanos.Store(start.Add(2 * time.Minute).UnixNano())
-	if _, err := service.Get(created.ID, "alice"); !errors.Is(err, ErrSessionNotFound) {
-		t.Fatalf("refreshed session was not evicted: %v", err)
+	if history, err := service.Get(created.ID, "alice"); err != nil || !history.ReadOnly {
+		t.Fatalf("expired session history = %+v, %v", history, err)
 	}
 	if _, err := service.Create(ref, "alice", testRequestID(t)); err != nil {
 		t.Fatalf("expired refreshed session did not release capacity: %v", err)
@@ -1208,14 +1208,21 @@ func TestServiceStreamReconnectsToPendingTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	firstCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	firstDone := make(chan error, 1)
 	go func() {
 		_, err := service.Stream(firstCtx, created.ID, "alice", "turn-stream", "question", nil)
 		firstDone <- err
 	}()
-	<-runner.started
+	select {
+	case <-runner.started:
+		cancel()
+	case err := <-firstDone:
+		t.Fatalf("turn was not admitted: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn did not start")
+	}
 	if err := <-firstDone; !errors.Is(err, ErrRequestPending) {
 		t.Fatalf("first stream error = %v", err)
 	}

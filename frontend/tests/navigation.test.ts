@@ -112,3 +112,10 @@ test("a revoked section is dropped without falsely activating another", () => {
   assert.equal(revoked.some((d) => d.id === "ai-usage"), false);
   assert.equal(revoked.filter((d) => d.active).length, 0);
 });
+
+
+test("history has its own operator control rather than selecting Overview", () => {
+  for (const pathname of ["/investigations", "/investigations/session-1"]) {
+    assert.equal(navDestinations({ ...base, pathname }).some((item) => item.active), false);
+  }
+});

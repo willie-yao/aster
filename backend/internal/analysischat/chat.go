@@ -43,6 +43,8 @@ var (
 	ErrPreparedFindingNotFound = errors.New("prepared cause finding not found")
 	// ErrSessionNotFound means the session is absent, expired, or owned by another user.
 	ErrSessionNotFound = errors.New("analysis chat session not found")
+	// ErrSessionInactive means the retained session cannot admit another turn.
+	ErrSessionInactive = errors.New("analysis chat session is archived or expired; start a new conversation")
 	// ErrSessionBusy means another turn is already running for the session.
 	ErrSessionBusy = errors.New("analysis chat session is busy")
 	// ErrRequestPending means this idempotent request is still running.
@@ -231,18 +233,24 @@ type Attempt struct {
 
 // SessionView is the authenticated session representation returned by the API.
 type SessionView struct {
-	ID               string                          `json:"id"`
-	CreatedBy        string                          `json:"created_by"`
-	Analysis         AnalysisRef                     `json:"analysis"`
-	CreatedAt        string                          `json:"created_at"`
-	UpdatedAt        string                          `json:"updated_at"`
-	ExpiresAt        string                          `json:"expires_at"`
-	Messages         []Message                       `json:"messages"`
-	Attempts         []Attempt                       `json:"attempts"`
-	Active           *ActiveTurn                     `json:"active,omitempty"`
-	TurnsUsed        int                             `json:"turns_used"`
-	MaxTurns         int                             `json:"max_turns"`
-	SourceRepository *sourceinvestigation.Repository `json:"source_repository,omitempty"`
+	ID                string                          `json:"id"`
+	CreatedBy         string                          `json:"created_by"`
+	Analysis          AnalysisRef                     `json:"analysis"`
+	CreatedAt         string                          `json:"created_at"`
+	UpdatedAt         string                          `json:"updated_at"`
+	ExpiresAt         string                          `json:"expires_at"`
+	Archived          bool                            `json:"archived"`
+	ReadOnly          bool                            `json:"read_only"`
+	HistoryExpiresAt  string                          `json:"history_expires_at,omitempty"`
+	Title             string                          `json:"title,omitempty"`
+	BuildIDs          []string                        `json:"build_ids,omitempty"`
+	ComparisonBuildID string                          `json:"comparison_build_id,omitempty"`
+	Messages          []Message                       `json:"messages"`
+	Attempts          []Attempt                       `json:"attempts"`
+	Active            *ActiveTurn                     `json:"active,omitempty"`
+	TurnsUsed         int                             `json:"turns_used"`
+	MaxTurns          int                             `json:"max_turns"`
+	SourceRepository  *sourceinvestigation.Repository `json:"source_repository,omitempty"`
 }
 
 // ActiveTurn is the authenticated state for one in-flight request.
@@ -324,6 +332,7 @@ type Runner interface {
 type Options struct {
 	StateDir            string
 	SessionTTL          time.Duration
+	HistoryRetention    time.Duration
 	MaxSessions         int
 	MaxSessionsPerOwner int
 	// MaxTurns bounds admitted model attempts, including failed turns.
@@ -347,6 +356,9 @@ func (o Options) normalized(dataDir string) Options {
 	}
 	if o.SessionTTL <= 0 {
 		o.SessionTTL = 2 * time.Hour
+	}
+	if o.HistoryRetention <= 0 {
+		o.HistoryRetention = DefaultHistoryRetention
 	}
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = 128
@@ -425,6 +437,7 @@ func NewService(ctx context.Context, dataDir string, runner Runner, opts Options
 	if err := validateStateDirPrivacy(dataDir, opts.StateDir); err != nil {
 		return nil, err
 	}
+	store.historyRetention = opts.HistoryRetention
 	if err := store.validate(); err != nil {
 		return nil, fmt.Errorf("validating analysis chat state: %w", err)
 	}
@@ -723,7 +736,7 @@ func (s *Service) latestSessionForAnalysis(state *persistedState, resolved resol
 	var latest *persistedSession
 	latestID := ""
 	for id, current := range state.Sessions {
-		if current == nil || current.Retired || current.View.Analysis != resolved.ref {
+		if !sessionLive(current, s.opts.Now()) || current.View.Analysis != resolved.ref {
 			continue
 		}
 		if resolved.ref.Scope == ScopeCause && persistedCauseComparisonBuildID(current.Resolved.Comparison) != causeComparisonBuildID(resolved.comparison) {
@@ -794,7 +807,7 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 				extendSessionExpiry(current, retainedUntil)
 			}
 		}
-		if !now.Before(current.ExpiresAt) && current.Active == nil {
+		if !now.Before(current.ExpiresAt) && !now.Before(current.HistoryExpiresAt) && current.Active == nil {
 			delete(state.Sessions, id)
 			changed = true
 		}
@@ -803,16 +816,17 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 }
 
 func (s *Service) sessionLimitReached(state *persistedState, owner string) bool {
-	if len(state.Sessions) >= s.opts.MaxSessions {
-		return true
-	}
-	owned := 0
+	live, owned := 0, 0
 	for _, current := range state.Sessions {
-		if current != nil && current.Owner == owner {
+		if !sessionLive(current, s.opts.Now()) {
+			continue
+		}
+		live++
+		if current.Owner == owner {
 			owned++
 		}
 	}
-	return owned >= s.opts.MaxSessionsPerOwner
+	return live >= s.opts.MaxSessions || owned >= s.opts.MaxSessionsPerOwner
 }
 
 func findCreateRequest(state *persistedState, owner, requestID, requestHash string) (*persistedSession, error) {
@@ -1025,6 +1039,11 @@ func cloneSessionView(view SessionView) SessionView {
 
 func (s *Service) sessionView(current *persistedSession) SessionView {
 	view := cloneSessionView(current.View)
+	view.Archived = current.Archived
+	view.ReadOnly = !sessionLive(current, s.opts.Now())
+	view.HistoryExpiresAt = optionalTimestamp(current.HistoryExpiresAt)
+	view.Title, view.BuildIDs = sessionDescription(current)
+	view.ComparisonBuildID = persistedCauseComparisonBuildID(current.Resolved.Comparison)
 	view.CreatedBy = current.Owner
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns

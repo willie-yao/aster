@@ -9,6 +9,7 @@ import { PullRequestDetailPage } from "./pages/PullRequestDetailPage";
 import { SharedFailurePage } from "./pages/SharedFailurePage";
 import { ActionRequestPage } from "./pages/ActionRequestPage";
 import { AnalysisHealthPage } from "./pages/AnalysisHealthPage";
+import { InvestigationHistoryPage, InvestigationSessionPage } from "./pages/InvestigationHistoryPage";
 import { AIUsagePage } from "./pages/AIUsagePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { Layout } from "./components/Layout";
@@ -39,6 +40,8 @@ export default function App() {
                   element={<PullRequestDetailPage />}
                 />
                 <Route path="analysis-health" element={<AnalysisHealthPage />} />
+                <Route path="investigations" element={<InvestigationHistoryPage />} />
+                <Route path="investigations/:sessionID" element={<InvestigationSessionPage />} />
                 <Route path="ai-usage" element={<AIUsagePage />} />
                 <Route path="job/:jobName" element={<JobDetailPage />} />
                 <Route

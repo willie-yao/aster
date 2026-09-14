@@ -1,3 +1,4 @@
+import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import DarkMode from "@mui/icons-material/DarkMode";
 import LightMode from "@mui/icons-material/LightMode";
 import AppBar from "@mui/material/AppBar";
@@ -66,6 +67,13 @@ export function Layout() {
           }}
         >
           {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
+        </IconButton>
+      )}
+      {features.analysis_chat && auth.status === "authenticated" && (
+        <IconButton component={RouterLink} to="/investigations" aria-label="Investigation history" title="Investigation history"
+          aria-current={location.pathname.startsWith("/investigations") ? "page" : undefined}
+          sx={{ width: 44, height: 44, color: location.pathname.startsWith("/investigations") ? "primary.main" : "text.secondary" }}>
+          <HistoryOutlined fontSize="small" />
         </IconButton>
       )}
       <ProfileMenu compact={railHostsControls} />

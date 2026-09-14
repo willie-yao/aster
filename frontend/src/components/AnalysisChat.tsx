@@ -29,6 +29,7 @@ import {
   RestartAltOutlined,
   StopCircleOutlined,
 } from "@mui/icons-material";
+import { AnalysisChatHistory } from "./AnalysisChatHistory";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
@@ -53,7 +54,7 @@ import {
   clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
   createPreparedAnalysisChatSession,
-  deleteAnalysisChatSession,
+  archiveAnalysisChatSession,
   findAnalysisChatSession,
   getAnalysisChatSession,
   isAmbiguousAnalysisChatFailure,
@@ -587,6 +588,25 @@ function ThinkingState({
   );
 }
 
+export function AnalysisChatTranscript({
+  session, fileCtx = {}, chatFixEnabled = false, fixEligible = false, onUseForFix,
+}: {
+  session: AnalysisChatSession;
+  fileCtx?: FileToUrlContext;
+  chatFixEnabled?: boolean;
+  fixEligible?: boolean;
+  onUseForFix?: (message: AnalysisChatMessage) => void;
+}) {
+  return analysisChatHistory(session).map((entry) => {
+    if (entry.kind === "attempt") return <AttemptSummary key={entry.key} attempt={entry.attempt} />;
+    const message = entry.message;
+    if (message.role === "user") return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
+    return <AssistantMessage key={entry.key} message={message} fileCtx={fileCtx}
+      chatFixEnabled={chatFixEnabled} fixEligible={fixEligible && Boolean(message.request_id && message.content.trim())}
+      onUseForFix={() => onUseForFix?.(message)} />;
+  });
+}
+
 export function AnalysisChat({
   analysisRef,
   fileCtx,
@@ -896,6 +916,7 @@ export function AnalysisChat({
         if (current) {
           try {
             refreshed = await getAnalysisChatSession(current.id, controller.signal);
+            if (refreshed.read_only) refreshed = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
           } catch (refreshError) {
             if (!(refreshError instanceof AnalysisChatAPIError && refreshError.status === 404)) throw refreshError;
             refreshed = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
@@ -904,6 +925,10 @@ export function AnalysisChat({
           refreshed = await findAnalysisChatSession(analysisRefRef.current, controller.signal);
         }
         if (controller.signal.aborted || generation !== sessionGenerationRef.current || identityRef.current !== refreshIdentity) return;
+        if (!refreshed && sessionRef.current) {
+          createRequestIDRef.current = newAnalysisChatRequestID();
+          preparedLookupIdentityRef.current = "";
+        }
         setSession(refreshed);
         if (refreshed?.active) recordProgress(refreshed.active);
       } catch (refreshError) {
@@ -1212,7 +1237,7 @@ export function AnalysisChat({
         if (pendingTurn) {
           clearAnalysisChatPendingIntent(analysisChatIntentStorage(), pendingTurn.sessionID, pendingTurn.requestID);
         }
-        await deleteAnalysisChatSession(discarded.id, controller.signal);
+        await archiveAnalysisChatSession(discarded.id, controller.signal);
       }
       if (identityRef.current !== resetIdentity) return;
       // The next question creates a replacement session, so a fresh create key
@@ -1565,29 +1590,15 @@ export function AnalysisChat({
                 </Box>
               )}
   
-              {history.map((entry) => {
-                if (entry.kind === "attempt") {
-                  return <AttemptSummary key={entry.key} attempt={entry.attempt} />;
-                }
-                const message = entry.message;
-                if (message.role === "user") {
-                  return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
-                }
-                const completedFinding = Boolean(message.request_id && message.content.trim());
-                const exactFixEligible = exactFixEnabled && completedFinding;
-                const legacyFixEligible = patternScope && Boolean(features.chat_fix) &&
-                  Boolean(fixPatterns.length) && completedFinding;
-                return (
-                  <AssistantMessage
-                    key={entry.key}
-                    message={message}
-                    fileCtx={fileCtx}
-                    chatFixEnabled={!session?.active && (exactFixEnabled || Boolean(features.chat_fix && patternScope))}
-                    fixEligible={exactFixEligible || legacyFixEligible}
-                    onUseForFix={() => openFix(message)}
-                  />
-                );
-              })}
+              {session && (
+                <AnalysisChatTranscript
+                  session={session}
+                  fileCtx={fileCtx}
+                  chatFixEnabled={!session.active && (exactFixEnabled || Boolean(features.chat_fix && patternScope))}
+                  fixEligible={exactFixEnabled || (patternScope && Boolean(features.chat_fix) && Boolean(fixPatterns.length))}
+                  onUseForFix={openFix}
+                />
+              )}
   
               {(session?.active || (busy && pendingTurn)) && (
                 <ThinkingState
@@ -1603,6 +1614,11 @@ export function AnalysisChat({
               {error && <Alert severity="error" variant="outlined">{error}</Alert>}
             </Stack>
   
+            {expanded && authStatus === "authenticated" && (
+              <AnalysisChatHistory jobID={analysisRef.job_id} scope={analysisRef.scope ?? "test"}
+                currentSessionID={session?.id} refreshKey={`${session?.turns_used ?? 0}:${session?.messages.length ?? 0}`} />
+            )}
+
             {/* aria-busy marks the composer, not the log: on the log it would
                 sit above the progress update and defer announcing it. */}
             <Box
@@ -1799,7 +1815,7 @@ export function AnalysisChat({
         />
         <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary">
-            This removes the shared conversation for every operator. The transcript cannot be recovered, and the published analysis is unchanged.
+            This archives the shared conversation for every operator. Saved findings remain in history until their retention deadline. The new conversation starts without the previous discussion, and the published analysis is unchanged.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: dialogGutter, py: 2 }}>
@@ -1815,7 +1831,7 @@ export function AnalysisChat({
             onClick={() => void startNewConversation()}
             disabled={resetting || restoring || busy || Boolean(session?.active)}
           >
-            {resetting ? "Removing" : "Remove and start new"}
+            {resetting ? "Archiving" : "Archive and start new"}
           </Button>
         </DialogActions>
       </Dialog>

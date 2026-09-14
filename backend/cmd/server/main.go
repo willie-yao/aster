@@ -475,6 +475,7 @@ func analysisChatServiceOptionsFromEnv(dataDir string, timeout time.Duration) (a
 	opts := analysischat.Options{
 		StateDir:                     strings.TrimSpace(os.Getenv("ANALYSIS_CHAT_STATE_DIR")),
 		SessionTTL:                   2 * time.Hour,
+		HistoryRetention:             analysischat.DefaultHistoryRetention,
 		MaxSessions:                  128,
 		MaxSessionsPerOwner:          8,
 		TurnLeaseTTL:                 timeout + 30*time.Second,
@@ -494,6 +495,13 @@ func analysisChatServiceOptionsFromEnv(dataDir string, timeout time.Duration) (a
 			return analysischat.Options{}, fmt.Errorf("ANALYSIS_CHAT_SESSION_TTL must be greater than zero")
 		}
 		opts.SessionTTL = ttl
+	}
+	if value := os.Getenv("ANALYSIS_CHAT_HISTORY_RETENTION"); value != "" {
+		retention, err := time.ParseDuration(value)
+		if err != nil || retention <= 0 {
+			return analysischat.Options{}, fmt.Errorf("ANALYSIS_CHAT_HISTORY_RETENTION must be a positive duration")
+		}
+		opts.HistoryRetention = retention
 	}
 	var err error
 	opts.MaxSessions, err = positiveIntEnv("ANALYSIS_CHAT_MAX_SESSIONS", opts.MaxSessions)

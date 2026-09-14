@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 
 // AnalysisChatRunner manages authenticated conversations about published analyses.
 type AnalysisChatRunner interface {
+	List(analysischat.HistoryQuery, string) (analysischat.HistoryPage, error)
+	Archive(string, string) error
 	Create(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	CreatePrepared(analysischat.AnalysisRef, string, string) (analysischat.SessionView, error)
 	Find(analysischat.AnalysisRef, string) (analysischat.SessionView, error)
@@ -343,6 +346,8 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, analysischat.ErrAnalysisNotFound), errors.Is(err, analysischat.ErrPatternNotFound), errors.Is(err, analysischat.ErrCauseNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis not found", "rejected"
+	case errors.Is(err, analysischat.ErrSessionInactive):
+		status, message, outcome = http.StatusGone, analysischat.ErrSessionInactive.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrSessionNotFound):
 		status, message, outcome = http.StatusNotFound, "analysis chat session not found", "rejected"
 	case errors.Is(err, analysischat.ErrRequestNotFound):
@@ -409,4 +414,46 @@ func safeAnalysisChatError(err error) string {
 		reason = reason[:maxReasonBytes] + "..."
 	}
 	return reason
+}
+
+func listAnalysisChatSessionsHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		query := r.URL.Query()
+		limit := 0
+		if value := query.Get("limit"); value != "" {
+			var err error
+			limit, err = strconv.Atoi(value)
+			if err != nil || limit < 1 || limit > 100 {
+				http.Error(w, "invalid page size", http.StatusBadRequest)
+				return
+			}
+		}
+		page, err := run.List(analysischat.HistoryQuery{JobID: query.Get("job_id"), Scope: query.Get("scope"), Cursor: query.Get("cursor"), Limit: limit}, identity.Login)
+		if err != nil {
+			writeAnalysisChatError(w, "list", identity.Login, err)
+			return
+		}
+		writeAnalysisChatJSON(w, http.StatusOK, page)
+	})
+}
+
+func archiveAnalysisChatSessionHandler(run AnalysisChatRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if err := run.Archive(r.PathValue("id"), identity.Login); err != nil {
+			writeAnalysisChatError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		auth.SetPrivateResponseHeaders(w.Header())
+		w.WriteHeader(http.StatusNoContent)
+	})
 }

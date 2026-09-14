@@ -143,6 +143,12 @@ export interface AnalysisChatSession {
   created_at: string;
   updated_at: string;
   expires_at: string;
+  history_expires_at?: string;
+  archived?: boolean;
+  read_only?: boolean;
+  title?: string;
+  build_ids?: string[];
+  comparison_build_id?: string;
   messages: AnalysisChatMessage[];
   attempts?: AnalysisChatAttempt[];
   active?: AnalysisChatActiveTurn;
@@ -174,4 +180,23 @@ export interface AnalysisChatProgress {
 export interface AnalysisChatActiveTurn extends AnalysisChatProgress {
   actor?: string;
   question?: string;
+}
+
+export interface AnalysisChatSessionSummary {
+  id: string;
+  analysis: AnalysisChatReference;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  history_expires_at: string;
+  archived: boolean;
+  read_only: boolean;
+  title: string;
+  build_ids?: string[];
+  comparison_build_id?: string;
+}
+
+export interface AnalysisChatHistoryPage {
+  sessions: AnalysisChatSessionSummary[];
+  next_cursor?: string;
 }

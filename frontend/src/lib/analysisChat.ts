@@ -1,5 +1,6 @@
 import type {
   AnalysisChatAttempt,
+  AnalysisChatHistoryPage,
   AnalysisChatMessage,
   AnalysisChatProgress,
   AnalysisChatReference,
@@ -660,4 +661,28 @@ export async function cancelAnalysisChatRequest(
     },
   );
   if (!response.ok) throw await apiError(response);
+}
+
+export function analysisChatHistoryQuery(jobID = "", scope = "", cursor = ""): string {
+  const query = new URLSearchParams();
+  if (jobID.trim()) query.set("job_id", jobID.trim());
+  if (scope) query.set("scope", scope);
+  if (cursor) query.set("cursor", cursor);
+  return query.toString();
+}
+
+export async function listAnalysisChatSessions(query: string, signal?: AbortSignal): Promise<AnalysisChatHistoryPage> {
+  const response = await fetch(`${API_BASE}api/analysis-chat/sessions${query ? `?${query}` : ""}`, {
+    credentials: "same-origin", cache: "no-store", signal,
+  });
+  if (!response.ok) throw await apiError(response);
+  return response.json() as Promise<AnalysisChatHistoryPage>;
+}
+
+export async function archiveAnalysisChatSession(sessionID: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/archive`, {
+    method: "POST", credentials: "same-origin", cache: "no-store", signal,
+  });
+  if (response.ok || response.status === 404) return;
+  throw await apiError(response);
 }
