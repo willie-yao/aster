@@ -10,6 +10,31 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
+func TestAnalysisPromptCacheKeySerializedIdentity(t *testing.T) {
+	schemas := []tools.Schema{{
+		Type: "function",
+		Function: tools.FunctionDecl{
+			Name: "read_artifact", Description: "Read a build log", Strict: true,
+			Parameters: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"path": map[string]any{"type": "string"}},
+			},
+		},
+	}}
+	raw, err := json.Marshal(schemas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantJSON = `[{"type":"function","function":{"name":"read_artifact","description":"Read a build log","parameters":{"properties":{"path":{"type":"string"}},"type":"object"},"strict":true}}]`
+	if string(raw) != wantJSON {
+		t.Fatalf("serialized schemas = %s, want %s", raw, wantJSON)
+	}
+	const wantKey = "aster_analysis_v1:ef7195539cdb15aa:5958feff4385fca0"
+	if got := analysisPromptCacheKey("stable prompt", schemas); got != wantKey {
+		t.Fatalf("prompt cache key = %q, want %q", got, wantKey)
+	}
+}
+
 func TestAnalysisPromptCacheKeyUsesStablePromptAndToolSchemas(t *testing.T) {
 	base := []tools.Schema{{Type: "function", Function: tools.FunctionDecl{Name: "read_artifact"}}}
 	repo := append(append([]tools.Schema(nil), base...), tools.Schema{Type: "function", Function: tools.FunctionDecl{Name: "read_repo_file"}})
