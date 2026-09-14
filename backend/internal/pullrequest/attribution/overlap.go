@@ -1,4 +1,4 @@
-package prattribution
+package attribution
 
 import (
 	"sort"

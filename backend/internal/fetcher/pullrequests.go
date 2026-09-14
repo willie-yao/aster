@@ -12,10 +12,10 @@ import (
 	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
-	"github.com/willie-yao/aster/backend/internal/prattribution"
-	"github.com/willie-yao/aster/backend/internal/prcomment"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"github.com/willie-yao/aster/backend/internal/prtriage"
+	prattribution "github.com/willie-yao/aster/backend/internal/pullrequest/attribution"
+	prcomment "github.com/willie-yao/aster/backend/internal/pullrequest/comment"
+	prtriage "github.com/willie-yao/aster/backend/internal/pullrequest/triage"
 )
 
 // writePullRequestOutput is a seam for tests.

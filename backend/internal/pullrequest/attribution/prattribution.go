@@ -1,4 +1,4 @@
-// Package prattribution decides whether a pull request's test failure is
+// Package attribution decides whether a pull request's test failure is
 // specific to that pull request, using only observed results: the base
 // branch's own runs, the same failure on other open pull requests, and the
 // test's recorded flakiness history.
@@ -6,7 +6,7 @@
 // No verdict asserts that a pull request caused a failure. Deterministic
 // evidence can rule a pull request out, but it cannot rule one in, so the
 // strongest judgment here is that nothing in the baseline explains the failure.
-package prattribution
+package attribution
 
 import (
 	"fmt"

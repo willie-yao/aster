@@ -1,4 +1,4 @@
-package prcomment
+package comment
 
 import (
 	"strings"

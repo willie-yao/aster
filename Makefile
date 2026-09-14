@@ -122,6 +122,7 @@ cleanroom-check:
 
 # Check the AGENTS.md repo map against the backend tree.
 check-repo-map:
+	bash hack/check-repo-map.sh --self-test
 	bash hack/check-repo-map.sh
 
 # Check that current onboarding examples use the supported published release.

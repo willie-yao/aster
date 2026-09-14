@@ -1,4 +1,4 @@
-// Package prcomment posts one bot comment on each newly observed pull request,
+// Package comment posts one bot comment on each newly observed pull request,
 // linking to that pull request's triage page on the dashboard.
 //
 // This is the engine's only unattended write that contacts a contributor's pull
@@ -11,7 +11,7 @@
 //   - dedup against GitHub itself, so losing local state cannot double-post
 //   - a per-pass cap, so a bug cannot fan out across a repository
 //   - a skip for the bot's own pull requests, so it never comments on itself
-package prcomment
+package comment
 
 import (
 	"fmt"

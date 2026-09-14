@@ -1,4 +1,4 @@
-// Package prescalation runs on-demand AI analysis for a single pull request
+// Package escalation runs on-demand AI analysis for a single pull request
 // test failure that the deterministic pass could not explain.
 //
 // Escalation is admin-initiated, one at a time, and bounded. Admission is
@@ -9,7 +9,7 @@
 // The analysis it runs is the ordinary agentic failure analysis under a
 // separate module, so it is gated by the same deterministic critique rules as every
 // other analysis.
-package prescalation
+package escalation
 
 import (
 	"context"

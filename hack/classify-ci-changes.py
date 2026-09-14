@@ -129,6 +129,7 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/project",
     "backend/internal/prow",
     "backend/internal/prowbuild",
+    "backend/internal/pullrequest",
     "backend/internal/redact",
     "backend/internal/remediationinvestigation",
     "backend/internal/remediationpolicy",
@@ -394,6 +395,26 @@ def self_test() -> None:
             {"backend", "benchmarks", "helm_static"},
         ),
         (
+            "pull request triage",
+            ["backend/internal/pullrequest/triage/prtriage.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request attribution",
+            ["backend/internal/pullrequest/attribution/prattribution.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request escalation",
+            ["backend/internal/pullrequest/escalation/prescalation.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request comment",
+            ["backend/internal/pullrequest/comment/body.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
             "fix executor",
             ["backend/internal/fixexecutor/executor.go"],
             {"backend", "benchmarks", "helm_static", "fix_executor"},
@@ -536,6 +557,13 @@ def self_test() -> None:
         if f'{gate}: ""' not in benchmarks_job:
             raise AssertionError(f"benchmark job does not disable {gate}")
 
+    namespace_moves = (
+        (
+            "backend/internal/prtriage/prtriage.go",
+            "backend/internal/pullrequest/triage/prtriage.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+    )
     with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:
         repository = pathlib.Path(tmp)
 
@@ -595,7 +623,34 @@ def self_test() -> None:
                 f"rename/merge-base: expected {sorted(expected)}, got {sorted(actual)}"
             )
 
-    print(f"{len(scenarios) + 3} classification scenarios passed")
+        for old, new, expected in namespace_moves:
+            write(old, "package fixture\n")
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "add namespace fixture")
+            base = git("rev-parse", "HEAD")
+            (repository / new).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(repository / old, repository / new)
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "move namespace fixture")
+            head = git("rev-parse", "HEAD")
+            paths = changed_paths(base, head, merge_base=False, repository=repository)
+            if set(paths) != {old, new}:
+                raise AssertionError(f"namespace rename: expected both paths, got {paths}")
+            actual = {key for key, enabled in classify(paths).items() if enabled}
+            if actual != expected:
+                raise AssertionError(f"namespace rename {new}: expected {expected}, got {actual}")
+
+            (repository / new).unlink()
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "delete namespace fixture")
+            paths = changed_paths(head, "HEAD", merge_base=False, repository=repository)
+            if paths != [new]:
+                raise AssertionError(f"namespace deletion: expected {new}, got {paths}")
+            actual = {key for key, enabled in classify(paths).items() if enabled}
+            if actual != expected:
+                raise AssertionError(f"namespace deletion {new}: expected {expected}, got {actual}")
+
+    print(f"{len(scenarios) + 3 + 2 * len(namespace_moves)} classification scenarios passed")
 
 
 def main() -> int:

@@ -11,7 +11,7 @@ export interface EscalationCitation {
 
 export const API_BASE = import.meta.env?.BASE_URL ?? "/";
 
-// Escalation lifecycle states, mirroring the prescalation package.
+// Escalation lifecycle states, mirroring the pullrequest/escalation package.
 export type EscalationState =
   | "not_started"
   | "queued"

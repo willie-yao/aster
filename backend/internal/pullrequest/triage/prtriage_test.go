@@ -1,4 +1,4 @@
-package prtriage
+package triage
 
 import (
 	"context"

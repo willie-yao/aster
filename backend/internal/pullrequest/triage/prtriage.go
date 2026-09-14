@@ -1,8 +1,8 @@
-// Package prtriage builds the pull-request view of presubmit results: which
+// Package triage builds the pull-request view of presubmit results: which
 // presubmits ran on each open pull request, and which tests failed. It reads
 // GitHub for pull request identity and the artifact bucket for build outcomes,
 // and performs no analysis of its own.
-package prtriage
+package triage
 
 import (
 	"context"

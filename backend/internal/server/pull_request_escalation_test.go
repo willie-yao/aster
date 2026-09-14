@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/willie-yao/aster/backend/internal/prescalation"
+	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
 )
 
 type fakeEscalationRunner struct {

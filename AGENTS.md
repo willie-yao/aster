@@ -51,10 +51,11 @@ backend/                         Go 1.26
     aggregator/                  Per-job and per-test aggregate statistics
     patterns/                    Correlates analyzed failures across builds
     recurrenceledger/            Durable memory of recurring causes across build windows
-    prtriage/                    Per-open-pull-request view of presubmit results
-    prattribution/               Rules a pull request out of a failure from observed results
-    prescalation/                On-demand AI analysis for unexplained pull request failures
-    prcomment/                   Opt-in bot comment on newly observed pull requests
+    pullrequest/
+      triage/                    Per-open-pull-request view of presubmit results
+      attribution/               Rules a pull request out of a failure from observed results
+      escalation/                On-demand AI analysis for unexplained pull request failures
+      comment/                   Opt-in bot comment on newly observed pull requests
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators

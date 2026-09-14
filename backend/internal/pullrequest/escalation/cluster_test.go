@@ -1,4 +1,4 @@
-package prescalation
+package escalation
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/modules/sharedfailure"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
-	"github.com/willie-yao/aster/backend/internal/prattribution"
+	prattribution "github.com/willie-yao/aster/backend/internal/pullrequest/attribution"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
@@ -303,7 +303,7 @@ func TestClusterRunnerWithoutAnAnalyzerIsUnavailable(t *testing.T) {
 	}
 }
 
-// The index is produced by prattribution and consumed here, so the two must
+// The index is produced by pullrequest/attribution and consumed here, so the two must
 // agree on the published shape rather than on a hand-written fixture.
 func TestClusterResolveReadsWhatAttributionPublishes(t *testing.T) {
 	root := t.TempDir()
