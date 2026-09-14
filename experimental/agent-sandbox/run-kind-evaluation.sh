@@ -348,7 +348,7 @@ mkdir -p "$FIXTURE_DIR"
   AGENT_SANDBOX_IMAGE="${EXECUTOR_REPOSITORY}@${EXECUTOR_DIGEST}" \
   AGENT_SANDBOX_RUNTIME_CLASS="$RUNTIME_CLASS" \
   AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions" \
-  go test ./internal/fixruntime -run '^(TestWriteAgentSandboxEvaluationFixtures|TestAgentSandboxPreflightAndSandboxWorkloadParity)$' -count=1 -v
+  go test ./internal/fix/runtime -run '^(TestWriteAgentSandboxEvaluationFixtures|TestAgentSandboxPreflightAndSandboxWorkloadParity)$' -count=1 -v
 ) >"$EVIDENCE_DIR/workload-shape-parity-test.log" 2>&1
 
 CLIENT_SA=production-eval-prow-ai-dashboard-agent-sandbox-fix-client
@@ -596,7 +596,7 @@ chmod 600 "$RUNTIME_KUBECONFIG"
 # Fake-client timeout and cancellation mapping, without creating a second Sandbox.
 (
   cd "$ROOT/backend"
-  go test ./internal/fixruntime -run '^TestAgentSandboxRuntimeTimeoutAndCancellation$' -count=1 -v
+  go test ./internal/fix/runtime -run '^TestAgentSandboxRuntimeTimeoutAndCancellation$' -count=1 -v
 ) >"$EVIDENCE_DIR/timeout-cancellation-test.log" 2>&1
 
 unset AI_TOKEN OPENAI_API_KEY ANTHROPIC_API_KEY CLAUDE_API_KEY KIMI_API_KEY FIX_TOKEN BOT_TOKEN ORKA_API_TOKEN GITHUB_TOKEN GH_TOKEN COPILOT_TOKEN AZURE_OPENAI_API_KEY || true
@@ -612,7 +612,7 @@ set +e
   AGENT_SANDBOX_POLL_INTERVAL=200ms \
   AGENT_SANDBOX_TEST_GATEWAY_ENDPOINT="https://fake-model-gateway.${EXECUTION_NAMESPACE}.svc.cluster.local:8443/v1/chat/completions" \
   AGENT_SANDBOX_EVIDENCE_DIR="$EVIDENCE_DIR" \
-  go test ./internal/fixruntime -run '^TestAgentSandboxProductionKindFixture$' -count=1 -v
+  go test ./internal/fix/runtime -run '^TestAgentSandboxProductionKindFixture$' -count=1 -v
 ) 2>&1 | tee "$TEST_LOG"
 test_status=${PIPESTATUS[0]}
 set -e

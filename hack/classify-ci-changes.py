@@ -113,8 +113,8 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/corrections",
     "backend/internal/fetcher",
     "backend/internal/fetchprogress",
-    "backend/internal/fixpr",
-    "backend/internal/fixruntime",
+    "backend/internal/fix/pr",
+    "backend/internal/fix/runtime",
     "backend/internal/ghpr",
     "backend/internal/issues",
     "backend/internal/junit",
@@ -145,7 +145,7 @@ REMOTE_BACKEND_PREFIXES = (
 
 FIX_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
-    "backend/internal/fixexecutor",
+    "backend/internal/fix/executor",
     "backend/internal/modelprovider",
     "backend/internal/runtime",
 )
@@ -157,7 +157,7 @@ HELM_BACKEND_PREFIXES = (
     "backend/internal/ai/tools",
     "backend/internal/agentsandbox",
     "backend/internal/artifacts",
-    "backend/internal/fixexecutor",
+    "backend/internal/fix/executor",
     "backend/internal/kubernetesdeploy",
     "backend/internal/modelprovider",
     "backend/internal/models",
@@ -416,7 +416,32 @@ def self_test() -> None:
         ),
         (
             "fix executor",
-            ["backend/internal/fixexecutor/executor.go"],
+            ["backend/internal/fix/executor/executor.go"],
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
+        ),
+        (
+            "fix PR",
+            ["backend/internal/fix/pr/fixpr.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix runtime",
+            ["backend/internal/fix/runtime/factory.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix runtime fixture",
+            ["backend/internal/fix/runtime/testdata/fakeexecutor/main.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix executor fixture",
+            ["backend/internal/fix/executor/testdata/fakegateway/main.go"],
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
+        ),
+        (
+            "fix executor command",
+            ["backend/cmd/fixexecutor/main.go"],
             {"backend", "benchmarks", "helm_static", "fix_executor"},
         ),
         (
@@ -562,6 +587,21 @@ def self_test() -> None:
             "backend/internal/prtriage/prtriage.go",
             "backend/internal/pullrequest/triage/prtriage.go",
             {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixpr/fixpr.go",
+            "backend/internal/fix/pr/fixpr.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixruntime/factory.go",
+            "backend/internal/fix/runtime/factory.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixexecutor/executor.go",
+            "backend/internal/fix/executor/executor.go",
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
         ),
     )
     with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:

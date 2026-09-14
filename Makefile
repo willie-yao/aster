@@ -79,7 +79,7 @@ test-v:
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
 	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationE2E$$' -count=1 -v
-	cd backend && go test ./internal/fixpr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
+	cd backend && go test ./internal/fix/pr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
 
 # Install the pinned Go linter.
 install-golangci-lint: $(GOLANGCI_LINT)

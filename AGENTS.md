@@ -87,9 +87,10 @@ backend/                         Go 1.26
     actiondraft/                 Validates model-generated issue and PR text
     actionverify/                Checks remediation symbols against pinned source
     issues/                      Opens and maintains GitHub issues
-    fixpr/                       Drafts minimal code fixes for recurring patterns
-    fixruntime/                  Selects the coding-agent runtime for fix PRs
-    fixexecutor/                 Clones, runs OpenCode, validates, and returns one staged patch
+    fix/
+      pr/                        Drafts minimal code fixes for recurring patterns
+      runtime/                   Selects the coding-agent runtime for fix PRs
+      executor/                  Clones, runs OpenCode, validates, and returns one staged patch
     chatfix/                     Bridges one chat response into fix generation
     remediationpolicy/           Shared deterministic remediation safety policy
     resolve/                     Admin-marked "resolved" recurring patterns
@@ -147,7 +148,7 @@ Prow/TestGrid -> fetcher -> ai -> output -> server -> frontend
 2. **`ai`** analyzes one failure with the agentic loop: the model calls tools to browse artifacts, and investigation floors plus deterministic critique gate the answer before it is cached. Start here for analysis quality.
 3. **`output`** writes `dashboard.json`, `jobs/*.json`, and the rest of the JSON contract. Both deploy paths read the identical contract.
 4. **`server`** serves that contract in Kubernetes mode and adds a capability descriptor plus admin-gated writes. The Pages path serves the same files statically with no server.
-5. **`actions`** performs on-demand admin writes (file issue, propose fix, mark resolved), reusing the same `issues` and `fixpr` code the scheduled pass uses.
+5. **`actions`** performs on-demand admin writes (file issue, propose fix, mark resolved), reusing the same `issues` and `fix/pr` code the scheduled pass uses.
 
 The many small packages are deliberate: several exist to break shared dependencies between `fetcher`, `actions`, and `server` (for example `resolve`, `patternstate`, `actiondraft`), which would otherwise import-cycle.
 

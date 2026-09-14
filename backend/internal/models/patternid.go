@@ -8,7 +8,7 @@ import (
 
 // PatternID is a stable, URL-safe identifier for a pattern analysis, derived
 // from the job and its shared root cause. It lets the frontend and the API
-// address one specific failure. It is independent of the fixpr dedup key so
+// address one specific failure. It is independent of the fix/pr dedup key so
 // changing one never disturbs the other.
 func PatternID(p PatternAnalysis) string {
 	job := strings.TrimSpace(p.JobID)

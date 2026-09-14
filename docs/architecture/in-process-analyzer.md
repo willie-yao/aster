@@ -128,7 +128,7 @@ The analyzer publishes evidence and diagnosis. Other packages consume that outpu
 | Recurring causal groups | `backend/internal/patterns` correlates representative published failures. It cannot rewrite a per-build diagnosis, and per-job failures are isolated by last-known-good publication. | [Agentic analysis](../agentic.md#pattern-analysis) |
 | Analysis chat | `backend/internal/analysischat` resolves one published test, pattern, or causal group into a bounded private conversation. Cause scope exposes that group's failed member builds plus one newer completed comparison run when available. Chat does not mutate job JSON. | [Server mode](../server.md#analysis-chat) |
 | Resolution and actions | `backend/internal/actions` and `backend/internal/resolve` operate on current published subjects. Issue and Fix writes use preview and confirmation. Pattern and cause resolution update private lifecycle state. | [Server mode](../server.md#admin-gated-actions) |
-| Fix PR generation | `backend/internal/fixpr` and `backend/internal/fixruntime` investigate a current selected subject, then bind immutable source, a canonical patch, validation, review, and confirmation. Analysis quality is context, not permission to start a manual attempt. | [Fix PR generation](../fix-prs.md) |
+| Fix PR generation | `backend/internal/fix/pr` and `backend/internal/fix/runtime` investigate a current selected subject, then bind immutable source, a canonical patch, validation, review, and confirmation. Analysis quality is context, not permission to start a manual attempt. | [Fix PR generation](../fix-prs.md) |
 | Pull request triage | `backend/internal/pullrequest/{triage,attribution,escalation,comment}` own deterministic attribution, shared failures, optional escalation, and the separately gated GitHub App comment. | [Pull request triage](../pull-request-triage.md) |
 
 ## Contributor map
@@ -150,4 +150,4 @@ The analyzer publishes evidence and diagnosis. Other packages consume that outpu
 | Recurring patterns | `backend/internal/patterns/`, `backend/internal/ai/pattern.go`, `backend/internal/ai/pattern_repo.go`, `backend/internal/models/patternlifecycle.go` |
 | Analysis chat and published-analysis resolution | `backend/internal/analysischat/chat.go`, `backend/internal/analysischat/resolution.go` |
 | Confirmed action requests | `backend/internal/actions/requests.go`, `backend/internal/actions/request_generation.go`, `backend/internal/actions/request_state.go`, `backend/internal/actions/request_cleanup.go` |
-| Fix PR runtime | `backend/internal/fixpr/`, `backend/internal/fixruntime/` |
+| Fix PR runtime | `backend/internal/fix/pr/`, `backend/internal/fix/runtime/` |

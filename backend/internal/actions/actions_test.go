@@ -15,7 +15,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/actionverify"
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
-	"github.com/willie-yao/aster/backend/internal/fixpr"
+	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/models"
