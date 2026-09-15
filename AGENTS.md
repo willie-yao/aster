@@ -39,6 +39,11 @@ backend/                         Go 1.26
     aster/                      Public CLI and one-shot pipeline; Pages and the k8s CronJob
     worker/                      Continuous in-cluster watch loop (k8s mode: watch)
     server/                      API server: /data/* read parity, capabilities, actions
+      main.go                    Flags, process startup, signals, and graceful shutdown
+      config.go                  Environment parsing and feature selection
+      auth.go                    Authentication setup and trusted origins
+      features.go                Service construction and interactive feature wiring
+      mock.go                    Local mock service wiring
     fixexecutor/                 Runs one credential-free Agent Sandbox fix workload
   internal/
     -- core pipeline (discover -> analyze -> write) --
