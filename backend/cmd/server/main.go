@@ -42,8 +42,8 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
-	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
+	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
 	"github.com/willie-yao/aster/backend/internal/server"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -704,7 +704,7 @@ func enablePullRequestEscalation(
 }
 
 // escalationChangedFiles adapts the GitHub client to the resolver's contract,
-// keeping prescalation free of a GitHub client dependency.
+// keeping pullrequest/escalation free of a GitHub client dependency.
 type escalationChangedFiles struct{ client *ghpr.Client }
 
 func (e escalationChangedFiles) ChangedFiles(ctx context.Context, owner, repo string, number int) (prescalation.ChangedFileSet, error) {

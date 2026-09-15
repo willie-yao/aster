@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/actionverify"
-	"github.com/willie-yao/aster/backend/internal/fixpr"
+	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"

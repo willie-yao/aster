@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 const (
@@ -16,18 +16,6 @@ const (
 	maxStructuredCandidates              = 32
 	maxStructuredCandidateStarts         = 4096
 )
-
-// ResponseFormat describes one strict JSON Schema response.
-type ResponseFormat struct {
-	Name        string
-	Description string
-	Schema      map[string]any
-}
-
-// ToolChoice forces one named function call.
-type ToolChoice struct {
-	Name string
-}
 
 // StructuredValidator accepts one complete JSON object. It must decode and
 // validate the expected fields before returning nil.
@@ -111,18 +99,18 @@ func StructuredCompletionPhase(ctx context.Context) string {
 // CompleteStructured requests a schema-bound object and accepts it only after
 // deterministic caller validation. Provider schema support is preferred, then
 // a forced function call, then bounded extraction from a plain completion.
-func (c *Client) CompleteStructured(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) error {
+func (c *Client) CompleteStructured(ctx context.Context, system, user string, format transport.ResponseFormat, validate StructuredValidator) error {
 	_, err := c.CompleteStructuredWithMetadata(ctx, system, user, format, validate)
 	return err
 }
 
 // CompleteStructuredWithMetadata preserves bounded attempt metadata without
 // retaining prompts, response text, tool arguments, or provider bodies.
-func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) (StructuredCompletionMetadata, error) {
+func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, user string, format transport.ResponseFormat, validate StructuredValidator) (StructuredCompletionMetadata, error) {
 	if validate == nil {
 		return StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}, fmt.Errorf("structured completion validator is required")
 	}
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr(system)},
 		{Role: "user", Content: strPtr(user)},
 	}
@@ -136,7 +124,7 @@ func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, use
 type structuredContentValidator func(string) structuredValidationResult
 
 type structuredMessagesResult struct {
-	Response *modelResponse
+	Response *transport.Response
 	Metadata StructuredCompletionMetadata
 }
 
@@ -169,8 +157,8 @@ func (r structuredMessagesResult) httpStatus() int {
 
 func (c *Client) completeStructuredMessagesWithMetadata(
 	ctx context.Context,
-	messages []modelMessage,
-	format ResponseFormat,
+	messages []transport.Message,
+	format transport.ResponseFormat,
 	maxResponseBytes int64,
 	omitReasoning bool,
 	validate structuredContentValidator,
@@ -185,23 +173,23 @@ func (c *Client) completeStructuredMessagesWithMetadata(
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = defaultStructuredResponseBytes
 	}
-	messages = append([]modelMessage(nil), messages...)
+	messages = append([]transport.Message(nil), messages...)
 	parallel := false
-	requests := []modelRequest{
+	requests := []transport.Request{
 		{
 			Model: c.model, Messages: messages, ResponseFormat: &format,
 			MaxResponseBytes: maxResponseBytes, OmitReasoning: omitReasoning,
 		},
 		{
 			Model: c.model, Messages: messages,
-			Tools: []tools.Schema{{
+			Tools: []transport.ToolSchema{{
 				Type: "function",
-				Function: tools.FunctionDecl{
+				Function: transport.FunctionDecl{
 					Name: format.Name, Description: format.Description,
 					Parameters: format.Schema, Strict: true,
 				},
 			}},
-			ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+			ToolChoice: &transport.ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 			MaxResponseBytes: maxResponseBytes, OmitReasoning: omitReasoning,
 		},
 		{
@@ -241,10 +229,10 @@ func (c *Client) completeStructuredMessagesWithMetadata(
 
 func (c *Client) runStructuredAttempt(
 	ctx context.Context,
-	request modelRequest,
+	request transport.Request,
 	path StructuredAttemptPath,
 	validate structuredContentValidator,
-) (*modelResponse, StructuredAttemptMetadata, error) {
+) (*transport.Response, StructuredAttemptMetadata, error) {
 	attempt := StructuredAttemptMetadata{Phase: StructuredCompletionPhase(ctx), Path: path}
 	response, err := c.callModelRequest(ctx, request)
 	setStructuredProviderAttempts(&attempt, response)
@@ -286,7 +274,7 @@ func (c *Client) runStructuredAttempt(
 }
 
 // completeForcedFunction accepts only one call to the exact named function.
-func (c *Client) completeForcedFunction(ctx context.Context, system, user string, format ResponseFormat, validate StructuredValidator) error {
+func (c *Client) completeForcedFunction(ctx context.Context, system, user string, format transport.ResponseFormat, validate StructuredValidator) error {
 	if validate == nil {
 		return fmt.Errorf("structured completion validator is required")
 	}
@@ -294,20 +282,20 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 		return fmt.Errorf("structured completion schema is required")
 	}
 	parallel := false
-	request := modelRequest{
+	request := transport.Request{
 		Model: c.model,
-		Messages: []modelMessage{
+		Messages: []transport.Message{
 			{Role: "system", Content: strPtr(system)},
 			{Role: "user", Content: strPtr(user)},
 		},
-		Tools: []tools.Schema{{
+		Tools: []transport.ToolSchema{{
 			Type: "function",
-			Function: tools.FunctionDecl{
+			Function: transport.FunctionDecl{
 				Name: format.Name, Description: format.Description,
 				Parameters: format.Schema, Strict: true,
 			},
 		}},
-		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+		ToolChoice: &transport.ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 		MaxResponseBytes: defaultStructuredResponseBytes, OmitReasoning: true,
 	}
 	strictValidate := func(raw string) structuredValidationResult {
@@ -346,7 +334,7 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 }
 
 func structuredFallbackAllowed(err error) bool {
-	var httpErr *modelHTTPError
+	var httpErr *transport.HTTPError
 	if !errors.As(err, &httpErr) {
 		return false
 	}
@@ -563,7 +551,7 @@ func appendStructuredAttempt(ctx context.Context, metadata StructuredCompletionM
 	return metadata
 }
 
-func setStructuredProviderAttempts(attempt *StructuredAttemptMetadata, response *modelResponse) {
+func setStructuredProviderAttempts(attempt *StructuredAttemptMetadata, response *transport.Response) {
 	if attempt == nil || response == nil || response.Attempts <= 0 {
 		return
 	}

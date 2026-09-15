@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // toolLoopPhase names a position in one loop turn so callers can report
@@ -24,7 +25,7 @@ const (
 // toolLoopAnswer is one tools-free model turn handed to the decision hook.
 type toolLoopAnswer struct {
 	Content  string
-	Response *modelResponse
+	Response *transport.Response
 	Iter     int
 	// Calls, ModelCalls, and ProviderAttempts are the loop's running counters
 	// at the moment of this answer, so a hook can report telemetry in place.
@@ -65,7 +66,7 @@ func (d toolLoopDecision) corrective() bool { return !d.stop && d.prompt != "" }
 // toolLoopDispatch is one dispatched tool call and its outcome. The onDispatch
 // hook may rewrite Envelope before it is appended to the conversation.
 type toolLoopDispatch struct {
-	Call     modelToolCall
+	Call     transport.ToolCall
 	Envelope string
 	Payload  map[string]interface{}
 }
@@ -74,8 +75,8 @@ type toolLoopDispatch struct {
 // messages, schemas, and dispatch are required.
 type toolLoopParams struct {
 	// messages seeds the conversation and is never mutated in place.
-	messages []modelMessage
-	schemas  []tools.Schema
+	messages []transport.Message
+	schemas  []transport.ToolSchema
 	// maxIters bounds the tool-call rounds. Defaults to 8 when <= 0.
 	maxIters int
 	// maxToolCalls caps dispatched calls across the run. Zero means unlimited.
@@ -90,9 +91,9 @@ type toolLoopParams struct {
 	strictContextBudget bool
 	// dispatch runs one tool call and returns the model-bound envelope, the
 	// structured payload behind it, and the raw tool result.
-	dispatch func(context.Context, modelToolCall) (string, map[string]interface{}, tools.Result)
+	dispatch func(context.Context, transport.ToolCall) (string, map[string]interface{}, tools.Result)
 	// onTurn observes every model message, including tool-calling ones.
-	onTurn func(modelMessage)
+	onTurn func(transport.Message)
 	// onAnswer decides what to do with a tools-free answer. A nil hook accepts.
 	onAnswer func(toolLoopAnswer) toolLoopDecision
 	// onDispatch observes each dispatched call and may rewrite its envelope.
@@ -109,7 +110,7 @@ type toolLoopResult struct {
 	Content string
 	// Messages is the accumulated conversation, ready for a caller-owned
 	// finalization round.
-	Messages []modelMessage
+	Messages []transport.Message
 	Calls    int
 	// ModelCalls counts model turns; ProviderAttempts counts underlying
 	// provider requests, which retries can make larger.
@@ -155,7 +156,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		maxIters = 8
 	}
 	schemaBytes := schemaPayloadBytes(params.schemas)
-	messages := append([]modelMessage(nil), params.messages...)
+	messages := append([]transport.Message(nil), params.messages...)
 	result := toolLoopResult{}
 
 	var parallelToolCalls *bool
@@ -180,7 +181,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			}
 		}
 
-		request := modelRequest{
+		request := transport.Request{
 			Model: c.model, Messages: messages, Tools: params.schemas,
 			ParallelToolCalls: parallelToolCalls,
 		}
@@ -223,7 +224,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			}
 			if decision.corrective() {
 				messages = appendToolsFreeAssistant(messages, message)
-				messages = append(messages, modelMessage{Role: "user", Content: strPtr(decision.prompt)})
+				messages = append(messages, transport.Message{Role: "user", Content: strPtr(decision.prompt)})
 				if decision.grantIter {
 					maxIters++
 				}
@@ -254,7 +255,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		}
 
 		echoCalls, skippedOutputs := continuationCalls(c.apiMode, message, toolCalls)
-		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: message.ProviderItems}
+		echo := transport.Message{Role: "assistant", ToolCalls: echoCalls, ProviderItems: message.ProviderItems}
 		if message.Content != nil {
 			echo.Content = message.Content
 		}
@@ -270,7 +271,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			if params.onDispatch != nil {
 				params.onDispatch(&dispatched)
 			}
-			messages = append(messages, modelMessage{
+			messages = append(messages, transport.Message{
 				Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(dispatched.Envelope),
 			})
 		}
@@ -287,7 +288,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 
 // modelResponseAttempts reports how many provider requests a model turn cost.
 // Transports that do not count attempts report a single one.
-func modelResponseAttempts(response *modelResponse) int {
+func modelResponseAttempts(response *transport.Response) int {
 	if response == nil {
 		return 0
 	}

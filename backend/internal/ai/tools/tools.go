@@ -20,24 +20,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
-
-// Schema is the OpenAI-shape tool definition emitted in the tools array of a
-// chat-completion request. Tools own their own schema so the registry can
-// build the per-request slice without duplicating the description elsewhere.
-type Schema struct {
-	Type     string       `json:"type"`
-	Function FunctionDecl `json:"function"`
-}
-
-// FunctionDecl is the function half of an OpenAI tool definition.
-type FunctionDecl struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-	Strict      bool                   `json:"strict,omitempty"`
-}
 
 // Result is what a Tool returns from Dispatch. Payload is the inner JSON
 // object the loop will hand back to the model in a "role: tool" message;
@@ -76,7 +61,7 @@ func ErrPayload(msg string) Result {
 type Tool interface {
 	Name() string
 	Group() string
-	Schema() Schema
+	Schema() transport.ToolSchema
 	Dispatch(ctx context.Context, env *Env, args json.RawMessage) Result
 }
 
@@ -330,8 +315,8 @@ func (r *Registry) Enable(entries []string) ([]string, error) {
 // Schemas returns the OpenAI tool definitions for the given enabled names,
 // sorted by name for determinism so equivalent configs produce equivalent
 // system prompts and prompt fingerprints.
-func (r *Registry) Schemas(enabled []string) []Schema {
-	out := make([]Schema, 0, len(enabled))
+func (r *Registry) Schemas(enabled []string) []transport.ToolSchema {
+	out := make([]transport.ToolSchema, 0, len(enabled))
 	for _, n := range enabled {
 		t, ok := r.tools[n]
 		if !ok {

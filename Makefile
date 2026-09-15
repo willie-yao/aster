@@ -79,7 +79,7 @@ test-v:
 e2e:
 	cd backend && go test ./internal/e2e/... -count=1 -v
 	cd backend && go test ./internal/fetcher -run '^TestEmailNotificationE2E$$' -count=1 -v
-	cd backend && go test ./internal/fixpr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
+	cd backend && go test ./internal/fix/pr -run '^TestAgentSandboxPreviewAndConfirmationUseExecutorResults$$' -count=1 -v
 
 # Install the pinned Go linter.
 install-golangci-lint: $(GOLANGCI_LINT)
@@ -122,6 +122,7 @@ cleanroom-check:
 
 # Check the AGENTS.md repo map against the backend tree.
 check-repo-map:
+	bash hack/check-repo-map.sh --self-test
 	bash hack/check-repo-map.sh
 
 # Check that current onboarding examples use the supported published release.

@@ -113,8 +113,8 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/corrections",
     "backend/internal/fetcher",
     "backend/internal/fetchprogress",
-    "backend/internal/fixpr",
-    "backend/internal/fixruntime",
+    "backend/internal/fix/pr",
+    "backend/internal/fix/runtime",
     "backend/internal/ghpr",
     "backend/internal/issues",
     "backend/internal/junit",
@@ -129,6 +129,7 @@ REMOTE_BACKEND_PREFIXES = (
     "backend/internal/project",
     "backend/internal/prow",
     "backend/internal/prowbuild",
+    "backend/internal/pullrequest",
     "backend/internal/redact",
     "backend/internal/remediationinvestigation",
     "backend/internal/remediationpolicy",
@@ -144,7 +145,7 @@ REMOTE_BACKEND_PREFIXES = (
 
 FIX_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
-    "backend/internal/fixexecutor",
+    "backend/internal/fix/executor",
     "backend/internal/modelprovider",
     "backend/internal/runtime",
 )
@@ -154,9 +155,10 @@ HELM_BACKEND_PREFIXES = (
     "backend/cmd/fixexecutor",
     "backend/internal/ai/skills",
     "backend/internal/ai/tools",
+    "backend/internal/ai/transport",
     "backend/internal/agentsandbox",
     "backend/internal/artifacts",
-    "backend/internal/fixexecutor",
+    "backend/internal/fix/executor",
     "backend/internal/kubernetesdeploy",
     "backend/internal/modelprovider",
     "backend/internal/models",
@@ -394,8 +396,53 @@ def self_test() -> None:
             {"backend", "benchmarks", "helm_static"},
         ),
         (
+            "pull request triage",
+            ["backend/internal/pullrequest/triage/prtriage.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request attribution",
+            ["backend/internal/pullrequest/attribution/prattribution.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request escalation",
+            ["backend/internal/pullrequest/escalation/prescalation.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "pull request comment",
+            ["backend/internal/pullrequest/comment/body.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
             "fix executor",
-            ["backend/internal/fixexecutor/executor.go"],
+            ["backend/internal/fix/executor/executor.go"],
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
+        ),
+        (
+            "fix PR",
+            ["backend/internal/fix/pr/fixpr.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix runtime",
+            ["backend/internal/fix/runtime/factory.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix runtime fixture",
+            ["backend/internal/fix/runtime/testdata/fakeexecutor/main.go"],
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "fix executor fixture",
+            ["backend/internal/fix/executor/testdata/fakegateway/main.go"],
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
+        ),
+        (
+            "fix executor command",
+            ["backend/cmd/fixexecutor/main.go"],
             {"backend", "benchmarks", "helm_static", "fix_executor"},
         ),
         (
@@ -437,6 +484,11 @@ def self_test() -> None:
                 "helm_static",
                 "remote_fixer",
                         },
+        ),
+        (
+            "transport schema clean-room dependency",
+            ["backend/internal/ai/transport/types.go"],
+            {"backend", "benchmarks", "helm_static", "remote_fixer"},
         ),
         (
             "tools clean-room dependency",
@@ -536,6 +588,28 @@ def self_test() -> None:
         if f'{gate}: ""' not in benchmarks_job:
             raise AssertionError(f"benchmark job does not disable {gate}")
 
+    namespace_moves = (
+        (
+            "backend/internal/prtriage/prtriage.go",
+            "backend/internal/pullrequest/triage/prtriage.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixpr/fixpr.go",
+            "backend/internal/fix/pr/fixpr.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixruntime/factory.go",
+            "backend/internal/fix/runtime/factory.go",
+            {"backend", "benchmarks", "remote_fixer"},
+        ),
+        (
+            "backend/internal/fixexecutor/executor.go",
+            "backend/internal/fix/executor/executor.go",
+            {"backend", "benchmarks", "helm_static", "fix_executor"},
+        ),
+    )
     with tempfile.TemporaryDirectory(prefix="aster-ci-classifier-") as tmp:
         repository = pathlib.Path(tmp)
 
@@ -595,7 +669,34 @@ def self_test() -> None:
                 f"rename/merge-base: expected {sorted(expected)}, got {sorted(actual)}"
             )
 
-    print(f"{len(scenarios) + 3} classification scenarios passed")
+        for old, new, expected in namespace_moves:
+            write(old, "package fixture\n")
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "add namespace fixture")
+            base = git("rev-parse", "HEAD")
+            (repository / new).parent.mkdir(parents=True, exist_ok=True)
+            os.rename(repository / old, repository / new)
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "move namespace fixture")
+            head = git("rev-parse", "HEAD")
+            paths = changed_paths(base, head, merge_base=False, repository=repository)
+            if set(paths) != {old, new}:
+                raise AssertionError(f"namespace rename: expected both paths, got {paths}")
+            actual = {key for key, enabled in classify(paths).items() if enabled}
+            if actual != expected:
+                raise AssertionError(f"namespace rename {new}: expected {expected}, got {actual}")
+
+            (repository / new).unlink()
+            git("add", "-A")
+            git("commit", "--no-gpg-sign", "-qm", "delete namespace fixture")
+            paths = changed_paths(head, "HEAD", merge_base=False, repository=repository)
+            if paths != [new]:
+                raise AssertionError(f"namespace deletion: expected {new}, got {paths}")
+            actual = {key for key, enabled in classify(paths).items() if enabled}
+            if actual != expected:
+                raise AssertionError(f"namespace deletion {new}: expected {expected}, got {actual}")
+
+    print(f"{len(scenarios) + 3 + 2 * len(namespace_moves)} classification scenarios passed")
 
 
 def main() -> int:

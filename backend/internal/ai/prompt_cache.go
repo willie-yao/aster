@@ -5,12 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 const analysisPromptCacheName = "aster_analysis_v1"
 
-func analysisPromptCacheKey(stablePrompt string, schemas []tools.Schema) string {
+func analysisPromptCacheKey(stablePrompt string, schemas []transport.ToolSchema) string {
 	promptSum := sha256.Sum256([]byte(stablePrompt))
 	schemaJSON, _ := json.Marshal(schemas)
 	schemaSum := sha256.Sum256(schemaJSON)

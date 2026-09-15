@@ -32,7 +32,15 @@ cd backend && go test ./internal/ai -run TestService_CacheKeyShape -v
 
 # AI subsystem with the race detector.
 cd backend && go test -race -count=1 ./internal/ai/...
+
+# Headless onboarding and concrete terminal adapters.
+cd backend && go test ./internal/onboard/... ./internal/kubernetesdeploy ./cmd/aster -count=1
 ```
+
+The `onboard` package owns planning, application, and the guided workflow through
+an injected prompter. `onboard/terminal` owns process streams, TTY detection, and
+concrete input implementations. Headless onboarding and Kubernetes deployment
+must not depend on the terminal adapter or its UI libraries.
 
 Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by anchor tests. Update the relevant anchor test in the same change as intentional prompt edits.
 

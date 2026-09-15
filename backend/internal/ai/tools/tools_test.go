@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // stubTool is a Tool that records the args it received so registry tests
@@ -18,8 +20,8 @@ type stubTool struct {
 
 func (s *stubTool) Name() string  { return s.name }
 func (s *stubTool) Group() string { return s.group }
-func (s *stubTool) Schema() Schema {
-	return Schema{Type: "function", Function: FunctionDecl{Name: s.name, Description: "stub"}}
+func (s *stubTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{Type: "function", Function: transport.FunctionDecl{Name: s.name, Description: "stub"}}
 }
 
 func (s *stubTool) Dispatch(_ context.Context, _ *Env, raw json.RawMessage) Result {

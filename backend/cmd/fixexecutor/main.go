@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/willie-yao/aster/backend/internal/fixexecutor"
+	fixexecutor "github.com/willie-yao/aster/backend/internal/fix/executor"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
 )

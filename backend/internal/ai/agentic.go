@@ -15,6 +15,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/evidenceplan"
 	"github.com/willie-yao/aster/backend/internal/ai/skills"
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -246,7 +247,7 @@ var artifactTreeNoiseExt = map[string]bool{
 // turn. With single=true and more than one call, only the first is kept so the
 // echoed assistant message stays compatible with single-call templates. The
 // dropped count is returned for logging. The model can re-request dropped calls.
-func limitToolCalls(calls []modelToolCall, single bool) (kept []modelToolCall, dropped int) {
+func limitToolCalls(calls []transport.ToolCall, single bool) (kept []transport.ToolCall, dropped int) {
 	if single && len(calls) > 1 {
 		return calls[:1], len(calls) - 1
 	}
@@ -792,7 +793,7 @@ func (c *Client) doAnalyzeAgentic(
 			userPrompt = prependPrompt(userPrompt, plan)
 		}
 	}
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr(fullSysPrompt)},
 		{Role: "user", Content: strPtr(userPrompt)},
 	}
@@ -1093,7 +1094,7 @@ func compactPublishedStrings(values []string, limit int) []string {
 	return out
 }
 
-func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftPhase string) analysisResponse {
+func (c *Client) applyPostLoopCritique(ctx context.Context, state *agentState, messages []transport.Message, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, opts AgenticOptions, retries *critiqueRetryBudget, draftObserved bool, draftPhase string) analysisResponse {
 	if state.critiquePassed {
 		return state.bestDraft.parsed
 	}
@@ -1141,7 +1142,7 @@ func selectedDraftAttempt(state *agentState) int {
 	return 0
 }
 
-func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState, messages []modelMessage, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, initial critiqueOutcome, opts AgenticOptions, retries *critiqueRetryBudget) analysisResponse {
+func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState, messages []transport.Message, finalContent string, finalProviderItems []json.RawMessage, parsed analysisResponse, initial critiqueOutcome, opts AgenticOptions, retries *critiqueRetryBudget) analysisResponse {
 	if !retries.available() {
 		recordTrace(ctx, TraceEvent{Kind: "critique_retry_denied", Outcome: "retry_budget", RetryDeniedReason: "retry_budget", InitialIssueCount: len(initial.Matches()), SelectedAttempt: selectedDraftAttempt(state), RemainingTimeMs: int(time.Until(state.deadline) / time.Millisecond)})
 		return state.bestDraft.parsed
@@ -1161,8 +1162,8 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		feedback += "\n\n" + injection
 	}
 	repairMessages := append(messages,
-		modelMessage{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
-		modelMessage{Role: "user", Content: strPtr(feedback)})
+		transport.Message{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
+		transport.Message{Role: "user", Content: strPtr(feedback)})
 	retry, _ := retries.admit()
 
 	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
@@ -1190,7 +1191,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 			return state.bestDraft.parsed
 		}
 		requestStart := time.Now()
-		resp, err := c.callModelRequest(ctx, modelRequest{
+		resp, err := c.callModelRequest(ctx, transport.Request{
 			Model: c.model, Messages: repairMessages, Tools: schemas,
 			ParallelToolCalls: parallelToolCalls, PromptCacheKey: state.promptCacheKey,
 		})
@@ -1202,7 +1203,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		msg := resp.Message
 		toolCalls, _ := limitToolCalls(msg.ToolCalls, opts.SingleToolCall)
 		echoCalls, skippedOutputs := continuationCalls(c.apiMode, msg, toolCalls)
-		echo := modelMessage{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
+		echo := transport.Message{Role: "assistant", ToolCalls: echoCalls, ProviderItems: msg.ProviderItems}
 		if msg.Content != nil {
 			echo.Content = msg.Content
 		}
@@ -1211,7 +1212,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(ctx, state, tc)
 			state.modelBytes += len(result)
-			repairMessages = append(repairMessages, modelMessage{Role: "tool", ToolCallID: tc.ID, Content: strPtr(result)})
+			repairMessages = append(repairMessages, transport.Message{Role: "tool", ToolCallID: tc.ID, Content: strPtr(result)})
 		}
 	}
 

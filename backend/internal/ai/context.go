@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // Context limits are expressed in tokens. The request estimator deliberately
@@ -117,7 +117,7 @@ func contextHeadroomFor(opts AgenticOptions) contextHeadroom {
 // conservativePromptTokenEstimate uses one token per serialized byte plus
 // a fixed transport allowance. This intentionally overestimates ordinary prose
 // and avoids a tokenizer dependency while remaining safe for dense CI data.
-func conservativePromptTokenEstimate(messages []modelMessage, schemaBytes int) int {
+func conservativePromptTokenEstimate(messages []transport.Message, schemaBytes int) int {
 	// requestSizeEstimate covers the model-visible content and schemas. Reserve
 	// additional token-equivalent framing for provider JSON, role encoding, and
 	// request metadata that transports add after the neutral messages are built.
@@ -126,7 +126,7 @@ func conservativePromptTokenEstimate(messages []modelMessage, schemaBytes int) i
 
 // prepareContextRequest compacts a request and rejects it before transport when
 // the conservative estimate still exceeds the reserved request budget.
-func prepareContextRequest(ctx context.Context, messages []modelMessage, schemaBytes int, headroom contextHeadroom, stage string) ([]modelMessage, bool) {
+func prepareContextRequest(ctx context.Context, messages []transport.Message, schemaBytes int, headroom contextHeadroom, stage string) ([]transport.Message, bool) {
 	compactionBudget := headroom.requestTokens - requestSerializationReserveTokens
 	if compactionBudget < 1 {
 		compactionBudget = 1
@@ -191,7 +191,7 @@ func stubContent(orig string) string {
 // schemaPayloadBytes is the serialized size of the tool schemas sent on every
 // loop call. Computed once per loop and added to the size estimate so
 // compaction accounts for the fixed schema cost, not just message content.
-func schemaPayloadBytes(schemas []tools.Schema) int {
+func schemaPayloadBytes(schemas []transport.ToolSchema) int {
 	if len(schemas) == 0 {
 		return 0
 	}
@@ -205,7 +205,7 @@ func schemaPayloadBytes(schemas []tools.Schema) int {
 // requestSizeEstimate approximates the serialized chat-request size in bytes:
 // message content + tool-call arguments + per-message framing + the fixed
 // schema payload.
-func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
+func requestSizeEstimate(messages []transport.Message, schemaBytes int) int {
 	total := schemaBytes + 64 // request framing
 	for i := range messages {
 		total += compactionMsgOverhead
@@ -227,7 +227,7 @@ func requestSizeEstimate(messages []modelMessage, schemaBytes int) int {
 // budgetBytes <= 0. Preserves the system prompt, task, message order, and
 // tool_call_id wiring so OpenAI tool-call pairing stays valid. Returns the
 // slice and the number of messages elided this call.
-func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]modelMessage, int) {
+func compactMessages(messages []transport.Message, schemaBytes, budgetBytes int) ([]transport.Message, int) {
 	if budgetBytes <= 0 || requestSizeEstimate(messages, schemaBytes) <= budgetBytes {
 		return messages, 0
 	}
@@ -279,14 +279,14 @@ func compactMessages(messages []modelMessage, schemaBytes, budgetBytes int) ([]m
 		if m.Role != "assistant" || len(m.ProviderItems) == 0 || len(m.ToolCalls) > 0 || m.Content == nil {
 			continue
 		}
-		replay := responsesAssistantMessagesFromProviderItems(m.ProviderItems)
+		replay := transport.ResponsesAssistantMessagesFromProviderItems(m.ProviderItems)
 		if len(replay) == 0 {
 			if m.Phase == "" {
-				m.Phase = responsesPhaseFromProviderItems(m.ProviderItems)
+				m.Phase = transport.ResponsesPhaseFromProviderItems(m.ProviderItems)
 			}
 			m.ProviderItems = nil
 		} else {
-			replacement := make([]modelMessage, 0, len(messages)+len(replay)-1)
+			replacement := make([]transport.Message, 0, len(messages)+len(replay)-1)
 			replacement = append(replacement, messages[:i]...)
 			replacement = append(replacement, replay...)
 			replacement = append(replacement, messages[i+1:]...)

@@ -2,34 +2,73 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"math"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 )
 
 type recordingTransport struct {
-	request modelRequest
-	result  *modelResponse
+	request transport.Request
+	result  *transport.Response
 	err     error
 	calls   int
 }
 
-func (t *recordingTransport) Complete(_ context.Context, req modelRequest) (*modelResponse, error) {
+func TestClientThrottleRemainsInsideTimedCall(t *testing.T) {
+	old := callDelay
+	callDelay = 20 * time.Millisecond
+	t.Cleanup(func() { callDelay = old })
+	for _, apiMode := range []string{APIChatCompletions, APIResponses} {
+		t.Run(apiMode, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				writeReasoningTestFinal(w, apiMode, "ok")
+			}))
+			defer server.Close()
+			client := NewClientWithOptions(Options{API: apiMode, Endpoint: server.URL, Model: "m"})
+			for _, cancelled := range []bool{false, true} {
+				store := NewTraceStore()
+				trace := store.Start(TraceMetadata{JobID: "job", APIMode: apiMode})
+				ctx, cancel := context.WithCancel(withAnalysisTrace(t.Context(), trace))
+				if cancelled {
+					cancel()
+				}
+				_, err := client.callModel(ctx, nil, nil, nil)
+				cancel()
+				if cancelled != errors.Is(err, context.Canceled) || !cancelled && err != nil {
+					t.Fatalf("cancelled=%v error=%v", cancelled, err)
+				}
+				trace.Finish("complete", err)
+				event := store.Snapshot().Traces[0].Events[0]
+				if event.DurationMs < int(callDelay/time.Millisecond) {
+					t.Fatalf("throttle omitted from timed call: %+v", event)
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("provider calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func (t *recordingTransport) Complete(_ context.Context, req transport.Request) (*transport.Response, error) {
 	t.calls++
 	t.request = req
 	return t.result, t.err
 }
 
 func TestClientCompleteUsesModelTransport(t *testing.T) {
-	transport := &recordingTransport{result: &modelResponse{
-		HasMessage: true, Message: modelMessage{Role: "assistant", Content: strPtr("done")},
+	provider := &recordingTransport{result: &transport.Response{
+		HasMessage: true, Message: transport.Message{Role: "assistant", Content: strPtr("done")},
 	}}
-	client := &Client{model: "model-a", transport: transport}
+	client := &Client{model: "model-a", transport: provider}
 
 	got, err := client.Complete(context.Background(), "system", "user")
 	if err != nil {
@@ -38,18 +77,18 @@ func TestClientCompleteUsesModelTransport(t *testing.T) {
 	if got != "done" {
 		t.Fatalf("Complete() = %q, want done", got)
 	}
-	wantMessages := []modelMessage{
+	wantMessages := []transport.Message{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr("user")},
 	}
-	if transport.request.Model != "model-a" || !reflect.DeepEqual(transport.request.Messages, wantMessages) {
-		t.Fatalf("transport request = %+v", transport.request)
+	if provider.request.Model != "model-a" || !reflect.DeepEqual(provider.request.Messages, wantMessages) {
+		t.Fatalf("transport request = %+v", provider.request)
 	}
 }
 
 func TestClientCallModelRecordsTrace(t *testing.T) {
-	transport := &recordingTransport{result: &modelResponse{
-		HasMessage: true, Message: modelMessage{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call"}}},
+	provider := &recordingTransport{result: &transport.Response{
+		HasMessage: true, Message: transport.Message{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call"}}},
 		ResponseID: "resp-1", Status: "completed", FinishReason: "tool_calls",
 		Attempts: 2, HTTPStatus: 200, WireRequestBytes: 321, Usage: aiusage.TokenUsage{
 			Reported: true, InputTokens: 11, CachedInputTokens: 3,
@@ -57,27 +96,27 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 			OutputTokens: 7, ReasoningTokens: 2,
 		},
 	}}
-	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortHigh, transport: transport}
+	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortHigh, transport: provider}
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIResponses})
 	ctx := withAnalysisTrace(context.Background(), trace)
-	if _, err := client.callModel(ctx, []modelMessage{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+	if _, err := client.callModel(ctx, []transport.Message{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	wantBytes := requestSizeEstimate([]modelMessage{{Role: "user", Content: strPtr("user")}}, 0)
+	wantBytes := requestSizeEstimate([]transport.Message{{Role: "user", Content: strPtr("user")}}, 0)
 	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ServiceTier != "" || event.ToolCallCount != 1 || event.Bytes != wantBytes || event.WireRequestBytes != 321 {
 		t.Fatalf("event = %+v", event)
 	}
 }
 
 func TestClientCallModelRecordsRequestBytesOnProviderError(t *testing.T) {
-	transport := &recordingTransport{err: errors.New("provider failed")}
-	client := &Client{model: "model-a", transport: transport}
+	provider := &recordingTransport{err: errors.New("provider failed")}
+	client := &Client{model: "model-a", transport: provider}
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test"})
-	messages := []modelMessage{{Role: "user", Content: strPtr("user")}}
+	messages := []transport.Message{{Role: "user", Content: strPtr("user")}}
 	ctx := withAnalysisTrace(context.Background(), trace)
 	if _, err := client.callModel(ctx, messages, nil, nil); err == nil {
 		t.Fatal("expected provider error")
@@ -95,8 +134,8 @@ func TestClientCallModelRecordsUsageOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport := &recordingTransport{result: &modelResponse{Usage: aiusage.TokenUsage{Reported: true, InputTokens: 9, OutputTokens: 4}}}
-	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortXHigh, transport: transport}
+	provider := &recordingTransport{result: &transport.Response{Usage: aiusage.TokenUsage{Reported: true, InputTokens: 9, OutputTokens: 4}}}
+	client := &Client{model: "model-a", reasoningEffort: ReasoningEffortXHigh, transport: provider}
 	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
 	if _, err := client.callModel(ctx, nil, nil, nil); err != nil {
 		t.Fatal(err)
@@ -118,8 +157,8 @@ func TestClientCallModelRecordsUnreportedUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport := &recordingTransport{err: errors.New("provider failed")}
-	client := &Client{model: "model-a", transport: transport}
+	provider := &recordingTransport{err: errors.New("provider failed")}
+	client := &Client{model: "model-a", transport: provider}
 	ctx, operation := aiusage.Begin(t.Context(), recorder, aiusage.Metadata{LogicalID: "request", Origin: aiusage.OriginFetcher, Feature: aiusage.FeatureFailureAnalysis, StartedAt: now})
 	if _, err := client.callModel(ctx, nil, nil, nil); err == nil {
 		t.Fatal("expected provider error")
@@ -131,80 +170,8 @@ func TestClientCallModelRecordsUnreportedUsage(t *testing.T) {
 	}
 }
 
-func TestChatTokenUsageDistinguishesAbsentAndZero(t *testing.T) {
-	if got := chatTokenUsage(nil); got.Reported {
-		t.Fatalf("absent usage = %+v", got)
-	}
-	if got := chatTokenUsage(&chatCompletionsUsage{}); !got.Reported || got.InputTokens != 0 || got.OutputTokens != 0 {
-		t.Fatalf("present zero usage = %+v", got)
-	}
-}
-
-func TestChatTokenUsageRecognizesCacheCreationFields(t *testing.T) {
-	var wire chatCompletionsResponse
-	if err := json.Unmarshal([]byte(`{"usage":{"input_tokens":11,"output_tokens":3,"cache_read_input_tokens":5,"cache_creation_input_tokens":7}}`), &wire); err != nil {
-		t.Fatal(err)
-	}
-	got := chatTokenUsage(wire.Usage)
-	if !got.Reported || got.InputTokens != 23 || got.CachedInputTokens != 5 ||
-		!got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 7 || got.OutputTokens != 3 {
-		t.Fatalf("usage = %+v", got)
-	}
-	zero := 0
-	got = chatTokenUsage(&chatCompletionsUsage{CacheCreationInputTokens: &zero})
-	if !got.CacheWriteInputTokensReported || got.CacheWriteInputTokens != 0 {
-		t.Fatalf("present zero cache write usage = %+v", got)
-	}
-}
-
-func TestChatTokenUsageMarksOverflowInvalid(t *testing.T) {
-	cacheWrite := 1
-	got := chatTokenUsage(&chatCompletionsUsage{InputTokens: math.MaxInt, CacheCreationInputTokens: &cacheWrite})
-	if got.InputTokens != -1 || !got.CacheWriteInputTokensReported {
-		t.Fatalf("overflow usage = %+v", got)
-	}
-}
-
-func TestChatCompletionsMessageRoundTrip(t *testing.T) {
-	messages := []modelMessage{
-		{
-			Role:    "assistant",
-			Content: strPtr("reasoning"),
-			ToolCalls: []modelToolCall{{
-				ID: "call-1", Type: "function",
-				Function: modelFunction{Name: "read_artifact", Arguments: `{"path":"log.txt"}`},
-			}},
-		},
-		{Role: "tool", ToolCallID: "call-1", Name: "read_artifact", Content: strPtr(`{"ok":true}`)},
-	}
-
-	wire := chatCompletionsResponse{ID: "chat-1", Usage: &chatCompletionsUsage{PromptTokens: 12, CompletionTokens: 4, PromptTokensDetails: chatPromptTokenDetails{CachedTokens: 5}, CompletionTokensDetails: chatOutputTokenDetails{ReasoningTokens: 2}}}
-	wire.Choices = append(wire.Choices, chatCompletionsChoice{
-		FinishReason: "tool_calls", Message: encodeChatMessages(messages)[0],
-	})
-	decoded := decodeChatResponse(wire)
-	if !decoded.HasMessage || decoded.FinishReason != "tool_calls" || !reflect.DeepEqual(decoded.Message, messages[0]) {
-		t.Fatalf("decoded response = %+v", decoded)
-	}
-	if decoded.ResponseID != "chat-1" || !decoded.Usage.Reported || decoded.Usage.InputTokens != 12 || decoded.Usage.CachedInputTokens != 5 || decoded.Usage.OutputTokens != 4 || decoded.Usage.ReasoningTokens != 2 {
-		t.Fatalf("decoded metadata = %+v", decoded)
-	}
-	if got := encodeChatMessages(messages); len(got) != 2 || got[1].ToolCallID != "call-1" || got[1].Name != "read_artifact" {
-		t.Fatalf("encoded messages = %+v", got)
-	}
-}
-
-func TestChatEncodingPreservesNilMessages(t *testing.T) {
-	if got := encodeChatMessages(nil); got != nil {
-		t.Fatalf("encodeChatMessages(nil) = %#v, want nil", got)
-	}
-	if got := decodeChatToolCalls(nil); got != nil {
-		t.Fatalf("decodeChatToolCalls(nil) = %#v, want nil", got)
-	}
-}
-
 func TestContinuationCallsPairsSkippedResponsesCalls(t *testing.T) {
-	msg := modelMessage{ToolCalls: []modelToolCall{{ID: "a"}, {ID: "b"}}}
+	msg := transport.Message{ToolCalls: []transport.ToolCall{{ID: "a"}, {ID: "b"}}}
 	echo, skipped := continuationCalls(APIResponses, msg, msg.ToolCalls[:1])
 	if len(echo) != 2 || len(skipped) != 1 || skipped[0].ToolCallID != "b" {
 		t.Fatalf("echo=%+v skipped=%+v", echo, skipped)

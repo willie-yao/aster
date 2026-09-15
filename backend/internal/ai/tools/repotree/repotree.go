@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // Group is the alias used to enable all repo tools at once.
@@ -112,10 +113,10 @@ type listTool struct{}
 
 func (*listTool) Name() string  { return "list_repo_tree" }
 func (*listTool) Group() string { return Group }
-func (*listTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*listTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "list_repo_tree",
 			Description: "List the immediate children of a directory in the source repository. Pass an empty string for the repo root. Returns subdirectories and files under that directory.",
 			Parameters: map[string]interface{}{
@@ -226,10 +227,10 @@ type readTool struct{}
 
 func (*readTool) Name() string  { return "read_repo_file" }
 func (*readTool) Group() string { return Group }
-func (*readTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*readTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name: "read_repo_file",
 			Description: "Read a byte range of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call. " +
 				"When line_start and line_end are present, they are absolute source coordinates for complete lines wholly contained in content; partial leading or trailing lines are outside the range.",
@@ -327,10 +328,10 @@ type grepTool struct{}
 
 func (*grepTool) Name() string  { return "grep_repo" }
 func (*grepTool) Group() string { return Group }
-func (*grepTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*grepTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "grep_repo",
 			Description: "Regex-search source files for matching lines. Narrow the search with path_glob (a path substring, or a *-glob like \"config/*.yaml\") so it stays cheap; each matched file is fetched over the API. Scans at most 40 files per call and reports truncation. Returns matches with file, line number, and context.",
 			Parameters: map[string]interface{}{

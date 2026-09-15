@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
-	"github.com/willie-yao/aster/backend/internal/fixpr"
+	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/statefile"

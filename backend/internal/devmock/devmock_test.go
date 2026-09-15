@@ -14,8 +14,8 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/output"
-	"github.com/willie-yao/aster/backend/internal/prescalation"
 	"github.com/willie-yao/aster/backend/internal/project"
+	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
 )
 
 // testClock advances only when a test says so, so the request and escalation

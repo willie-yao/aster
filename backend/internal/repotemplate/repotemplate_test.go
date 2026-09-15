@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // contentsServer serves the GitHub contents API for a fixed file/dir set.
@@ -120,7 +121,7 @@ type fakeCompleter struct {
 	err  error
 }
 
-func (f fakeCompleter) CompleteStructured(_ context.Context, _, _ string, _ ai.ResponseFormat, validate ai.StructuredValidator) error {
+func (f fakeCompleter) CompleteStructured(_ context.Context, _, _ string, _ transport.ResponseFormat, validate ai.StructuredValidator) error {
 	if f.err != nil {
 		return f.err
 	}

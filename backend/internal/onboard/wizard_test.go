@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -194,12 +193,6 @@ func (f *fakePullRequestWriter) Open(context.Context, Repo, map[string]string, s
 	return "https://github.com/example/dashboard/pull/1", nil
 }
 
-type panicReader struct{}
-
-func (panicReader) Read([]byte) (int, error) {
-	panic("stdin was read")
-}
-
 func cloneFiles(files map[string]string) map[string]string {
 	out := make(map[string]string, len(files))
 	for path, content := range files {
@@ -234,11 +227,9 @@ func wizardDependencies(input string) (dependencies, *bytes.Buffer, *fakeScaffol
 		prompts:        &fakePromptBuilder{},
 		files:          writer,
 		pullRequests:   &fakePullRequestWriter{},
-		terminal: Terminal{
-			In: strings.NewReader(input), Out: out, Err: out, Interactive: true,
-		},
+		out:            out,
+		newPrompter:    func() Prompter { return newLineWizardUI(strings.NewReader(input), out) },
 	}
-	deps.wizard = newLineWizardUI(deps.terminal)
 	return deps, out, writer, sweeper
 }
 
@@ -461,8 +452,7 @@ func TestWizard_ExistingOutputIsPreserved(t *testing.T) {
 
 func TestRun_NonInteractiveMissingInputsNeverReadsStdin(t *testing.T) {
 	deps, _, writer, _ := wizardDependencies("")
-	deps.terminal.In = panicReader{}
-	deps.terminal.Interactive = true
+	deps.newPrompter = func() Prompter { panic("unexpected prompter construction") }
 	opts := Options{NonInteractive: true}
 	err := run(context.Background(), opts, deps)
 	if err == nil || !strings.Contains(err.Error(), "non-interactive onboarding requires") {
@@ -475,7 +465,7 @@ func TestRun_NonInteractiveMissingInputsNeverReadsStdin(t *testing.T) {
 
 func TestRun_NonTTYMissingInputsFails(t *testing.T) {
 	deps, _, _, _ := wizardDependencies("")
-	deps.terminal.Interactive = false
+	deps.newPrompter = nil
 	err := run(context.Background(), Options{}, deps)
 	if err == nil || !strings.Contains(err.Error(), "stdin is not an interactive terminal") {
 		t.Fatalf("error = %v", err)
@@ -484,9 +474,7 @@ func TestRun_NonTTYMissingInputsFails(t *testing.T) {
 
 func TestRun_CompleteFlagsRemainNonInteractive(t *testing.T) {
 	deps, _, writer, sweeper := wizardDependencies("")
-	deps.terminal.In = panicReader{}
-	deps.terminal.Interactive = false
-	deps.wizard = panicWizardUI{}
+	deps.newPrompter = func() Prompter { panic("unexpected prompter construction") }
 	disabled := false
 	opts := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
@@ -509,7 +497,7 @@ func TestRun_InteractiveAndFlaggedInputsGenerateSameFiles(t *testing.T) {
 	}
 
 	flaggedDeps, _, flaggedWriter, _ := wizardDependencies("")
-	flaggedDeps.terminal.Interactive = false
+	flaggedDeps.newPrompter = nil
 	disabled := false
 	flagged := Options{
 		TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
@@ -537,7 +525,7 @@ func TestRun_K8sFlaggedInputsRequireStorage(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			deps, _, writer, _ := wizardDependencies("")
 			pullRequests := deps.pullRequests.(*fakePullRequestWriter)
-			deps.terminal.Interactive = false
+			deps.newPrompter = nil
 			disabled := false
 			opts := Options{
 				TestGrid: "dashboard-a", DashboardRepo: "example/project-aster",
@@ -555,8 +543,6 @@ func TestRun_K8sFlaggedInputsRequireStorage(t *testing.T) {
 		})
 	}
 }
-
-var _ io.Reader = panicReader{}
 
 func TestWizard_CategoryTokensCanBeEdited(t *testing.T) {
 	input := strings.Join([]string{"", "", defaultTestDashboardRepo, "", "", "", "n", "", "custom", "y"}, "\n") + "\n"
@@ -1008,7 +994,7 @@ func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
 		deps.catalogs.(*wizardFakeCatalogClient).catalog.Jobs[key] = definition
 	}
 	ui := &queuedWizardUI{inputs: []string{usePromptDefault}}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "upstream-org/project", TestGrid: "dashboard-a", Mode: modePages,
@@ -1035,7 +1021,7 @@ func TestWizard_AuthenticatedUserOwnsUpstreamDashboardSuggestion(t *testing.T) {
 func TestWizard_NoSafeDashboardOwnerRequiresInput(t *testing.T) {
 	deps, out, _, _ := wizardDependencies("")
 	ui := &queuedWizardUI{inputs: []string{"chosen-owner/project-aster"}}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", TestGrid: "dashboard-a", Mode: modePages,
@@ -1061,7 +1047,7 @@ func TestWizard_ExplicitDashboardRepositorySkipsOwnerLookup(t *testing.T) {
 	repositories := deps.repositories.(*wizardFakeRepositoryClient)
 	repositories.authLogin = "authenticated-owner"
 	ui := &queuedWizardUI{}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: "explicit-owner/dashboard", TestGrid: "dashboard-a", Mode: modePages,
@@ -1079,7 +1065,7 @@ func TestWizard_ExplicitDashboardRepositorySkipsOwnerLookup(t *testing.T) {
 func TestWizard_ShortNameDefaultsEmpty(t *testing.T) {
 	deps, out, _, _ := wizardDependencies("")
 	ui := &queuedWizardUI{inputs: []string{usePromptDefault}}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
@@ -1100,7 +1086,7 @@ func TestWizard_ShortNameDefaultsEmpty(t *testing.T) {
 func TestWizard_ExplicitShortNameIsPreserved(t *testing.T) {
 	deps, out, _, _ := wizardDependencies("")
 	ui := &queuedWizardUI{}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, _, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,
@@ -1206,7 +1192,7 @@ func TestWizard_InteractiveUpdateRequiresFinalConfirmation(t *testing.T) {
 	writer := deps.files.(*fakeScaffoldWriter)
 	writer.inspection = testPagesDestinationActions("project.yaml")
 	ui := &queuedWizardUI{selects: []string{"update"}, confirms: []bool{true}}
-	deps.wizard = ui
+	deps.newPrompter = func() Prompter { return ui }
 	disabled := false
 	plan, opts, err := runWizard(context.Background(), Options{
 		SourceRepo: "example/project", DashboardRepo: defaultTestDashboardRepo, TestGrid: "dashboard-a", Mode: modePages,

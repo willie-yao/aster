@@ -3,51 +3,147 @@
 # the map cannot silently rot as packages are added or removed. The map is the
 # orientation contract for contributors and agents alike.
 #
-# Enforced for backend/cmd/* and backend/internal/* top-level packages. Nested
-# helpers (ai/tools/k8s and friends) are documented but not enforced.
+# Namespace-only directories are traversed. Package-local testdata is excluded.
 set -o errexit
 set -o nounset
 set -o pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-readonly map_file=AGENTS.md
-missing=()
-stale=()
+python3 - "$@" <<'PY'
+import argparse
+import pathlib
+import re
+import tempfile
 
-# The map section runs from the "## Repo layout" heading to the next heading.
-map_body="$(awk '/^## Repo layout$/{found=1; next} found && /^## /{exit} found' "${map_file}")"
 
-# Only the backend block owns cmd/ and internal/ package entries; the frontend
-# block reuses the same indent for src/ subdirectories.
-backend_body="$(awk '/^backend\//{found=1; next} found && /^[a-z]/{exit} found' <<<"${map_body}")"
+def package_paths(root):
+    def walk(directory):
+        if any(directory.glob("*.go")):
+            yield directory.relative_to(root).as_posix()
+        for child in sorted(directory.iterdir()):
+            if child.is_dir() and child.name != "testdata" and not child.name.startswith((".", "_")):
+                yield from walk(child)
 
-for dir in backend/cmd/*/ backend/internal/*/; do
-	pkg="$(basename "${dir}")"
-	grep -qE "^[[:space:]]*${pkg}/" <<<"${backend_body}" || missing+=("${dir}")
-done
+    return {
+        package
+        for area in ("backend/cmd", "backend/internal")
+        for package in walk(root / area)
+    }
 
-# Every package entry indented directly under cmd/ or internal/ must exist.
-while read -r pkg; do
-	[[ -d "backend/cmd/${pkg}" || -d "backend/internal/${pkg}" ]] || stale+=("${pkg}")
-done < <(grep -oE '^    [a-z][a-z0-9]*/' <<<"${backend_body}" | tr -d ' /' | sort -u)
 
-status=0
-if ((${#missing[@]})); then
-	status=1
-	echo "AGENTS.md repo map does not list these packages:"
-	printf '  %s\n' "${missing[@]}"
-fi
-if ((${#stale[@]})); then
-	status=1
-	echo "AGENTS.md repo map lists these packages, but they no longer exist:"
-	printf '  %s\n' "${stale[@]}"
-fi
+def mapped_paths(text):
+    section = text.split("## Repo layout\n", 1)[1].split("\n## ", 1)[0]
+    backend = re.split(r"\n[a-z]", section.split("\nbackend/", 1)[1], maxsplit=1)[0]
+    stack = [(0, "backend")]
+    paths = set()
+    for line in backend.splitlines():
+        match = re.match(r"^( +)([a-z][a-z0-9]*(?:/[a-z][a-z0-9]*)*)/(?:\s|$)", line)
+        if not match:
+            continue
+        indent, name = len(match[1]), match[2]
+        while stack[-1][0] >= indent:
+            stack.pop()
+        path = stack[-1][1] + "/" + name
+        stack.append((indent, path))
+        if indent > 2 and path.startswith(("backend/cmd/", "backend/internal/")):
+            paths.add(path)
+    return paths
 
-if ((status)); then
-	echo
-	echo "Update the \"Repo layout\" section in ${map_file} to match the tree."
-	exit 1
-fi
 
-echo "AGENTS.md repo map matches backend/cmd and backend/internal."
+def differences(root, text):
+    packages = package_paths(root)
+    mapped = mapped_paths(text)
+    # Namespace entries are valid ancestors of a package.
+    valid = packages | {
+        parent.as_posix()
+        for package in packages
+        for parent in pathlib.PurePosixPath(package).parents
+    }
+    stale = {
+        path for path in mapped
+        if path not in valid
+    }
+    return packages - mapped, stale
+
+
+def self_test():
+    text = """## Repo layout
+
+```
+backend/
+  cmd/
+    server/
+  internal/
+    server/
+    runtime/
+    ai/
+      tools/k8s/
+    pullrequest/
+      triage/
+    fix/
+      runtime/
+    prow/jobconfig/
+frontend/
+  src/
+    components/
+```
+
+## Next section
+"""
+    with tempfile.TemporaryDirectory(prefix=".repo-map-test-", dir=".") as directory:
+        root = pathlib.Path(directory)
+        for package in (
+            "cmd/server", "internal/server", "internal/runtime", "internal/ai",
+            "internal/ai/tools/k8s", "internal/pullrequest/triage",
+            "internal/fix/runtime", "internal/fix/runtime/testdata/fakeexecutor",
+            "internal/prow/jobconfig",
+        ):
+            path = root / "backend" / package
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "package.go").write_text("package fixture\n")
+        scenarios = (
+            ("valid namespaces and nested helpers", text, set(), set()),
+            ("missing nested helper", text.replace("      tools/k8s/\n", ""),
+             {"backend/internal/ai/tools/k8s"}, set()),
+            ("stale nested helper", text.replace("      tools/k8s/", "      removed/"),
+             {"backend/internal/ai/tools/k8s"}, {"backend/internal/ai/removed"}),
+            ("missing nested package", text.replace("      triage/\n", ""),
+             {"backend/internal/pullrequest/triage"}, set()),
+            ("stale nested package", text.replace("      triage/", "      removed/"),
+             {"backend/internal/pullrequest/triage"}, {"backend/internal/pullrequest/removed"}),
+            ("same leaf in another namespace", text.replace("    fix/\n      runtime/\n", ""),
+             {"backend/internal/fix/runtime"}, set()),
+            ("cmd ownership", text.replace("  cmd/\n    server/\n", "  cmd/\n"),
+             {"backend/cmd/server"}, set()),
+            ("missing top-level package", text.replace("\n    runtime/\n", "\n"),
+             {"backend/internal/runtime"}, set()),
+            ("stale top-level package", text.replace("    prow/jobconfig/", "    removed/"),
+             {"backend/internal/prow/jobconfig"}, {"backend/internal/removed"}),
+        )
+        for name, candidate, missing, stale in scenarios:
+            actual = differences(root, candidate)
+            assert actual == (missing, stale), (name, actual)
+    print(f"{len(scenarios)} repo map scenarios passed")
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--self-test", action="store_true")
+args = parser.parse_args()
+if args.self_test:
+    self_test()
+else:
+    missing, stale = differences(pathlib.Path("."), pathlib.Path("AGENTS.md").read_text())
+    for title, paths in (
+        ("AGENTS.md repo map does not list these packages:", missing),
+        ("AGENTS.md repo map lists these packages, but they no longer exist:", stale),
+    ):
+        if paths:
+            print(title)
+            for path in sorted(paths):
+                print(f"  {path}/")
+    if missing or stale:
+        print('\nUpdate the "Repo layout" section in AGENTS.md to match the tree.')
+        raise SystemExit(1)
+    print("AGENTS.md repo map matches backend/cmd and backend/internal.")
+PY

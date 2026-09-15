@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/fixpr"
+	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 )
 
 const (

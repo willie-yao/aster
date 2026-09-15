@@ -21,16 +21,19 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if err := validateAIEndpoint(opts.DeploymentAIEndpoint); err != nil {
 		return nil, opts, fmt.Errorf("deployed %w", err)
 	}
-	if deps.wizard == nil {
+	if deps.newPrompter == nil {
 		return nil, opts, fmt.Errorf("interactive onboarding UI is unavailable")
 	}
-	prompt := deps.wizard
+	prompt := deps.newPrompter()
+	if prompt == nil {
+		return nil, opts, fmt.Errorf("interactive onboarding UI is unavailable")
+	}
 	if closer, ok := prompt.(io.Closer); ok {
 		defer func() { _ = closer.Close() }()
 	}
-	fmt.Fprintln(deps.terminal.Out, "Guided Aster onboarding")
-	fmt.Fprintln(deps.terminal.Out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
-	fmt.Fprintln(deps.terminal.Out)
+	fmt.Fprintln(deps.out, "Guided Aster onboarding")
+	fmt.Fprintln(deps.out, "Use Ctrl+C to cancel. No files are written before final confirmation.")
+	fmt.Fprintln(deps.out)
 
 	repo, detectedFromGit, err := wizardSourceRepo(ctx, prompt, opts, deps)
 	if err != nil {
@@ -50,8 +53,8 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 			return nil, opts, metadataErr
 		}
 		if metadata.Upstream != nil && metadata.Upstream.FullName != repo.FullName {
-			fmt.Fprintf(deps.terminal.Out, "Detected GitHub fork upstream: %s\n", metadata.Upstream.FullName)
-			useUpstream, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			fmt.Fprintf(deps.out, "Detected GitHub fork upstream: %s\n", metadata.Upstream.FullName)
+			useUpstream, confirmErr := prompt.Confirm(ctx, ConfirmPrompt{
 				Title: "Use the upstream repository for Prow discovery?",
 				Value: true,
 			})
@@ -69,7 +72,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if opts.DashboardRepo == "" {
 		dashboardOwner, ownerWarning = inferDashboardOwner(ctx, opts.GitHubToken, detectedRepo, deps.repositories)
 	}
-	fmt.Fprintf(deps.terminal.Out, "\nInspecting GitHub metadata and kubernetes/test-infra for %s...\n", repo.FullName)
+	fmt.Fprintf(deps.out, "\nInspecting GitHub metadata and kubernetes/test-infra for %s...\n", repo.FullName)
 	discoveryCtx, cancelDiscovery := context.WithTimeout(ctx, onboardingDiscoveryTimeout)
 	report, err := discoverRepository(discoveryCtx, repo, opts.GitHubToken, dashboardOwner, deps.repositories, deps.catalogs)
 	cancelDiscovery()
@@ -80,7 +83,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		report.Warnings = append(report.Warnings, ownerWarning)
 	}
 	opts.SourceRepo = report.SourceRepo.FullName
-	fmt.Fprintf(deps.terminal.Out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
+	fmt.Fprintf(deps.out, "Found %d Prow job definition(s) that test this repository.\n", len(report.MatchingJobs))
 
 	selected, err := wizardDiscovery(ctx, prompt, &opts, report)
 	if err != nil {
@@ -88,7 +91,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 	if selected != nil && opts.IncludePresubmits == nil && selected.DashboardPresubmitJobs > 0 {
 		defaultInclude := selected.DashboardPeriodicJobs == 0
-		include, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+		include, confirmErr := prompt.Confirm(ctx, ConfirmPrompt{
 			Title:       "Include presubmit jobs in the dashboard?",
 			Description: "Presubmit history increases coverage and fetch time.",
 			Value:       defaultInclude,
@@ -100,9 +103,9 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if opts.Mode == "" {
-		choice, selectErr := prompt.Select(ctx, selectPrompt{
+		choice, selectErr := prompt.Select(ctx, SelectPrompt{
 			Title: "Deployment profile",
-			Options: []selectOption{
+			Options: []SelectOption{
 				{
 					Value:       modePages,
 					Label:       "GitHub Pages",
@@ -126,7 +129,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	}
 
 	if opts.DashboardRepo == "" {
-		opts.DashboardRepo, err = prompt.Input(ctx, inputPrompt{
+		opts.DashboardRepo, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Dashboard repository",
 			Description: "Existing owner/name consumer repository you control that will publish the dashboard.",
 			Value:       report.DashboardRepo.Value,
@@ -157,7 +160,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	opts.DashboardRepo = dashboardRepo.FullName
 
 	if opts.ID == "" {
-		opts.ID, err = prompt.Input(ctx, inputPrompt{
+		opts.ID, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Project ID",
 			Description: "Stable lowercase identifier inferred from repository metadata.",
 			Value:       report.Identity.ID.Value,
@@ -168,7 +171,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 	}
 	if opts.Name == "" {
-		opts.Name, err = prompt.Input(ctx, inputPrompt{
+		opts.Name, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Project display name",
 			Description: "Human-readable name shown throughout the dashboard.",
 			Value:       report.Identity.Name.Value,
@@ -179,7 +182,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		}
 	}
 	if opts.ShortName == "" {
-		opts.ShortName, err = prompt.Input(ctx, inputPrompt{
+		opts.ShortName, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Short name",
 			Description: "Optional established project abbreviation. Enter none or - to omit it.",
 			Value:       report.Identity.ShortName.Value,
@@ -190,7 +193,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		opts.ShortName = clearableValue(opts.ShortName)
 	}
 
-	if err := wizardDeploymentAI(ctx, prompt, &opts, deps.terminal.Out); err != nil {
+	if err := wizardDeploymentAI(ctx, prompt, &opts, deps.out); err != nil {
 		return nil, opts, err
 	}
 
@@ -209,7 +212,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 			defaultOut = siblingDashboardConsumerDir(sourceCheckoutRoot, workingDir, dashboardRepo.Name)
 			description = "Sibling directory for the dashboard consumer repository. It may be a new directory or an existing checkout."
 		}
-		opts.OutDir, err = prompt.Input(ctx, inputPrompt{
+		opts.OutDir, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Dashboard consumer directory",
 			Description: description,
 			Value:       defaultOut,
@@ -228,7 +231,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 
 	planning := planningContext{discovery: &report, selected: selected}
 	opts.allowK8sStoragePlaceholder = opts.Mode == modeK8s && opts.PlanOut == "" && !opts.OpenPR
-	fmt.Fprintln(deps.terminal.Out, "\nRunning the real job sweep and validating the scaffold...")
+	fmt.Fprintln(deps.out, "\nRunning the real job sweep and validating the scaffold...")
 	plan, err := buildPlan(ctx, opts, planning, deps)
 	if err != nil {
 		return nil, opts, err
@@ -238,7 +241,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 		for _, category := range plan.Project.Categories {
 			categoryTokens = append(categoryTokens, category.ID)
 		}
-		value, inputErr := prompt.Input(ctx, inputPrompt{
+		value, inputErr := prompt.Input(ctx, InputPrompt{
 			Title:       "Category tokens",
 			Description: "Comma-separated job-name tokens. Enter none or - to clear them.",
 			Value:       strings.Join(categoryTokens, ","),
@@ -258,7 +261,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 			return nil, opts, err
 		}
 	}
-	printReview(deps.terminal.Out, plan)
+	printReview(deps.out, plan)
 	if opts.DryRun {
 		return plan, opts, nil
 	}
@@ -266,7 +269,7 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	if hasDestinationReplacements(plan.Destination.Files) {
 		confirmationTitle = "Create and update these scaffold files?"
 	}
-	confirmed, err := prompt.Confirm(ctx, confirmPrompt{
+	confirmed, err := prompt.Confirm(ctx, ConfirmPrompt{
 		Title:       confirmationTitle,
 		Description: "This is the first prompt that permits a filesystem or GitHub write.",
 		Value:       false,
@@ -280,13 +283,13 @@ func runWizard(ctx context.Context, opts Options, deps dependencies) (*Plan, Opt
 	return plan, opts, nil
 }
 
-func wizardPromptAuthoring(ctx context.Context, prompt wizardUI, opts *Options) error {
+func wizardPromptAuthoring(ctx context.Context, prompt Prompter, opts *Options) error {
 	opts.PromptMode = strings.TrimSpace(opts.PromptMode)
 	if err := validatePromptMode(opts.PromptMode); err != nil {
 		return err
 	}
 	if opts.PromptMode == "" {
-		mode, err := prompt.Select(ctx, selectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []selectOption{
+		mode, err := prompt.Select(ctx, SelectPrompt{Title: "Project prompt authoring", Description: "Choose how prompts/system.md is prepared.", Options: []SelectOption{
 			{Value: promptModeHandoff, Label: "Create an agent handoff bundle (recommended)", Description: "Writes a reusable skill and reviewable TODO prompt for your own coding agent."},
 			{Value: promptModeTemplate, Label: "TODO template", Description: "Does not call a model."},
 		}})
@@ -317,7 +320,7 @@ func validateDashboardConsumerDir(opts Options) error {
 	return nil
 }
 
-func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *Options, plan *Plan, deps dependencies) error {
+func prepareInteractiveDestination(ctx context.Context, prompt Prompter, opts *Options, plan *Plan, deps dependencies) error {
 	for {
 		if err := inspectPlanDestination(plan, deps); err != nil {
 			return err
@@ -325,10 +328,10 @@ func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *O
 		if plan.Destination.OpenPR || !hasDestinationReplacements(plan.Destination.Files) || plan.Destination.UpdateExisting {
 			return nil
 		}
-		choice, err := prompt.Select(ctx, selectPrompt{
+		choice, err := prompt.Select(ctx, SelectPrompt{
 			Title:       "Dashboard consumer directory contains generated files",
 			Description: "Choose another directory, explicitly update known scaffold files, or cancel.",
-			Options: []selectOption{
+			Options: []SelectOption{
 				{Value: "another", Label: "Choose another directory", Description: "Keep every existing file unchanged."},
 				{Value: "update", Label: "Update known scaffold files", Description: "Replace only the generated files listed in the review."},
 				{Value: "cancel", Label: "Cancel onboarding", Description: "Stop without writing files."},
@@ -340,7 +343,7 @@ func prepareInteractiveDestination(ctx context.Context, prompt wizardUI, opts *O
 		}
 		switch choice {
 		case "another":
-			value, err := prompt.Input(ctx, inputPrompt{
+			value, err := prompt.Input(ctx, InputPrompt{
 				Title:       "Dashboard consumer directory",
 				Description: "Choose a different directory for the dashboard consumer repository.",
 				Required:    true,
@@ -408,20 +411,20 @@ func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
 	return nil
 }
 
-func wizardSourceRepo(ctx context.Context, prompt wizardUI, opts Options, deps dependencies) (Repo, bool, error) {
+func wizardSourceRepo(ctx context.Context, prompt Prompter, opts Options, deps dependencies) (Repo, bool, error) {
 	if opts.SourceRepo != "" {
 		repo, err := NormalizeGitHubRepo(opts.SourceRepo)
 		if err != nil {
 			return Repo{}, false, fmt.Errorf("source repository: %w", err)
 		}
-		fmt.Fprintf(deps.terminal.Out, "Source repository: %s (explicit input)\n", repo.FullName)
+		fmt.Fprintf(deps.out, "Source repository: %s (explicit input)\n", repo.FullName)
 		return repo, false, nil
 	}
 	if remote, err := deps.remotes.Origin(ctx); err == nil {
 		repo, normalizeErr := NormalizeGitHubRepo(remote)
 		if normalizeErr == nil {
-			fmt.Fprintf(deps.terminal.Out, "Source repository detected from git remote origin: %s\n", repo.FullName)
-			use, confirmErr := prompt.Confirm(ctx, confirmPrompt{
+			fmt.Fprintf(deps.out, "Source repository detected from git remote origin: %s\n", repo.FullName)
+			use, confirmErr := prompt.Confirm(ctx, ConfirmPrompt{
 				Title: "Use this repository?",
 				Value: true,
 			})
@@ -433,7 +436,7 @@ func wizardSourceRepo(ctx context.Context, prompt wizardUI, opts Options, deps d
 			}
 		}
 	}
-	value, err := prompt.Input(ctx, inputPrompt{
+	value, err := prompt.Input(ctx, InputPrompt{
 		Title:       "Source GitHub repository",
 		Description: "Repository tested by Prow, as owner/name or a GitHub URL.",
 		Required:    true,
@@ -462,7 +465,7 @@ func wizardSourceRepo(ctx context.Context, prompt wizardUI, opts Options, deps d
 	return repo, false, nil
 }
 
-func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
+func wizardDiscovery(ctx context.Context, prompt Prompter, opts *Options, report DiscoveryReport) (*DashboardCandidate, error) {
 	if opts.Bucket != "" {
 		return nil, nil
 	}
@@ -475,7 +478,7 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 		}
 		return nil, nil
 	}
-	options := make([]selectOption, 0, len(report.Candidates)+2)
+	options := make([]SelectOption, 0, len(report.Candidates)+2)
 	for _, candidate := range report.Candidates {
 		summary := fmt.Sprintf("%s (%s)", safeTerminal(candidate.Dashboard),
 			directSourceMatchSummary(candidate.PeriodicJobs, candidate.PresubmitJobs))
@@ -483,19 +486,19 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 		if candidate.DashboardPostsubmitJobs > 0 {
 			description += fmt.Sprintf("; %d postsubmit jobs are unsupported", candidate.DashboardPostsubmitJobs)
 		}
-		options = append(options, selectOption{
+		options = append(options, SelectOption{
 			Value:       "candidate:" + candidate.Dashboard,
 			Label:       summary,
 			Description: description + ".",
 		})
 	}
 	options = append(options,
-		selectOption{
+		SelectOption{
 			Value:       "manual_testgrid",
 			Label:       "Enter a TestGrid dashboard manually",
 			Description: "Use a dashboard name not inferred from repository metadata.",
 		},
-		selectOption{
+		SelectOption{
 			Value:       "artifact_bucket",
 			Label:       "Use an artifact bucket",
 			Description: "Discover jobs directly from a Prow artifact bucket.",
@@ -505,7 +508,7 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 	if len(report.Candidates) > 0 {
 		defaultValue = "candidate:" + report.Candidates[0].Dashboard
 	}
-	choice, err := prompt.Select(ctx, selectPrompt{
+	choice, err := prompt.Select(ctx, SelectPrompt{
 		Title:       "Choose the discovery source",
 		Description: "Select the TestGrid dashboard or artifact source for this project.",
 		Options:     options,
@@ -522,13 +525,13 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 		}
 	}
 	if choice == "manual_testgrid" {
-		opts.TestGrid, err = prompt.Input(ctx, inputPrompt{
+		opts.TestGrid, err = prompt.Input(ctx, InputPrompt{
 			Title:    "TestGrid dashboard",
 			Required: true,
 		})
 		return nil, err
 	}
-	opts.Bucket, err = prompt.Input(ctx, inputPrompt{
+	opts.Bucket, err = prompt.Input(ctx, InputPrompt{
 		Title:       "Artifact bucket",
 		Description: "Bucket containing Prow logs or pr-logs indexes.",
 		Required:    true,
@@ -536,7 +539,7 @@ func wizardDiscovery(ctx context.Context, prompt wizardUI, opts *Options, report
 	if err != nil {
 		return nil, err
 	}
-	opts.GCSWebBase, err = prompt.Input(ctx, inputPrompt{
+	opts.GCSWebBase, err = prompt.Input(ctx, InputPrompt{
 		Title:       "gcsweb base URL",
 		Description: "Optional gateway root for non-GCS object storage.",
 		Value:       opts.GCSWebBase,

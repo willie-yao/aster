@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // agForceFinalizePrompt is the user message that forces a JSON-only final round
@@ -25,11 +24,11 @@ Your entire response must start with { and end with }.`
 
 const analysisFinalizeToolName = "submit_analysis"
 
-func analysisFinalizeFormat() ResponseFormat {
+func analysisFinalizeFormat() transport.ResponseFormat {
 	stringArray := func() map[string]any {
 		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	}
-	return ResponseFormat{
+	return transport.ResponseFormat{
 		Name:        analysisFinalizeToolName,
 		Description: "Submit one structured failure analysis.",
 		Schema: map[string]any{
@@ -63,7 +62,7 @@ func analysisFinalizeFormat() ResponseFormat {
 
 const critiqueFinalizationReserve = 5 * time.Second
 
-func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
+func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState, messages []transport.Message, headroom contextHeadroom) (string, []json.RawMessage, bool) {
 	started := time.Now()
 	content, items, safe := c.runFinalizeRound(ctx, messages, headroom)
 	state.recentModelRequest = time.Since(started)
@@ -74,12 +73,12 @@ func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState,
 // just the final analysis. Used when the agent ran out of iterations or returned
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
-func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, headroom contextHeadroom) (string, []json.RawMessage, bool) {
-	messages = append(messages, modelMessage{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+func (c *Client) runFinalizeRound(ctx context.Context, messages []transport.Message, headroom contextHeadroom) (string, []json.RawMessage, bool) {
+	messages = append(messages, transport.Message{Role: "user", Content: strPtr(agForceFinalizePrompt)})
 	format := analysisFinalizeFormat()
-	toolDefs := []tools.Schema{{
+	toolDefs := []transport.ToolSchema{{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name: format.Name, Description: format.Description,
 			Parameters: format.Schema, Strict: true,
 		},
@@ -94,9 +93,9 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 	}
 	recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "requested"})
 	parallel := false
-	resp, err := c.callModelRequest(ctx, modelRequest{
+	resp, err := c.callModelRequest(ctx, transport.Request{
 		Model: c.model, Messages: messages, Tools: toolDefs,
-		ToolChoice: &ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
+		ToolChoice: &transport.ToolChoice{Name: format.Name}, ParallelToolCalls: &parallel,
 	})
 	if err != nil {
 		recordTrace(ctx, TraceEvent{Kind: "finalize", Outcome: "error", ErrorCode: "model_request_error"})
@@ -117,7 +116,7 @@ func (c *Client) runFinalizeRound(ctx context.Context, messages []modelMessage, 
 		phase := ""
 		if c.apiMode == APIResponses {
 			phase = "final_answer"
-			items = responsesAssistantProviderItem(content, phase)
+			items = transport.ResponsesAssistantProviderItem(content, phase)
 		}
 		return content, items, true
 	}
@@ -148,17 +147,4 @@ func tryParseAnalysis(s string) (analysisResponse, bool) {
 		return analysisResponse{}, false
 	}
 	return out, true
-}
-
-var toolsUnsupportedRe = regexp.MustCompile(`(?i)tool[s_]?call|function[s_]?call|tools_choice|tools provided|tools?\s+(?:are\s+)?not supported|function calling`)
-
-func isToolsUnsupportedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, " 400") && !strings.Contains(msg, " 422") {
-		return false
-	}
-	return toolsUnsupportedRe.MatchString(msg)
 }

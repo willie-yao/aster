@@ -17,12 +17,12 @@ type queuedWizardUI struct {
 	inputs         []string
 	selects        []string
 	confirms       []bool
-	inputPrompts   []inputPrompt
-	selectPrompts  []selectPrompt
-	confirmPrompts []confirmPrompt
+	inputPrompts   []InputPrompt
+	selectPrompts  []SelectPrompt
+	confirmPrompts []ConfirmPrompt
 }
 
-func (u *queuedWizardUI) Input(_ context.Context, prompt inputPrompt) (string, error) {
+func (u *queuedWizardUI) Input(_ context.Context, prompt InputPrompt) (string, error) {
 	u.inputPrompts = append(u.inputPrompts, prompt)
 	if len(u.inputs) == 0 {
 		return "", fmt.Errorf("unexpected input prompt %q", prompt.Title)
@@ -43,7 +43,7 @@ func (u *queuedWizardUI) Input(_ context.Context, prompt inputPrompt) (string, e
 	return value, nil
 }
 
-func (u *queuedWizardUI) Select(_ context.Context, prompt selectPrompt) (string, error) {
+func (u *queuedWizardUI) Select(_ context.Context, prompt SelectPrompt) (string, error) {
 	u.selectPrompts = append(u.selectPrompts, prompt)
 	if len(u.selects) == 0 {
 		return "", fmt.Errorf("unexpected select prompt %q", prompt.Title)
@@ -61,7 +61,7 @@ func (u *queuedWizardUI) Select(_ context.Context, prompt selectPrompt) (string,
 	return value, nil
 }
 
-func (u *queuedWizardUI) Confirm(_ context.Context, prompt confirmPrompt) (bool, error) {
+func (u *queuedWizardUI) Confirm(_ context.Context, prompt ConfirmPrompt) (bool, error) {
 	u.confirmPrompts = append(u.confirmPrompts, prompt)
 	if len(u.confirms) == 0 {
 		return false, fmt.Errorf("unexpected confirmation prompt %q", prompt.Title)
@@ -201,7 +201,7 @@ func TestWizardDeploymentAI_ProviderSwitchClearsRejectedModelDefault(t *testing.
 	if err := wizardDeploymentAI(context.Background(), ui, &opts, &bytes.Buffer{}); err != nil {
 		t.Fatalf("wizardDeploymentAI: %v", err)
 	}
-	var modelPrompts []inputPrompt
+	var modelPrompts []InputPrompt
 	for _, prompt := range ui.inputPrompts {
 		if prompt.Title == "Deployed AI model" {
 			modelPrompts = append(modelPrompts, prompt)

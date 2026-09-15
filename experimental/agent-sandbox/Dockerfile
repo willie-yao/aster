@@ -3,8 +3,8 @@ WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/internal/runtime ./internal/runtime
-COPY backend/internal/fixruntime/testdata/fakeexecutor ./internal/fixruntime/testdata/fakeexecutor
-RUN CGO_ENABLED=0 go build -trimpath -o /out/fixruntime-fake ./internal/fixruntime/testdata/fakeexecutor
+COPY backend/internal/fix/runtime/testdata/fakeexecutor ./internal/fix/runtime/testdata/fakeexecutor
+RUN CGO_ENABLED=0 go build -trimpath -o /out/fixruntime-fake ./internal/fix/runtime/testdata/fakeexecutor
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates git \

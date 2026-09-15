@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 func TestParseContextWindowTokens(t *testing.T) {
@@ -64,10 +66,10 @@ func TestDeriveContextBudgets_FallbackIsBounded(t *testing.T) {
 }
 
 func TestConservativePromptTokenEstimate_UsesOneBytePerToken(t *testing.T) {
-	messages := []modelMessage{
+	messages := []transport.Message{
 		{Role: "system", Content: strPtr("system")},
 		{Role: "user", Content: strPtr(strings.Repeat("/very/long/artifact/path/日本語/", 600))},
-		{Role: "assistant", ToolCalls: []modelToolCall{{ID: "call", Type: "function", Function: modelFunction{Name: "grep_artifact", Arguments: `{"path":"logs/a.yaml","pattern":"é"}`}}}},
+		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call", Type: "function", Function: transport.FunctionCall{Name: "grep_artifact", Arguments: `{"path":"logs/a.yaml","pattern":"é"}`}}}},
 		{Role: "tool", ToolCallID: "call", Content: strPtr(strings.Repeat(`{"key":"値","line":"aaaaaaaa"}`+"\n", 1200))},
 	}
 	bytes := requestSizeEstimate(messages, 2048)

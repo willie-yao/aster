@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/auth"
-	"github.com/willie-yao/aster/backend/internal/prescalation"
+	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
 )
 
 const (

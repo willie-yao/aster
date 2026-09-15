@@ -58,7 +58,7 @@ func TestAIProviderOptionsDescribeDeploymentReachability(t *testing.T) {
 	if pages[0].Value != string(aiProviderChoose) || k8s[0].Value != string(aiProviderChoose) {
 		t.Fatalf("provider sentinel missing: pages=%v k8s=%v", pages[0], k8s[0])
 	}
-	find := func(options []selectOption, id aiProviderID) selectOption {
+	find := func(options []SelectOption, id aiProviderID) SelectOption {
 		t.Helper()
 		for _, option := range options {
 			if option.Value == string(id) {
@@ -66,7 +66,7 @@ func TestAIProviderOptionsDescribeDeploymentReachability(t *testing.T) {
 			}
 		}
 		t.Fatalf("option %q missing", id)
-		return selectOption{}
+		return SelectOption{}
 	}
 	if got := find(pages, aiProviderSelfHosted).Description; !strings.Contains(got, "GitHub Actions") {
 		t.Fatalf("Pages self-hosted description = %q", got)

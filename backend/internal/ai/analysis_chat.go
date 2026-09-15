@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
@@ -119,7 +120,7 @@ const analysisChatAnnouncementCorrectivePrompt = "Your previous response announc
 	" Either make that tool call now, or return the analysis-conversation JSON object using the evidence you already gathered." +
 	" Output JSON only."
 
-func analysisChatStructuredFormat() ResponseFormat {
+func analysisChatStructuredFormat() transport.ResponseFormat {
 	nullableString := []any{
 		map[string]any{"type": "string"},
 		map[string]any{"type": "null"},
@@ -139,7 +140,7 @@ func analysisChatStructuredFormat() ResponseFormat {
 		},
 		map[string]any{"type": "null"},
 	}
-	return ResponseFormat{
+	return transport.ResponseFormat{
 		Name: "analysis_chat_reply", Description: "Return an analysis chat answer with verified artifact or source citations.",
 		Schema: map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -439,7 +440,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		singleToolCall:      a.opts.SingleToolCall,
 		contextByteBudget:   a.opts.ContextByteBudget,
 		strictContextBudget: true,
-		dispatch: func(ctx context.Context, toolCall modelToolCall) (string, map[string]interface{}, tools.Result) {
+		dispatch: func(ctx context.Context, toolCall transport.ToolCall) (string, map[string]interface{}, tools.Result) {
 			// agentState owns the model and GCS byte budgets, so the loop sees
 			// no separate tool result to account for.
 			envelope, payload := dispatchAgenticToolWithPayload(ctx, state, toolCall)
@@ -457,7 +458,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		},
 		// A turn that both calls tools and emits a valid answer keeps that
 		// answer as a fallback for a later round that cannot produce one.
-		onTurn: func(message modelMessage) {
+		onTurn: func(message transport.Message) {
 			if len(message.ToolCalls) == 0 || message.Content == nil || strings.TrimSpace(*message.Content) == "" {
 				return
 			}
@@ -629,7 +630,7 @@ func (a *AnalysisChatAgent) classifyAnalysisChatLoopError(ctx context.Context, r
 		if errors.Is(modelErr.err, context.Canceled) || errors.Is(modelErr.err, context.DeadlineExceeded) {
 			return modelErr.err
 		}
-		if modelErr.iter == 0 && isToolsUnsupportedError(modelErr.err) {
+		if modelErr.iter == 0 && transport.IsToolsUnsupportedError(modelErr.err) {
 			return errors.Join(ErrToolsUnsupported, analysischat.ErrProviderRequestFailed)
 		}
 		return analysischat.ErrProviderRequestFailed
@@ -645,11 +646,11 @@ func (a *AnalysisChatAgent) classifyAnalysisChatLoopError(ctx context.Context, r
 
 // analysisChatStatusResponse carries a bare HTTP status into the response
 // telemetry when the model turn produced no usable response.
-func analysisChatStatusResponse(status int) *modelResponse {
+func analysisChatStatusResponse(status int) *transport.Response {
 	if status == 0 {
 		return nil
 	}
-	return &modelResponse{HTTPStatus: status}
+	return &transport.Response{HTTPStatus: status}
 }
 
 // callAnalysisChatFinal runs the structured finalize ladder. It also returns the
@@ -657,7 +658,7 @@ func analysisChatStatusResponse(status int) *modelResponse {
 // salvaged into an unverified answer.
 func (a *AnalysisChatAgent) callAnalysisChatFinal(
 	ctx context.Context,
-	messages []modelMessage,
+	messages []transport.Message,
 	evidence map[string]*analysisChatEvidence,
 	source *analysisChatSourceCitationContext,
 ) (analysischat.Reply, analysisChatParseStats, string, structuredMessagesResult, error) {
@@ -782,7 +783,7 @@ func recordAnalysisChatResponseFailure(
 	ctx context.Context,
 	stage string,
 	modelCalls, providerAttempts int,
-	response *modelResponse,
+	response *transport.Response,
 	stats analysisChatParseStats,
 	category string,
 ) {
@@ -793,7 +794,7 @@ func recordAnalysisChatResponseFallback(
 	ctx context.Context,
 	stage string,
 	modelCalls, providerAttempts int,
-	response *modelResponse,
+	response *transport.Response,
 	stats analysisChatParseStats,
 	category string,
 ) {
@@ -807,7 +808,7 @@ func recordAnalysisChatResponseDegraded(
 	ctx context.Context,
 	stage string,
 	modelCalls, providerAttempts int,
-	response *modelResponse,
+	response *transport.Response,
 	stats analysisChatParseStats,
 	category string,
 ) {
@@ -818,7 +819,7 @@ func recordAnalysisChatResponseTelemetry(
 	ctx context.Context,
 	outcome, stage string,
 	modelCalls, providerAttempts int,
-	response *modelResponse,
+	response *transport.Response,
 	stats analysisChatParseStats,
 	category string,
 ) {
@@ -837,7 +838,7 @@ func recordAnalysisChatStructuredResponse(
 ) {
 	response := result.Response
 	if response == nil && result.httpStatus() != 0 {
-		response = &modelResponse{HTTPStatus: result.httpStatus()}
+		response = &transport.Response{HTTPStatus: result.httpStatus()}
 	}
 	recordAnalysisChatResponseTelemetryWithAttempt(
 		ctx, outcome, stage, modelCalls, providerAttempts, response, stats, category, string(result.finalPath()),
@@ -848,7 +849,7 @@ func recordAnalysisChatResponseTelemetryWithAttempt(
 	ctx context.Context,
 	outcome, stage string,
 	modelCalls, providerAttempts int,
-	response *modelResponse,
+	response *transport.Response,
 	stats analysisChatParseStats,
 	category, structuredAttempt string,
 ) {
@@ -910,8 +911,8 @@ func patternAnalysisChatTools(enabled []string) []string {
 	return out
 }
 
-func prepareAnalysisChatFinalizeMessages(messages []modelMessage, budget int) ([]modelMessage, error) {
-	messages = append(messages, modelMessage{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+func prepareAnalysisChatFinalizeMessages(messages []transport.Message, budget int) ([]transport.Message, error) {
+	messages = append(messages, transport.Message{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
 	messages, _ = compactMessages(messages, 0, budget)
 	if size := requestSizeEstimate(messages, 0); size > budget {
 		return nil, fmt.Errorf("analysis chat finalize request exceeds the %d-byte context budget after compaction", budget)
@@ -919,18 +920,18 @@ func prepareAnalysisChatFinalizeMessages(messages []modelMessage, budget int) ([
 	return messages, nil
 }
 
-func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []analysischat.Message, question string, schemaBytes, budget int) ([]modelMessage, error) {
-	base := []modelMessage{
+func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []analysischat.Message, question string, schemaBytes, budget int) ([]transport.Message, error) {
+	base := []transport.Message{
 		{Role: "system", Content: strPtr(systemPrompt)},
 		{Role: "user", Content: strPtr(contextMessage)},
 	}
-	historyMessages := make([]modelMessage, 0, len(history))
+	historyMessages := make([]transport.Message, 0, len(history))
 	for _, message := range history {
 		switch strings.TrimSpace(message.Role) {
 		case "user":
 			content := clampAnalysisChatText(message.Content, analysisChatMaxQuestionBytes)
 			if content != "" {
-				historyMessages = append(historyMessages, modelMessage{Role: "user", Content: strPtr(content)})
+				historyMessages = append(historyMessages, transport.Message{Role: "user", Content: strPtr(content)})
 			}
 		case "assistant":
 			content, err := analysisChatAssistantHistory(message)
@@ -938,11 +939,11 @@ func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []an
 				return nil, err
 			}
 			if content != "" {
-				historyMessages = append(historyMessages, modelMessage{Role: "assistant", Content: strPtr(content)})
+				historyMessages = append(historyMessages, transport.Message{Role: "assistant", Content: strPtr(content)})
 			}
 		}
 	}
-	questionMessage := modelMessage{Role: "user", Content: strPtr(question)}
+	questionMessage := transport.Message{Role: "user", Content: strPtr(question)}
 	target := budget * analysisChatHistoryTargetPct / 100
 	for {
 		messages := append(slices.Clone(base), historyMessages...)
@@ -1319,7 +1320,7 @@ func analysisChatEvidenceBytes(evidence map[string]*analysisChatEvidence) int {
 	return total
 }
 
-func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall modelToolCall, payload map[string]interface{}, maxBytes int) (int, bool) {
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall transport.ToolCall, payload map[string]interface{}, maxBytes int) (int, bool) {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
 		return 0, true
 	}

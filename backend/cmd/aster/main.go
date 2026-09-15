@@ -26,6 +26,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/kubernetesdeploy"
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/onboard"
+	"github.com/willie-yao/aster/backend/internal/onboard/terminal"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
@@ -336,7 +337,7 @@ func runOnboard(ctx context.Context, args []string) {
 	opts.AIModel = os.Getenv("AI_MODEL")
 	opts.GitHubToken = os.Getenv("GITHUB_TOKEN")
 
-	if err := onboard.Run(ctx, opts); err != nil {
+	if err := terminal.Run(ctx, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

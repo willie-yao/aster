@@ -96,8 +96,8 @@ var aiProviderPresets = []aiProviderPreset{
 	},
 }
 
-func aiProviderOptions(mode string) []selectOption {
-	options := []selectOption{{
+func aiProviderOptions(mode string) []SelectOption {
+	options := []SelectOption{{
 		Value:       string(aiProviderChoose),
 		Label:       "Choose a provider",
 		Description: "Select a provider or choose Configure later.",
@@ -116,7 +116,7 @@ func aiProviderOptions(mode string) []selectOption {
 				description += " The stock Pages workflow sends a bearer token, not an Azure api-key header."
 			}
 		}
-		options = append(options, selectOption{
+		options = append(options, SelectOption{
 			Value:       string(preset.ID),
 			Label:       preset.Label,
 			Description: description,

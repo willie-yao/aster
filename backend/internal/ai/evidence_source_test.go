@@ -6,14 +6,15 @@ import (
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 type evidenceSourceTool struct{ source EvidenceReadSource }
 
 func (t *evidenceSourceTool) Name() string  { return "evidence_source" }
 func (t *evidenceSourceTool) Group() string { return "test" }
-func (t *evidenceSourceTool) Schema() tools.Schema {
-	return tools.Schema{Type: "function", Function: tools.FunctionDecl{Name: t.Name(), Parameters: map[string]interface{}{"type": "object"}}}
+func (t *evidenceSourceTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{Type: "function", Function: transport.FunctionDecl{Name: t.Name(), Parameters: map[string]interface{}{"type": "object"}}}
 }
 func (t *evidenceSourceTool) Dispatch(ctx context.Context, _ *tools.Env, _ json.RawMessage) tools.Result {
 	t.source = EvidenceReadSourceFromContext(ctx)
@@ -27,7 +28,7 @@ func TestDispatchAgenticToolMarksModelToolEvidenceSource(t *testing.T) {
 	state := &agentState{
 		registry: registry, enabledTools: []string{tool.Name()}, opts: AgenticOptions{ModelByteBudget: 1024, GCSByteBudget: 1024},
 	}
-	dispatchAgenticTool(t.Context(), state, modelToolCall{Function: modelFunction{Name: tool.Name(), Arguments: `{}`}})
+	dispatchAgenticTool(t.Context(), state, transport.ToolCall{Function: transport.FunctionCall{Name: tool.Name(), Arguments: `{}`}})
 	if tool.source != EvidenceReadSourceModelTool {
 		t.Fatalf("source = %q, want %q", tool.source, EvidenceReadSourceModelTool)
 	}

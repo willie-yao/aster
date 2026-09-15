@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 )
 
@@ -44,10 +45,10 @@ type listTool struct{}
 
 func (*listTool) Name() string  { return "list_artifacts" }
 func (*listTool) Group() string { return Group }
-func (*listTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*listTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "list_artifacts",
 			Description: "List the immediate children of a directory in the build's GCS artifact tree. Pass an empty string for the build root. Returns dirs and files (with sizes).",
 			Parameters: map[string]interface{}{
@@ -94,10 +95,10 @@ type readTool struct{}
 
 func (*readTool) Name() string  { return "read_artifact" }
 func (*readTool) Group() string { return Group }
-func (*readTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*readTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "read_artifact",
 			Description: "Read a byte range of a file. Use for small/known files. For large logs prefer tail_artifact or grep_artifact. Returns up to 16384 bytes per call.",
 			Parameters: map[string]interface{}{
@@ -149,10 +150,10 @@ type tailTool struct{}
 
 func (*tailTool) Name() string  { return "tail_artifact" }
 func (*tailTool) Group() string { return Group }
-func (*tailTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*tailTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "tail_artifact",
 			Description: "Return the last N lines of a file. Most efficient way to inspect the end of a build log or controller log. Default 500 lines, max 2000.",
 			Parameters: map[string]interface{}{
@@ -207,10 +208,10 @@ const artifactGrepSelector = "artifact-workspace"
 
 func (*grepTool) Name() string  { return "grep_artifact" }
 func (*grepTool) Group() string { return Group }
-func (*grepTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*grepTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "grep_artifact",
 			Description: "Regex-search a file for matching lines. Returns matches with surrounding context lines and line numbers. Use this for huge build-logs where you want to find specific errors.",
 			Parameters: map[string]interface{}{
@@ -366,10 +367,10 @@ type findTool struct{}
 
 func (*findTool) Name() string  { return "find_artifacts" }
 func (*findTool) Group() string { return Group }
-func (*findTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*findTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "find_artifacts",
 			Description: "Recursively search the artifact tree for files whose basename matches a regex. Bounded: walks at most max_dirs subdirectories and returns at most max_results matches. Use for locating files when you know the name pattern but not the path (e.g. junit_*.xml, kubelet.log, build-log.txt).",
 			Parameters: map[string]interface{}{

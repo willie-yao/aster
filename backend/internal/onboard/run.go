@@ -17,7 +17,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/onboard/promptauthor"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
@@ -33,8 +32,8 @@ type dependencies struct {
 	prompts        promptBuilder
 	files          scaffoldWriter
 	pullRequests   pullRequestWriter
-	terminal       Terminal
-	wizard         wizardUI
+	out            io.Writer
+	newPrompter    func() Prompter
 }
 
 type defaultSweeper struct{}
@@ -68,7 +67,7 @@ func (w githubPullRequestWriter) Open(ctx context.Context, repo Repo, files map[
 	})
 }
 
-func defaultDependencies(opts Options, terminal Terminal) dependencies {
+func defaultDependencies(opts Options, out io.Writer) dependencies {
 	client := defaultDiscoveryHTTPClient()
 	return dependencies{
 		repositories:   githubRepositoryClient{client: client},
@@ -79,30 +78,19 @@ func defaultDependencies(opts Options, terminal Terminal) dependencies {
 		prompts:        defaultPromptBuilder{},
 		files:          localScaffoldWriter{},
 		pullRequests:   githubPullRequestWriter{client: &http.Client{Timeout: 30 * time.Second}, token: opts.GitHubToken},
-		terminal:       terminal,
-		wizard:         newWizardUI(terminal),
+		out:            out,
 	}
 }
 
-// Run executes onboarding using the process terminal. Complete flag-based
-// invocations remain non-interactive.
-func Run(ctx context.Context, opts Options) error {
-	interactive := term.IsTerminal(int(os.Stdin.Fd()))
-	return RunWithTerminal(ctx, opts, Terminal{In: os.Stdin, Out: os.Stdout, Err: os.Stderr, Interactive: interactive})
-}
-
-// RunWithTerminal executes onboarding with injected terminal streams.
-func RunWithTerminal(ctx context.Context, opts Options, terminal Terminal) error {
-	if terminal.In == nil {
-		terminal.In = strings.NewReader("")
+// Run executes onboarding. A nil prompter factory disables interactive input.
+// Complete flag-based invocations never construct a prompter.
+func Run(ctx context.Context, opts Options, out io.Writer, newPrompter func() Prompter) error {
+	if out == nil {
+		out = io.Discard
 	}
-	if terminal.Out == nil {
-		terminal.Out = io.Discard
-	}
-	if terminal.Err == nil {
-		terminal.Err = terminal.Out
-	}
-	return run(ctx, opts, defaultDependencies(opts, terminal))
+	deps := defaultDependencies(opts, out)
+	deps.newPrompter = newPrompter
+	return run(ctx, opts, deps)
 }
 
 // BuildPlan creates a validated, credential-free onboarding plan without applying it.
@@ -110,8 +98,7 @@ func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
 	if err := normalizeRepositories(&opts); err != nil {
 		return nil, err
 	}
-	terminal := Terminal{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard}
-	deps := defaultDependencies(opts, terminal)
+	deps := defaultDependencies(opts, io.Discard)
 	plan, err := buildPlan(ctx, opts, planningContext{}, deps)
 	if err != nil {
 		return nil, err
@@ -124,9 +111,8 @@ func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
 
 // Apply revalidates and applies a plan using the provided GitHub write token.
 func Apply(ctx context.Context, plan *Plan, githubToken string) error {
-	terminal := Terminal{In: strings.NewReader(""), Out: os.Stdout, Err: os.Stderr}
 	opts := Options{GitHubToken: githubToken}
-	return applyPlan(ctx, plan, githubToken, defaultDependencies(opts, terminal))
+	return applyPlan(ctx, plan, githubToken, defaultDependencies(opts, os.Stdout))
 }
 
 func run(ctx context.Context, opts Options, deps dependencies) error {
@@ -144,28 +130,28 @@ func run(ctx context.Context, opts Options, deps dependencies) error {
 		if err := preflightPlan(plan, deps); err != nil {
 			return err
 		}
-		printReview(deps.terminal.Out, plan)
+		printReview(deps.out, plan)
 		if opts.DryRun {
-			return finishDryRun(deps.terminal.Out, plan, opts.PlanOut)
+			return finishDryRun(deps.out, plan, opts.PlanOut)
 		}
 		return applyPlan(ctx, plan, opts.GitHubToken, deps)
 	}
 	if opts.NonInteractive {
 		return fmt.Errorf("non-interactive onboarding requires %s", strings.Join(missingInputs(opts), ", "))
 	}
-	if !deps.terminal.Interactive {
+	if deps.newPrompter == nil {
 		return fmt.Errorf("onboarding needs %s, but stdin is not an interactive terminal; provide the missing flags or pass --non-interactive for an immediate validation error", strings.Join(missingInputs(opts), ", "))
 	}
 	plan, opts, err := runWizard(ctx, opts, deps)
 	if errors.Is(err, ErrCancelled) {
-		fmt.Fprintln(deps.terminal.Out, "Onboarding cancelled. No files were written.")
+		fmt.Fprintln(deps.out, "Onboarding cancelled. No files were written.")
 		return nil
 	}
 	if err != nil {
 		return err
 	}
 	if opts.DryRun {
-		return finishDryRun(deps.terminal.Out, plan, opts.PlanOut)
+		return finishDryRun(deps.out, plan, opts.PlanOut)
 	}
 	return applyPlan(ctx, plan, opts.GitHubToken, deps)
 }
@@ -255,12 +241,12 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 			return fmt.Errorf("applying an open-PR onboarding plan needs a GitHub token with write access to the dashboard repo")
 		}
 		title := fmt.Sprintf("Add %s Aster scaffold", plan.Project.Name)
-		fmt.Fprintf(deps.terminal.Out, "Opening a scaffold pull request against %s...\n", plan.DashboardRepo.FullName)
+		fmt.Fprintf(deps.out, "Opening a scaffold pull request against %s...\n", plan.DashboardRepo.FullName)
 		url, err := deps.pullRequests.Open(ctx, plan.DashboardRepo, plan.Files, "onboard/scaffold", title, scaffoldPRBody(plan.Project.Name, plan.Deployment.Mode, plan.Deployment.AIEnabled), githubToken)
 		if err != nil {
 			return fmt.Errorf("opening scaffold pull request: %w", err)
 		}
-		fmt.Fprintf(deps.terminal.Out, "Scaffold pull request opened: %s\n", url)
+		fmt.Fprintf(deps.out, "Scaffold pull request opened: %s\n", url)
 		return nil
 	}
 	files, _, err := deps.files.Inspect(plan.Destination.OutDir, plan.Files, plan.Destination.ReplaceConsumerOwned)
@@ -276,8 +262,8 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 	if err := deps.files.Write(plan.Destination.OutDir, plan.Files, plan.Destination.UpdateExisting, plan.Destination.ReplaceConsumerOwned, plan.Destination.Files); err != nil {
 		return err
 	}
-	fmt.Fprintf(deps.terminal.Out, "Scaffold written to %s/\n", plan.Destination.OutDir)
-	fmt.Fprintf(deps.terminal.Out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-aster-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
+	fmt.Fprintf(deps.out, "Scaffold written to %s/\n", plan.Destination.OutDir)
+	fmt.Fprintf(deps.out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-aster-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
 	return nil
 }
 

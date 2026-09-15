@@ -2,7 +2,6 @@ package onboard
 
 import (
 	"context"
-	"io"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -107,14 +106,6 @@ type Plan struct {
 	Files                      map[string]string           `json:"-"`
 	reviewedDigest             string
 	allowK8sStoragePlaceholder bool
-}
-
-// Terminal supplies injected input and output for the interactive wizard.
-type Terminal struct {
-	In          io.Reader
-	Out         io.Writer
-	Err         io.Writer
-	Interactive bool
 }
 
 // JobSweep records selected jobs and the catalog revision that produced them.

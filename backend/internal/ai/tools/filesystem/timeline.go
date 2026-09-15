@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 // verify_timeline orders the timestamped events in a log so the model reasons
@@ -38,10 +39,10 @@ type timelineTool struct{}
 
 func (*timelineTool) Name() string  { return "verify_timeline" }
 func (*timelineTool) Group() string { return Group }
-func (*timelineTool) Schema() tools.Schema {
-	return tools.Schema{
+func (*timelineTool) Schema() transport.ToolSchema {
+	return transport.ToolSchema{
 		Type: "function",
-		Function: tools.FunctionDecl{
+		Function: transport.FunctionDecl{
 			Name:        "verify_timeline",
 			Description: "Extract the timestamped events from a log file and return them ordered by time. Use to check causal ordering: whether the stated root cause is the earliest initiating failure or a later downstream/teardown symptom. Pass an optional resource substring to keep only records mentioning it (works even for cloud activity logs whose records are multi-line JSON, so the timestamp and the resource name are on different lines).",
 			Parameters: map[string]interface{}{

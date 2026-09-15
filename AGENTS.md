@@ -51,10 +51,11 @@ backend/                         Go 1.26
     aggregator/                  Per-job and per-test aggregate statistics
     patterns/                    Correlates analyzed failures across builds
     recurrenceledger/            Durable memory of recurring causes across build windows
-    prtriage/                    Per-open-pull-request view of presubmit results
-    prattribution/               Rules a pull request out of a failure from observed results
-    prescalation/                On-demand AI analysis for unexplained pull request failures
-    prcomment/                   Opt-in bot comment on newly observed pull requests
+    pullrequest/
+      triage/                    Per-open-pull-request view of presubmit results
+      attribution/               Rules a pull request out of a failure from observed results
+      escalation/                On-demand AI analysis for unexplained pull request failures
+      comment/                   Opt-in bot comment on newly observed pull requests
     output/                      Writes the JSON contract the frontend reads
     models/                      Shared wire-format types
     fetchprogress/               Persists safe aggregate fetch progress for operators
@@ -67,8 +68,12 @@ backend/                         Go 1.26
       critique.go                Deterministic judge that gates drafts
       compose.go                 BasePrompt + consumer system.md + ResponseFormatFooter
       cache.go / cache_acceptance.go  On-disk cache and its acceptance floors
+      transport/                 Provider messages, tool schemas, HTTP codecs, retries, model discovery
       evidenceplan/              Ranked evidence planning + deterministic repair
-      tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
+      tools/                     Function-calling registry and dispatch
+        filesystem/              Read-only artifact tools
+        k8s/                     Kubernetes-shaped artifact discovery
+        repotree/                Read-only pinned source tools
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
       modules/pullrequest/       Seed prompt plus pull request change context
@@ -86,9 +91,10 @@ backend/                         Go 1.26
     actiondraft/                 Validates model-generated issue and PR text
     actionverify/                Checks remediation symbols against pinned source
     issues/                      Opens and maintains GitHub issues
-    fixpr/                       Drafts minimal code fixes for recurring patterns
-    fixruntime/                  Selects the coding-agent runtime for fix PRs
-    fixexecutor/                 Clones, runs OpenCode, validates, and returns one staged patch
+    fix/
+      pr/                        Drafts minimal code fixes for recurring patterns
+      runtime/                   Selects the coding-agent runtime for fix PRs
+      executor/                  Clones, runs OpenCode, validates, and returns one staged patch
     chatfix/                     Bridges one chat response into fix generation
     remediationpolicy/           Shared deterministic remediation safety policy
     resolve/                     Admin-marked "resolved" recurring patterns
@@ -104,7 +110,9 @@ backend/                         Go 1.26
     devmock/                     In-memory stand-ins behind `server -mock`
     runtime/                     Swappable agent-execution abstraction
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
-    onboard/                     `aster onboard`: discovery, presets, doctor, scaffold
+    onboard/                     Headless discovery, planning, scaffold apply, guided workflow
+      promptauthor/              Source-only prompt authoring contract
+      terminal/                  Process terminal, TTY selection, and interactive input adapters
     project/                     project.yaml load + validate
 
     -- support --
@@ -146,7 +154,7 @@ Prow/TestGrid -> fetcher -> ai -> output -> server -> frontend
 2. **`ai`** analyzes one failure with the agentic loop: the model calls tools to browse artifacts, and investigation floors plus deterministic critique gate the answer before it is cached. Start here for analysis quality.
 3. **`output`** writes `dashboard.json`, `jobs/*.json`, and the rest of the JSON contract. Both deploy paths read the identical contract.
 4. **`server`** serves that contract in Kubernetes mode and adds a capability descriptor plus admin-gated writes. The Pages path serves the same files statically with no server.
-5. **`actions`** performs on-demand admin writes (file issue, propose fix, mark resolved), reusing the same `issues` and `fixpr` code the scheduled pass uses.
+5. **`actions`** performs on-demand admin writes (file issue, propose fix, mark resolved), reusing the same `issues` and `fix/pr` code the scheduled pass uses.
 
 The many small packages are deliberate: several exist to break shared dependencies between `fetcher`, `actions`, and `server` (for example `resolve`, `patternstate`, `actiondraft`), which would otherwise import-cycle.
 
