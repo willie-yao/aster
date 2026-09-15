@@ -9,9 +9,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
-func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out io.Writer) error {
+func wizardDeploymentAI(ctx context.Context, prompt Prompter, opts *Options, out io.Writer) error {
 	if opts.AIEnabled == nil {
-		enabled, err := prompt.Confirm(ctx, confirmPrompt{
+		enabled, err := prompt.Confirm(ctx, ConfirmPrompt{
 			Title:       "Enable AI failure analysis in the deployed dashboard?",
 			Description: "Configure a provider now or choose Configure later on the next screen.",
 			Value:       true,
@@ -28,7 +28,7 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 	selected := matchAIProviderPreset(deploymentAIAPI(*opts), deploymentAIEndpoint(*opts))
 	modelDefault := deploymentAIModel(*opts)
 	for {
-		choice, err := prompt.Select(ctx, selectPrompt{
+		choice, err := prompt.Select(ctx, SelectPrompt{
 			Title:       "Deployed AI provider",
 			Description: "Presets fill the API and endpoint. Tokens remain environment-only.",
 			Options:     aiProviderOptions(opts.Mode),
@@ -72,10 +72,10 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 			if existingSelection && deploymentAIAPI(*opts) == project.AIAPIResponses {
 				api = project.AIAPIResponses
 			}
-			api, err = prompt.Select(ctx, selectPrompt{
+			api, err = prompt.Select(ctx, SelectPrompt{
 				Title:       "Deployed AI API",
 				Description: "Choose the request contract supported by the endpoint.",
-				Options: []selectOption{
+				Options: []SelectOption{
 					{Value: project.AIAPIChatCompletions, Label: "Chat Completions"},
 					{Value: project.AIAPIResponses, Label: "Responses"},
 				},
@@ -85,7 +85,7 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 				return err
 			}
 		}
-		endpoint, err = prompt.Input(ctx, inputPrompt{
+		endpoint, err = prompt.Input(ctx, InputPrompt{
 			Title:       "Deployed AI endpoint",
 			Description: "Absolute HTTP or HTTPS endpoint reachable from the deployment.",
 			Value:       endpoint,
@@ -99,7 +99,7 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 		if existingSelection {
 			modelValue = modelDefault
 		}
-		model, err := prompt.Input(ctx, inputPrompt{
+		model, err := prompt.Input(ctx, InputPrompt{
 			Title:       "Deployed AI model",
 			Description: "Exact model identifier available to your account or deployment.",
 			Value:       modelValue,
@@ -119,7 +119,7 @@ func wizardDeploymentAI(ctx context.Context, prompt wizardUI, opts *Options, out
 		if opts.Mode == modePages {
 			warnings := pagesEndpointWarnings(endpoint)
 			if len(warnings) > 0 {
-				proceed, err := prompt.Confirm(ctx, confirmPrompt{
+				proceed, err := prompt.Confirm(ctx, ConfirmPrompt{
 					Title:       "Continue with this endpoint for GitHub Pages?",
 					Description: strings.Join(warnings, "\n"),
 					Value:       false,

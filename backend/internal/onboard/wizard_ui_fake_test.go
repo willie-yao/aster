@@ -15,11 +15,11 @@ type lineWizardUI struct {
 	out    io.Writer
 }
 
-func newLineWizardUI(terminal Terminal) wizardUI {
-	return &lineWizardUI{reader: bufio.NewReader(terminal.In), out: terminal.Out}
+func newLineWizardUI(in io.Reader, out io.Writer) Prompter {
+	return &lineWizardUI{reader: bufio.NewReader(in), out: out}
 }
 
-func (u *lineWizardUI) Input(_ context.Context, prompt inputPrompt) (string, error) {
+func (u *lineWizardUI) Input(_ context.Context, prompt InputPrompt) (string, error) {
 	for {
 		fmt.Fprint(u.out, prompt.Title)
 		if prompt.Value != "" {
@@ -53,7 +53,7 @@ func (u *lineWizardUI) Input(_ context.Context, prompt inputPrompt) (string, err
 	}
 }
 
-func (u *lineWizardUI) Select(_ context.Context, prompt selectPrompt) (string, error) {
+func (u *lineWizardUI) Select(_ context.Context, prompt SelectPrompt) (string, error) {
 	fmt.Fprintln(u.out, prompt.Title)
 	defaultIndex := 0
 	for i, option := range prompt.Options {
@@ -95,7 +95,7 @@ func (u *lineWizardUI) Select(_ context.Context, prompt selectPrompt) (string, e
 	}
 }
 
-func (u *lineWizardUI) Confirm(_ context.Context, prompt confirmPrompt) (bool, error) {
+func (u *lineWizardUI) Confirm(_ context.Context, prompt ConfirmPrompt) (bool, error) {
 	suffix := " [y/N]: "
 	if prompt.Value {
 		suffix = " [Y/n]: "
@@ -130,18 +130,4 @@ func isLineCancel(value string) bool {
 	default:
 		return false
 	}
-}
-
-type panicWizardUI struct{}
-
-func (panicWizardUI) Input(context.Context, inputPrompt) (string, error) {
-	panic("wizard input was requested")
-}
-
-func (panicWizardUI) Select(context.Context, selectPrompt) (string, error) {
-	panic("wizard selection was requested")
-}
-
-func (panicWizardUI) Confirm(context.Context, confirmPrompt) (bool, error) {
-	panic("wizard confirmation was requested")
 }

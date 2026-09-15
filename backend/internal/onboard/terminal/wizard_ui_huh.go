@@ -1,4 +1,4 @@
-package onboard
+package terminal
 
 import (
 	"context"
@@ -7,17 +7,18 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
+	"github.com/willie-yao/aster/backend/internal/onboard"
 )
 
 type huhWizardUI struct {
 	terminal Terminal
 }
 
-func newHuhWizardUI(terminal Terminal) wizardUI {
+func newHuhWizardUI(terminal Terminal) onboard.Prompter {
 	return &huhWizardUI{terminal: terminal}
 }
 
-func (u *huhWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, error) {
+func (u *huhWizardUI) Input(ctx context.Context, prompt onboard.InputPrompt) (string, error) {
 	value := prompt.Value
 	field := newClearableHuhInput(huh.NewInput().
 		Title(prompt.Title).
@@ -39,7 +40,7 @@ func (u *huhWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, er
 	return strings.TrimSpace(value), nil
 }
 
-func (u *huhWizardUI) Select(ctx context.Context, prompt selectPrompt) (string, error) {
+func (u *huhWizardUI) Select(ctx context.Context, prompt onboard.SelectPrompt) (string, error) {
 	if len(prompt.Options) == 0 {
 		return "", fmt.Errorf("%s: no options are available", prompt.Title)
 	}
@@ -82,7 +83,7 @@ func (u *huhWizardUI) Select(ctx context.Context, prompt selectPrompt) (string, 
 	return value, nil
 }
 
-func (u *huhWizardUI) Confirm(ctx context.Context, prompt confirmPrompt) (bool, error) {
+func (u *huhWizardUI) Confirm(ctx context.Context, prompt onboard.ConfirmPrompt) (bool, error) {
 	value := prompt.Value
 	field := huh.NewConfirm().
 		Title(prompt.Title).
@@ -107,7 +108,7 @@ func (u *huhWizardUI) run(ctx context.Context, title string, field huh.Field) er
 
 func normalizeWizardUIError(title string, err error) error {
 	if errors.Is(err, huh.ErrUserAborted) || errors.Is(err, context.Canceled) {
-		return ErrCancelled
+		return onboard.ErrCancelled
 	}
 	return fmt.Errorf("%s: %w", title, err)
 }

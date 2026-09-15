@@ -3,8 +3,7 @@
 # the map cannot silently rot as packages are added or removed. The map is the
 # orientation contract for contributors and agents alike.
 #
-# Namespace-only directories are traversed. Nested helpers within a package
-# (ai/tools/k8s and friends) are documented but not enforced.
+# Namespace-only directories are traversed. Package-local testdata is excluded.
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -22,7 +21,6 @@ def package_paths(root):
     def walk(directory):
         if any(directory.glob("*.go")):
             yield directory.relative_to(root).as_posix()
-            return
         for child in sorted(directory.iterdir()):
             if child.is_dir() and child.name != "testdata" and not child.name.startswith((".", "_")):
                 yield from walk(child)
@@ -56,7 +54,7 @@ def mapped_paths(text):
 def differences(root, text):
     packages = package_paths(root)
     mapped = mapped_paths(text)
-    # Namespace entries are valid ancestors; helpers under a package stay optional.
+    # Namespace entries are valid ancestors of a package.
     valid = packages | {
         parent.as_posix()
         for package in packages
@@ -64,7 +62,7 @@ def differences(root, text):
     }
     stale = {
         path for path in mapped
-        if path not in valid and not any(path.startswith(package + "/") for package in packages)
+        if path not in valid
     }
     return packages - mapped, stale
 
@@ -80,7 +78,7 @@ backend/
     server/
     runtime/
     ai/
-      tools/{filesystem,k8s,repotree}/
+      tools/k8s/
     pullrequest/
       triage/
     fix/
@@ -105,7 +103,11 @@ frontend/
             path.mkdir(parents=True, exist_ok=True)
             (path / "package.go").write_text("package fixture\n")
         scenarios = (
-            ("valid namespaces and optional helpers", text, set(), set()),
+            ("valid namespaces and nested helpers", text, set(), set()),
+            ("missing nested helper", text.replace("      tools/k8s/\n", ""),
+             {"backend/internal/ai/tools/k8s"}, set()),
+            ("stale nested helper", text.replace("      tools/k8s/", "      removed/"),
+             {"backend/internal/ai/tools/k8s"}, {"backend/internal/ai/removed"}),
             ("missing nested package", text.replace("      triage/\n", ""),
              {"backend/internal/pullrequest/triage"}, set()),
             ("stale nested package", text.replace("      triage/", "      removed/"),

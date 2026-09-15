@@ -70,7 +70,10 @@ backend/                         Go 1.26
       cache.go / cache_acceptance.go  On-disk cache and its acceptance floors
       transport/                 Provider messages, tool schemas, HTTP codecs, retries, model discovery
       evidenceplan/              Ranked evidence planning + deterministic repair
-      tools/{filesystem,k8s,repotree}/  Function-calling tools exposed to the model
+      tools/                     Function-calling registry and dispatch
+        filesystem/              Read-only artifact tools
+        k8s/                     Kubernetes-shaped artifact discovery
+        repotree/                Read-only pinned source tools
       skills/                    Diagnostic recipe registry (+ builtin/{prow,kubernetes})
       modules/universal/         Builds the per-failure seed prompt
       modules/pullrequest/       Seed prompt plus pull request change context
@@ -107,7 +110,9 @@ backend/                         Go 1.26
     devmock/                     In-memory stand-ins behind `server -mock`
     runtime/                     Swappable agent-execution abstraction
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
-    onboard/                     `aster onboard`: discovery, presets, doctor, scaffold
+    onboard/                     Headless discovery, planning, scaffold apply, guided workflow
+      promptauthor/              Source-only prompt authoring contract
+      terminal/                  Process terminal, TTY selection, and interactive input adapters
     project/                     project.yaml load + validate
 
     -- support --

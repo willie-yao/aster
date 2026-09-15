@@ -1,4 +1,4 @@
-package onboard
+package terminal
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
+	"github.com/willie-yao/aster/backend/internal/onboard"
 )
 
 func TestNewWizardUI_SelectsTerminalImplementation(t *testing.T) {
@@ -41,7 +42,7 @@ func TestNewWizardUI_SelectsTerminalImplementation(t *testing.T) {
 func TestAccessibleWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
-	value, err := ui.Input(context.Background(), inputPrompt{
+	value, err := ui.Input(context.Background(), onboard.InputPrompt{
 		Title: "Project ID", Description: "Editable inferred value.", Value: "kind", Required: true,
 	})
 	if err != nil {
@@ -60,7 +61,7 @@ func TestAccessibleWizardUI_InputAcceptsEditableDefault(t *testing.T) {
 func TestAccessibleWizardUI_InputCanReplaceDefault(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("custom\n"), Out: out, Err: out})
-	value, err := ui.Input(context.Background(), inputPrompt{
+	value, err := ui.Input(context.Background(), onboard.InputPrompt{
 		Title: "Project ID", Value: "kind", Required: true,
 	})
 	if err != nil {
@@ -74,7 +75,7 @@ func TestAccessibleWizardUI_InputCanReplaceDefault(t *testing.T) {
 func TestAccessibleWizardUI_InputValidatesRequiredValue(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\naccepted\n"), Out: out, Err: out})
-	value, err := ui.Input(context.Background(), inputPrompt{
+	value, err := ui.Input(context.Background(), onboard.InputPrompt{
 		Title: "Required", Required: true,
 	})
 	if err != nil {
@@ -91,18 +92,18 @@ func TestAccessibleWizardUI_InputValidatesRequiredValue(t *testing.T) {
 func TestAccessibleWizardUI_SelectUsesStableValue(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
-	value, err := ui.Select(context.Background(), selectPrompt{
+	value, err := ui.Select(context.Background(), onboard.SelectPrompt{
 		Title: "Deployment",
-		Options: []selectOption{
-			{Value: modePages, Label: "GitHub Pages"},
-			{Value: modeK8s, Label: "Kubernetes"},
+		Options: []onboard.SelectOption{
+			{Value: "pages", Label: "GitHub Pages"},
+			{Value: "k8s", Label: "Kubernetes"},
 		},
-		Value: modeK8s,
+		Value: "k8s",
 	})
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
-	if value != modeK8s {
+	if value != "k8s" {
 		t.Fatalf("value = %q", value)
 	}
 }
@@ -110,9 +111,9 @@ func TestAccessibleWizardUI_SelectUsesStableValue(t *testing.T) {
 func TestAccessibleWizardUI_SelectValidationRejectsSentinel(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n2\n"), Out: out, Err: out})
-	value, err := ui.Select(context.Background(), selectPrompt{
+	value, err := ui.Select(context.Background(), onboard.SelectPrompt{
 		Title: "Provider",
-		Options: []selectOption{
+		Options: []onboard.SelectOption{
 			{Value: "choose", Label: "Choose a provider"},
 			{Value: "provider", Label: "Provider"},
 		},
@@ -138,7 +139,7 @@ func TestAccessibleWizardUI_SelectValidationRejectsSentinel(t *testing.T) {
 func TestAccessibleWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 	out := &bytes.Buffer{}
 	ui := newAccessibleWizardUI(Terminal{In: strings.NewReader("\n"), Out: out, Err: out})
-	value, err := ui.Confirm(context.Background(), confirmPrompt{
+	value, err := ui.Confirm(context.Background(), onboard.ConfirmPrompt{
 		Title: "Create this scaffold?", Description: "This permits a write.", Value: false,
 	})
 	if err != nil {
@@ -153,25 +154,25 @@ func TestAccessibleWizardUI_ConfirmPreservesDefaultNo(t *testing.T) {
 }
 
 func TestAccessibleWizardUI_EOFCancelsInsteadOfAcceptingDefaults(t *testing.T) {
-	for name, run := range map[string]func(wizardUI) error{
-		"input": func(ui wizardUI) error {
-			_, err := ui.Input(context.Background(), inputPrompt{Title: "Input", Value: "default"})
+	for name, run := range map[string]func(onboard.Prompter) error{
+		"input": func(ui onboard.Prompter) error {
+			_, err := ui.Input(context.Background(), onboard.InputPrompt{Title: "Input", Value: "default"})
 			return err
 		},
-		"select": func(ui wizardUI) error {
-			_, err := ui.Select(context.Background(), selectPrompt{
-				Title: "Select", Value: "a", Options: []selectOption{{Value: "a", Label: "A"}},
+		"select": func(ui onboard.Prompter) error {
+			_, err := ui.Select(context.Background(), onboard.SelectPrompt{
+				Title: "Select", Value: "a", Options: []onboard.SelectOption{{Value: "a", Label: "A"}},
 			})
 			return err
 		},
-		"confirm": func(ui wizardUI) error {
-			_, err := ui.Confirm(context.Background(), confirmPrompt{Title: "Confirm", Value: true})
+		"confirm": func(ui onboard.Prompter) error {
+			_, err := ui.Confirm(context.Background(), onboard.ConfirmPrompt{Title: "Confirm", Value: true})
 			return err
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ui := newAccessibleWizardUI(Terminal{In: strings.NewReader(""), Out: io.Discard, Err: io.Discard})
-			if err := run(ui); !errors.Is(err, ErrCancelled) {
+			if err := run(ui); !errors.Is(err, onboard.ErrCancelled) {
 				t.Fatalf("error = %v", err)
 			}
 		})
@@ -207,7 +208,7 @@ func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, err := ui.Input(ctx, inputPrompt{Title: "Blocked", Value: "default"})
+		_, err := ui.Input(ctx, onboard.InputPrompt{Title: "Blocked", Value: "default"})
 		result <- err
 	}()
 	select {
@@ -218,7 +219,7 @@ func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		if !errors.Is(err, ErrCancelled) {
+		if !errors.Is(err, onboard.ErrCancelled) {
 			t.Fatalf("error = %v", err)
 		}
 	case <-time.After(time.Second):
@@ -228,7 +229,7 @@ func TestAccessibleWizardUI_ContextCancellationUnblocksPrompt(t *testing.T) {
 
 func TestNormalizeWizardUIError(t *testing.T) {
 	for _, err := range []error{huh.ErrUserAborted, context.Canceled} {
-		if got := normalizeWizardUIError("Prompt", err); !errors.Is(got, ErrCancelled) {
+		if got := normalizeWizardUIError("Prompt", err); !errors.Is(got, onboard.ErrCancelled) {
 			t.Fatalf("normalize(%v) = %v", err, got)
 		}
 	}

@@ -1,17 +1,16 @@
 package onboard
 
-import (
-	"context"
-	"os"
-)
+import "context"
 
-type wizardUI interface {
-	Input(context.Context, inputPrompt) (string, error)
-	Select(context.Context, selectPrompt) (string, error)
-	Confirm(context.Context, confirmPrompt) (bool, error)
+// Prompter supplies interactive input for the guided workflow.
+type Prompter interface {
+	Input(context.Context, InputPrompt) (string, error)
+	Select(context.Context, SelectPrompt) (string, error)
+	Confirm(context.Context, ConfirmPrompt) (bool, error)
 }
 
-type inputPrompt struct {
+// InputPrompt describes one editable text value.
+type InputPrompt struct {
 	Title       string
 	Description string
 	Value       string
@@ -19,29 +18,25 @@ type inputPrompt struct {
 	Validate    func(string) error
 }
 
-type selectPrompt struct {
+// SelectPrompt describes a choice among stable option values.
+type SelectPrompt struct {
 	Title       string
 	Description string
-	Options     []selectOption
+	Options     []SelectOption
 	Value       string
 	Validate    func(string) error
 }
 
-type selectOption struct {
+// SelectOption pairs a stable value with its display text.
+type SelectOption struct {
 	Value       string
 	Label       string
 	Description string
 }
 
-type confirmPrompt struct {
+// ConfirmPrompt describes a yes-or-no choice.
+type ConfirmPrompt struct {
 	Title       string
 	Description string
 	Value       bool
-}
-
-func newWizardUI(terminal Terminal) wizardUI {
-	if os.Getenv("TERM") == "dumb" || os.Getenv("ACCESSIBLE") != "" {
-		return newAccessibleWizardUI(terminal)
-	}
-	return newHuhWizardUI(terminal)
 }

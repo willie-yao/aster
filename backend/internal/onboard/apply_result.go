@@ -150,8 +150,7 @@ func ApplyReviewed(ctx context.Context, plan *Plan, githubToken string, opts Rev
 		return emptyResult, emptyHandoff, err
 	}
 
-	terminal := Terminal{In: strings.NewReader(""), Out: os.Stdout, Err: os.Stderr}
-	deps := defaultDependencies(Options{GitHubToken: githubToken}, terminal)
+	deps := defaultDependencies(Options{GitHubToken: githubToken}, os.Stdout)
 	if err := applyPlan(ctx, plan, githubToken, deps); err != nil {
 		return emptyResult, emptyHandoff, err
 	}

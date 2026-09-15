@@ -1,4 +1,4 @@
-package onboard
+package terminal
 
 import (
 	"bufio"
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/muesli/cancelreader"
+	"github.com/willie-yao/aster/backend/internal/onboard"
 )
 
 type accessibleWizardUI struct {
@@ -18,11 +19,11 @@ type accessibleWizardUI struct {
 	cancel   cancelreader.CancelReader
 }
 
-func newAccessibleWizardUI(terminal Terminal) wizardUI {
+func newAccessibleWizardUI(terminal Terminal) onboard.Prompter {
 	return &accessibleWizardUI{terminal: terminal}
 }
 
-func (u *accessibleWizardUI) Input(ctx context.Context, prompt inputPrompt) (string, error) {
+func (u *accessibleWizardUI) Input(ctx context.Context, prompt onboard.InputPrompt) (string, error) {
 	if prompt.Description != "" {
 		fmt.Fprintln(u.terminal.Out, prompt.Description)
 	}
@@ -54,7 +55,7 @@ func (u *accessibleWizardUI) Input(ctx context.Context, prompt inputPrompt) (str
 	}
 }
 
-func (u *accessibleWizardUI) Select(ctx context.Context, prompt selectPrompt) (string, error) {
+func (u *accessibleWizardUI) Select(ctx context.Context, prompt onboard.SelectPrompt) (string, error) {
 	if len(prompt.Options) == 0 {
 		return "", fmt.Errorf("%s: no options are available", prompt.Title)
 	}
@@ -103,7 +104,7 @@ func (u *accessibleWizardUI) Select(ctx context.Context, prompt selectPrompt) (s
 	}
 }
 
-func (u *accessibleWizardUI) Confirm(ctx context.Context, prompt confirmPrompt) (bool, error) {
+func (u *accessibleWizardUI) Confirm(ctx context.Context, prompt onboard.ConfirmPrompt) (bool, error) {
 	if prompt.Description != "" {
 		fmt.Fprintln(u.terminal.Out, prompt.Description)
 	}
@@ -148,16 +149,16 @@ func (u *accessibleWizardUI) readLine(ctx context.Context) (string, error) {
 		if u.cancel.Cancel() {
 			<-resultCh
 		}
-		return "", ErrCancelled
+		return "", onboard.ErrCancelled
 	case result := <-resultCh:
 		if errors.Is(result.err, cancelreader.ErrCanceled) {
-			return "", ErrCancelled
+			return "", onboard.ErrCancelled
 		}
 		if result.err != nil && !errors.Is(result.err, io.EOF) {
 			return "", result.err
 		}
 		if errors.Is(result.err, io.EOF) && result.value == "" {
-			return "", ErrCancelled
+			return "", onboard.ErrCancelled
 		}
 		return result.value, nil
 	}
