@@ -190,24 +190,25 @@ type Service struct {
 	issueManagerFactory issueManagerFactory
 	writeAudit          func(botWriteAuditRecord) error
 
-	rmu                      sync.Mutex
-	requests                 *actionRequestState
-	requestTimeout           time.Duration
-	requestNotify            RequestReadyNotifier
-	requestNotifyCancels     map[string]context.CancelFunc
-	requestCancels           map[string]context.CancelFunc
-	requestConfirms          map[string]struct{}
-	requestDone              map[string]chan struct{}
-	requestCleanups          map[string]struct{}
-	requestsConfigured       bool
-	stopping                 bool
-	requestWG                sync.WaitGroup
-	managedRuntime           func() (runtime.ManagedAgentRuntime, error)
-	requestStateWriter       func(string, any) error
-	sourceVerifier           func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
-	sourceRevisionClient     analysisSourceRevisionClient
-	analysisRequestGenerator func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error)
-	fixActionsEnabled        bool
+	rmu                       sync.Mutex
+	requests                  *actionRequestState
+	requestTimeout            time.Duration
+	requestNotify             RequestReadyNotifier
+	requestNotifyCancels      map[string]context.CancelFunc
+	requestCancels            map[string]context.CancelFunc
+	requestConfirms           map[string]struct{}
+	requestDone               map[string]chan struct{}
+	requestCleanups           map[string]struct{}
+	requestsConfigured        bool
+	stopping                  bool
+	requestWG                 sync.WaitGroup
+	requestGenerationWaitHook func(string)
+	managedRuntime            func() (runtime.ManagedAgentRuntime, error)
+	requestStateWriter        func(string, any) error
+	sourceVerifier            func(context.Context, actionverify.Reader, actionverify.Input) (actionverify.Result, error)
+	sourceRevisionClient      analysisSourceRevisionClient
+	analysisRequestGenerator  func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error)
+	fixActionsEnabled         bool
 }
 
 // NewService builds a Service. dataDir is the fetcher output directory holding

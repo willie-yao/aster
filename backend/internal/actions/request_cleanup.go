@@ -145,6 +145,9 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 				return s.currentRequestView(id), err
 			}
 			if work.UID == "" && done != nil && !generationDone {
+				if s.requestGenerationWaitHook != nil {
+					s.requestGenerationWaitHook(id)
+				}
 				select {
 				case <-done:
 					generationDone = true
@@ -157,6 +160,9 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 		}
 		if done == nil || generationDone {
 			return s.finalizeCleanup(id)
+		}
+		if s.requestGenerationWaitHook != nil {
+			s.requestGenerationWaitHook(id)
 		}
 		select {
 		case <-done:

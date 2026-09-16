@@ -533,6 +533,18 @@ func TestBenchmarkArm(t *testing.T) {
 			t.Fatalf("arm = %q, error = %v", got, err)
 		}
 	})
+	t.Run("non-baseline requires variant", func(t *testing.T) {
+		t.Setenv("BENCH_ARM", "proposed-recipes")
+		if _, err := benchmarkArm(false); err == nil {
+			t.Fatal("non-baseline arm without variant was accepted")
+		}
+	})
+	t.Run("baseline is reserved for baseline runs", func(t *testing.T) {
+		t.Setenv("BENCH_ARM", "baseline")
+		if _, err := benchmarkArm(true); err == nil {
+			t.Fatal("baseline arm with variant was accepted")
+		}
+	})
 	t.Run("invalid", func(t *testing.T) {
 		t.Setenv("BENCH_ARM", "bad arm")
 		if _, err := benchmarkArm(false); err == nil {
@@ -559,6 +571,25 @@ func TestValidateBenchmarkVariantDir(t *testing.T) {
 	if err := validateBenchmarkVariantDir(base, variant); err == nil {
 		t.Fatal("changed variant project was accepted")
 	}
+	t.Run("missing baseline project", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(base, "project.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateBenchmarkVariantDir(base, variant); err == nil {
+			t.Fatal("missing baseline project was accepted")
+		}
+	})
+	t.Run("missing variant project", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(base, "project.yaml"), projectData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(variant, "project.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateBenchmarkVariantDir(base, variant); err == nil {
+			t.Fatal("missing variant project was accepted")
+		}
+	})
 }
 
 func writeBenchmarkConsumer(t *testing.T, dir, prompt string, recipe bool) {

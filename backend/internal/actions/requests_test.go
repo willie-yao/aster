@@ -652,6 +652,24 @@ func TestAnalysisFixRequestOwnerIsolation(t *testing.T) {
 func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	service, pattern := requestTestService(t)
 	notified := make(chan ActionRequestView, 1)
+	emailPersisted := make(chan struct{})
+	var emailPersistedOnce sync.Once
+	service.requestStateWriter = func(path string, value any) error {
+		if err := statefile.WritePrivateJSONDurable(path, value); err != nil {
+			return err
+		}
+		state, ok := value.(*actionRequestState)
+		if !ok {
+			return nil
+		}
+		for _, request := range state.Requests {
+			if request != nil && request.EmailSent {
+				emailPersistedOnce.Do(func() { close(emailPersisted) })
+				break
+			}
+		}
+		return nil
+	}
 	service.ConfigureAsyncRequests(time.Minute, func(_ context.Context, view ActionRequestView) error {
 		notified <- view
 		return nil
@@ -676,11 +694,12 @@ func TestAsyncIssueRequestPersistsAndNotifies(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("draft-ready notifier was not called")
 	}
-	deadline := time.Now().Add(time.Second)
-	for !ready.EmailSent && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-		ready = waitRequest(t, service, created.ID, "alice", RequestReady)
+	select {
+	case <-emailPersisted:
+	case <-time.After(time.Second):
+		t.Fatal("email status was not persisted")
 	}
+	ready = waitRequest(t, service, created.ID, "alice", RequestReady)
 	if !ready.EmailSent {
 		t.Fatalf("email status not persisted: %+v", ready)
 	}
@@ -1708,12 +1727,19 @@ func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
 		Cleanup: &actionCleanupState{FinalStatus: RequestCancelled, RequestedAt: now.Format(time.RFC3339)},
 	}
 	service.requestDone[id] = make(chan struct{})
+	waitStarted := make(chan struct{})
+	var waitStartedOnce sync.Once
+	service.requestGenerationWaitHook = func(waitID string) {
+		if waitID == id {
+			waitStartedOnce.Do(func() { close(waitStarted) })
+		}
+	}
 	firstDone := make(chan ActionRequestView, 1)
 	go func() {
 		view, _ := service.cleanupRequest(context.Background(), id)
 		firstDone <- view
 	}()
-	time.Sleep(20 * time.Millisecond)
+	<-waitStarted
 	service.rmu.Lock()
 	service.requests.Requests[id].Runtime = &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}
 	service.rmu.Unlock()
@@ -1724,7 +1750,7 @@ func TestOverlappingCleanupWaitsForGenerationExit(t *testing.T) {
 	select {
 	case <-firstDone:
 		t.Fatal("first cleanup returned before generation exited")
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
 	service.finishGeneration(id)
 	select {
