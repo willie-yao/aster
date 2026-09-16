@@ -72,7 +72,7 @@ func validateRemoteContentSizes(ctx context.Context, work string) error {
 		return err
 	}
 	var total int64
-	for _, file := range strings.Split(strings.TrimSpace(names), "\n") {
+	for file := range strings.SplitSeq(strings.TrimSpace(names), "\n") {
 		file = strings.TrimSpace(file)
 		if file == "" {
 			continue
@@ -98,7 +98,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 		return err
 	}
 	var changed []string
-	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(status), "\n") {
 		parts := strings.Split(line, "\t")
 		if len(parts) < 2 || parts[0] == "" {
 			continue
@@ -124,7 +124,7 @@ func validateRemoteChange(ctx context.Context, work string) error {
 	if err != nil {
 		return err
 	}
-	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(numstat), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && (fields[0] == "-" || fields[1] == "-") {
 			return fmt.Errorf("%w: remote diff contains a binary file", ErrResultContract)

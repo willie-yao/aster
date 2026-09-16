@@ -217,8 +217,8 @@ func (c *Client) DetectContextWindowTokens(ctx context.Context) (int, bool) {
 // callers such as prompt drafting. The request is bounded only by ctx.
 func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr(system)},
-		{Role: "user", Content: strPtr(user)},
+		{Role: "system", Content: new(system)},
+		{Role: "user", Content: new(user)},
 	}
 	resp, err := c.callModel(ctx, messages, nil, nil)
 	if err != nil {

@@ -51,10 +51,10 @@ func (*listTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "list_artifacts",
 			Description: "List the immediate children of a directory in the build's GCS artifact tree. Pass an empty string for the build root. Returns dirs and files (with sizes).",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"path": map[string]interface{}{
+				"properties": map[string]any{
+					"path": map[string]any{
 						"type":        "string",
 						"description": "Directory path relative to the build root, e.g. \"\" for root, \"artifacts/\", \"artifacts/clusters/foo/machines/bar/\".",
 					},
@@ -76,11 +76,11 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	files := make([]map[string]interface{}, 0, len(res.Files))
+	files := make([]map[string]any, 0, len(res.Files))
 	for _, f := range res.Files {
-		files = append(files, map[string]interface{}{"name": f.Name, "size": f.Size})
+		files = append(files, map[string]any{"name": f.Name, "size": f.Size})
 	}
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"dir":   res.Dir,
 		"dirs":  res.Dirs,
 		"files": files,
@@ -101,12 +101,12 @@ func (*readTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "read_artifact",
 			Description: "Read a byte range of a file. Use for small/known files. For large logs prefer tail_artifact or grep_artifact. Returns up to 16384 bytes per call.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"path":   map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-					"offset": map[string]interface{}{"type": "integer", "description": "Byte offset to start reading from (default 0).", "default": 0},
-					"length": map[string]interface{}{"type": "integer", "description": "Number of bytes to read (default 8192, max 16384).", "default": 8192},
+				"properties": map[string]any{
+					"path":   map[string]any{"type": "string", "description": "File path relative to build root."},
+					"offset": map[string]any{"type": "integer", "description": "Byte offset to start reading from (default 0).", "default": 0},
+					"length": map[string]any{"type": "integer", "description": "Number of bytes to read (default 8192, max 16384).", "default": 8192},
 				},
 				"required": []string{"path"},
 			},
@@ -136,7 +136,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	return tools.Result{
 		BytesFetched: len(data), ContentBytes: len(data),
-		Payload: map[string]interface{}{
+		Payload: map[string]any{
 			"path":      args.Path,
 			"file_size": size,
 			"offset":    offset,
@@ -156,11 +156,11 @@ func (*tailTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "tail_artifact",
 			Description: "Return the last N lines of a file. Most efficient way to inspect the end of a build log or controller log. Default 500 lines, max 2000.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"path":  map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-					"lines": map[string]interface{}{"type": "integer", "description": "Number of trailing lines (default 500, max 2000).", "default": 500},
+				"properties": map[string]any{
+					"path":  map[string]any{"type": "string", "description": "File path relative to build root."},
+					"lines": map[string]any{"type": "integer", "description": "Number of trailing lines (default 500, max 2000).", "default": 500},
 				},
 				"required": []string{"path"},
 			},
@@ -193,7 +193,7 @@ func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	return tools.Result{
 		BytesFetched: len(res.Content), ContentBytes: len(res.Content),
-		Payload: map[string]interface{}{
+		Payload: map[string]any{
 			"path":           args.Path,
 			"file_size":      res.FileSize,
 			"lines_returned": res.LinesReturned,
@@ -214,13 +214,13 @@ func (*grepTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "grep_artifact",
 			Description: "Regex-search a file for matching lines. Returns matches with surrounding context lines and line numbers. Use this for huge build-logs where you want to find specific errors.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"path":          map[string]interface{}{"type": "string", "description": "File path relative to build root."},
-					"pattern":       map[string]interface{}{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
-					"context_lines": map[string]interface{}{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
-					"max_matches":   map[string]interface{}{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
+				"properties": map[string]any{
+					"path":          map[string]any{"type": "string", "description": "File path relative to build root."},
+					"pattern":       map[string]any{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
+					"context_lines": map[string]any{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
+					"max_matches":   map[string]any{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
 				},
 				"required": []string{"path", "pattern"},
 			},
@@ -253,9 +253,9 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		observation.FileReadErrors = 1
 		return artifactGrepError(observation, err.Error())
 	}
-	matches := make([]map[string]interface{}, 0, len(res.Matches))
+	matches := make([]map[string]any, 0, len(res.Matches))
 	for _, m := range res.Matches {
-		matches = append(matches, map[string]interface{}{
+		matches = append(matches, map[string]any{
 			"line":    m.LineNo,
 			"context": m.Context,
 		})
@@ -269,7 +269,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		observation.Outcome = tools.GrepOutcomeMatched
 	}
 	observation.ReturnedRanges = artifactGrepRanges(canonicalArtifactGrepPath(args.Path), res.Matches)
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"path":              args.Path,
 		"file_size":         res.FileSize,
 		"bytes_scanned":     res.BytesScanned,
@@ -334,7 +334,7 @@ func canonicalArtifactGrepPath(path string) string {
 
 func artifactGrepError(observation tools.GrepCallObservation, message string) tools.Result {
 	observation.Outcome = tools.GrepOutcomeError
-	return tools.Result{Payload: map[string]interface{}{"error": message}, Observation: observation}
+	return tools.Result{Payload: map[string]any{"error": message}, Observation: observation}
 }
 
 func artifactGrepRanges(path string, matches []artifacts.GrepMatch) []tools.GrepRangeObservation {
@@ -373,13 +373,13 @@ func (*findTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "find_artifacts",
 			Description: "Recursively search the artifact tree for files whose basename matches a regex. Bounded: walks at most max_dirs subdirectories and returns at most max_results matches. Use for locating files when you know the name pattern but not the path (e.g. junit_*.xml, kubelet.log, build-log.txt).",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"pattern":     map[string]interface{}{"type": "string", "description": "RE2 regex matched against each file's basename. Use (?i) prefix for case-insensitive."},
-					"root":        map[string]interface{}{"type": "string", "description": "Directory to walk under, relative to build root. Default empty (build root).", "default": ""},
-					"max_results": map[string]interface{}{"type": "integer", "description": "Max matching files to return (default 50, max 200).", "default": 50},
-					"max_dirs":    map[string]interface{}{"type": "integer", "description": "Max directories to scan (default 200, max 1000).", "default": 200},
+				"properties": map[string]any{
+					"pattern":     map[string]any{"type": "string", "description": "RE2 regex matched against each file's basename. Use (?i) prefix for case-insensitive."},
+					"root":        map[string]any{"type": "string", "description": "Directory to walk under, relative to build root. Default empty (build root).", "default": ""},
+					"max_results": map[string]any{"type": "integer", "description": "Max matching files to return (default 50, max 200).", "default": 50},
+					"max_dirs":    map[string]any{"type": "integer", "description": "Max directories to scan (default 200, max 1000).", "default": 200},
 				},
 				"required": []string{"pattern"},
 			},
@@ -465,7 +465,7 @@ func (*findTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		truncatedByDirs = true
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"pattern":      args.Pattern,
 		"root":         args.Root,
 		"scanned_dirs": scanned,

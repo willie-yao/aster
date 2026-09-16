@@ -242,7 +242,7 @@ func compactMessages(messages []transport.Message, schemaBytes, budgetBytes int)
 		}
 	}
 	stub := func(i int) {
-		messages[i].Content = strPtr(stubContent(*messages[i].Content))
+		messages[i].Content = new(stubContent(*messages[i].Content))
 		elided++
 	}
 	// Stage 1: stub older tool results, preferring to keep the most recent
@@ -266,7 +266,7 @@ func compactMessages(messages []transport.Message, schemaBytes, budgetBytes int)
 		}
 		elidedMessage := false
 		if m.Content != nil && !isStubbed(m.Content) && len(*m.Content) > compactionStubHead {
-			m.Content = strPtr(stubContent(*m.Content))
+			m.Content = new(stubContent(*m.Content))
 			elidedMessage = true
 		}
 		if elidedMessage {

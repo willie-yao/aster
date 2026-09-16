@@ -339,7 +339,7 @@ func directSourceMatchSummary(periodic, presubmit int) string {
 func splitDashboards(value string) []string {
 	seen := map[string]struct{}{}
 	var out []string
-	for _, item := range strings.Split(value, ",") {
+	for item := range strings.SplitSeq(value, ",") {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue

@@ -45,11 +45,11 @@ func (*timelineTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "verify_timeline",
 			Description: "Extract the timestamped events from a log file and return them ordered by time. Use to check causal ordering: whether the stated root cause is the earliest initiating failure or a later downstream/teardown symptom. Pass an optional resource substring to keep only records mentioning it (works even for cloud activity logs whose records are multi-line JSON, so the timestamp and the resource name are on different lines).",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"path":     map[string]interface{}{"type": "string", "description": "File path relative to build root (e.g. a build log or a cloud activity log)."},
-					"resource": map[string]interface{}{"type": "string", "description": "Optional substring; only events whose line/record contains it are returned (case-insensitive)."},
+				"properties": map[string]any{
+					"path":     map[string]any{"type": "string", "description": "File path relative to build root (e.g. a build log or a cloud activity log)."},
+					"resource": map[string]any{"type": "string", "description": "Optional substring; only events whose line/record contains it are returned (case-insensitive)."},
 				},
 				"required": []string{"path"},
 			},
@@ -93,9 +93,9 @@ func (*timelineTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawM
 		last = events[len(events)-1].Timestamp
 	}
 
-	out := make([]map[string]interface{}, 0, len(events))
+	out := make([]map[string]any, 0, len(events))
 	for _, e := range events {
-		out = append(out, map[string]interface{}{
+		out = append(out, map[string]any{
 			"timestamp": e.Timestamp,
 			"operation": e.Operation,
 			"status":    e.Status,
@@ -105,7 +105,7 @@ func (*timelineTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawM
 
 	return tools.Result{
 		BytesFetched: len(content),
-		Payload: map[string]interface{}{
+		Payload: map[string]any{
 			"path":      args.Path,
 			"resource":  args.Resource,
 			"count":     len(out),

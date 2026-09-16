@@ -223,12 +223,12 @@ Vite serves `frontend/public/` at the site root, so any JSON the fetcher writes 
 - **Single package:** `cd backend && go test ./internal/ai/... -count=1`
 - **Benchmark-module tests:** `go -C backend/benchmarks test ./... -count=1` (live cases remain gated)
 - **Single test:** `go test ./internal/ai -run TestService_CacheKeyShape -v`
-- **Race detector** (AI subsystem only): `go test -race -count=1 ./internal/ai/...`
+- **Race detector:** `go -C backend test -race -count=1 ./...` and `go -C backend/benchmarks test -race -count=1 ./...` (live benchmark gates unset).
 - **Vet:** `cd backend && go vet ./...`
-- **Format:** `cd backend && gofmt -l .` (then `gofmt -w .` to fix)
-- **Static analysis:** `cd backend && staticcheck ./...` (expected clean; any warning from code you touched is a regression).
+- **Format:** `make fmt-check` (then `make fmt` to fix).
+- **Static analysis:** `make lint lint-benchmarks` runs the pinned golangci-lint suite, including staticcheck, on both modules.
 
-CI (`.github/workflows/ci.yml`) runs build + test + vet on the main backend module and type check + test + lint + root/subpath builds on frontend. A separate job runs provider-free benchmark-module tests, tidy, and vet for backend or benchmark changes; live benchmarks stay disabled. CI does not run staticcheck; please still run it locally before opening a PR.
+CI (`.github/workflows/ci.yml`) runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks on the main backend module, plus type check, tests, lint, and root/subpath builds on frontend. A separate job runs provider-free benchmark-module tests with the race detector, tidy, vet, lint, and formatting checks for backend or benchmark changes; live benchmarks stay disabled. Both backend jobs use the pinned golangci-lint suite, including staticcheck.
 
 ### Anchor pin tests
 
@@ -245,7 +245,7 @@ The AI cache is on-disk JSON keyed by mode + hash. Changing the agentic cache sc
 - **Errors:** wrap with `fmt.Errorf("...: %w", err)`. Surface enough context for the operator to find the failing artifact / cache key.
 - **Logging:** `log.Printf` with a leading emoji/icon and the test or job identifier. See `service.go` for the canonical patterns (`🔍 Analyzing:`, `⏭ Skipping transient:`).
 - **`docs/` is for users, not design history.** Document current behavior and how to use it. Do not add decision records, rationale for alternatives that were considered and rejected, or migration narratives - those belong in the issue or pull request. A change that only records a decision needs no docs update at all.
-- **No new linting/build/test tools** without a strong reason. CI is intentionally minimal; staticcheck is run locally.
+- **No new linting/build/test tools** without a strong reason. Reuse the pinned golangci-lint suite locally and in CI.
 
 ## AI subsystem orientation
 

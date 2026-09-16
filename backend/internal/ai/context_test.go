@@ -67,10 +67,10 @@ func TestDeriveContextBudgets_FallbackIsBounded(t *testing.T) {
 
 func TestConservativePromptTokenEstimate_UsesOneBytePerToken(t *testing.T) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")},
-		{Role: "user", Content: strPtr(strings.Repeat("/very/long/artifact/path/日本語/", 600))},
+		{Role: "system", Content: new("system")},
+		{Role: "user", Content: new(strings.Repeat("/very/long/artifact/path/日本語/", 600))},
 		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call", Type: "function", Function: transport.FunctionCall{Name: "grep_artifact", Arguments: `{"path":"logs/a.yaml","pattern":"é"}`}}}},
-		{Role: "tool", ToolCallID: "call", Content: strPtr(strings.Repeat(`{"key":"値","line":"aaaaaaaa"}`+"\n", 1200))},
+		{Role: "tool", ToolCallID: "call", Content: new(strings.Repeat(`{"key":"値","line":"aaaaaaaa"}`+"\n", 1200))},
 	}
 	bytes := requestSizeEstimate(messages, 2048)
 	tokens := conservativePromptTokenEstimate(messages, 2048)
@@ -103,8 +103,8 @@ func TestPrepareContextRequest_CompactsBefore128KProviderCall(t *testing.T) {
 func TestAgentic_ContextHeadroomCompactsLongToolHistory(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	for i := 0; i < 16; i++ {
-		srv.push(200, chatRespToolCall("call-"+string(rune('a'+i)), "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	for i := range 16 {
+		srv.push(200, chatRespToolCall("call-"+string(rune('a'+i)), "read_artifact", map[string]any{"path": "build-log.txt"}))
 	}
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 

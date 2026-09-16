@@ -383,7 +383,7 @@ func setPlanCategoryTokens(plan *Plan, opts Options, value string) error {
 	value = clearableValue(value)
 	var categories []project.CategoryRule
 	seen := map[string]struct{}{}
-	for _, token := range strings.Split(value, ",") {
+	for token := range strings.SplitSeq(value, ",") {
 		token = strings.ToLower(strings.TrimSpace(token))
 		if token == "" {
 			continue

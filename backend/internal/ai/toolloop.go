@@ -34,7 +34,7 @@ func dispatchToolCall(
 	if result.Payload == nil {
 		// Defensive: registry promises a non-nil Payload, but never trust the
 		// edge case. Empty map is safer than a nil deref downstream.
-		result.Payload = map[string]interface{}{}
+		result.Payload = map[string]any{}
 	}
 	_, failed := result.Payload["error"]
 	traceToolCall(tc, result.BytesFetched, failed)

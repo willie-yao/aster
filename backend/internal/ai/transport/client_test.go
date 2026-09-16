@@ -10,8 +10,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
 
-func strPtr(s string) *string { return &s }
-
 func TestClientHasNoFixedTimeout(t *testing.T) {
 	c := NewClient(modelprovider.Config{API: modelprovider.APIChatCompletions}, "", nil, "", nil)
 	if c.api.httpClient.Timeout != 0 {
@@ -31,7 +29,7 @@ func TestCopilotHeaderSkippedForNonCopilotEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(modelprovider.Config{API: modelprovider.APIChatCompletions, Endpoint: srv.URL, Model: "m"}, "tok", nil, "", nil)
-	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: strPtr("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
+	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: new("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
 		t.Fatalf("callModel: %v", err)
 	}
 	if got != "" {
@@ -54,7 +52,7 @@ func TestRequestHeaders_CustomHeaders(t *testing.T) {
 		"NIM-Function-Id": "abc-123",
 		"api-key":         "azure-key",
 	}, "", nil)
-	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: strPtr("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
+	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: new("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
 		t.Fatalf("callModel: %v", err)
 	}
 
@@ -81,7 +79,7 @@ func TestRequestHeaders_ExtraHeadersOverrideAuthorization(t *testing.T) {
 	c := NewClient(modelprovider.Config{API: modelprovider.APIChatCompletions, Endpoint: srv.URL, Model: "m"}, "ignored", map[string]string{
 		"Authorization": "Token custom-scheme",
 	}, "", nil)
-	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: strPtr("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
+	if _, err := c.Complete(context.Background(), Request{Model: c.model, Messages: []Message{{Role: "user", Content: new("user")}}, Tools: nil, ParallelToolCalls: nil}); err != nil {
 		t.Fatalf("callModel: %v", err)
 	}
 	if gotAuth != "Token custom-scheme" {

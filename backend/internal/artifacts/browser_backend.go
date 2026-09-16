@@ -309,7 +309,7 @@ func grepStream(r io.Reader, fileSize, maxBytes int64, re *regexp.Regexp, contex
 			out.TotalMatches++
 			if len(out.Matches) < maxMatches {
 				ctx := make([]string, 0, 2*contextLines+1)
-				for i := 0; i < contextLines; i++ {
+				for i := range contextLines {
 					idx := (beforeIdx + i) % contextLines
 					if before[idx] == "" {
 						continue

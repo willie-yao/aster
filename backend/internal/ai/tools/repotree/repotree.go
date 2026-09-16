@@ -119,11 +119,11 @@ func (*listTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "list_repo_tree",
 			Description: "List the immediate children of a directory in the source repository. Pass an empty string for the repo root. Returns subdirectories and files under that directory.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"source_id": map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
-					"path": map[string]interface{}{
+				"properties": map[string]any{
+					"source_id": map[string]any{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
+					"path": map[string]any{
 						"type":        "string",
 						"description": "Directory path relative to the repo root, e.g. \"\" for root, \"config/\", \"pkg/cloud/\".",
 					},
@@ -173,7 +173,7 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}
 	sort.Strings(dirs)
 	sort.Strings(files)
-	return tools.Result{Payload: map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
 		"source_id": selected.ID,
 		"dir":       prefix,
 		"dirs":      dirs,
@@ -234,13 +234,13 @@ func (*readTool) Schema() transport.ToolSchema {
 			Name: "read_repo_file",
 			Description: "Read a byte range of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call. " +
 				"When line_start and line_end are present, they are absolute source coordinates for complete lines wholly contained in content; partial leading or trailing lines are outside the range.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"source_id": map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
-					"path":      map[string]interface{}{"type": "string", "description": "File path relative to the repo root."},
-					"offset":    map[string]interface{}{"type": "integer", "description": "Byte offset to start from (default 0).", "default": 0},
-					"length":    map[string]interface{}{"type": "integer", "description": "Bytes to read (default 8192, max 16384).", "default": 8192},
+				"properties": map[string]any{
+					"source_id": map[string]any{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
+					"path":      map[string]any{"type": "string", "description": "File path relative to the repo root."},
+					"offset":    map[string]any{"type": "integer", "description": "Byte offset to start from (default 0).", "default": 0},
+					"length":    map[string]any{"type": "integer", "description": "Bytes to read (default 8192, max 16384).", "default": 8192},
 				},
 				"required": []string{"source_id", "path"},
 			},
@@ -290,7 +290,7 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	slice := content[offset:end]
 	result := tools.Result{
 		BytesFetched: len(slice), ContentBytes: len(slice),
-		Payload: map[string]interface{}{
+		Payload: map[string]any{
 			"source_id": selected.ID,
 			"path":      args.Path,
 			"file_size": size,
@@ -334,14 +334,14 @@ func (*grepTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "grep_repo",
 			Description: "Regex-search source files for matching lines. Narrow the search with path_glob (a path substring, or a *-glob like \"config/*.yaml\") so it stays cheap; each matched file is fetched over the API. Scans at most 40 files per call and reports truncation. Returns matches with file, line number, and context.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"source_id":     map[string]interface{}{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
-					"pattern":       map[string]interface{}{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
-					"path_glob":     map[string]interface{}{"type": "string", "description": "Restrict to files whose path matches this substring or *-glob. Strongly recommended; a broad search is capped at 40 files.", "default": ""},
-					"context_lines": map[string]interface{}{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
-					"max_matches":   map[string]interface{}{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
+				"properties": map[string]any{
+					"source_id":     map[string]any{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
+					"pattern":       map[string]any{"type": "string", "description": "RE2 regex (Go syntax). Use (?i) prefix for case-insensitive."},
+					"path_glob":     map[string]any{"type": "string", "description": "Restrict to files whose path matches this substring or *-glob. Strongly recommended; a broad search is capped at 40 files.", "default": ""},
+					"context_lines": map[string]any{"type": "integer", "description": "Lines of context before/after each match (default 2, max 5).", "default": 2},
+					"max_matches":   map[string]any{"type": "integer", "description": "Max matches to return (default 30, max 100).", "default": 30},
 				},
 				"required": []string{"source_id", "pattern"},
 			},
@@ -458,7 +458,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		}
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"source_id":        selected.ID,
 		"pattern":          args.Pattern,
 		"path_glob":        args.PathGlob,
@@ -505,7 +505,7 @@ func repoGrepObservation(sourceID, pathFilter string, contextLines, maxMatches i
 
 func repoGrepError(observation GrepObservation, message string) tools.Result {
 	observation.Call.Outcome = tools.GrepOutcomeError
-	return tools.Result{Payload: map[string]interface{}{"error": message}, Observation: observation}
+	return tools.Result{Payload: map[string]any{"error": message}, Observation: observation}
 }
 
 // normalizeDir turns a user directory arg into a clean prefix ending in "/"

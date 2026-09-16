@@ -65,9 +65,9 @@ func (*discoverClustersTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "discover_clusters",
 			Description: "List workload Kubernetes clusters whose debug artifacts were captured under artifacts/clusters/ for this build. Excludes the management ('bootstrap') cluster. Returns an empty list if the build did not capture per-cluster artifacts.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type":       "object",
-				"properties": map[string]interface{}{},
+				"properties": map[string]any{},
 				"required":   []string{},
 			},
 		},
@@ -79,15 +79,15 @@ func (*discoverClustersTool) Dispatch(ctx context.Context, env *tools.Env, _ jso
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	items := make([]map[string]interface{}, 0, len(clusters))
+	items := make([]map[string]any, 0, len(clusters))
 	for _, c := range clusters {
-		items = append(items, map[string]interface{}{
+		items = append(items, map[string]any{
 			"name":    c.Name,
 			"path":    c.Path,
 			"web_url": joinWeb(env, c.Path),
 		})
 	}
-	return tools.Result{Payload: map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
 		"clusters": items,
 		"count":    len(items),
 	}}
@@ -103,10 +103,10 @@ func (*findMyClusterTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "find_my_cluster",
 			Description: "Resolve which workload cluster a failed test most likely ran against. Uses provider-agnostic flavor-substring matching (cluster dir name minus random ID appears in normalized test name) with a CAPZ keyword-rules fallback. Returns the chosen cluster plus reason and the full candidate list so you can override.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"test_name": map[string]interface{}{
+				"properties": map[string]any{
+					"test_name": map[string]any{
 						"type":        "string",
 						"description": "Full test name (typically TestCase.Name) including any Ginkgo brackets.",
 					},
@@ -128,9 +128,9 @@ func (*findMyClusterTool) Dispatch(ctx context.Context, env *tools.Env, raw json
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	candidates := make([]map[string]interface{}, 0, len(clusters))
+	candidates := make([]map[string]any, 0, len(clusters))
 	for _, c := range clusters {
-		candidates = append(candidates, map[string]interface{}{
+		candidates = append(candidates, map[string]any{
 			"name":    c.Name,
 			"path":    c.Path,
 			"web_url": joinWeb(env, c.Path),
@@ -138,7 +138,7 @@ func (*findMyClusterTool) Dispatch(ctx context.Context, env *tools.Env, raw json
 	}
 
 	if len(clusters) == 0 {
-		return tools.Result{Payload: map[string]interface{}{
+		return tools.Result{Payload: map[string]any{
 			"match":      nil,
 			"reason":     "no clusters discovered for this build",
 			"candidates": candidates,
@@ -146,7 +146,7 @@ func (*findMyClusterTool) Dispatch(ctx context.Context, env *tools.Env, raw json
 	}
 	matched := MapTestToCluster(args.TestName, clusters)
 	if matched == nil {
-		return tools.Result{Payload: map[string]interface{}{
+		return tools.Result{Payload: map[string]any{
 			"match":      nil,
 			"reason":     "no flavor-substring or rule match",
 			"candidates": candidates,
@@ -156,8 +156,8 @@ func (*findMyClusterTool) Dispatch(ctx context.Context, env *tools.Env, raw json
 	if len(clusters) > 1 {
 		reason = "flavor or keyword rule"
 	}
-	return tools.Result{Payload: map[string]interface{}{
-		"match": map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
+		"match": map[string]any{
 			"name":    matched.Name,
 			"path":    matched.Path,
 			"web_url": joinWeb(env, matched.Path),
@@ -177,10 +177,10 @@ func (*listMachinesTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "list_cluster_machines",
 			Description: "List the per-machine (per-VM/node) debug directories under a discovered cluster. Returns machine names and their dir paths; use list_machine_logs to see which log files each machine has.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"cluster": map[string]interface{}{
+				"properties": map[string]any{
+					"cluster": map[string]any{
 						"type":        "string",
 						"description": "Cluster name as returned by discover_clusters (e.g. \"capz-e2e-abc123-windows\").",
 					},
@@ -202,15 +202,15 @@ func (*listMachinesTool) Dispatch(ctx context.Context, env *tools.Env, raw json.
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	items := make([]map[string]interface{}, 0, len(machines))
+	items := make([]map[string]any, 0, len(machines))
 	for _, m := range machines {
-		items = append(items, map[string]interface{}{
+		items = append(items, map[string]any{
 			"name":    m.Name,
 			"path":    m.Path,
 			"web_url": joinWeb(env, m.Path),
 		})
 	}
-	return tools.Result{Payload: map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
 		"cluster":  args.Cluster,
 		"machines": items,
 		"count":    len(items),
@@ -227,11 +227,11 @@ func (*listMachineLogsTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "list_machine_logs",
 			Description: "List the known log files actually present in a machine's debug directory (boot.log, kubelet.log, journal.log, etc.). Use this resolver before tail_artifact/grep_artifact so you don't fetch missing files. Returns files in priority order.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"cluster": map[string]interface{}{"type": "string", "description": "Cluster name."},
-					"machine": map[string]interface{}{"type": "string", "description": "Machine (VM/node) name as returned by list_cluster_machines."},
+				"properties": map[string]any{
+					"cluster": map[string]any{"type": "string", "description": "Cluster name."},
+					"machine": map[string]any{"type": "string", "description": "Machine (VM/node) name as returned by list_cluster_machines."},
 				},
 				"required": []string{"cluster", "machine"},
 			},
@@ -251,16 +251,16 @@ func (*listMachineLogsTool) Dispatch(ctx context.Context, env *tools.Env, raw js
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	items := make([]map[string]interface{}, 0, len(logs))
+	items := make([]map[string]any, 0, len(logs))
 	for _, l := range logs {
-		items = append(items, map[string]interface{}{
+		items = append(items, map[string]any{
 			"name":    l.Name,
 			"path":    l.Path,
 			"size":    l.Size,
 			"web_url": joinWeb(env, l.Path),
 		})
 	}
-	return tools.Result{Payload: map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
 		"cluster": args.Cluster,
 		"machine": args.Machine,
 		"logs":    items,
@@ -278,10 +278,10 @@ func (*discoverControllersTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "discover_controllers",
 			Description: "List management-cluster controller deployments captured under artifacts/clusters/bootstrap/logs/. Returns one entry per (namespace, deployment) pair. Pass a namespace to scope; omit for all namespaces.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"namespace": map[string]interface{}{
+				"properties": map[string]any{
+					"namespace": map[string]any{
 						"type":        "string",
 						"description": "Optional namespace filter (e.g. \"capz-system\", \"capi-system\"). Omit to list all namespaces.",
 					},
@@ -311,16 +311,16 @@ func (*discoverControllersTool) Dispatch(ctx context.Context, env *tools.Env, ra
 	if err != nil {
 		return tools.ErrPayload(err.Error())
 	}
-	items := make([]map[string]interface{}, 0, len(controllers))
+	items := make([]map[string]any, 0, len(controllers))
 	for _, c := range controllers {
-		items = append(items, map[string]interface{}{
+		items = append(items, map[string]any{
 			"namespace":  c.Namespace,
 			"deployment": c.Deployment,
 			"path":       c.Path,
 			"web_url":    joinWeb(env, c.Path),
 		})
 	}
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"namespace":   args.Namespace,
 		"controllers": items,
 		"count":       len(items),
@@ -343,13 +343,13 @@ func (*resolveControllerLogTool) Schema() transport.ToolSchema {
 		Function: transport.FunctionDecl{
 			Name:        "resolve_controller_log",
 			Description: "Find the concrete pod-level container-log path for a controller deployment. Returns the first pod (filtered by optional pod_name_regex) whose container_log file is present. Use the returned path with tail_artifact or grep_artifact.",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"namespace":      map[string]interface{}{"type": "string", "description": "Namespace, e.g. \"capz-system\"."},
-					"deployment":     map[string]interface{}{"type": "string", "description": "Deployment name, e.g. \"capz-controller-manager\"."},
-					"pod_name_regex": map[string]interface{}{"type": "string", "description": "Optional regex to filter pod names. Default matches any."},
-					"container_log":  map[string]interface{}{"type": "string", "description": "Container log file name (default \"manager.log\").", "default": "manager.log"},
+				"properties": map[string]any{
+					"namespace":      map[string]any{"type": "string", "description": "Namespace, e.g. \"capz-system\"."},
+					"deployment":     map[string]any{"type": "string", "description": "Deployment name, e.g. \"capz-controller-manager\"."},
+					"pod_name_regex": map[string]any{"type": "string", "description": "Optional regex to filter pod names. Default matches any."},
+					"container_log":  map[string]any{"type": "string", "description": "Container log file name (default \"manager.log\").", "default": "manager.log"},
 				},
 				"required": []string{"namespace", "deployment"},
 			},
@@ -380,17 +380,17 @@ func (*resolveControllerLogTool) Dispatch(ctx context.Context, env *tools.Env, r
 		return tools.ErrPayload(err.Error())
 	}
 	if log == nil {
-		return tools.Result{Payload: map[string]interface{}{
+		return tools.Result{Payload: map[string]any{
 			"namespace":  args.Namespace,
 			"deployment": args.Deployment,
 			"match":      nil,
 		}}
 	}
-	return tools.Result{Payload: map[string]interface{}{
+	return tools.Result{Payload: map[string]any{
 		"namespace":  args.Namespace,
 		"deployment": args.Deployment,
 		"pod":        pod,
-		"log": map[string]interface{}{
+		"log": map[string]any{
 			"name":    log.Name,
 			"path":    log.Path,
 			"size":    log.Size,
@@ -401,10 +401,10 @@ func (*resolveControllerLogTool) Dispatch(ctx context.Context, env *tools.Env, r
 
 // mustUnmarshalPayload decodes a cached JSON payload back into a map. On decode
 // failure it returns an error envelope instead of panicking.
-func mustUnmarshalPayload(s string) map[string]interface{} {
-	var out map[string]interface{}
+func mustUnmarshalPayload(s string) map[string]any {
+	var out map[string]any
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return map[string]interface{}{"error": "cache decode failed: " + err.Error()}
+		return map[string]any{"error": "cache decode failed: " + err.Error()}
 	}
 	return out
 }

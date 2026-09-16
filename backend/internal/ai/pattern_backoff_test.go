@@ -153,7 +153,7 @@ func TestPatternFailureBackoffDoesNotPersistTransientOrCancellation(t *testing.T
 				srv.push(test.status, "private transient response")
 			}
 			service := newPatternBackoffService(t, srv.URL, t.TempDir(), "claude-test")
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				_, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
 				want := int32(attempt+1) * test.requestsPerAnalysis
 				if calls := atomic.LoadInt32(&srv.calls); err == nil || IsPatternFailureSuppressed(err) || calls != want {

@@ -11,7 +11,7 @@ See [Local development](docs/development.md) for setup and [Testing](docs/testin
 - Go 1.26 as declared by `backend/go.mod`
 - Node.js 20 or newer
 - npm
-- `staticcheck` for the full backend validation
+- The pinned golangci-lint suite for backend validation, installed by `make lint`
 - Docker and Helm only for container or Kubernetes changes
 
 ## Workflow

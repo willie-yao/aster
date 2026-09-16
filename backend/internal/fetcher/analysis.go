@@ -222,9 +222,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 		p.finishProgressAnalysis(item.tc.Source == models.TestCaseSourceBuild, outcome)
 	}
 	scheduleWork := func(item aiWork) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-analysisCtx.Done():
@@ -239,7 +237,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			request := item.request(consecutiveMap[item.jobID+"::"+item.tc.Name], p.cacheGenerationFingerprint())
 			result, analyzeErr := analyzer.AnalyzeFailure(analysisCtx, p.client, request)
 			finish(item, before, result, analyzeErr)
-		}()
+		})
 	}
 	for _, item := range work {
 		scheduleWork(item)

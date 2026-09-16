@@ -15,10 +15,10 @@ func TestClientMaxOutputTokensIsOptionalAndFingerprinting(t *testing.T) {
 	base := NewClientWithOptions(Options{Endpoint: "https://example.invalid/v1/chat/completions", Model: "model"})
 	limited := NewClientWithOptions(Options{Endpoint: "https://example.invalid/v1/chat/completions", Model: "model", MaxOutputTokens: 8192})
 	capture := &recordingTransport{result: &transport.Response{
-		HasMessage: true, Message: transport.Message{Role: "assistant", Content: strPtr("ok")},
+		HasMessage: true, Message: transport.Message{Role: "assistant", Content: new("ok")},
 	}}
 	limited.transport = capture
-	if _, err := limited.callModel(t.Context(), []transport.Message{{Role: "user", Content: strPtr("test")}}, nil, nil); err != nil {
+	if _, err := limited.callModel(t.Context(), []transport.Message{{Role: "user", Content: new("test")}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if capture.request.MaxOutputTokens != 8192 || base.ModelFingerprint() == limited.ModelFingerprint() {

@@ -8,7 +8,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 )
 
-func dispatchTimeline(t *testing.T, env *tools.Env, args map[string]interface{}) map[string]interface{} {
+func dispatchTimeline(t *testing.T, env *tools.Env, args map[string]any) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -18,12 +18,12 @@ func dispatchTimeline(t *testing.T, env *tools.Env, args map[string]interface{})
 	return res.Payload
 }
 
-func timelineEventsOf(t *testing.T, payload map[string]interface{}) []map[string]interface{} {
+func timelineEventsOf(t *testing.T, payload map[string]any) []map[string]any {
 	t.Helper()
 	if e, ok := payload["error"]; ok {
 		t.Fatalf("unexpected error payload: %v", e)
 	}
-	rawEvents, ok := payload["events"].([]map[string]interface{})
+	rawEvents, ok := payload["events"].([]map[string]any)
 	if !ok {
 		t.Fatalf("events missing or wrong type: %#v", payload["events"])
 	}
@@ -39,7 +39,7 @@ func TestTimelineOrdersLineLogByTimestamp(t *testing.T) {
 		"2026-07-04T02:41:35Z creating rule two\n"
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte(log)}}}
 
-	payload := dispatchTimeline(t, env, map[string]interface{}{"path": "build-log.txt"})
+	payload := dispatchTimeline(t, env, map[string]any{"path": "build-log.txt"})
 	events := timelineEventsOf(t, payload)
 	if len(events) != 3 {
 		t.Fatalf("want 3 events, got %d: %#v", len(events), events)
@@ -59,7 +59,7 @@ func TestTimelineOrdersLineLogByTimestamp(t *testing.T) {
 func TestTimelineResourceFilterLineLog(t *testing.T) {
 	log := "2026-07-04T02:41:20Z touch alpha\n2026-07-04T02:41:35Z touch beta\n"
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{"log": []byte(log)}}}
-	payload := dispatchTimeline(t, env, map[string]interface{}{"path": "log", "resource": "ALPHA"})
+	payload := dispatchTimeline(t, env, map[string]any{"path": "log", "resource": "ALPHA"})
 	events := timelineEventsOf(t, payload)
 	if len(events) != 1 || events[0]["timestamp"] != "2026-07-04T02:41:20Z" {
 		t.Fatalf("resource filter wrong: %#v", events)
@@ -87,7 +87,7 @@ func TestTimelineParsesJSONActivityRecords(t *testing.T) {
 		"\n" + rec("2026-07-04T02:41:30.0Z", "other-thing", "Microsoft.Compute/disks/write", "Succeeded")
 
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{"act.log": []byte(content)}}}
-	payload := dispatchTimeline(t, env, map[string]interface{}{"path": "act.log", "resource": "test-security-rule"})
+	payload := dispatchTimeline(t, env, map[string]any{"path": "act.log", "resource": "test-security-rule"})
 	events := timelineEventsOf(t, payload)
 	if len(events) != 2 {
 		t.Fatalf("want 2 filtered records, got %d: %#v", len(events), events)
@@ -107,7 +107,7 @@ func TestTimelineParsesJSONActivityRecords(t *testing.T) {
 func TestTimelineJSONArrayShape(t *testing.T) {
 	content := `[{"eventTimestamp":"2026-07-04T02:00:02Z","resourceId":"nsg/rule-a"},{"eventTimestamp":"2026-07-04T02:00:01Z","resourceId":"nsg/rule-a"}]`
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{"a.json": []byte(content)}}}
-	payload := dispatchTimeline(t, env, map[string]interface{}{"path": "a.json", "resource": "rule-a"})
+	payload := dispatchTimeline(t, env, map[string]any{"path": "a.json", "resource": "rule-a"})
 	events := timelineEventsOf(t, payload)
 	if len(events) != 2 || events[0]["timestamp"] != "2026-07-04T02:00:01Z" {
 		t.Fatalf("array shape not ordered/parsed: %#v", events)
@@ -116,7 +116,7 @@ func TestTimelineJSONArrayShape(t *testing.T) {
 
 func TestTimelineNoMatchesReturnsEmpty(t *testing.T) {
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{"log": []byte("2026-07-04T02:00:00Z hello\n")}}}
-	payload := dispatchTimeline(t, env, map[string]interface{}{"path": "log", "resource": "absent"})
+	payload := dispatchTimeline(t, env, map[string]any{"path": "log", "resource": "absent"})
 	if got := payload["count"]; got != 0 {
 		t.Fatalf("want count 0, got %v", got)
 	}
@@ -124,10 +124,10 @@ func TestTimelineNoMatchesReturnsEmpty(t *testing.T) {
 
 func TestTimelineMissingPathErrors(t *testing.T) {
 	env := &tools.Env{Browser: &fakeBrowser{files: map[string][]byte{}}}
-	if _, ok := dispatchTimeline(t, env, map[string]interface{}{"path": "nope"})["error"]; !ok {
+	if _, ok := dispatchTimeline(t, env, map[string]any{"path": "nope"})["error"]; !ok {
 		t.Fatal("want error payload for missing file")
 	}
-	if _, ok := dispatchTimeline(t, env, map[string]interface{}{})["error"]; !ok {
+	if _, ok := dispatchTimeline(t, env, map[string]any{})["error"]; !ok {
 		t.Fatal("want error payload for empty path")
 	}
 }

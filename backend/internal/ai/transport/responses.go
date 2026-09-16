@@ -124,7 +124,7 @@ func (t *responsesTransport) Complete(ctx context.Context, req Request) (*Respon
 	consecutiveFlexUnavailable := 0
 	attempts := 0
 	wireRequestBytes := 0
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		attempts = attempt + 1
 		raw = nil
 		responseRead = false

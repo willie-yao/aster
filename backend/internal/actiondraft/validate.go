@@ -143,7 +143,7 @@ func validateUniqueSections(body string) error {
 	seenSections := map[string]bool{}
 	affectedBuilds := false
 	seenBuilds := map[string]bool{}
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if match := headingPattern.FindStringSubmatch(line); match != nil {
 			name := normalizeHeading(match[1])
 			if name != "" && seenSections[name] {

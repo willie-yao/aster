@@ -394,7 +394,7 @@ func stagedResult(ctx context.Context, work, home, temp string, outputLimit int)
 		return nil, nil, "", fmt.Errorf("read staged status: %v: %s", err, oneLine(stderr))
 	}
 	var changed []string
-	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(status), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -654,7 +654,7 @@ func setGitMetadataWritable(root string, writable bool) error {
 
 func openCodeSummary(output string) string {
 	var summaries []string
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		var event struct {
 			Type string `json:"type"`
 			Part struct {

@@ -693,7 +693,7 @@ func TestServiceRunnerFailuresReachTurnLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "retry"); err == nil || errors.Is(err, ErrTurnLimit) {
 			t.Fatalf("attempt %d error = %v", i+1, err)
 		}

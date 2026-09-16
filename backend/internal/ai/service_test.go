@@ -677,7 +677,7 @@ func TestService_CritiqueRetriesDoNotChangeCacheEnforcement(t *testing.T) {
 func TestService_BelowFloor_ReanalyzesBuildCacheEntry(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]any{"path": ""}))
 	srv.push(200, chatRespFinal(`{"summary":"fresh post-floor","is_transient":false,"root_cause":"r","severity":"Low","suggested_fix":"f","relevant_files":[]}`))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -886,7 +886,7 @@ func TestService_ShouldReanalyze_CacheGeneration(t *testing.T) {
 func TestService_MissingCitationReanalysisReplacesStaleAnalysis(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 
 	client := newAgenticTestClient(t, srv.URL)
@@ -924,7 +924,7 @@ func (f *serviceFixedBrowserFactory) ForBuild(_, _ string) artifacts.Browser { r
 func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	client := newAgenticTestClient(t, srv.URL)
 	registry, enabled := newTestRegistry(t)
@@ -945,7 +945,7 @@ func TestServiceHardPolicyReturnsReanalysisEligiblePreliminaryResult(t *testing.
 	if got := atomic.LoadInt32(&srv.calls); got != 2 {
 		t.Fatalf("first provider calls = %d, want 2", got)
 	}
-	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	second, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
 	if err != nil || second.Summary == nil || second.Analysis == nil || second.Analysis.Disposition != models.AnalysisDispositionPreliminary || second.Analysis.CacheHit {
@@ -1043,7 +1043,7 @@ func TestPreliminaryRetryBudgetStopsUncachedReanalysis(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	for range maxPreliminaryAttempts {
-		srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+		srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 		srv.push(200, chatRespFinal(missingCitationFinalJSON))
 	}
 	client := newAgenticTestClient(t, srv.URL)

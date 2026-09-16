@@ -38,14 +38,14 @@ func TestResponsesForcedFinalizationReplaysAsAssistantContent(t *testing.T) {
 
 	client := NewClientWithOptions(Options{API: APIResponses, Endpoint: server.URL, Model: "model"})
 	headroom := contextHeadroomFor(AgenticOptions{ContextWindowTokens: 128_000, RequestTokenBudget: 120_000})
-	base := []transport.Message{{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("analyze")}}
+	base := []transport.Message{{Role: "system", Content: new("system")}, {Role: "user", Content: new("analyze")}}
 	first, providerItems, safe := client.runFinalizeRound(t.Context(), base, headroom)
 	if !safe || first != cleanFinalJSON {
 		t.Fatalf("first finalization = %q, safe=%t", first, safe)
 	}
 	repair := append(base,
-		transport.Message{Role: "assistant", Content: strPtr(first), ProviderItems: providerItems},
-		transport.Message{Role: "user", Content: strPtr("fix the draft")},
+		transport.Message{Role: "assistant", Content: new(first), ProviderItems: providerItems},
+		transport.Message{Role: "user", Content: new("fix the draft")},
 	)
 	second, _, safe := client.runFinalizeRound(t.Context(), repair, headroom)
 	if !safe || second != cleanFinalJSON {
@@ -99,7 +99,7 @@ func TestChatForcedFinalizationStillReturnsArguments(t *testing.T) {
 
 	client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: server.URL, Model: "model"})
 	headroom := contextHeadroomFor(AgenticOptions{ContextWindowTokens: 128_000, RequestTokenBudget: 120_000})
-	content, providerItems, safe := client.runFinalizeRound(t.Context(), []transport.Message{{Role: "user", Content: strPtr("analyze")}}, headroom)
+	content, providerItems, safe := client.runFinalizeRound(t.Context(), []transport.Message{{Role: "user", Content: new("analyze")}}, headroom)
 	if !safe || content != cleanFinalJSON || len(providerItems) != 0 {
 		t.Fatalf("finalization = %q, provider_items=%d, safe=%t", content, len(providerItems), safe)
 	}

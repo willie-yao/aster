@@ -104,7 +104,7 @@ func PullHeadRevision(refs map[string]string, repo, pullNumber string) (string, 
 		if !strings.EqualFold(strings.TrimSpace(name), repo) {
 			continue
 		}
-		for _, segment := range strings.Split(value, ",") {
+		for segment := range strings.SplitSeq(value, ",") {
 			ref, revision, found := strings.Cut(strings.TrimSpace(segment), ":")
 			if !found || strings.TrimSpace(ref) != pullNumber {
 				continue

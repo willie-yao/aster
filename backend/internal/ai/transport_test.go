@@ -66,7 +66,7 @@ func (t *recordingTransport) Complete(_ context.Context, req transport.Request) 
 
 func TestClientCompleteUsesModelTransport(t *testing.T) {
 	provider := &recordingTransport{result: &transport.Response{
-		HasMessage: true, Message: transport.Message{Role: "assistant", Content: strPtr("done")},
+		HasMessage: true, Message: transport.Message{Role: "assistant", Content: new("done")},
 	}}
 	client := &Client{model: "model-a", transport: provider}
 
@@ -78,8 +78,8 @@ func TestClientCompleteUsesModelTransport(t *testing.T) {
 		t.Fatalf("Complete() = %q, want done", got)
 	}
 	wantMessages := []transport.Message{
-		{Role: "system", Content: strPtr("system")},
-		{Role: "user", Content: strPtr("user")},
+		{Role: "system", Content: new("system")},
+		{Role: "user", Content: new("user")},
 	}
 	if provider.request.Model != "model-a" || !reflect.DeepEqual(provider.request.Messages, wantMessages) {
 		t.Fatalf("transport request = %+v", provider.request)
@@ -100,12 +100,12 @@ func TestClientCallModelRecordsTrace(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIResponses})
 	ctx := withAnalysisTrace(context.Background(), trace)
-	if _, err := client.callModel(ctx, []transport.Message{{Role: "user", Content: strPtr("user")}}, nil, nil); err != nil {
+	if _, err := client.callModel(ctx, []transport.Message{{Role: "user", Content: new("user")}}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	trace.Finish("success", nil)
 	event := store.Snapshot().Traces[0].Events[0]
-	wantBytes := requestSizeEstimate([]transport.Message{{Role: "user", Content: strPtr("user")}}, 0)
+	wantBytes := requestSizeEstimate([]transport.Message{{Role: "user", Content: new("user")}}, 0)
 	if event.Kind != "model_request" || event.ResponseID != "resp-1" || event.Attempts != 2 || !event.UsageReported || event.InputTokens != 11 || event.CachedInputTokens != 3 || !event.CacheWriteInputTokensReported || event.CacheWriteInputTokens != 2 || event.OutputTokens != 7 || event.ReasoningTokens != 2 || event.ReasoningEffort != "high" || event.ServiceTier != "" || event.ToolCallCount != 1 || event.Bytes != wantBytes || event.WireRequestBytes != 321 {
 		t.Fatalf("event = %+v", event)
 	}
@@ -116,7 +116,7 @@ func TestClientCallModelRecordsRequestBytesOnProviderError(t *testing.T) {
 	client := &Client{model: "model-a", transport: provider}
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test"})
-	messages := []transport.Message{{Role: "user", Content: strPtr("user")}}
+	messages := []transport.Message{{Role: "user", Content: new("user")}}
 	ctx := withAnalysisTrace(context.Background(), trace)
 	if _, err := client.callModel(ctx, messages, nil, nil); err == nil {
 		t.Fatal("expected provider error")

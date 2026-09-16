@@ -210,7 +210,7 @@ func templateName(filename, body string) string {
 	if strings.HasPrefix(t, "---") {
 		rest := strings.TrimPrefix(t, "---")
 		if end := strings.Index(rest, "\n---"); end >= 0 {
-			for _, line := range strings.Split(rest[:end], "\n") {
+			for line := range strings.SplitSeq(rest[:end], "\n") {
 				line = strings.TrimSpace(line)
 				if strings.HasPrefix(line, "name:") {
 					if v := strings.TrimSpace(strings.TrimPrefix(line, "name:")); v != "" {

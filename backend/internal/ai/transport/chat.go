@@ -123,7 +123,7 @@ func (t *chatCompletionsTransport) Complete(ctx context.Context, req Request) (*
 
 	var resp *http.Response
 	attempts := 0
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		attempts = attempt + 1
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.api.endpoint, bytes.NewReader(body))
 		if err != nil {

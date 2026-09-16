@@ -19,7 +19,7 @@ func newPatternTestService(t *testing.T, serverURL string) *Service {
 
 func patternFailures(n int) []PatternFailure {
 	out := make([]PatternFailure, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, PatternFailure{
 			BuildID:        string(rune('a'+i)) + "build",
 			FailingTest:    "spec",
@@ -200,7 +200,7 @@ func TestAnalyzePatternCachesStrictResponse(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	srv.push(200, patternToolResponse(sharedPatternResponse()))
 	service := newPatternTestService(t, srv.URL)
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		pattern, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
 		if err != nil || pattern == nil {
 			t.Fatalf("attempt %d pattern=%+v error=%v", attempt, pattern, err)
@@ -273,7 +273,7 @@ func TestAnalyzePatternDatesUntimestampedCacheEntryFromItsAge(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		now = now.Add(30 * time.Minute)
 		pattern, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
 		if err != nil {

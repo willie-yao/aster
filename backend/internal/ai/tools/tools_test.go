@@ -26,7 +26,7 @@ func (s *stubTool) Schema() transport.ToolSchema {
 
 func (s *stubTool) Dispatch(_ context.Context, _ *Env, raw json.RawMessage) Result {
 	s.args = append([]byte(nil), raw...)
-	return Result{Payload: map[string]interface{}{"called": s.name}}
+	return Result{Payload: map[string]any{"called": s.name}}
 }
 
 func TestRegistryEnableExpandsGroups(t *testing.T) {
@@ -143,11 +143,11 @@ func TestCacheConcurrentSafe(t *testing.T) {
 	c := NewCache()
 	const writers, perWriter = 8, 100
 	var wg sync.WaitGroup
-	for w := 0; w < writers; w++ {
+	for w := range writers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < perWriter; i++ {
+			for i := range perWriter {
 				key := string(rune('a'+w)) + string(rune('0'+i%10))
 				c.Set(key, key)
 				_, _ = c.Get(key)

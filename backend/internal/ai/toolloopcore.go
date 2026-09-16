@@ -68,7 +68,7 @@ func (d toolLoopDecision) corrective() bool { return !d.stop && d.prompt != "" }
 type toolLoopDispatch struct {
 	Call     transport.ToolCall
 	Envelope string
-	Payload  map[string]interface{}
+	Payload  map[string]any
 }
 
 // toolLoopParams configures one run of the shared tool-calling loop. Only
@@ -91,7 +91,7 @@ type toolLoopParams struct {
 	strictContextBudget bool
 	// dispatch runs one tool call and returns the model-bound envelope, the
 	// structured payload behind it, and the raw tool result.
-	dispatch func(context.Context, transport.ToolCall) (string, map[string]interface{}, tools.Result)
+	dispatch func(context.Context, transport.ToolCall) (string, map[string]any, tools.Result)
 	// onTurn observes every model message, including tool-calling ones.
 	onTurn func(transport.Message)
 	// onAnswer decides what to do with a tools-free answer. A nil hook accepts.
@@ -224,7 +224,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			}
 			if decision.corrective() {
 				messages = appendToolsFreeAssistant(messages, message)
-				messages = append(messages, transport.Message{Role: "user", Content: strPtr(decision.prompt)})
+				messages = append(messages, transport.Message{Role: "user", Content: new(decision.prompt)})
 				if decision.grantIter {
 					maxIters++
 				}
@@ -272,7 +272,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 				params.onDispatch(&dispatched)
 			}
 			messages = append(messages, transport.Message{
-				Role: "tool", ToolCallID: toolCall.ID, Content: strPtr(dispatched.Envelope),
+				Role: "tool", ToolCallID: toolCall.ID, Content: new(dispatched.Envelope),
 			})
 		}
 		if err := ctx.Err(); err != nil {

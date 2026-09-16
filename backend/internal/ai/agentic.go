@@ -794,8 +794,8 @@ func (c *Client) doAnalyzeAgentic(
 		}
 	}
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr(fullSysPrompt)},
-		{Role: "user", Content: strPtr(userPrompt)},
+		{Role: "system", Content: new(fullSysPrompt)},
+		{Role: "user", Content: new(userPrompt)},
 	}
 	schemas := state.registry.Schemas(state.enabledTools)
 	state.promptCacheKey = analysisPromptCacheKey(sysPrompt+agToolDocs, schemas)
@@ -1162,8 +1162,8 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		feedback += "\n\n" + injection
 	}
 	repairMessages := append(messages,
-		transport.Message{Role: "assistant", Content: strPtr(finalContent), ProviderItems: finalProviderItems},
-		transport.Message{Role: "user", Content: strPtr(feedback)})
+		transport.Message{Role: "assistant", Content: new(finalContent), ProviderItems: finalProviderItems},
+		transport.Message{Role: "user", Content: new(feedback)})
 	retry, _ := retries.admit()
 
 	updated := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, state.evidenceContentByPath, state.readSourceFull, matchSkillsForDraft(state, parsed), state.consecutiveFailures, analysisCitationContext{Evidence: state.analysisEvidence, Full: state.analysisEvidenceFull})
@@ -1212,7 +1212,7 @@ func (c *Client) runBoundedCritiqueRepair(ctx context.Context, state *agentState
 		for _, tc := range toolCalls {
 			result := dispatchAgenticTool(ctx, state, tc)
 			state.modelBytes += len(result)
-			repairMessages = append(repairMessages, transport.Message{Role: "tool", ToolCallID: tc.ID, Content: strPtr(result)})
+			repairMessages = append(repairMessages, transport.Message{Role: "tool", ToolCallID: tc.ID, Content: new(result)})
 		}
 	}
 

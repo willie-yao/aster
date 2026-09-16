@@ -1053,7 +1053,7 @@ var DefaultAgentic = Agentic{
 	MinToolCalls: 2,
 	MinGCSBytes:  0,
 	Critique: AgenticCritique{
-		MaxRetries: intPtr(0),
+		MaxRetries: new(0),
 	},
 }
 
@@ -1061,7 +1061,7 @@ var DefaultAgentic = Agentic{
 // Safe to call on a nil receiver.
 func (a *AI) EffectiveAgentic() Agentic {
 	out := DefaultAgentic
-	out.Critique.MaxRetries = intPtr(*DefaultAgentic.Critique.MaxRetries)
+	out.Critique.MaxRetries = new(*DefaultAgentic.Critique.MaxRetries)
 	if a == nil {
 		return out
 	}
@@ -1210,8 +1210,6 @@ func LoadDir(dir string) (*Config, string, error) {
 	}
 	return cfg, prompt, nil
 }
-
-func intPtr(v int) *int { return &v }
 
 // parse decodes YAML in strict mode and runs validation.
 func parse(r io.Reader) (*Config, error) {

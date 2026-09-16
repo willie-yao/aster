@@ -226,11 +226,9 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 		return startTurnResult{}, err
 	}
 	if result.Started {
-		s.activeWG.Add(1)
-		go func() {
-			defer s.activeWG.Done()
+		s.activeWG.Go(func() {
 			s.runTurn(id, owner, requestID, leaseID, result.Turn)
-		}()
+		})
 	}
 	return result, nil
 }

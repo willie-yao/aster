@@ -861,7 +861,7 @@ func invalidDataPath(name string) bool {
 }
 
 func hiddenDataPath(name string) bool {
-	for _, segment := range strings.Split(path.Clean("/"+name), "/") {
+	for segment := range strings.SplitSeq(path.Clean("/"+name), "/") {
 		if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
 			return true
 		}

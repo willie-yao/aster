@@ -242,7 +242,7 @@ func TestClustersOrderIsStable(t *testing.T) {
 	Annotate(details, observedBaseline(testName, other), Repository{}, nil)
 
 	first := Clusters(details)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		again := Clusters(details)
 		for j := range first {
 			if first[j].ID != again[j].ID {

@@ -750,7 +750,7 @@ func TestFitPreviewStateOrdersTimestampsChronologically(t *testing.T) {
 
 	t.Run("count", func(t *testing.T) {
 		state := newState()
-		for i := 0; i < maxPersistedPreviews-1; i++ {
+		for i := range maxPersistedPreviews - 1 {
 			key := fmt.Sprintf("later-%03d", i)
 			state.Previews[key] = &persistedPreview{
 				Kind: "issue", CreatedAt: "2026-01-01T00:00:01Z", Status: previewStatusReady,

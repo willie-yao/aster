@@ -111,10 +111,10 @@ func TestPatchBudgetPrefersCoveringMoreFiles(t *testing.T) {
 	// Each file fits on its own, but together they exceed the budget. The
 	// smallest ones must win so the retained text covers the most files.
 	var raws []map[string]any
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		raws = append(raws, rawFile(fmt.Sprintf("large%d.go", i), MaxFilePatchBytes))
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		raws = append(raws, rawFile(fmt.Sprintf("small%d.go", i), 200))
 	}
 	set, _ := changedFiles(t, [][]map[string]any{raws})
@@ -122,7 +122,7 @@ func TestPatchBudgetPrefersCoveringMoreFiles(t *testing.T) {
 	if set.PatchBytes > MaxPatchBytes {
 		t.Fatalf("patch bytes = %d, over budget %d", set.PatchBytes, MaxPatchBytes)
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		name := fmt.Sprintf("small%d.go", i)
 		if file, _ := patchFor(set, name); file.Patch == "" {
 			t.Errorf("%s should fit the budget ahead of the large files", name)
@@ -188,9 +188,9 @@ func TestTruncatePatchPrefersAHunkBoundary(t *testing.T) {
 
 func TestChangedFilesCapsTheFileList(t *testing.T) {
 	var pages [][]map[string]any
-	for page := 0; page < 4; page++ {
+	for page := range 4 {
 		var batch []map[string]any
-		for i := 0; i < changedFilesPageSize; i++ {
+		for i := range changedFilesPageSize {
 			batch = append(batch, rawFile(fmt.Sprintf("p%d_f%d.go", page, i), 10))
 		}
 		pages = append(pages, batch)

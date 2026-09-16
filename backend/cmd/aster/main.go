@@ -405,7 +405,7 @@ func runNotifyTest(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 	var recipients []string
-	for _, recipient := range strings.Split(to, ",") {
+	for recipient := range strings.SplitSeq(to, ",") {
 		if trimmed := strings.TrimSpace(recipient); trimmed != "" {
 			recipients = append(recipients, trimmed)
 		}

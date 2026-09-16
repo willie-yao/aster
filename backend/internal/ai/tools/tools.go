@@ -39,7 +39,7 @@ import (
 // A tool that wants to surface an error to the model uses ErrPayload as a
 // shortcut; the loop will still apply the envelope.
 type Result struct {
-	Payload         map[string]interface{}
+	Payload         map[string]any
 	BudgetExhausted bool
 	BytesFetched    int
 	ContentBytes    int
@@ -51,7 +51,7 @@ type Result struct {
 
 // ErrPayload returns a Result whose Payload contains a single "error" key.
 func ErrPayload(msg string) Result {
-	return Result{Payload: map[string]interface{}{"error": msg}}
+	return Result{Payload: map[string]any{"error": msg}}
 }
 
 // Tool is the unit of agent capability. Name must be unique within the

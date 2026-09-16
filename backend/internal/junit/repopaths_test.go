@@ -44,7 +44,7 @@ func TestRepoFailurePathsSkipsVersionQualifiedReferences(t *testing.T) {
 
 func TestRepoFailurePathsDeduplicatesAndBounds(t *testing.T) {
 	body := ""
-	for i := 0; i < maxRepoFailurePaths*3; i++ {
+	for range maxRepoFailurePaths * 3 {
 		body += "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412\n"
 	}
 	if got := RepoFailurePaths(body, capz); len(got) != 1 {
@@ -53,7 +53,7 @@ func TestRepoFailurePathsDeduplicatesAndBounds(t *testing.T) {
 
 	body = ""
 	var paths []string
-	for i := 0; i < maxRepoFailurePaths*2; i++ {
+	for i := range maxRepoFailurePaths * 2 {
 		path := fmt.Sprintf("test/e2e/f%02d.go", maxRepoFailurePaths*2-i)
 		paths = append(paths, path)
 		body += "sigs.k8s.io/cluster-api-provider-azure/" + path + ":1\n"

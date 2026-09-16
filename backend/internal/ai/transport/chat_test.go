@@ -45,13 +45,13 @@ func TestChatCompletionsMessageRoundTrip(t *testing.T) {
 	messages := []Message{
 		{
 			Role:    "assistant",
-			Content: strPtr("reasoning"),
+			Content: new("reasoning"),
 			ToolCalls: []ToolCall{{
 				ID: "call-1", Type: "function",
 				Function: FunctionCall{Name: "read_artifact", Arguments: `{"path":"log.txt"}`},
 			}},
 		},
-		{Role: "tool", ToolCallID: "call-1", Name: "read_artifact", Content: strPtr(`{"ok":true}`)},
+		{Role: "tool", ToolCallID: "call-1", Name: "read_artifact", Content: new(`{"ok":true}`)},
 	}
 
 	wire := chatCompletionsResponse{ID: "chat-1", Usage: &chatCompletionsUsage{PromptTokens: 12, CompletionTokens: 4, PromptTokensDetails: chatPromptTokenDetails{CachedTokens: 5}, CompletionTokensDetails: chatOutputTokenDetails{ReasoningTokens: 2}}}

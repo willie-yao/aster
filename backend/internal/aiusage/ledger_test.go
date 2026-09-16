@@ -208,14 +208,12 @@ func TestRecorderConcurrentOperations(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	recorder := testRecorder(t, "", now, 100)
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			ctx, operation := Begin(t.Context(), recorder, Metadata{Origin: OriginFetcher, Feature: FeatureFailureAnalysis, StartedAt: now})
 			ObserveModelRequest(ctx, TokenUsage{Reported: true, InputTokens: 1})
 			operation.Finish(OutcomeSuccess)
-		}()
+		})
 	}
 	wg.Wait()
 	snapshot := recorder.Snapshot()
@@ -283,7 +281,7 @@ func TestRecorderDeduplicatesEntireRetentionWindow(t *testing.T) {
 	recorder := testRecorder(t, "", now, 0)
 	stamp := now.Format(time.RFC3339Nano)
 	var first OperationUsage
-	for i := 0; i < 1001; i++ {
+	for i := range 1001 {
 		operation := recorder.Record(OperationUsage{ID: fmt.Sprintf("%016x", i), Origin: OriginAnalyzer, Feature: FeatureFailureAnalysis, StartedAt: stamp, CompletedAt: stamp, Outcome: OutcomeSuccess, InputTokens: 1})
 		if i == 0 {
 			first = operation

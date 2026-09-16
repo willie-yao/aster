@@ -223,7 +223,7 @@ func gunzipBody(t *testing.T, data []byte) string {
 
 func headerContains(header http.Header, name, value string) bool {
 	for _, current := range header.Values(name) {
-		for _, item := range strings.Split(current, ",") {
+		for item := range strings.SplitSeq(current, ",") {
 			if strings.EqualFold(strings.TrimSpace(item), value) {
 				return true
 			}

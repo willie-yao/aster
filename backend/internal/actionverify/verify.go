@@ -418,7 +418,7 @@ func compositeLiteralIsMap(file *ast.File, literal *ast.CompositeLit) bool {
 }
 
 func modulePathFromGoMod(content string) string {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) == 2 && fields[0] == "module" {
 			return fields[1]
@@ -951,7 +951,7 @@ func configurationValuePresent(filePath, content, value string) (bool, bool) {
 	}
 	pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])` + regexp.QuoteMeta(key) + `\s*=\s*` + regexp.QuoteMeta(expected) + `(?:\s|[,\]}"']|$)`)
 	mappingPattern := regexp.MustCompile(`(^|[\s{,\-])["']?` + regexp.QuoteMeta(key) + `["']?\s*:\s*["']?` + regexp.QuoteMeta(expected) + `["']?(?:\s|[,\]}]|$)`)
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(stripLineComment(line, markers))
 		if line == "" {
 			continue
@@ -1439,7 +1439,7 @@ func isBuildConstrained(filePath, content string) bool {
 			return true
 		}
 	}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "//go:build ") || strings.HasPrefix(line, "// +build ") {
 			return true

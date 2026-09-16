@@ -126,7 +126,7 @@ func scoreFixBenchmarkResult(ctx context.Context, sourceRoot string, benchmarkCa
 
 func fixBenchmarkStatusPaths(status string) []string {
 	var paths []string
-	for _, line := range strings.Split(status, "\n") {
+	for line := range strings.SplitSeq(status, "\n") {
 		if len(line) < 4 {
 			continue
 		}

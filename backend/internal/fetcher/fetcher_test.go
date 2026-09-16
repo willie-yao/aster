@@ -109,7 +109,7 @@ func TestFetchBuildResultParsesRootJUnitWhenTreeTruncated(t *testing.T) {
 	write("logs/job/1/started.json", `{"timestamp":1000}`)
 	write("logs/job/1/finished.json", `{"timestamp":1060,"passed":false,"result":"FAILURE"}`)
 	write("logs/job/1/artifacts/junit.e2e_suite.1.xml", `<testsuite name="suite"><testcase name="case" classname="suite" status="passed"/></testsuite>`)
-	for i := 0; i < 2001; i++ {
+	for i := range 2001 {
 		write(fmt.Sprintf("logs/job/1/artifacts/clusters/%04d/log.txt", i), "x")
 	}
 

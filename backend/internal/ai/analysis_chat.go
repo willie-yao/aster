@@ -440,7 +440,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		singleToolCall:      a.opts.SingleToolCall,
 		contextByteBudget:   a.opts.ContextByteBudget,
 		strictContextBudget: true,
-		dispatch: func(ctx context.Context, toolCall transport.ToolCall) (string, map[string]interface{}, tools.Result) {
+		dispatch: func(ctx context.Context, toolCall transport.ToolCall) (string, map[string]any, tools.Result) {
 			// agentState owns the model and GCS byte budgets, so the loop sees
 			// no separate tool result to account for.
 			envelope, payload := dispatchAgenticToolWithPayload(ctx, state, toolCall)
@@ -912,7 +912,7 @@ func patternAnalysisChatTools(enabled []string) []string {
 }
 
 func prepareAnalysisChatFinalizeMessages(messages []transport.Message, budget int) ([]transport.Message, error) {
-	messages = append(messages, transport.Message{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	messages = append(messages, transport.Message{Role: "user", Content: new(analysisChatFinalizePrompt)})
 	messages, _ = compactMessages(messages, 0, budget)
 	if size := requestSizeEstimate(messages, 0); size > budget {
 		return nil, fmt.Errorf("analysis chat finalize request exceeds the %d-byte context budget after compaction", budget)
@@ -922,8 +922,8 @@ func prepareAnalysisChatFinalizeMessages(messages []transport.Message, budget in
 
 func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []analysischat.Message, question string, schemaBytes, budget int) ([]transport.Message, error) {
 	base := []transport.Message{
-		{Role: "system", Content: strPtr(systemPrompt)},
-		{Role: "user", Content: strPtr(contextMessage)},
+		{Role: "system", Content: new(systemPrompt)},
+		{Role: "user", Content: new(contextMessage)},
 	}
 	historyMessages := make([]transport.Message, 0, len(history))
 	for _, message := range history {
@@ -931,7 +931,7 @@ func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []an
 		case "user":
 			content := clampAnalysisChatText(message.Content, analysisChatMaxQuestionBytes)
 			if content != "" {
-				historyMessages = append(historyMessages, transport.Message{Role: "user", Content: strPtr(content)})
+				historyMessages = append(historyMessages, transport.Message{Role: "user", Content: new(content)})
 			}
 		case "assistant":
 			content, err := analysisChatAssistantHistory(message)
@@ -939,11 +939,11 @@ func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []an
 				return nil, err
 			}
 			if content != "" {
-				historyMessages = append(historyMessages, transport.Message{Role: "assistant", Content: strPtr(content)})
+				historyMessages = append(historyMessages, transport.Message{Role: "assistant", Content: new(content)})
 			}
 		}
 	}
-	questionMessage := transport.Message{Role: "user", Content: strPtr(question)}
+	questionMessage := transport.Message{Role: "user", Content: new(question)}
 	target := budget * analysisChatHistoryTargetPct / 100
 	for {
 		messages := append(slices.Clone(base), historyMessages...)
@@ -1320,7 +1320,7 @@ func analysisChatEvidenceBytes(evidence map[string]*analysisChatEvidence) int {
 	return total
 }
 
-func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall transport.ToolCall, payload map[string]interface{}, maxBytes int) (int, bool) {
+func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolCall transport.ToolCall, payload map[string]any, maxBytes int) (int, bool) {
 	if evidence == nil || !isContentFetchingTool(toolCall.Function.Name) {
 		return 0, true
 	}
@@ -1394,14 +1394,14 @@ func appendAnalysisChatEvidenceCandidate(evidence *analysisChatEvidence, text st
 	evidence.Bytes += len(text)
 }
 
-func analysisChatEvidenceMatches(value any) []map[string]interface{} {
+func analysisChatEvidenceMatches(value any) []map[string]any {
 	switch matches := value.(type) {
-	case []map[string]interface{}:
+	case []map[string]any:
 		return matches
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(matches))
+	case []any:
+		out := make([]map[string]any, 0, len(matches))
 		for _, raw := range matches {
-			if match, ok := raw.(map[string]interface{}); ok {
+			if match, ok := raw.(map[string]any); ok {
 				out = append(out, match)
 			}
 		}
@@ -1415,7 +1415,7 @@ func analysisChatEvidenceContexts(value any) []string {
 	switch contexts := value.(type) {
 	case []string:
 		return contexts
-	case []interface{}:
+	case []any:
 		out := make([]string, 0, len(contexts))
 		for _, raw := range contexts {
 			if contextLine, ok := raw.(string); ok {

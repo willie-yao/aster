@@ -263,7 +263,7 @@ func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (str
 	if forkRepo == "" {
 		forkRepo = repo
 	}
-	for i := 0; i < forkPollAttempts; i++ {
+	for range forkPollAttempts {
 		var probe forkRepository
 		err := c.get(ctx, c.url(forkOwner, forkRepo, ""), &probe)
 		if err == nil {
@@ -367,7 +367,7 @@ func validBranchName(branch string) bool {
 			return false
 		}
 	}
-	for _, component := range strings.Split(branch, "/") {
+	for component := range strings.SplitSeq(branch, "/") {
 		if component == "" || strings.HasPrefix(component, ".") ||
 			strings.HasSuffix(component, ".") || strings.HasSuffix(component, ".lock") {
 			return false

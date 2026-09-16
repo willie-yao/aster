@@ -40,7 +40,7 @@ func SetPrivateResponseHeaders(header http.Header) {
 
 func appendVary(header http.Header, value string) {
 	for _, current := range header.Values("Vary") {
-		for _, item := range strings.Split(current, ",") {
+		for item := range strings.SplitSeq(current, ",") {
 			if strings.EqualFold(strings.TrimSpace(item), value) {
 				return
 			}

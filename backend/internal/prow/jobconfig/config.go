@@ -109,7 +109,7 @@ func ParseJobConfig(data []byte, filename, dashboard string, categories []projec
 // contains the given dashboard name.
 func matchesDashboard(r rawJob, dashboard string) bool {
 	dashboards := r.Annotations["testgrid-dashboards"]
-	for _, d := range strings.Split(dashboards, ",") {
+	for d := range strings.SplitSeq(dashboards, ",") {
 		if strings.TrimSpace(d) == dashboard {
 			return true
 		}
