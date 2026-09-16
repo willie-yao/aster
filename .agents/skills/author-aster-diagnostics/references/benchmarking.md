@@ -62,7 +62,7 @@ If the pinned engine has no documented provider-free identity loader, record a g
 
 ## Run the benchmark matrix
 
-Use the selected engine revision's documented benchmark entry point or a command provided by the independent post-reveal evaluator. Do not inspect answer-bearing benchmark tests during authoring merely to reconstruct environment variables. A typical single-case cold run from `<engine>/backend` is:
+Use the separate `aster-benchmarks` runner or a command provided by the independent post-reveal evaluator. Do not inspect answer-bearing benchmark tests during authoring merely to reconstruct environment variables. Choose a full post-extraction Aster commit hash. A typical single-case cold run from a clean, committed benchmark checkout is:
 
 ```bash
 RUN_AI_BENCHMARK=1 \
@@ -78,12 +78,13 @@ BENCH_CACHE_MODE=cold \
 BENCH_CACHE_DIR=<private-condition-cache> \
 BENCH_RESULTS_JSONL=<private-condition-results.jsonl> \
 BENCH_MODEL_LABEL=<anonymous-stable-label> \
-go test ./benchmarks -run '^TestAIBenchmark$' -v -count=1 -timeout 60m
+python3 run.py --engine-dir <engine-checkout> --engine-commit <full-engine-commit> --live -- \
+  go test . -run '^TestAIBenchmark$' -v -count=1 -timeout 60m
 ```
 
 Never place a token value directly in a report or command transcript. Use a private environment or secret provider. Do not inspect Secret values.
 
-Use separate cache directories and JSONL files for every condition. Prompt, recipe, model, and transient-streak changes do not reliably refresh reusable analyses by themselves, so never share a cache across conditions. Keep condition labels blind during evaluation. Run at least three repetitions when provider access and cost permit. Record cold-cache state, cache generation, duration, usage, provider attempts, tool failures, malformed calls, citations, source grounding, initiating error, transient outcome, and score dimensions.
+Use separate cache directories and JSONL files for every condition. Prompt, recipe, model, and transient-streak changes do not reliably refresh reusable analyses by themselves, so never share a cache across conditions. Keep condition labels blind during evaluation. Run at least three repetitions when provider access and cost permit. Record engine and benchmark commits, cold-cache state, cache generation, duration, usage, provider attempts, tool failures, malformed calls, citations, source grounding, initiating error, transient outcome, and score dimensions.
 
 Before creating conditions, reject every final holdout whose job and build or causal-event identity overlaps `baseline_provenance`. A different test in the same build is still excluded because the baseline author may have seen sibling evidence. Run A, B, and C for every remaining final holdout, including recurrence and out-of-class cases, plus an unrelated control. Prefer one analyzer or test event per holdout identity. If a build-level holdout reveals independent failures, score and classify each event separately and aggregate recurrence plus generalization as `mixed`. Do not reuse previous holdout IDs in a new package.
 
