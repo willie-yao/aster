@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e install-golangci-lint lint lint-benchmarks fmt fmt-check tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
+.PHONY: all build build-server build-worker serve dev-actions image remote-fixer-image agent-sandbox-fix-executor-image test test-v e2e install-golangci-lint lint fmt fmt-check tidy helm-check cleanroom-check check-repo-map check-onboarding-release-pins check-doc-links \
        fetch-data fetch-data-quick fetch-data-ai fetch-data-ai-quick snapshot-data \
        fe-install dev dev-mock mock-server fe-build fe-check fe-test fe-lint \
        dist dist-ai clean clean-cache clean-mock clean-all help
@@ -91,10 +91,6 @@ $(GOLANGCI_LINT):
 # Run the pinned Go linter.
 lint: install-golangci-lint
 	cd backend && GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(GOLANGCI_LINT) run ./...
-
-# Lint the separate benchmark module.
-lint-benchmarks: install-golangci-lint
-	cd backend/benchmarks && GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(GOLANGCI_LINT) run ./...
 
 # Format Go code
 fmt:
@@ -254,7 +250,6 @@ help:
 	@echo "  test               Run Go tests"
 	@echo "  test-v             Run Go tests (verbose)"
 	@echo "  lint               Run golangci-lint"
-	@echo "  lint-benchmarks    Lint the benchmark module"
 	@echo "  fmt                Format Go code"
 	@echo "  fmt-check          Check Go formatting"
 	@echo "  tidy               Tidy Go modules"

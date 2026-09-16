@@ -128,9 +128,6 @@ backend/                         Go 1.26
     textutil/                    Small shared string helpers
     e2e/                         Hermetic end-to-end pipeline regression test
 
-  benchmarks/                    Separate Go module for opt-in model-quality benchmarks;
-                                 live cases gated; provider-free harness tests run in CI
-
 frontend/                        React 19 + Vite 8 + MUI 9
   public/data/                   Fetcher writes JSON here; Vite serves it
   src/
@@ -221,14 +218,13 @@ Vite serves `frontend/public/` at the site root, so any JSON the fetcher writes 
 
 - **Main-module tests:** `cd backend && go test ./... -count=1` (also `make test`)
 - **Single package:** `cd backend && go test ./internal/ai/... -count=1`
-- **Benchmark-module tests:** `go -C backend/benchmarks test ./... -count=1` (live cases remain gated)
 - **Single test:** `go test ./internal/ai -run TestService_CacheKeyShape -v`
-- **Race detector:** `go -C backend test -race -count=1 ./...` and `go -C backend/benchmarks test -race -count=1 ./...` (live benchmark gates unset).
+- **Race detector:** `go -C backend test -race -count=1 ./...`.
 - **Vet:** `cd backend && go vet ./...`
 - **Format:** `make fmt-check` (then `make fmt` to fix).
-- **Static analysis:** `make lint lint-benchmarks` runs the pinned golangci-lint suite, including staticcheck, on both modules.
+- **Static analysis:** `make lint` runs the pinned golangci-lint suite, including staticcheck, on the backend module.
 
-CI (`.github/workflows/ci.yml`) runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks on the main backend module, plus type check, tests, lint, and root/subpath builds on frontend. A separate job runs provider-free benchmark-module tests with the race detector, tidy, vet, lint, and formatting checks for backend or benchmark changes; live benchmarks stay disabled. Both backend jobs use the pinned golangci-lint suite, including staticcheck.
+CI (`.github/workflows/ci.yml`) runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks on the main backend module, plus type check, tests, lint, and root/subpath builds on frontend. The backend job uses the pinned golangci-lint suite, including staticcheck. Personal model-quality evaluations are maintained outside this repository.
 
 ### Anchor pin tests
 

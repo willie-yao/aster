@@ -7,5 +7,3 @@ It uses the local storage provider over `testdata/bucket`, which mirrors the Pro
 ```bash
 make e2e
 ```
-
-The opt-in quality benchmarks that used to live here now live in `backend/benchmarks`. They call real model endpoints and are gated behind `RUN_*` and `BENCH_*` environment variables.

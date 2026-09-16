@@ -1,6 +1,6 @@
 # Testing
 
-The engine has deterministic backend, frontend, and end-to-end tests. Live model quality evaluation is opt-in and is not a normal CI gate.
+The engine has deterministic backend, frontend, and end-to-end tests. Live model quality evaluations are maintained separately from the engine.
 
 ## Full validation
 
@@ -8,18 +8,14 @@ Run these before opening a pull request that affects both backend and frontend:
 
 ```bash
 make build
-make fmt-check lint lint-benchmarks
+make fmt-check lint
 go -C backend mod tidy -diff
 go -C backend vet ./...
 go -C backend test ./... -race -count=1
-go -C backend/benchmarks mod tidy -diff
-go -C backend/benchmarks vet ./...
-env RUN_AI_BENCHMARK= RUN_CAUSE_RESOLUTION_BENCHMARK= RUN_BENCHMARK_FIXTURE_VALIDATION= \
-  go -C backend/benchmarks test ./... -race -count=1
 cd frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-CI runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks for the main backend module plus frontend type check, tests, lint, and root/subpath builds. A benchmark-scoped job runs provider-free harness tests with the race detector, tidy, vet, lint, and formatting checks when backend or benchmark changes select it. Live benchmark gates are explicitly disabled. Both backend jobs use the pinned golangci-lint suite, including staticcheck; `make lint lint-benchmarks` installs and runs the same suite locally.
+CI runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks for the main backend module plus frontend type check, tests, lint, and root/subpath builds. The backend job uses the pinned golangci-lint suite, including staticcheck; `make lint` installs and runs the same suite locally.
 
 Check Go formatting with:
 
@@ -84,27 +80,13 @@ The harness uses:
 
 `make e2e` also runs the hermetic email and fix-PR loop in `internal/fetcher`. That scenario uses temporary Prow artifacts, a fake GitHub transport, a deterministic fix agent, and an in-memory email sender. It covers the recurring-pattern alert, action links, fix tracking, and deduplication across repeated passes. A second bridge test proves the finalized pattern bridge reaches the same email side effects. Neither test sends real email, calls GitHub, or runs OpenCode.
 
-Fixtures live under `backend/internal/e2e/testdata`. Benchmark fixtures live separately under `backend/benchmarks/testdata`. Scrub secrets and private artifact content before committing a recording. The email-loop test writes its compact sequential artifacts into temporary directories instead of committing additional fixture trees.
+Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private artifact content before committing a recording. The email-loop test writes its compact sequential artifacts into temporary directories instead of committing additional fixture trees.
 
-## AI quality benchmark
+## AI quality evaluations
 
-The opt-in benchmarks live in a separate Go module at `backend/benchmarks`. The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. CI runs its provider-free harness tests with the race detector and checks module metadata, vet, lint, and formatting when backend or benchmark changes select it. Live cases remain gated behind their own `RUN_*` or `BENCH_*` environment variable. Provider-free harness tests can be run directly with `go -C backend/benchmarks test ./... -race -count=1` with the live benchmark gates unset.
+Personal model-quality evaluations live in the separate `aster-benchmarks` repository. They are not required to build, test, or deploy Aster. Use that repository's runner and documentation for pinned-engine, provider-free checks and explicitly authorized live evaluations.
 
-Use a Go toolchain at least as new as `backend/benchmarks/go.mod` requires on
-`PATH`, including for the fixture verifier's nested `go test` commands.
-
-```bash
-RUN_AI_BENCHMARK=1 \
-AI_ENDPOINT=http://127.0.0.1:8000/v1/chat/completions \
-AI_MODEL=<model-id> AI_TOKEN=<token-or-placeholder> \
-  go -C backend/benchmarks test . -run TestAIBenchmark -v -timeout 60m
-```
-
-Set `BENCH_PROJECT_DIR` to a consumer repository to load its prompt and AI settings. The benchmark also accepts `BENCH_MAX_ITERS`, `BENCH_TIMEOUT`, `BENCH_MIN_TOOL_CALLS`, `BENCH_MIN_GCS_BYTES`, and `BENCH_CRITIQUE_RETRIES` overrides.
-
-There is no checked-in A/B comparison command. Compare benchmark logs or saved results when evaluating two models or configurations.
-
-The benchmark reports the unique successful filesystem and Kubernetes Tool names and per-Tool call counts for each trial.
+Product unit tests, hermetic E2E tests, and the small cache and flakiness performance benchmarks remain in this repository.
 
 ## Documentation validation
 
