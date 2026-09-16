@@ -80,8 +80,8 @@ type ToolSchema struct {
 
 // FunctionDecl is the function half of an OpenAI tool definition.
 type FunctionDecl struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
-	Strict      bool                   `json:"strict,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+	Strict      bool           `json:"strict,omitempty"`
 }

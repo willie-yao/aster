@@ -210,7 +210,7 @@ func TestServiceFixCandidateAcceptsUnchangedCanonicalizedAnalysis(t *testing.T) 
 	testCase := analyzedTest("TestCluster", "junit.xml", "2026-07-24T12:00:00Z")
 	testCase.AIAnalysis.RootCause = strings.Repeat("root ", 9000)
 	testCase.AIAnalysis.SuggestedFix = strings.Repeat("fix ", 5000)
-	for i := 0; i < 55; i++ {
+	for i := range 55 {
 		testCase.AIAnalysis.RelevantFiles = append(testCase.AIAnalysis.RelevantFiles, fmt.Sprintf("  pkg/file-%02d.go  ", i))
 	}
 	detail := testDetail(testCase)

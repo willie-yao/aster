@@ -74,7 +74,7 @@ func (c *Client) runFinalizeRoundTracked(ctx context.Context, state *agentState,
 // prose without parseable JSON. Returns raw content; callers handle unparseable
 // responses.
 func (c *Client) runFinalizeRound(ctx context.Context, messages []transport.Message, headroom contextHeadroom) (string, []json.RawMessage, bool) {
-	messages = append(messages, transport.Message{Role: "user", Content: strPtr(agForceFinalizePrompt)})
+	messages = append(messages, transport.Message{Role: "user", Content: new(agForceFinalizePrompt)})
 	format := analysisFinalizeFormat()
 	toolDefs := []transport.ToolSchema{{
 		Type: "function",

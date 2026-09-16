@@ -24,7 +24,7 @@ type openCodeErrorEvent struct {
 // providerCredentialRejection reports the first OpenCode error event that means
 // the model provider refused an authenticated execution request.
 func providerCredentialRejection(stdout string) (string, *engineruntime.ProviderErrorDetail, bool) {
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		var event openCodeErrorEvent
 		if json.Unmarshal([]byte(strings.TrimSpace(line)), &event) != nil || event.Type != "error" {
 			continue

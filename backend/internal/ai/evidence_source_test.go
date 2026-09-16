@@ -14,11 +14,11 @@ type evidenceSourceTool struct{ source EvidenceReadSource }
 func (t *evidenceSourceTool) Name() string  { return "evidence_source" }
 func (t *evidenceSourceTool) Group() string { return "test" }
 func (t *evidenceSourceTool) Schema() transport.ToolSchema {
-	return transport.ToolSchema{Type: "function", Function: transport.FunctionDecl{Name: t.Name(), Parameters: map[string]interface{}{"type": "object"}}}
+	return transport.ToolSchema{Type: "function", Function: transport.FunctionDecl{Name: t.Name(), Parameters: map[string]any{"type": "object"}}}
 }
 func (t *evidenceSourceTool) Dispatch(ctx context.Context, _ *tools.Env, _ json.RawMessage) tools.Result {
 	t.source = EvidenceReadSourceFromContext(ctx)
-	return tools.Result{Payload: map[string]interface{}{"ok": true}}
+	return tools.Result{Payload: map[string]any{"ok": true}}
 }
 
 func TestDispatchAgenticToolMarksModelToolEvidenceSource(t *testing.T) {

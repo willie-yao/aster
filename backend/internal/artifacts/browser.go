@@ -123,7 +123,7 @@ func SafePath(p string) (string, error) {
 	if strings.Contains(p, "://") {
 		return "", fmt.Errorf("%w: looks like a URL", ErrUnsafePath)
 	}
-	for _, seg := range strings.Split(p, "/") {
+	for seg := range strings.SplitSeq(p, "/") {
 		if seg == ".." {
 			return "", fmt.Errorf("%w: contains .. segment", ErrUnsafePath)
 		}

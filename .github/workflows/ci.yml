@@ -135,14 +135,19 @@ jobs:
         run: make check-repo-map
       - name: Test release CLI assets
         run: bash hack/test-release-cli-assets.sh
+      - name: Check formatting
+        run: make fmt-check
+      - name: Check module tidy
+        working-directory: backend
+        run: go mod tidy -diff
       - name: Lint
         run: make lint
       - name: Build
         working-directory: backend
         run: go build ./...
-      - name: Test
+      - name: Test with race detector
         working-directory: backend
-        run: go test ./... -count=1
+        run: go test ./... -race -count=1
       - name: Vet
         working-directory: backend
         run: go vet ./...
@@ -161,15 +166,19 @@ jobs:
         with:
           go-version-file: backend/benchmarks/go.mod
           cache-dependency-path: backend/benchmarks/go.sum
+      - name: Check formatting
+        run: make fmt-check
       - name: Check module tidy
         working-directory: backend/benchmarks
         run: go mod tidy -diff
+      - name: Lint
+        run: make lint-benchmarks
       - name: Vet
         working-directory: backend/benchmarks
         run: go vet ./...
-      - name: Test provider-free harness
+      - name: Test provider-free harness with race detector
         working-directory: backend/benchmarks
-        run: go test ./... -count=1
+        run: go test ./... -race -count=1
 
   frontend:
     needs: changes

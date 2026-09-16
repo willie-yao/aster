@@ -153,7 +153,7 @@ func TestOnlyOneEscalationRunsAtATime(t *testing.T) {
 	runner := newFakeRunner()
 	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxQueued: 4})
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -166,7 +166,7 @@ func TestOnlyOneEscalationRunsAtATime(t *testing.T) {
 		t.Fatalf("concurrent runs = %d, want 1", got)
 	}
 	close(runner.release)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		waitForState(t, service, testRef(fmt.Sprintf("Test%d", i)), StateComplete)
 	}
 }
@@ -190,7 +190,7 @@ func TestConcurrentStartsBoundResolverCalls(t *testing.T) {
 
 	var busy int32
 	var wg sync.WaitGroup
-	for i := 0; i < callers; i++ {
+	for i := range callers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -395,7 +395,7 @@ func TestStartIsIdempotentForTheSameSubject(t *testing.T) {
 	resolver := &fakeResolver{}
 	service := newService(t, resolver, runner, Options[Ref]{})
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := service.Start(context.Background(), testRef("TestA"), "octocat", "req-1"); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
@@ -578,7 +578,7 @@ func TestRetentionIsBounded(t *testing.T) {
 	// slot release, which happens just after its result becomes visible.
 	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxRecords: 3, MaxQueued: 2})
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -605,7 +605,7 @@ func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 
 	// Holding the runner keeps all four records running, and therefore
 	// unprunable, until the queue is full.
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -625,7 +625,7 @@ func TestAFullQueuesResultsAreAllRetained(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ref := testRef(fmt.Sprintf("Test%d", i))
 		view, err := service.Get(ref)
 		if err != nil {
@@ -848,7 +848,7 @@ func TestConcurrentFinishesDoNotLosePersistedResults(t *testing.T) {
 	defer close(blocked)
 
 	const queued = 12
-	for i := 0; i < queued; i++ {
+	for i := range queued {
 		ref := Ref{PullNumber: 1, JobID: "j", BuildID: "b", TestName: fmt.Sprintf("Test%d", i)}
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -967,7 +967,7 @@ func TestIdempotencyIndexIsBounded(t *testing.T) {
 	service := newService(t, &fakeResolver{}, runner, Options[Ref]{MaxRecords: 2, MaxQueued: 2})
 	ref := testRef("TestA")
 
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
 		}

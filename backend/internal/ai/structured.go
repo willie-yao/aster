@@ -111,8 +111,8 @@ func (c *Client) CompleteStructuredWithMetadata(ctx context.Context, system, use
 		return StructuredCompletionMetadata{Attempts: []StructuredAttemptMetadata{}}, fmt.Errorf("structured completion validator is required")
 	}
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr(system)},
-		{Role: "user", Content: strPtr(user)},
+		{Role: "system", Content: new(system)},
+		{Role: "user", Content: new(user)},
 	}
 	result, err := c.completeStructuredMessagesWithMetadata(
 		ctx, messages, format, defaultStructuredResponseBytes, true,
@@ -285,8 +285,8 @@ func (c *Client) completeForcedFunction(ctx context.Context, system, user string
 	request := transport.Request{
 		Model: c.model,
 		Messages: []transport.Message{
-			{Role: "system", Content: strPtr(system)},
-			{Role: "user", Content: strPtr(user)},
+			{Role: "system", Content: new(system)},
+			{Role: "user", Content: new(user)},
 		},
 		Tools: []transport.ToolSchema{{
 			Type: "function",

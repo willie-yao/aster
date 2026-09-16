@@ -157,7 +157,7 @@ func TestConsumerSetupSkillCLIFlags(t *testing.T) {
 				t.Fatalf("CLI help: %v\n%s", err, output)
 			}
 			flags := map[string]bool{}
-			for _, line := range strings.Split(string(output), "\n") {
+			for line := range strings.SplitSeq(string(output), "\n") {
 				fields := strings.Fields(strings.TrimSpace(line))
 				if len(fields) == 0 || !strings.HasPrefix(fields[0], "-") {
 					continue

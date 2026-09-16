@@ -238,7 +238,7 @@ func TestConversationCitationsBoundsOrderAndScope(t *testing.T) {
 	}
 
 	overflow := []Message{{Role: "assistant", RequestID: "one"}, {Role: "assistant", RequestID: "two"}}
-	for i := 0; i < maxConversationFixCitations; i++ {
+	for i := range maxConversationFixCitations {
 		overflow[0].Citations = append(overflow[0].Citations, Citation{Path: "build-log.txt", LineStart: i + 1, LineEnd: i + 1, Quote: "old"})
 		overflow[1].Citations = append(overflow[1].Citations, Citation{Path: "junit.xml", LineStart: i + 1, LineEnd: i + 1, Quote: "new"})
 	}

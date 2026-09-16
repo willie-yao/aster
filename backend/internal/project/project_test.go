@@ -518,13 +518,13 @@ func TestAgentic_Effective(t *testing.T) {
 		}
 	})
 	t.Run("Critique.MaxRetries accepts explicit zero", func(t *testing.T) {
-		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: intPtr(0)}})
+		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: new(0)}})
 		if got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 0 {
 			t.Errorf("Critique.MaxRetries = %v, want 0", got.Critique.MaxRetries)
 		}
 	})
 	t.Run("Critique.MaxRetries passes through when set", func(t *testing.T) {
-		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: intPtr(5)}})
+		got := eff(Agentic{Critique: AgenticCritique{MaxRetries: new(5)}})
 		if got.Critique.MaxRetries == nil || *got.Critique.MaxRetries != 5 {
 			t.Errorf("Critique.MaxRetries = %v, want 5", got.Critique.MaxRetries)
 		}
@@ -1108,10 +1108,10 @@ func TestValidateAIUsage(t *testing.T) {
 		wantErr string
 	}{
 		{name: "defaults"},
-		{name: "valid", usage: &AIUsage{RetentionDays: 30, RecentOperations: intPtr(0), Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1.25", CachedInputPerMillion: "0.125", CacheWriteInputPerMillion: "1.5", OutputPerMillion: "10"}}},
+		{name: "valid", usage: &AIUsage{RetentionDays: 30, RecentOperations: new(0), Pricing: &AIUsagePricing{Currency: "USD", InputPerMillion: "1.25", CachedInputPerMillion: "0.125", CacheWriteInputPerMillion: "1.5", OutputPerMillion: "10"}}},
 		{name: "retention", usage: &AIUsage{RetentionDays: 3651}, wantErr: "retention_days"},
-		{name: "recent negative", usage: &AIUsage{RecentOperations: intPtr(-1)}, wantErr: "recent_operations"},
-		{name: "recent large", usage: &AIUsage{RecentOperations: intPtr(5001)}, wantErr: "recent_operations"},
+		{name: "recent negative", usage: &AIUsage{RecentOperations: new(-1)}, wantErr: "recent_operations"},
+		{name: "recent large", usage: &AIUsage{RecentOperations: new(5001)}, wantErr: "recent_operations"},
 		{name: "currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "usd", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
 		{name: "numeric currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "123", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},
 		{name: "symbol currency", usage: &AIUsage{Pricing: &AIUsagePricing{Currency: "$$$", InputPerMillion: "1", OutputPerMillion: "2"}}, wantErr: "currency"},

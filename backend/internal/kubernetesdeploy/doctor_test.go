@@ -1110,7 +1110,7 @@ func TestWriteKubernetesDoctorReportBoundsControlCharacters(t *testing.T) {
 
 func TestWriteKubernetesDoctorReportBoundsTotalOutput(t *testing.T) {
 	report := KubernetesDoctorReport{}
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		report.Checks = append(report.Checks, KubernetesDoctorCheck{Name: fmt.Sprintf("check-%04d", i), Status: KubernetesDoctorWarn, Detail: strings.Repeat("x", 1024)})
 	}
 	var output bytes.Buffer

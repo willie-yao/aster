@@ -236,10 +236,10 @@ func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
 		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
 	})
 	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
-	state.recordSourceContent(transport.ToolCall{Function: transport.FunctionCall{Name: "grep_repo", Arguments: `{"source_id":"primary"}`}}, map[string]interface{}{
+	state.recordSourceContent(transport.ToolCall{Function: transport.FunctionCall{Name: "grep_repo", Arguments: `{"source_id":"primary"}`}}, map[string]any{
 		"source_id": tools.PrimarySourceID,
-		"matches": []interface{}{map[string]interface{}{
-			"path": "Makefile", "context": []interface{}{"> 12: tool --supported"},
+		"matches": []any{map[string]any{
+			"path": "Makefile", "context": []any{"> 12: tool --supported"},
 		}},
 	}, repotree.GrepObservation{Call: tools.GrepCallObservation{SelectorID: tools.PrimarySourceID}, Matches: []repotree.GrepMatchObservation{{SourceID: tools.PrimarySourceID, Path: "Makefile"}}})
 	if got := state.preparePublishedAnalysis(analysisResponse{RootCause: "The job ran tool --supported and exited non-zero."}).RootCause; !strings.Contains(got, "--supported") {
@@ -261,7 +261,7 @@ func TestRecordSourceContentMapsOnlyObservedCompleteReadLines(t *testing.T) {
 	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
 	state.recordSourceContent(
 		transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
-		map[string]interface{}{"source_id": tools.PrimarySourceID, "content": content, "length": len(content)},
+		map[string]any{"source_id": tools.PrimarySourceID, "content": content, "length": len(content)},
 		repotree.ReadObservation{
 			SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 11,
 			ByteStart: byteStart, ByteEnd: byteEnd,
@@ -287,7 +287,7 @@ func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
 		sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 		startTime: time.Now(),
 	}
-	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, map[string]interface{}{
+	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, map[string]any{
 		"source_id": tools.PrimarySourceID, "content": raw, "length": len(raw),
 	}))
 	visibleContent, _ := visible["content"].(string)
@@ -443,10 +443,10 @@ func TestEvidenceOverflowOnlyBlocksLineAwareDrafts(t *testing.T) {
 
 func TestCappedToolPayloadCannotGroundHiddenEvidence(t *testing.T) {
 	state := &agentState{opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now()}
-	payload := map[string]interface{}{
-		"matches": []interface{}{
-			map[string]interface{}{"context": []interface{}{"> 1: " + strings.Repeat("x", agenticToolBudget)}},
-			map[string]interface{}{"context": []interface{}{"> 2494: hidden evidence"}},
+	payload := map[string]any{
+		"matches": []any{
+			map[string]any{"context": []any{"> 1: " + strings.Repeat("x", agenticToolBudget)}},
+			map[string]any{"context": []any{"> 2494: hidden evidence"}},
 		},
 	}
 	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, payload))

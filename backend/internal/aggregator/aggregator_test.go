@@ -154,7 +154,7 @@ func TestComputeJobSummary_PassRates(t *testing.T) {
 	// 12 runs newest-first. The last 10 hold 8 passes and 2 fails (0.8). The two
 	// oldest runs fail but fall outside the 10-run window and must be excluded.
 	runs := make([]models.BuildResult, 0, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		pass := i != 2 && i != 5 && i != 10 && i != 11
 		runs = append(runs, makeBuild(fmt.Sprintf("%d", 12-i), hoursAgo(i), pass, nil))
 	}
@@ -391,10 +391,10 @@ func TestHashError_DifferentInput(t *testing.T) {
 
 func TestComputeJobSummarySeparatesCurrentStatusFromRollingReliability(t *testing.T) {
 	runs := make([]models.BuildResult, 0, 10)
-	for index := 0; index < 5; index++ {
+	for index := range 5 {
 		runs = append(runs, makeBuild(fmt.Sprintf("pass-%d", 5-index), hoursAgo(index), true, nil))
 	}
-	for index := 0; index < 5; index++ {
+	for index := range 5 {
 		runs = append(runs, makeBuild(fmt.Sprintf("failure-%d", 5-index), hoursAgo(index+5), false, nil))
 	}
 

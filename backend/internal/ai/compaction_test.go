@@ -12,26 +12,26 @@ import (
 
 func sysAndTask() []transport.Message {
 	return []transport.Message{
-		{Role: "system", Content: strPtr("system prompt")},
-		{Role: "user", Content: strPtr("analyze this failure")},
+		{Role: "system", Content: new("system prompt")},
+		{Role: "user", Content: new("analyze this failure")},
 	}
 }
 
 func toolMsg(id string, n int) transport.Message {
-	return transport.Message{Role: "tool", ToolCallID: id, Content: strPtr(strings.Repeat("x", n))}
+	return transport.Message{Role: "tool", ToolCallID: id, Content: new(strings.Repeat("x", n))}
 }
 
 func asstToolCall(id, reasoning string) transport.Message {
 	return transport.Message{
 		Role:      "assistant",
-		Content:   strPtr(reasoning),
+		Content:   new(reasoning),
 		ToolCalls: []transport.ToolCall{{ID: id, Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"a"}`}}},
 	}
 }
 
 func conversation(numTools, toolSize int) []transport.Message {
 	msgs := sysAndTask()
-	for i := 0; i < numTools; i++ {
+	for i := range numTools {
 		id := string(rune('a' + i))
 		msgs = append(msgs, asstToolCall(id, "let me read artifact"), toolMsg(id, toolSize))
 	}
@@ -177,7 +177,7 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 		t.Fatal("provider items were not counted")
 	}
 	duplicate := append([]transport.Message(nil), large...)
-	duplicate[0].Content = strPtr(strings.Repeat("x", 1024))
+	duplicate[0].Content = new(strings.Repeat("x", 1024))
 	if requestSizeEstimate(duplicate, 0) != requestSizeEstimate(large, 0) {
 		t.Fatal("assistant content was double-counted beside provider items")
 	}
@@ -189,10 +189,10 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 
 func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
+		{Role: "system", Content: new("system")}, {Role: "user", Content: new("user")},
 		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
-		{Role: "tool", ToolCallID: "call-1", Content: strPtr(strings.Repeat("y", 1000))},
-		{Role: "user", Content: strPtr("continue")},
+		{Role: "tool", ToolCallID: "call-1", Content: new(strings.Repeat("y", 1000))},
+		{Role: "user", Content: new("continue")},
 	}
 	got, _ := compactMessages(messages, 0, 300)
 	for _, message := range got {
@@ -204,12 +204,12 @@ func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 
 func TestCompactMessagesPreservesMultipleAssistantPhases(t *testing.T) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
-		{Role: "assistant", Content: strPtr("commentaryfinal"), ProviderItems: []json.RawMessage{
+		{Role: "system", Content: new("system")}, {Role: "user", Content: new("user")},
+		{Role: "assistant", Content: new("commentaryfinal"), ProviderItems: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"commentary"}]}`),
 			json.RawMessage(`{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"final"}]}`),
 		}},
-		{Role: "user", Content: strPtr("revise")},
+		{Role: "user", Content: new("revise")},
 	}
 	got, elided := compactMessages(messages, 0, 350)
 	if elided != 1 || len(got) != 5 {
@@ -223,9 +223,9 @@ func TestCompactMessagesPreservesMultipleAssistantPhases(t *testing.T) {
 
 func TestCompactMessagesDropsNoToolResponsesState(t *testing.T) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("user")},
-		{Role: "assistant", Content: strPtr("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","padding":"` + strings.Repeat("x", 2000) + `","content":[{"type":"output_text","text":"draft"}]}`)}},
-		{Role: "user", Content: strPtr("revise")},
+		{Role: "system", Content: new("system")}, {Role: "user", Content: new("user")},
+		{Role: "assistant", Content: new("draft"), ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","phase":"analysis","padding":"` + strings.Repeat("x", 2000) + `","content":[{"type":"output_text","text":"draft"}]}`)}},
+		{Role: "user", Content: new("revise")},
 	}
 	got, elided := compactMessages(messages, 0, 600)
 	if elided != 1 {

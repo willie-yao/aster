@@ -7,7 +7,7 @@ This guide is for contributors working on the engine. See [`CONTRIBUTING.md`](..
 - Go 1.26 as declared by `backend/go.mod`
 - Node.js 20 or newer
 - npm
-- `staticcheck` for full backend validation
+- The pinned golangci-lint suite for backend validation, installed by `make lint`
 
 Docker, Helm, and kubectl are needed only for container or Kubernetes work.
 

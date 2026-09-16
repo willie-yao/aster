@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-func floatPtr(v float64) *float64 { return &v }
-
 func TestEffectiveAttention_Defaults(t *testing.T) {
 	t.Run("nil config", func(t *testing.T) {
 		var c *Config
@@ -28,7 +26,7 @@ func TestEffectiveAttention_Defaults(t *testing.T) {
 
 	t.Run("rule guards default", func(t *testing.T) {
 		c := validConfig()
-		c.Attention = &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(1)}}
+		c.Attention = &Attention{LowPassRate: &LowPassRate{Threshold: new(1.0)}}
 		got := c.EffectiveAttention()
 		if got.LowPassRate == nil {
 			t.Fatal("LowPassRate = nil, want the configured rule")
@@ -52,7 +50,7 @@ func TestEffectiveAttention_Defaults(t *testing.T) {
 		c := validConfig()
 		c.Attention = &Attention{
 			PersistentAfter: 5,
-			LowPassRate:     &LowPassRate{Threshold: floatPtr(0.8), MinRuns: 2, RecentRuns: 10, MaxItems: 7},
+			LowPassRate:     &LowPassRate{Threshold: new(0.8), MinRuns: 2, RecentRuns: 10, MaxItems: 7},
 		}
 		got := c.EffectiveAttention()
 		if got.PersistentAfter != 5 {
@@ -73,11 +71,11 @@ func TestValidate_Attention(t *testing.T) {
 	}{
 		{
 			name:      "valid full cutoff",
-			attention: &Attention{PersistentAfter: 2, LowPassRate: &LowPassRate{Threshold: floatPtr(1)}},
+			attention: &Attention{PersistentAfter: 2, LowPassRate: &LowPassRate{Threshold: new(1.0)}},
 		},
 		{
 			name:      "valid zero cutoff",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(0)}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(0.0)}},
 		},
 		{
 			name:      "threshold required",
@@ -86,17 +84,17 @@ func TestValidate_Attention(t *testing.T) {
 		},
 		{
 			name:      "threshold above one",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(1.5)}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(1.5)}},
 			wantErr:   "attention.low_pass_rate.threshold must be between 0 and 1",
 		},
 		{
 			name:      "threshold below zero",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(-0.1)}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(-0.1)}},
 			wantErr:   "attention.low_pass_rate.threshold must be between 0 and 1",
 		},
 		{
 			name:      "threshold NaN",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(math.NaN())}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(math.NaN())}},
 			wantErr:   "attention.low_pass_rate.threshold must be between 0 and 1",
 		},
 		{
@@ -106,17 +104,17 @@ func TestValidate_Attention(t *testing.T) {
 		},
 		{
 			name:      "negative min_runs",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(1), MinRuns: -1}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(1.0), MinRuns: -1}},
 			wantErr:   "attention.low_pass_rate.min_runs must not be negative",
 		},
 		{
 			name:      "negative recent_runs",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(1), RecentRuns: -1}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(1.0), RecentRuns: -1}},
 			wantErr:   "attention.low_pass_rate.recent_runs must not be negative",
 		},
 		{
 			name:      "negative max_items",
-			attention: &Attention{LowPassRate: &LowPassRate{Threshold: floatPtr(1), MaxItems: -1}},
+			attention: &Attention{LowPassRate: &LowPassRate{Threshold: new(1.0), MaxItems: -1}},
 			wantErr:   "attention.low_pass_rate.max_items must not be negative",
 		},
 	}

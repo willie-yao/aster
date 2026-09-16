@@ -85,7 +85,7 @@ agentLoop:
 				outcome, unread := evidence.decide(state, coverage.UnmetGroups)
 				if outcome == evidenceGateNudge {
 					nudgeMessages := slices.Clone(messages)
-					nudgeMessages = append(nudgeMessages, transport.Message{Role: "user", Content: strPtr(formatEvidenceHeadroomNudge(unread))})
+					nudgeMessages = append(nudgeMessages, transport.Message{Role: "user", Content: new(formatEvidenceHeadroomNudge(unread))})
 					if prepared, nudgeFits := prepareContextRequest(ctx, nudgeMessages, schemaBytes, headroom, "evidence_nudge"); nudgeFits {
 						messages = prepared
 						evidence.recordNudge(state)
@@ -190,7 +190,7 @@ agentLoop:
 					}
 					messages = append(messages, echo, transport.Message{
 						Role:    "user",
-						Content: strPtr(formatFloorsNudge(state, state.opts)),
+						Content: new(formatFloorsNudge(state, state.opts)),
 					})
 					var fits bool
 					messages, fits = prepareContextRequest(ctx, messages, schemaBytes, headroom, "floor_nudge")
@@ -256,7 +256,7 @@ agentLoop:
 					}
 					messages = append(messages, echo, transport.Message{
 						Role:    "user",
-						Content: strPtr(formatEvidenceNudge(unread)),
+						Content: new(formatEvidenceNudge(unread)),
 					})
 					var fits bool
 					messages, fits = prepareContextRequest(ctx, messages, schemaBytes, headroom, "evidence_nudge")
@@ -333,7 +333,7 @@ agentLoop:
 			messages = append(messages, transport.Message{
 				Role:       "tool",
 				ToolCallID: tc.ID,
-				Content:    strPtr(result),
+				Content:    new(result),
 			})
 		}
 	}

@@ -118,7 +118,7 @@ func TestHandWrittenFilesAreListedBeforeGeneratedOnes(t *testing.T) {
 
 func TestListedFilesAreBounded(t *testing.T) {
 	subject := Subject{Number: 1}
-	for i := 0; i < maxListedFiles*2; i++ {
+	for i := range maxListedFiles * 2 {
 		subject.Files = append(subject.Files, ChangedFile{Path: strings.Repeat("a", 3) + string(rune('a'+i%26)) + ".go"})
 	}
 	got := promptFor(t, subject)

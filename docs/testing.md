@@ -8,17 +8,23 @@ Run these before opening a pull request that affects both backend and frontend:
 
 ```bash
 make build
-cd backend && go vet ./... && go test ./... -count=1 && staticcheck ./...
-cd ../frontend && npm ci && npx tsc -b && npm run lint && npm run build
+make fmt-check lint lint-benchmarks
+go -C backend mod tidy -diff
+go -C backend vet ./...
+go -C backend test ./... -race -count=1
+go -C backend/benchmarks mod tidy -diff
+go -C backend/benchmarks vet ./...
+env RUN_AI_BENCHMARK= RUN_CAUSE_RESOLUTION_BENCHMARK= RUN_BENCHMARK_FIXTURE_VALIDATION= \
+  go -C backend/benchmarks test ./... -race -count=1
+cd frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-CI runs build, test, and vet for the main backend module plus frontend type check, tests, lint, and root/subpath builds. A benchmark-scoped job runs provider-free harness tests, tidy, and vet when backend or benchmark changes select it. Live benchmark gates are explicitly disabled. CI does not run `staticcheck`, so run it locally for backend changes.
+CI runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks for the main backend module plus frontend type check, tests, lint, and root/subpath builds. A benchmark-scoped job runs provider-free harness tests with the race detector, tidy, vet, lint, and formatting checks when backend or benchmark changes select it. Live benchmark gates are explicitly disabled. Both backend jobs use the pinned golangci-lint suite, including staticcheck; `make lint lint-benchmarks` installs and runs the same suite locally.
 
 Check Go formatting with:
 
 ```bash
-cd backend
-gofmt -l .
+make fmt-check
 ```
 
 ## Focused backend tests
@@ -82,7 +88,7 @@ Fixtures live under `backend/internal/e2e/testdata`. Benchmark fixtures live sep
 
 ## AI quality benchmark
 
-The opt-in benchmarks live in a separate Go module at `backend/benchmarks`. The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. CI runs its provider-free harness tests and checks module metadata and vet when backend or benchmark changes select it. Live cases remain gated behind their own `RUN_*` or `BENCH_*` environment variable. Provider-free harness tests can be run directly with `go -C backend/benchmarks test ./... -count=1` with the live benchmark gates unset.
+The opt-in benchmarks live in a separate Go module at `backend/benchmarks`. The main module's `go build ./...`, `go test ./...`, and `go vet ./...` do not compile it. CI runs its provider-free harness tests with the race detector and checks module metadata, vet, lint, and formatting when backend or benchmark changes select it. Live cases remain gated behind their own `RUN_*` or `BENCH_*` environment variable. Provider-free harness tests can be run directly with `go -C backend/benchmarks test ./... -race -count=1` with the live benchmark gates unset.
 
 Use a Go toolchain at least as new as `backend/benchmarks/go.mod` requires on
 `PATH`, including for the fixture verifier's nested `go test` commands.

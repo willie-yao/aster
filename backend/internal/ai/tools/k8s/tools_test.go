@@ -19,7 +19,7 @@ func envWith(webBase string) *tools.Env {
 	}
 }
 
-func mustDispatch(t *testing.T, tool tools.Tool, env *tools.Env, args interface{}) map[string]interface{} {
+func mustDispatch(t *testing.T, tool tools.Tool, env *tools.Env, args any) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -33,7 +33,7 @@ func mustDispatch(t *testing.T, tool tools.Tool, env *tools.Env, args interface{
 }
 
 // numAs reads a numeric payload field that may be int or cache-round-tripped float64.
-func numAs(v interface{}) int {
+func numAs(v any) int {
 	switch n := v.(type) {
 	case int:
 		return n
@@ -50,7 +50,7 @@ func TestDiscoverClustersDispatchAttachesWebURLAndCount(t *testing.T) {
 	if got := numAs(payload["count"]); got != 2 {
 		t.Fatalf("count = %d, want 2", got)
 	}
-	clusters := payload["clusters"].([]map[string]interface{})
+	clusters := payload["clusters"].([]map[string]any)
 	for _, c := range clusters {
 		path := c["path"].(string)
 		want := "https://gcsweb.k8s.io/gcs/bucket/logs/job/1/" + path
@@ -64,7 +64,7 @@ func TestDiscoverClustersDispatchOmitsWebURLWhenBaseEmpty(t *testing.T) {
 	env := envWith("")
 	payload := mustDispatch(t, &discoverClustersTool{}, env, struct{}{})
 
-	clusters := payload["clusters"].([]map[string]interface{})
+	clusters := payload["clusters"].([]map[string]any)
 	if len(clusters) == 0 {
 		t.Fatalf("expected clusters, got none")
 	}
@@ -101,7 +101,7 @@ func TestFindMyClusterDispatchSingleClusterShortCircuits(t *testing.T) {
 		Cache: tools.NewCache(),
 	}
 	payload := mustDispatch(t, &findMyClusterTool{}, env, map[string]string{"test_name": "totally unrelated test"})
-	match, ok := payload["match"].(map[string]interface{})
+	match, ok := payload["match"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected match map, got %v", payload["match"])
 	}
@@ -118,14 +118,14 @@ func TestFindMyClusterDispatchKeywordRule(t *testing.T) {
 	payload := mustDispatch(t, &findMyClusterTool{}, env, map[string]string{
 		"test_name": "[It] IPv6 networking works",
 	})
-	match := payload["match"].(map[string]interface{})
+	match := payload["match"].(map[string]any)
 	if match["name"].(string) != "capz-e2e-abc123-ipv6" {
 		t.Errorf("expected ipv6 cluster, got %v", match["name"])
 	}
 	if payload["reason"].(string) != "flavor or keyword rule" {
 		t.Errorf("expected multi-cluster reason, got %q", payload["reason"])
 	}
-	cands := payload["candidates"].([]map[string]interface{})
+	cands := payload["candidates"].([]map[string]any)
 	if len(cands) != 2 {
 		t.Errorf("expected 2 candidates, got %d", len(cands))
 	}
@@ -151,7 +151,7 @@ func TestListClusterMachinesDispatchPathAndWebURL(t *testing.T) {
 	if got := numAs(payload["count"]); got != 2 {
 		t.Fatalf("count = %d, want 2", got)
 	}
-	machines := payload["machines"].([]map[string]interface{})
+	machines := payload["machines"].([]map[string]any)
 	first := machines[0]
 	if first["web_url"].(string) != "https://web/base/"+first["path"].(string) {
 		t.Errorf("web_url = %q, path = %q", first["web_url"], first["path"])
@@ -164,7 +164,7 @@ func TestListMachineLogsDispatchPriorityAndSize(t *testing.T) {
 		"cluster": "capz-e2e-abc123-ha",
 		"machine": "capz-e2e-abc123-ha-control-plane-jkl42",
 	})
-	logs := payload["logs"].([]map[string]interface{})
+	logs := payload["logs"].([]map[string]any)
 	if len(logs) == 0 {
 		t.Fatal("expected logs")
 	}
@@ -198,7 +198,7 @@ func TestResolveControllerLogDispatchDefaults(t *testing.T) {
 		"namespace":  "capz-system",
 		"deployment": "capz-controller-manager",
 	})
-	log := payload["log"].(map[string]interface{})
+	log := payload["log"].(map[string]any)
 	if log["name"].(string) != "manager.log" {
 		t.Errorf("default container_log = %q, want manager.log", log["name"])
 	}

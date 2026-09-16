@@ -30,7 +30,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewClient(modelprovider.Config{API: modelprovider.APIResponses, Endpoint: server.URL, Model: "model"}, "token", nil, "", nil)
-	messages := []Message{{Role: "system", Content: strPtr("system")}, {Role: "user", Content: strPtr("inspect")}}
+	messages := []Message{{Role: "system", Content: new("system")}, {Role: "user", Content: new("inspect")}}
 	first, err := client.Complete(context.Background(), Request{Model: client.model, Messages: messages, Tools: nil, ParallelToolCalls: nil})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestResponsesTransportToolRoundTrip(t *testing.T) {
 	if first.ResponseID != "resp-1" || first.Status != "completed" || !first.Usage.Reported || first.Usage.InputTokens != 21 || first.Usage.CachedInputTokens != 5 || !first.Usage.CacheWriteInputTokensReported || first.Usage.CacheWriteInputTokens != 2 || first.Usage.OutputTokens != 8 || first.Usage.ReasoningTokens != 3 || first.Attempts != 1 || first.WireRequestBytes == 0 {
 		t.Fatalf("first metadata = %+v", first)
 	}
-	messages = append(messages, first.Message, Message{Role: "tool", ToolCallID: "call-1", Content: strPtr(`{"ok":true}`)})
+	messages = append(messages, first.Message, Message{Role: "tool", ToolCallID: "call-1", Content: new(`{"ok":true}`)})
 	second, err := client.Complete(context.Background(), Request{Model: client.model, Messages: messages, Tools: nil, ParallelToolCalls: nil})
 	if err != nil || second.Message.Content == nil || *second.Message.Content != "done" {
 		t.Fatalf("second response = %+v, err = %v", second, err)

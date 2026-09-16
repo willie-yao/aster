@@ -41,7 +41,7 @@ func (b *localBackend) resolve(path string) (string, error) {
 	if filepath.IsAbs(filepath.FromSlash(path)) {
 		return "", fmt.Errorf("storage: path %q is not bucket-relative", path)
 	}
-	for _, seg := range strings.Split(p, "/") {
+	for seg := range strings.SplitSeq(p, "/") {
 		if seg == ".." {
 			return "", fmt.Errorf("storage: path %q must not contain a .. segment", path)
 		}

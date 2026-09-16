@@ -87,7 +87,7 @@ func TestHeadlessOnboardingDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list headless dependencies: %v\n%s", err, output)
 	}
-	for _, dependency := range strings.Fields(string(output)) {
+	for dependency := range strings.FieldsSeq(string(output)) {
 		if dependency == "github.com/willie-yao/aster/backend/internal/onboard/terminal" ||
 			dependency == "github.com/muesli/cancelreader" ||
 			strings.HasPrefix(dependency, "charm.land/") ||

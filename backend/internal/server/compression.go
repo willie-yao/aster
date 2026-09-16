@@ -114,7 +114,7 @@ func acceptsGzip(value string) bool {
 	gzipSeen := false
 	gzipAllowed := false
 	wildcardAllowed := false
-	for _, item := range strings.Split(value, ",") {
+	for item := range strings.SplitSeq(value, ",") {
 		parts := strings.Split(item, ";")
 		encoding := strings.ToLower(strings.TrimSpace(parts[0]))
 		quality := 1.0
@@ -146,7 +146,7 @@ func acceptsGzip(value string) bool {
 
 func addVary(header http.Header, value string) {
 	for _, current := range header.Values("Vary") {
-		for _, item := range strings.Split(current, ",") {
+		for item := range strings.SplitSeq(current, ",") {
 			item = strings.TrimSpace(item)
 			if item == "*" || strings.EqualFold(item, value) {
 				return
@@ -157,7 +157,7 @@ func addVary(header http.Header, value string) {
 }
 
 func hasNoTransform(cacheControl string) bool {
-	for _, directive := range strings.Split(cacheControl, ",") {
+	for directive := range strings.SplitSeq(cacheControl, ",") {
 		if strings.EqualFold(strings.TrimSpace(directive), "no-transform") {
 			return true
 		}

@@ -138,7 +138,7 @@ func TestGCSWebBackend_ReadAndList(t *testing.T) {
 
 func TestGCSWebBackend_ListTreeCap(t *testing.T) {
 	objects := map[string]string{}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		objects[fmt.Sprintf("d/f%02d.txt", i)] = "x"
 	}
 	srv := gcswebServer(t, "b", objects)

@@ -58,7 +58,7 @@ func bodyValidator(want string) StructuredValidator {
 
 func TestCompleteStructuredFallsBackToForcedTool(t *testing.T) {
 	provider := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"unsafe"}`)}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: new(`{"body":"unsafe"}`)}}},
 		{response: &transport.Response{
 			HasMessage: true,
 			Message: transport.Message{ToolCalls: []transport.ToolCall{{
@@ -87,7 +87,7 @@ func TestCompleteStructuredUsesBoundedExtractorFallback(t *testing.T) {
 	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{err: unsupported},
 		{err: unsupported},
-		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr("planning text\n{\"body\":\"safe\"}\n")}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: new("planning text\n{\"body\":\"safe\"}\n")}}},
 	}}
 	client := &Client{model: "model", transport: provider}
 	if err := client.CompleteStructured(context.Background(), "system", "user", structuredBodyFormat(), bodyValidator("safe")); err != nil {
@@ -100,9 +100,9 @@ func TestCompleteStructuredUsesBoundedExtractorFallback(t *testing.T) {
 
 func TestCompleteStructuredRejectsConflictingCandidates(t *testing.T) {
 	provider := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
-		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr("missing tool call")}}},
-		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: strPtr(`{"body":"one"}{"body":"two"}`)}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: new(`{"body":"one"}{"body":"two"}`)}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: new("missing tool call")}}},
+		{response: &transport.Response{HasMessage: true, Message: transport.Message{Content: new(`{"body":"one"}{"body":"two"}`)}}},
 	}}
 	client := &Client{model: "model", transport: provider}
 	validator := func(raw json.RawMessage) error {
@@ -227,7 +227,7 @@ func codedBodyValidator(want, code string) StructuredValidator {
 }
 
 func structuredContent(content string) *transport.Response {
-	return &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: strPtr(content)}}
+	return &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: new(content)}}
 }
 
 func structuredFunction(name, arguments string) *transport.Response {
@@ -454,7 +454,7 @@ func TestCompleteStructuredRecordsContentFreeTraceEvent(t *testing.T) {
 
 func TestCompleteStructuredEmptyResponseOutcome(t *testing.T) {
 	provider := &scriptedTransport{results: []scriptedTransportResult{
-		{response: &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: strPtr(" ")}}},
+		{response: &transport.Response{HasMessage: true, Attempts: 1, Message: transport.Message{Content: new(" ")}}},
 		{response: structuredContent("missing function")},
 		{response: &transport.Response{HasMessage: false, Attempts: 1}},
 	}}
@@ -492,10 +492,10 @@ func TestCompleteStructuredConflictingCandidatesAreNoCandidate(t *testing.T) {
 
 func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")},
-		{Role: "user", Content: strPtr("published context")},
+		{Role: "system", Content: new("system")},
+		{Role: "user", Content: new("published context")},
 		{
-			Role: "assistant", Content: strPtr("checking"),
+			Role: "assistant", Content: new("checking"),
 			ToolCalls: []transport.ToolCall{{
 				ID: "artifact-call", Type: "function",
 				Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
@@ -505,12 +505,12 @@ func TestCompleteStructuredMessagesPreservesExistingHistory(t *testing.T) {
 				json.RawMessage(`{"type":"function_call","call_id":"artifact-call","name":"read_artifact","arguments":"{\"path\":\"build.log\"}"}`),
 			},
 		},
-		{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: strPtr(`{"content":"evidence"}`)},
+		{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: new(`{"content":"evidence"}`)},
 	}
 	provider := &scriptedTransport{results: []scriptedTransportResult{
 		{response: &transport.Response{
 			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 2,
-			Message: transport.Message{Content: strPtr(`{"body":"unsafe"}`)},
+			Message: transport.Message{Content: new(`{"body":"unsafe"}`)},
 		}},
 		{response: &transport.Response{
 			HasMessage: true, HTTPStatus: http.StatusOK, Attempts: 1,
@@ -570,10 +570,10 @@ func TestCompleteStructuredMessagesPreservesChatAndResponsesWireHistory(t *testi
 			defer server.Close()
 
 			messages := []transport.Message{
-				{Role: "system", Content: strPtr("system-marker")},
-				{Role: "user", Content: strPtr("question-marker")},
+				{Role: "system", Content: new("system-marker")},
+				{Role: "user", Content: new("question-marker")},
 				{
-					Role: "assistant", Content: strPtr("assistant-marker"),
+					Role: "assistant", Content: new("assistant-marker"),
 					ToolCalls: []transport.ToolCall{{
 						ID: "artifact-call", Type: "function",
 						Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build.log"}`},
@@ -583,7 +583,7 @@ func TestCompleteStructuredMessagesPreservesChatAndResponsesWireHistory(t *testi
 						json.RawMessage(`{"type":"function_call","call_id":"artifact-call","name":"read_artifact","arguments":"{\"path\":\"build.log\"}"}`),
 					},
 				},
-				{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: strPtr(`{"content":"evidence-marker"}`)},
+				{Role: "tool", Name: "read_artifact", ToolCallID: "artifact-call", Content: new(`{"content":"evidence-marker"}`)},
 			}
 			client := NewClientWithOptions(Options{API: apiMode, Endpoint: server.URL, Model: "model"})
 			result, err := client.completeStructuredMessagesWithMetadata(

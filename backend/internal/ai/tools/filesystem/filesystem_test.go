@@ -95,11 +95,11 @@ func (b *fakeBrowser) Grep(_ context.Context, p string, _ *regexp.Regexp, contex
 func TestGrepArtifactContextLinesDefaultAndExplicitZero(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		args map[string]interface{}
+		args map[string]any
 		want int
 	}{
-		{name: "omitted", args: map[string]interface{}{"path": "build-log.txt", "pattern": "failure"}, want: 2},
-		{name: "explicit zero", args: map[string]interface{}{"path": "build-log.txt", "pattern": "failure", "context_lines": 0}, want: 0},
+		{name: "omitted", args: map[string]any{"path": "build-log.txt", "pattern": "failure"}, want: 2},
+		{name: "explicit zero", args: map[string]any{"path": "build-log.txt", "pattern": "failure", "context_lines": 0}, want: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("failure\n")}}
@@ -123,7 +123,7 @@ func TestGrepArtifactRetainsContentFreeCallTelemetry(t *testing.T) {
 			Matches: []artifacts.GrepMatch{{LineNo: 2, Context: []string{"  1: before", "> 2: match", "  3: after"}}},
 		},
 	}
-	raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "private model query"})
+	raw, _ := json.Marshal(map[string]any{"path": "build-log.txt", "pattern": "private model query"})
 	result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
 	observation, ok := result.Observation.(tools.GrepCallObservation)
 	if !ok {
@@ -150,7 +150,7 @@ func TestGrepArtifactRedactsPlainFilterButRetainsCanonicalRange(t *testing.T) {
 			Matches: []artifacts.GrepMatch{{LineNo: 1, Context: []string{"> 1: target:"}}},
 		},
 	}
-	raw, _ := json.Marshal(map[string]interface{}{"path": "Makefile", "pattern": "target"})
+	raw, _ := json.Marshal(map[string]any{"path": "Makefile", "pattern": "target"})
 	result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
 	observation := result.Observation.(tools.GrepCallObservation)
 	if observation.PathFilter != "" || !observation.PathFilterRedacted || len(observation.ReturnedRanges) != 1 || observation.ReturnedRanges[0].Path != "Makefile" {
@@ -174,7 +174,7 @@ func TestGrepArtifactRetainsZeroMatchAndErrorTelemetry(t *testing.T) {
 			if tc.browserError {
 				browser.grepErr = errors.New("read failed")
 			}
-			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": tc.pattern})
+			raw, _ := json.Marshal(map[string]any{"path": "build-log.txt", "pattern": tc.pattern})
 			result := (&grepTool{}).Dispatch(context.Background(), &tools.Env{Browser: browser}, raw)
 			observation, ok := result.Observation.(tools.GrepCallObservation)
 			if !ok || observation.Outcome != tc.outcome || observation.MatchCount != 0 || len(observation.ReturnedRanges) != 0 {
@@ -235,7 +235,7 @@ func TestGrepArtifactPayloadReportsScanCoverage(t *testing.T) {
 				grepResult: tc.result,
 			}
 			env := &tools.Env{Browser: browser, RemainingGCSBytes: tc.remainingGCSBytes}
-			raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "missing"})
+			raw, _ := json.Marshal(map[string]any{"path": "build-log.txt", "pattern": "missing"})
 			result := (&grepTool{}).Dispatch(context.Background(), env, raw)
 			payload := result.Payload
 			if payload["file_size"] != tc.result.FileSize || payload["bytes_scanned"] != tc.result.BytesScanned {
@@ -292,7 +292,7 @@ func junitTree() *fakeBrowser {
 	}
 }
 
-func dispatchFind(t *testing.T, env *tools.Env, args interface{}) map[string]interface{} {
+func dispatchFind(t *testing.T, env *tools.Env, args any) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -307,7 +307,7 @@ func dispatchFind(t *testing.T, env *tools.Env, args interface{}) map[string]int
 
 func TestFindArtifactsRecursesAndFiltersByBasename(t *testing.T) {
 	env := &tools.Env{Browser: junitTree()}
-	payload := dispatchFind(t, env, map[string]interface{}{
+	payload := dispatchFind(t, env, map[string]any{
 		"pattern": `^junit.*\.xml$`,
 	})
 
@@ -347,7 +347,7 @@ func TestFindArtifactsRecursesAndFiltersByBasename(t *testing.T) {
 
 func TestFindArtifactsHonorsRootScope(t *testing.T) {
 	env := &tools.Env{Browser: junitTree()}
-	payload := dispatchFind(t, env, map[string]interface{}{
+	payload := dispatchFind(t, env, map[string]any{
 		"pattern": `^junit.*\.xml$`,
 		"root":    "artifacts/junit/",
 	})
@@ -370,7 +370,7 @@ func TestFindArtifactsHonorsRootScope(t *testing.T) {
 
 func TestFindArtifactsTruncatesByMaxResults(t *testing.T) {
 	env := &tools.Env{Browser: junitTree()}
-	payload := dispatchFind(t, env, map[string]interface{}{
+	payload := dispatchFind(t, env, map[string]any{
 		"pattern":     `^junit.*\.xml$`,
 		"max_results": 2,
 	})
@@ -384,7 +384,7 @@ func TestFindArtifactsTruncatesByMaxResults(t *testing.T) {
 
 func TestFindArtifactsTruncatesByMaxDirs(t *testing.T) {
 	env := &tools.Env{Browser: junitTree()}
-	payload := dispatchFind(t, env, map[string]interface{}{
+	payload := dispatchFind(t, env, map[string]any{
 		"pattern":  `^junit.*\.xml$`,
 		"max_dirs": 1,
 	})
@@ -398,7 +398,7 @@ func TestFindArtifactsTruncatesByMaxDirs(t *testing.T) {
 
 func TestFindArtifactsInvalidRegexReturnsErrorPayload(t *testing.T) {
 	env := &tools.Env{Browser: junitTree()}
-	payload := dispatchFind(t, env, map[string]interface{}{"pattern": "["})
+	payload := dispatchFind(t, env, map[string]any{"pattern": "["})
 	if _, ok := payload["error"]; !ok {
 		t.Errorf("expected error payload, got %v", payload)
 	}
@@ -437,26 +437,26 @@ func TestStringEncodedNumericArgsAreAccepted(t *testing.T) {
 		"build-log.txt": []byte("line1\nERROR boom\nline3\nline4\n"),
 	}}
 	env := &tools.Env{Browser: b}
-	mustNoError := func(t *testing.T, name string, payload map[string]interface{}) {
+	mustNoError := func(t *testing.T, name string, payload map[string]any) {
 		t.Helper()
 		if e, isErr := payload["error"]; isErr {
 			t.Fatalf("%s with string-encoded numeric args should not error: %v", name, e)
 		}
 	}
 
-	raw, _ := json.Marshal(map[string]interface{}{"path": "build-log.txt", "lines": "2"})
+	raw, _ := json.Marshal(map[string]any{"path": "build-log.txt", "lines": "2"})
 	mustNoError(t, "tail_artifact", (&tailTool{}).Dispatch(context.Background(), env, raw).Payload)
 
-	raw, _ = json.Marshal(map[string]interface{}{"path": "build-log.txt", "pattern": "ERROR", "context_lines": "1", "max_matches": "10"})
+	raw, _ = json.Marshal(map[string]any{"path": "build-log.txt", "pattern": "ERROR", "context_lines": "1", "max_matches": "10"})
 	mustNoError(t, "grep_artifact", (&grepTool{}).Dispatch(context.Background(), env, raw).Payload)
 
-	raw, _ = json.Marshal(map[string]interface{}{"path": "build-log.txt", "offset": "0", "length": "5"})
+	raw, _ = json.Marshal(map[string]any{"path": "build-log.txt", "offset": "0", "length": "5"})
 	read := (&readTool{}).Dispatch(context.Background(), env, raw)
 	mustNoError(t, "read_artifact", read.Payload)
 	if content, _ := read.Payload["content"].(string); read.ContentBytes != len(content) || read.ContentBytes == 0 {
 		t.Fatalf("read_artifact content bytes = %d, content length = %d", read.ContentBytes, len(content))
 	}
 
-	raw, _ = json.Marshal(map[string]interface{}{"pattern": ".*", "max_results": "10", "max_dirs": "50"})
+	raw, _ = json.Marshal(map[string]any{"pattern": ".*", "max_results": "10", "max_dirs": "50"})
 	mustNoError(t, "find_artifacts", (&findTool{}).Dispatch(context.Background(), env, raw).Payload)
 }

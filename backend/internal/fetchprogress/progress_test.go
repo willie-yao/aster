@@ -74,15 +74,13 @@ func TestWriteReadersNeverObservePartialJSON(t *testing.T) {
 	var bad atomic.Int64
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				if _, err := Read(path); err != nil {
 					bad.Add(1)
 				}
 			}
-		}()
+		})
 	}
 	for i := range 100 {
 		status := testStatus(now.Add(time.Duration(i) * time.Second))
@@ -424,13 +422,11 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	tracker.StartPhase(PhaseAnalysis)
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			tracker.FinishJob(1, 2)
 			tracker.StartAnalysis(false)
 			tracker.FinishAnalysis(false, OutcomeSucceeded)
-		}()
+		})
 	}
 	wg.Wait()
 	tracker.CompletePhase()
@@ -452,7 +448,7 @@ func TestPassHistoryIsVersionedBoundedAndRecordsDurations(t *testing.T) {
 		newID: func() string { id++; return fmt.Sprintf("%024x", id) },
 		logf:  func(string, ...any) {},
 	})
-	for pass := 0; pass < HistoryLimit+5; pass++ {
+	for range HistoryLimit + 5 {
 		tracker.StartPass(PassLightweightWatch)
 		now = now.Add(2 * time.Second)
 		tracker.CompletePhase()

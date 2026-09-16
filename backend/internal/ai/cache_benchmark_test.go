@@ -11,7 +11,7 @@ import (
 
 func BenchmarkCacheLoadAndSave(b *testing.B) {
 	entries := make(map[string]CacheEntry, 10000)
-	for i := 0; i < 10000; i++ {
+	for i := range 10000 {
 		key := fmt.Sprintf("entry-%d", i)
 		entries[key] = CacheEntry{Key: key, CreatedAt: time.Now(), Data: json.RawMessage(`{"ok":true}`)}
 	}

@@ -27,15 +27,13 @@ func (s *Service) startGeneration(id, userToken string) {
 		kind = request.Kind
 	}
 	s.rmu.Unlock()
-	s.requestWG.Add(1)
-	go func() {
-		defer s.requestWG.Done()
+	s.requestWG.Go(func() {
 		if kind == requestKindAnalysisFix {
 			s.generateAnalysisFixRequest(id, userToken)
 			return
 		}
 		s.generateRequest(id, userToken)
-	}()
+	})
 }
 
 func (s *Service) finishGeneration(id string) {
@@ -333,7 +331,7 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 		return
 	}
 	var notifyErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		if s.validateSubjectSnapshot(view.FailureID, view.PatternHash, view.Kind) != nil {
 			return
 		}

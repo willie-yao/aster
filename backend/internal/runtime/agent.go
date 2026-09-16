@@ -131,7 +131,7 @@ func gitChanges(ctx context.Context, dir, token string) (map[string]string, stri
 		return nil, "", err
 	}
 	files := map[string]string{}
-	for _, p := range strings.Split(strings.TrimSpace(names), "\n") {
+	for p := range strings.SplitSeq(strings.TrimSpace(names), "\n") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue

@@ -1509,9 +1509,7 @@ func TestRequestTimeoutUsesRuntimeCleanup(t *testing.T) {
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 	}}
 	service.requestDone[id] = make(chan struct{})
-	service.requestWG.Add(1)
-	go func() {
-		defer service.requestWG.Done()
+	service.requestWG.Go(func() {
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
 			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
 				return PreviewResult{}, nil, err
@@ -1519,7 +1517,7 @@ func TestRequestTimeoutUsesRuntimeCleanup(t *testing.T) {
 			<-ctx.Done()
 			return PreviewResult{}, nil, ctx.Err()
 		})
-	}()
+	})
 	view := waitRequest(t, service, id, "alice", RequestFailed)
 	if view.Error == "" {
 		t.Fatalf("timeout view = %+v", view)
@@ -1542,15 +1540,13 @@ func TestCancelPendingRequestWaitsForGenerator(t *testing.T) {
 	}}
 	service.requestDone[id] = make(chan struct{})
 	started := make(chan struct{})
-	service.requestWG.Add(1)
-	go func() {
-		defer service.requestWG.Done()
+	service.requestWG.Go(func() {
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
 			close(started)
 			<-ctx.Done()
 			return PreviewResult{}, nil, ctx.Err()
 		})
-	}()
+	})
 	<-started
 	view, err := service.CancelRequest(context.Background(), id, "alice")
 	if err != nil || view.Status != RequestCancelled {
@@ -1613,16 +1609,14 @@ func TestCleanupPendingGenerationTransitionsThroughCleanup(t *testing.T) {
 		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 	}}
 	service.requestDone[id] = make(chan struct{})
-	service.requestWG.Add(1)
-	go func() {
-		defer service.requestWG.Done()
+	service.requestWG.Go(func() {
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
 			if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "uid-one", ExecutionID: id}); err != nil {
 				return PreviewResult{}, nil, err
 			}
 			return PreviewResult{}, nil, runtime.ErrCleanupPending
 		})
-	}()
+	})
 	view := waitRequest(t, service, id, "alice", RequestFailed)
 	if view.Error == "" {
 		t.Fatalf("cleanup-pending result = %+v", view)
@@ -1645,15 +1639,13 @@ func TestExpiredPendingRequestCleansBeforeExpiring(t *testing.T) {
 	}}
 	service.requestDone[id] = make(chan struct{})
 	started := make(chan struct{})
-	service.requestWG.Add(1)
-	go func() {
-		defer service.requestWG.Done()
+	service.requestWG.Go(func() {
 		service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
 			close(started)
 			<-ctx.Done()
 			return PreviewResult{}, nil, ctx.Err()
 		})
-	}()
+	})
 	<-started
 	view, err := service.GetRequest(id, "alice")
 	if err != nil || view.Status != RequestCancelling {

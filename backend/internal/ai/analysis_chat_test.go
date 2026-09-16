@@ -91,7 +91,7 @@ func newAnalysisChatAgentWithRepoToolsForTest(t *testing.T, serverURL string, br
 	return agent
 }
 
-func chatRespToolCallWithContent(content, id, name string, args map[string]interface{}) string {
+func chatRespToolCallWithContent(content, id, name string, args map[string]any) string {
 	encodedContent, _ := json.Marshal(content)
 	encodedArgs, _ := json.Marshal(args)
 	argumentString, _ := json.Marshal(string(encodedArgs))
@@ -136,7 +136,7 @@ func analysisChatReplyVerified(reply analysischat.Reply, err error) bool {
 func TestAnalysisChatAgentChallengesAfterReadingArtifact(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 200}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 200}))
 	server.push(200, chatRespFinal(`{
 		"answer":"The API server failed first, before the controller stopped.",
 		"assessment":"challenges",
@@ -164,7 +164,7 @@ func TestAnalysisChatAgentChallengesAfterReadingArtifact(t *testing.T) {
 func TestAnalysisChatAgentAcceptsMixedReplyWithoutCorrectiveRound(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{
 		"path": "builds/123/build-log.txt", "offset": 0, "length": 1024,
 	}))
 	server.push(200, chatRespFinal(`{
@@ -202,7 +202,7 @@ func TestAnalysisChatAgentAcceptsMixedReplyWithoutCorrectiveRound(t *testing.T) 
 func TestAnalysisChatAgentReportsProgressPhases(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	server.push(200, chatRespFinal(`{
 		"answer":"The controller exit supports the current analysis.",
 		"assessment":"supports",
@@ -287,9 +287,9 @@ func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testi
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	valid := `{"answer":"The controller exit supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
-	server.push(200, chatRespToolCallWithContent(valid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespToolCallWithContent(valid, "call-2", "list_artifacts", map[string]any{"path": ""}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
@@ -312,9 +312,9 @@ func TestAnalysisChatAgentKeepsValidatedCitedDraftWhenFinalizeIsInvalid(t *testi
 func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	valid := `{"answer":"The first log supports the published conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"proposed_revision":null}`
-	server.push(200, chatRespToolCallWithContent(valid, "call-2", "tail_artifact", map[string]interface{}{"path": "later.log", "lines": 20}))
+	server.push(200, chatRespToolCallWithContent(valid, "call-2", "tail_artifact", map[string]any{"path": "later.log", "lines": 20}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
@@ -337,9 +337,9 @@ func TestAnalysisChatAgentRejectsStaleValidatedDraft(t *testing.T) {
 func TestAnalysisChatAgentNeverKeepsDraftWithInvalidCitations(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	invalid := `{"answer":"The log supports the conclusion.","assessment":"supports","citations":[{"path":"build-log.txt","quote":"different evidence"}],"proposed_revision":null}`
-	server.push(200, chatRespToolCallWithContent(invalid, "call-2", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespToolCallWithContent(invalid, "call-2", "list_artifacts", map[string]any{"path": ""}))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
 	server.push(200, chatRespFinal(`{"answer":"unfinished"`))
@@ -360,7 +360,7 @@ func TestAnalysisChatAgentKeepsValidDraftWhenFinalizeRequestFails(t *testing.T) 
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
 	valid := `{"answer":"The existing conclusion remains plausible.","assessment":"explains","citations":[],"proposed_revision":null}`
-	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]interface{}{"path": ""}))
+	server.push(200, chatRespToolCallWithContent(valid, "call-1", "list_artifacts", map[string]any{"path": ""}))
 	server.push(500, `private provider body`)
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 1, Timeout: time.Second})
 	store := NewTraceStore()
@@ -529,7 +529,7 @@ func TestAnalysisChatResponseLogsValidationDetail(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	// A descriptive answer that omits citations entirely trips the contract.
 	uncited := `{"answer":"sentinel-answer-text","assessment":"inconclusive"}`
 	for range 4 {
@@ -805,7 +805,7 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
 		sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 	}
-	arguments, err := json.Marshal(map[string]interface{}{
+	arguments, err := json.Marshal(map[string]any{
 		"source_id": tools.PrimarySourceID, "path": path, "offset": offset, "length": length,
 	})
 	if err != nil {
@@ -1134,7 +1134,7 @@ func TestAnalysisChatAgentReplaysStructuredAssistantHistory(t *testing.T) {
 
 func TestBuildAnalysisChatMessagesDropsOldestHistoryWithinBudget(t *testing.T) {
 	var history []analysischat.Message
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		marker := "middle-marker"
 		if i == 0 {
 			marker = "oldest-marker"
@@ -1182,8 +1182,8 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 	evidence := map[string]*analysisChatEvidence{}
 	recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
-	}}, map[string]interface{}{"matches": []interface{}{map[string]interface{}{
-		"line": float64(42), "context": []interface{}{"  41: before", "> 42: controller stopped", "  43: after"},
+	}}, map[string]any{"matches": []any{map[string]any{
+		"line": float64(42), "context": []any{"  41: before", "> 42: controller stopped", "  43: after"},
 	}}}, analysisChatEvidenceFallbackMaxBytes)
 	valid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"controller stopped"}],"proposed_revision":null}`
 	reply, err := parseAnalysisChatReply(valid, evidence)
@@ -1492,7 +1492,7 @@ func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
 func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]interface{}{
+	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "match", "max_matches": 100,
 	}))
 	server.push(200, chatRespFinal(`{
@@ -1502,7 +1502,7 @@ func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 		"proposed_revision":null
 	}`))
 	var lines []string
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		lines = append(lines, fmt.Sprintf("match-%03d-marker %s", i, strings.Repeat("x", 500)))
 	}
 	browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte(strings.Join(lines, "\n"))}}
@@ -1519,14 +1519,14 @@ func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 func TestPrepareAnalysisChatFinalizeMessagesCompactsCompleteRequest(t *testing.T) {
 	toolContent := strings.Repeat("x", 12<<10)
 	messages := []transport.Message{
-		{Role: "system", Content: strPtr("system")},
-		{Role: "user", Content: strPtr("question")},
+		{Role: "system", Content: new("system")},
+		{Role: "user", Content: new("question")},
 		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1", Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{}`}}}},
 		{Role: "tool", ToolCallID: "call-1", Content: &toolContent},
 	}
 	before := requestSizeEstimate(messages, 0)
 	budget := before + len(analysisChatFinalizePrompt)/2
-	complete := append(slices.Clone(messages), transport.Message{Role: "user", Content: strPtr(analysisChatFinalizePrompt)})
+	complete := append(slices.Clone(messages), transport.Message{Role: "user", Content: new(analysisChatFinalizePrompt)})
 	if requestSizeEstimate(complete, 0) <= budget {
 		t.Fatal("test setup did not cross the context budget")
 	}
@@ -1624,7 +1624,7 @@ func TestAnalysisChatEvidenceOverflowIsAtomicAndReportsRoom(t *testing.T) {
 
 	roomLeft, recorded := recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
-	}}, map[string]interface{}{"content": strings.Repeat("b", 100)}, budget)
+	}}, map[string]any{"content": strings.Repeat("b", 100)}, budget)
 
 	if recorded {
 		t.Fatal("an overflowing read was accepted")
@@ -1639,7 +1639,7 @@ func TestAnalysisChatEvidenceOverflowIsAtomicAndReportsRoom(t *testing.T) {
 	// A read that fits is still recorded, and reports the room it left.
 	roomLeft, recorded = recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`,
-	}}, map[string]interface{}{"content": strings.Repeat("c", 40)}, budget)
+	}}, map[string]any{"content": strings.Repeat("c", 40)}, budget)
 	if !recorded || roomLeft != budget-190 {
 		t.Fatalf("fitting read: recorded=%v roomLeft=%d", recorded, roomLeft)
 	}
@@ -1753,7 +1753,7 @@ func TestAnalysisChatRepositoryToolsAreCauseScopedAndResolved(t *testing.T) {
 func TestAnalysisChatFinalizationUsesForcedFunctionAndRecordsUsage(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCallWithUsage("call-1", "list_artifacts", map[string]interface{}{"path": ""}, 10, 2, 0))
+	server.push(200, chatRespToolCallWithUsage("call-1", "list_artifacts", map[string]any{"path": ""}, 10, 2, 0))
 	server.push(200, chatRespFinalWithUsage(`still invalid`, 11, 3, 0))
 	valid := `{"answer":"The published context is sufficient.","assessment":"inconclusive","citations":[],"proposed_revision":null}`
 	server.push(200, chatRespForcedFunctionWithUsage("analysis_chat_reply", valid, 12, 4, 1))
@@ -1821,7 +1821,7 @@ func TestAnalysisChatFinalizationUsesForcedFunctionAndRecordsUsage(t *testing.T)
 	}
 }
 
-func chatRespToolCallWithUsage(id, name string, args map[string]interface{}, input, output, reasoning int) string {
+func chatRespToolCallWithUsage(id, name string, args map[string]any, input, output, reasoning int) string {
 	encodedArgs, _ := json.Marshal(args)
 	encodedArgsString, _ := json.Marshal(string(encodedArgs))
 	return fmt.Sprintf(
@@ -2023,7 +2023,7 @@ func TestAnalysisChatPatternContextBounds(t *testing.T) {
 		{name: "total bytes", mutate: func(pattern *models.PatternAnalysis) {
 			pattern.SharedRootCause = strings.Repeat("r", 32<<10)
 			pattern.SuggestedFix = strings.Repeat("f", 16<<10)
-			for index := 0; index < analysisChatMaxPatternCausalGroups; index++ {
+			for index := range analysisChatMaxPatternCausalGroups {
 				group := models.PatternCausalGroup{ID: fmt.Sprintf("g-%d", index), ContentHash: fmt.Sprintf("h-%d", index), Builds: []string{fmt.Sprintf("%d", index)}, RootCause: strings.Repeat("c", analysisChatMaxPatternRootCauseBytes), Confidence: "high"}
 				pattern.CausalGroups = append(pattern.CausalGroups, group)
 			}
@@ -2049,7 +2049,7 @@ func TestAnalysisChatPatternTextBoundsIncludeElisionMarker(t *testing.T) {
 
 func TestAnalysisChatPatternContextKeepsGroupsWithoutArtifactSlots(t *testing.T) {
 	pattern := &models.PatternAnalysis{ID: "pattern", Subject: "subject", Systemic: true, Confidence: "high", Summary: "summary"}
-	for index := 0; index < 4; index++ {
+	for index := range 4 {
 		pattern.CausalGroups = append(pattern.CausalGroups, models.PatternCausalGroup{
 			ID: fmt.Sprintf("group-%d", index), ContentHash: fmt.Sprintf("hash-%d", index),
 			Builds:    []string{fmt.Sprintf("%d-a", index), fmt.Sprintf("%d-b", index)},
@@ -2079,7 +2079,7 @@ func TestAnalysisChatPatternContextKeepsGroupsWithoutArtifactSlots(t *testing.T)
 func TestAnalysisChatExplicitArtifactQuestionReadsAndCitesEvidence(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	server.push(200, chatRespFinal(`{
 		"answer":"The artifact records the controller stopping.",
 		"citations":[{"path":"build-log.txt","quote":"controller stopped"}],
@@ -2132,7 +2132,7 @@ func TestAnalysisChatEmptyOrFailedArtifactRecordsNoContent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			shrinkCallDelay(t)
 			server := newScriptedChatServer(t)
-			server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+			server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 			server.push(200, chatRespFinal(`{
 				"answer":"The artifact could not be read, so this stays unresolved.",
 				"citations":[],"assessment":"inconclusive","proposed_revision":null
@@ -2161,7 +2161,7 @@ func TestAnalysisChatEmptyOrFailedArtifactRecordsNoContent(t *testing.T) {
 func TestAnalysisChatEvidenceClaimWithoutCitationsDegradesToUnverified(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]interface{}{"path": "build-log.txt", "lines": 20}))
+	server.push(200, chatRespToolCall("call-1", "tail_artifact", map[string]any{"path": "build-log.txt", "lines": 20}))
 	uncited := `{"answer":"The artifact supports it.","citations":[],"assessment":"supports","proposed_revision":null}`
 	server.push(200, chatRespFinal(uncited))
 	server.push(200, chatRespFinal(uncited))
@@ -2191,7 +2191,7 @@ func TestAnalysisChatEvidenceClaimWithoutCitationsDegradesToUnverified(t *testin
 func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRounds(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 1024}))
 	invalid := `{"answer":"The artifact supports it.","citations":[{"path":"build-log.txt","quote":"different evidence"}],"assessment":"supports","proposed_revision":null}`
 	server.push(200, chatRespFinal(invalid))
 	server.push(200, chatRespFinal(invalid))
@@ -2217,8 +2217,8 @@ func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRounds(t *testing.T)
 func TestAnalysisChatPartialEvidenceTraceAfterCorrectiveRounds(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "good.log", "offset": 0, "length": 1024}))
-	server.push(200, chatRespToolCall("call-2", "read_artifact", map[string]interface{}{"path": "other.log", "offset": 0, "length": 1024}))
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{"path": "good.log", "offset": 0, "length": 1024}))
+	server.push(200, chatRespToolCall("call-2", "read_artifact", map[string]any{"path": "other.log", "offset": 0, "length": 1024}))
 	partial := `{"answer":"The controller stopped.","citations":[{"path":"good.log","quote":"controller stopped"},{"path":"other.log","quote":"missing evidence"}],"assessment":"supports","proposed_revision":null}`
 	server.push(200, chatRespFinal(partial))
 	server.push(200, chatRespFinal(partial))
@@ -2274,7 +2274,7 @@ func TestAnalysisChatPublishedPatternMembershipNeedsNoArtifactRead(t *testing.T)
 func TestAnalysisChatPatternArtifactCitationKeepsBuildPrefix(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]interface{}{
+	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]any{
 		"path": "builds/104/build-log.txt", "pattern": "group failure", "max_matches": 10,
 	}))
 	server.push(200, chatRespFinal(`{
@@ -2362,7 +2362,7 @@ func TestSeedAnalysisChatEvidenceSkipsSourceCitationsBeforePathNormalization(t *
 func TestSeedAnalysisChatEvidenceBoundsCarriedBytes(t *testing.T) {
 	quote := strings.Repeat("a", 32<<10)
 	history := make([]analysischat.Message, 0, 16)
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		history = append(history, analysischat.Message{Role: "assistant", Citations: []analysischat.Citation{
 			{Path: fmt.Sprintf("build-%d.log", i), Quote: quote},
 		}})
@@ -2405,7 +2405,7 @@ func TestAnalysisChatFollowUpCitesEarlierTurnEvidence(t *testing.T) {
 func TestAnalysisChatProseAnswerDegradesToUnverified(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		server.push(200, chatRespFinal("The controller log stops at 12:04, so look there."))
 	}
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
@@ -2425,7 +2425,7 @@ func TestAnalysisChatProseAnswerDegradesToUnverified(t *testing.T) {
 func TestAnalysisChatEmptyAnswerReportsGate(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		server.push(200, chatRespFinal("   "))
 	}
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: time.Second})
@@ -2531,9 +2531,9 @@ func TestAnalysisChatNarrationIsNotSalvaged(t *testing.T) {
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespToolCallWithContent(
 		"Let me check the controller log.", "call-1", "read_artifact",
-		map[string]interface{}{"path": "build-log.txt"},
+		map[string]any{"path": "build-log.txt"},
 	))
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		server.push(200, chatRespFinal("   "))
 	}
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
@@ -2551,8 +2551,8 @@ const analysisChatAnnouncementTurn = "The controller logs are very revealing. Le
 func TestAnalysisChatAnnouncementFailsInsteadOfBeingSalvaged(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
-	for i := 0; i < analysisChatMaxCorrectiveRounds+1; i++ {
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	for range analysisChatMaxCorrectiveRounds + 1 {
 		server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
 	}
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -2572,7 +2572,7 @@ func TestAnalysisChatAnnouncementFailsInsteadOfBeingSalvaged(t *testing.T) {
 func TestAnalysisChatAnnouncementRecoversOnTheLastCorrectiveRound(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 1024}))
 	server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
 	server.push(200, chatRespFinal(analysisChatAnnouncementTurn))
 	server.push(200, chatRespFinal(`{
@@ -2888,7 +2888,7 @@ func TestAnalysisChatPreparedCauseUsesHistoricalSourceWithoutCurrentLookup(t *te
 	defer func() { githubAPIBase, rawContentBase = oldAPI, oldRaw }()
 
 	server := newScriptedChatServer(t)
-	server.push(200, chatRespToolCall("source-1", "read_repo_file", map[string]interface{}{
+	server.push(200, chatRespToolCall("source-1", "read_repo_file", map[string]any{
 		"source_id": tools.PrimarySourceID, "path": "controllers/fix.go", "offset": 0, "length": 1024,
 	}))
 	server.push(200, chatRespFinal(`{
@@ -3110,7 +3110,7 @@ func TestRecordSourceContentKeepsCurrentEvidenceSeparateFromPrimaryGrounding(t *
 	call := transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_repo_file", Arguments: `{"source_id":"current","path":"pkg/same.go"}`,
 	}}
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"source_id": analysisChatCurrentSourceID, "content": "current line\n", "length": len("current line\n"),
 	}
 	badObservation := repotree.ReadObservation{

@@ -68,7 +68,7 @@ func TestChatReasoningEffortRejectsGPT54ToolCallsBeforeTransport(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
 			defer server.Close()
 			client := NewClientWithOptions(Options{API: APIChatCompletions, Endpoint: server.URL, Model: model, ReasoningEffort: ReasoningEffortHigh})
-			_, err := client.callModel(context.Background(), []transport.Message{{Role: "user", Content: strPtr("test")}}, []transport.ToolSchema{{Type: "function", Function: transport.FunctionDecl{Name: "read"}}}, nil)
+			_, err := client.callModel(context.Background(), []transport.Message{{Role: "user", Content: new("test")}}, []transport.ToolSchema{{Type: "function", Function: transport.FunctionDecl{Name: "read"}}}, nil)
 			if err == nil || !strings.Contains(err.Error(), "set reasoning effort to none or use responses") {
 				t.Fatalf("error = %v", err)
 			}
@@ -193,13 +193,13 @@ func TestReasoningEffortToolLoopRetainsEffort(t *testing.T) {
 			client := NewClientWithOptions(Options{API: apiMode, Endpoint: server.URL, Model: "m", ReasoningEffort: ReasoningEffortXHigh})
 			result, err := client.runToolLoop(context.Background(), toolLoopParams{
 				messages: []transport.Message{
-					{Role: "system", Content: strPtr("system")},
-					{Role: "user", Content: strPtr("user")},
+					{Role: "system", Content: new("system")},
+					{Role: "user", Content: new("user")},
 				},
 				schemas:  []transport.ToolSchema{{Type: "function", Function: transport.FunctionDecl{Name: "echo"}}},
 				maxIters: 2,
-				dispatch: func(context.Context, transport.ToolCall) (string, map[string]interface{}, tools.Result) {
-					return `{"echo":"hi"}`, map[string]interface{}{"echo": "hi"}, tools.Result{}
+				dispatch: func(context.Context, transport.ToolCall) (string, map[string]any, tools.Result) {
+					return `{"echo":"hi"}`, map[string]any{"echo": "hi"}, tools.Result{}
 				},
 			})
 			if err != nil {

@@ -169,7 +169,7 @@ func TestAnalyzeFailuresProgressTracksColdAndWarmResultsAsLogicalCompletions(t *
 		}},
 	}}
 
-	for pass := 0; pass < 2; pass++ {
+	for pass := range 2 {
 		p.progress.StartPass(fetchprogress.PassLightweightWatch)
 		if err := p.analyzeFailuresWithAI(t.Context(), details); err != nil {
 			t.Fatalf("analysis pass %d: %v", pass+1, err)

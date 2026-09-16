@@ -54,7 +54,7 @@ func TestTraceSessionProjectsRunRecordOnFinish(t *testing.T) {
 func TestTraceStoreBoundsAndRedacts(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test https://secret.example Authorization: Bearer top-secret", APIMode: APIResponses, ReasoningEffort: " HIGH "})
-	for i := 0; i < analysisTraceMaxEvents+2; i++ {
+	for range analysisTraceMaxEvents + 2 {
 		trace.Record(TraceEvent{Kind: "model_request", ErrorCode: "provider_status"})
 	}
 	trace.Finish("error", nil)
@@ -101,7 +101,7 @@ func TestTraceStoreRetainsContentFreeGrepTelemetry(t *testing.T) {
 func TestTraceStoreRetainsDraftDecisionsAtEventCap(t *testing.T) {
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
-	for i := 0; i < analysisTraceMaxEvents; i++ {
+	for range analysisTraceMaxEvents {
 		trace.Record(TraceEvent{Kind: "model_request"})
 	}
 	for i, reason := range []string{draftReasonCandidateNotBetter, draftReasonFallbackPromoted} {
@@ -208,7 +208,7 @@ func TestLoadTraceStoreRejectsNoncurrentVersions(t *testing.T) {
 
 func TestTraceStoreCapsCompletedTraces(t *testing.T) {
 	store := NewTraceStore()
-	for i := 0; i < analysisTraceMaxTraces+2; i++ {
+	for i := range analysisTraceMaxTraces + 2 {
 		trace := store.Start(TraceMetadata{JobID: "job", BuildID: fmt.Sprintf("%d", i)})
 		trace.Finish("success", nil)
 	}

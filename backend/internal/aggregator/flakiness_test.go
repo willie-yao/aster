@@ -408,7 +408,7 @@ func TestCollectBuildFailuresBuildsBoundedSafeIndex(t *testing.T) {
 	details := []models.JobDetail{{
 		Name: "periodic-capz-e2e", JobID: "org/repo/periodic-capz-e2e",
 	}}
-	for i := 0; i < maxBuildFailureResults+5; i++ {
+	for i := range maxBuildFailureResults + 5 {
 		started := baseTime.Add(-time.Duration(i) * time.Minute)
 		details[0].Runs = append(details[0].Runs, models.BuildResult{
 			BuildInfo: models.BuildInfo{

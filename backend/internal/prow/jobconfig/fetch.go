@@ -401,7 +401,7 @@ func DerivePeriodicPrefix(jobs []models.ProwJob) string {
 }
 
 func definitionMatchesDashboard(definition JobDefinition, dashboard string) bool {
-	for _, value := range strings.Split(definition.Annotations["testgrid-dashboards"], ",") {
+	for value := range strings.SplitSeq(definition.Annotations["testgrid-dashboards"], ",") {
 		if strings.TrimSpace(value) == dashboard {
 			return true
 		}

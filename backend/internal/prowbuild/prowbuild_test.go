@@ -348,7 +348,7 @@ func TestDiscoverJUnitPathsFindsRootJUnitBeforeTreeCap(t *testing.T) {
 		"logs/job/1/artifacts/junit.e2e_suite.1.xml": "x",
 		"logs/job/1/artifacts/results.xml":           "x",
 	}
-	for i := 0; i < 2001; i++ {
+	for i := range 2001 {
 		objects[fmt.Sprintf("logs/job/1/artifacts/clusters/%04d/log.txt", i)] = "x"
 	}
 	b := &fakeBackend{objects: objects}

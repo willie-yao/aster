@@ -280,7 +280,7 @@ func chatRespFinal(content string) string {
 }
 
 // chatRespToolCall builds a chat-completion response that invokes one tool.
-func chatRespToolCall(id, name string, args map[string]interface{}) string {
+func chatRespToolCall(id, name string, args map[string]any) string {
 	a, _ := json.Marshal(args)
 	aStr, _ := json.Marshal(string(a))
 	return fmt.Sprintf(
@@ -326,7 +326,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	// Round 1: model calls list_artifacts.
-	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]any{"path": ""}))
 	// Round 2: model returns final JSON.
 	final := `{"summary":"DNS lookup failed","is_transient":false,"root_cause":"resolver pointed at stale nameserver","severity":"High","suggested_fix":"Update /etc/resolv.conf","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
@@ -371,7 +371,7 @@ func TestAgentic_HappyPath_ToolThenFinalJSON(t *testing.T) {
 func TestAgentic_TraceRetainsZeroMatchGrepWithoutPattern(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "private model query",
 	}))
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"The retained evidence is inconclusive.","severity":"Low","suggested_fix":"Inspect the failing component logs.","relevant_files":[],"evidence_citations":[]}`))
@@ -408,7 +408,7 @@ func TestAgentic_TraceRetainsZeroMatchGrepWithoutPattern(t *testing.T) {
 func TestAgenticTraceRecordsModelToolAndCritique(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "initiating error", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "initiating error", "context_lines": 0}))
 	srv.push(200, chatRespFinal(`{"summary":"failure","is_transient":false,"root_cause":"build-log.txt contains the initiating error","severity":"High","suggested_fix":"fix the configuration","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"initiating error"}]}`))
 
 	store := NewTraceStore()
@@ -585,7 +585,7 @@ func TestAgentic_MinToolCalls_NudgeForcesInvestigation(t *testing.T) {
 	srv.push(200, chatRespFinal(final1))
 	// Round 2: after the nudge, model reads build-log.txt (the artifact it
 	// will cite), satisfying both the floor and the critique's read check.
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 16384}))
 	// Round 3: model finalizes with the post-investigation answer.
 	final2 := `{"summary":"real cause","is_transient":false,"root_cause":"found in build-log.txt line 42","severity":"High","suggested_fix":"fix it","relevant_files":["build-log.txt"]}`
 	srv.push(200, chatRespFinal(final2))
@@ -634,8 +634,8 @@ func TestAgentic_MinToolCalls_RejectedFinalNotReusedAfterMaxIters(t *testing.T) 
 	srv.push(200, chatRespFinal(rejected))
 	// Rounds 2+: after the nudge, model only calls tools and never finalizes.
 	// MaxIters=3 means we get exactly 2 more chat calls. Both are tool calls.
-	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]any{"path": ""}))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]any{"path": ""}))
 	// Loop exits via MaxIters; runFinalizeRound fires. Force a successful
 	// finalize so we land in the cache-write path.
 	final := `{"summary":"FINAL","is_transient":false,"root_cause":"from finalize round","severity":"High","suggested_fix":"y","relevant_files":[]}`
@@ -700,13 +700,13 @@ func TestAgentic_MinGCSBytes_NudgeForcesMoreReading(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	// Round 1: list_artifacts (BytesFetched=0).
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
 	// Round 2: tools-free finalize with gcsBytes still 0.
 	premature := `{"summary":"shallow","is_transient":false,"root_cause":"unknown","severity":"Medium","suggested_fix":"x","relevant_files":[]}`
 	srv.push(200, chatRespFinal(premature))
 	// Round 3: after the nudge, read_artifact returns 16 KB so gcsBytes
 	// crosses the 15 KB floor.
-	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]interface{}{"path": "build-log.txt", "offset": 0, "length": 16384}))
+	srv.push(200, chatRespToolCall("c2", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 16384}))
 	// Round 4: tools-free with substantive content.
 	final := `{"summary":"deep","is_transient":false,"root_cause":"found in build-log.txt:42","severity":"High","suggested_fix":"fix","relevant_files":["build-log.txt"]}`
 	srv.push(200, chatRespFinal(final))
@@ -745,7 +745,7 @@ func TestAgentic_EvidencePlanCoverageSatisfiesGCSFloorAndSurvivesReload(t *testi
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
 
 	set := loadSkillsForTest(t, map[string]string{
@@ -808,7 +808,7 @@ required_evidence:
 func TestAgentic_CompleteSparseEvidencePlanSatisfiesGCSFloor(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "initiating failure", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "initiating failure", "context_lines": 0}))
 	final := `{"summary":"profiled failure","is_transient":false,"root_cause":"The profiled failure is proven by build-log.txt.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"initiating failure"}]}`
 	srv.push(200, chatRespFinal(final))
 
@@ -855,7 +855,7 @@ required_evidence:
 func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
 	final := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"ABCDE"}]}`
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
@@ -897,10 +897,10 @@ func TestAgentic_GCSFloorOnlyRetryIsCappedAndReusable(t *testing.T) {
 func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "ABCDE", "context_lines": 0}))
 	premature := `{"summary":"configuration rejected","is_transient":false,"root_cause":"build-log.txt contains the configuration rejection.","severity":"High","suggested_fix":"Correct the rejected configuration and rerun the job.","relevant_files":["build-log.txt"],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"ABCDE"}]}`
 	srv.push(200, chatRespFinal(premature))
-	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]any{"path": ""}))
 	final := premature
 	srv.push(200, chatRespFinal(final))
 
@@ -934,7 +934,7 @@ func TestAgentic_GCSFloorRetryMarkerSurvivesForcedFinalization(t *testing.T) {
 func TestAgentic_OldCacheWithoutEvidenceMarkerRetainsGCSFloor(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(`{"summary":"fresh","is_transient":false,"root_cause":"build-log.txt contains the initiating failure","severity":"High","suggested_fix":"Correct the failing configuration and rerun the job.","relevant_files":["build-log.txt"]}`))
 
 	cacheDir := t.TempDir()
@@ -986,9 +986,9 @@ func TestAgentic_EvidencePlanCoverageDoesNotBypassMinToolCalls(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
 	final := `{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update the issuer with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(final))
-	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]any{"path": ""}))
 	srv.push(200, chatRespFinal(final))
 
 	set := loadSkillsForTest(t, map[string]string{
@@ -1110,17 +1110,17 @@ func TestDispatchAgenticToolEvidenceReadsRequireNonEmptyContent(t *testing.T) {
 	cases := []struct {
 		name string
 		tool string
-		args map[string]interface{}
+		args map[string]any
 		want bool
 	}{
-		{name: "non-empty read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/content.log"}, want: true},
-		{name: "empty read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/empty.log"}},
-		{name: "whitespace read", tool: "tail_artifact", args: map[string]interface{}{"path": "logs/whitespace.log"}},
-		{name: "failed read", tool: "read_artifact", args: map[string]interface{}{"path": "logs/missing.log"}},
-		{name: "grep with matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "healthy"}, want: true},
-		{name: "grep without matches", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/grep.log", "pattern": "failure"}},
-		{name: "grep blank match", tool: "grep_artifact", args: map[string]interface{}{"path": "logs/blank.log", "pattern": "^$", "context_lines": 0}},
-		{name: "listing only", tool: "list_artifacts", args: map[string]interface{}{"path": ""}},
+		{name: "non-empty read", tool: "read_artifact", args: map[string]any{"path": "logs/content.log"}, want: true},
+		{name: "empty read", tool: "read_artifact", args: map[string]any{"path": "logs/empty.log"}},
+		{name: "whitespace read", tool: "tail_artifact", args: map[string]any{"path": "logs/whitespace.log"}},
+		{name: "failed read", tool: "read_artifact", args: map[string]any{"path": "logs/missing.log"}},
+		{name: "grep with matches", tool: "grep_artifact", args: map[string]any{"path": "logs/grep.log", "pattern": "healthy"}, want: true},
+		{name: "grep without matches", tool: "grep_artifact", args: map[string]any{"path": "logs/grep.log", "pattern": "failure"}},
+		{name: "grep blank match", tool: "grep_artifact", args: map[string]any{"path": "logs/blank.log", "pattern": "^$", "context_lines": 0}},
+		{name: "listing only", tool: "list_artifacts", args: map[string]any{"path": ""}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1547,7 +1547,7 @@ func TestAgentic_CritiqueRetryTieKeepsInitial(t *testing.T) {
 func TestAgentic_PassingPostInjectionInitialIsCached(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
 	initial := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
 	revised := `{"summary":"webhook cert","is_transient":false,"root_cause":"manager.log shows an x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Check the webhook certificate.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(initial))
@@ -2246,7 +2246,7 @@ required_evidence:
 func TestAgentic_PostLoopEvidenceRepairUsesSharedBudget(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal(final))
@@ -2298,7 +2298,7 @@ required_evidence:
 func TestAgentic_UnparseableEvidenceRepairRetainsPassingInjectedDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
 	final := `{"summary":"webhook cert","is_transient":false,"root_cause":"x509 webhook validation failure prevented cluster creation","severity":"High","suggested_fix":"Regenerate the webhook serving certificate and redeploy the controller.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(final))
 	srv.push(200, chatRespFinal("not json"))
@@ -2390,7 +2390,7 @@ func TestAgentic_CritiqueRepairUnexpectedFunctionRetainsPriorDraft(t *testing.T)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	// The forced-finalize repair must not execute this unexpected function.
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
 	// A clean response is the forbidden-extra-call sentinel.
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 
@@ -2428,8 +2428,8 @@ func TestAgentic_Critique_FinalizeRoundOutputCritiqued(t *testing.T) {
 	srv := newScriptedChatServer(t)
 
 	// MaxIters=2: model only calls tools, so MaxIters triggers runFinalizeRound.
-	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]interface{}{"path": ""}))
-	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("c1", "list_artifacts", map[string]any{"path": ""}))
+	srv.push(200, chatRespToolCall("c2", "list_artifacts", map[string]any{"path": ""}))
 	// runFinalizeRound: model emits a clean (non-punt) final.
 	srv.push(200, chatRespFinal(cleanFinalJSON))
 
@@ -2483,7 +2483,7 @@ func TestAgentic_Critique_RetryAllowsToolCallThenFinal(t *testing.T) {
 	// Round 1: punt-shaped final fails critique and re-prompts.
 	srv.push(200, chatRespFinal(puntyFinalJSON))
 	// Round 2: model reads an artifact in response to critique feedback.
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{
 		"path": "build-log.txt", "offset": 0, "length": 256,
 	}))
 	// Round 3: model re-emits with a clean final that passes critique.
@@ -2525,7 +2525,7 @@ func TestAgentic_BoundedRepairAllowsOneToolTurnThenFinal(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	initial := `{"summary":"s","is_transient":false,"root_cause":"build-log.txt shows the controller failed","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(initial))
-	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]interface{}{"path": "build-log.txt", "pattern": "mismatch", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "mismatch", "context_lines": 0}))
 	clean := `{"summary":"deep","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[],"evidence_citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"mismatch"}]}`
 	srv.push(200, chatRespFinal(clean))
 	browser := &trackingBrowser{fakeBrowser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("mismatch")}}, treeResponses: []treeResponse{{truncated: true}, {truncated: true}}}
@@ -2585,7 +2585,7 @@ func TestAgentic_HallucinationRetry(t *testing.T) {
 	// Round 1: model emits final citing manager.log (never read).
 	srv.push(200, chatRespFinal(hallucinatedFinalJSON))
 	// Round 2: after critique feedback, model greps the exact build-log line.
-	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]interface{}{
+	srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
 	}))
 	// Round 3: re-emit citing build-log.txt, which passes.
@@ -2863,8 +2863,8 @@ func countAssistantToolCalls(t *testing.T, body []byte) int {
 	t.Helper()
 	var req struct {
 		Messages []struct {
-			Role      string        `json:"role"`
-			ToolCalls []interface{} `json:"tool_calls"`
+			Role      string `json:"role"`
+			ToolCalls []any  `json:"tool_calls"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -2933,9 +2933,9 @@ func TestAgentic_EvidenceInjection_PostLoopRetry(t *testing.T) {
 
 	citePath := "artifacts/clusters/c1/machines/m1/cloud-init-output.log"
 	// Iter 1: a tool call keeps the loop from getting a tools-free final.
-	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_1", "list_artifacts", map[string]any{"path": ""}))
 	// Iter 2: another tool call reaches MaxIters and forces finalization.
-	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]interface{}{"path": ""}))
+	srv.push(200, chatRespToolCall("call_2", "list_artifacts", map[string]any{"path": ""}))
 	// Forced finalize: draft cites an unread artifact (clean fix).
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"cloud-init failed per `+citePath+`","severity":"High","suggested_fix":"Update kustomize/cluster-template.yaml line 1; reapply.","relevant_files":[]}`))
 	// Injection-driven finalize retry: clean, grounded draft.
@@ -3148,7 +3148,7 @@ func TestAgentic_SeedArtifactTree_ByteCapped(t *testing.T) {
 	// 60 long, sortable paths total about 30KB. With a small model budget the
 	// seed byte budget is about 3KB, so only the first handful fit.
 	files := map[string][]byte{}
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		p := fmt.Sprintf("artifacts/clusters/c/p%03d/%s.log", i, strings.Repeat("x", 470))
 		files[p] = []byte("y")
 	}
@@ -3528,7 +3528,7 @@ func TestBuildEvidenceInjectionRespectsArtifactAndByteBounds(t *testing.T) {
 	var groups []skills.EvidenceGroup
 	var plannedGroups []skills.PlannedEvidenceGroup
 	files := map[string][]byte{}
-	for i := 0; i < evidenceInjectionMaxArtifacts+2; i++ {
+	for i := range evidenceInjectionMaxArtifacts + 2 {
 		path := fmt.Sprintf("logs/group-%d.log", i)
 		groups = append(groups, skills.EvidenceGroup{ID: fmt.Sprintf("group-%d", i), AnyOf: []string{fmt.Sprintf("group-%d\\.log$", i)}})
 		plannedGroups = append(plannedGroups, skills.PlannedEvidenceGroup{ID: fmt.Sprintf("group-%d", i), CandidatePaths: []string{path}})
@@ -3569,7 +3569,7 @@ func TestAgentic_StrongModelReadsPlannedEvidenceWithoutRepair(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	path := "artifacts/issuer.yaml"
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{"path": path, "pattern": "x509 issuer mismatch", "context_lines": 0}))
 	srv.push(200, chatRespFinal(`{"summary":"x509","is_transient":false,"root_cause":"x509 issuer mismatch shown in artifacts/issuer.yaml","severity":"High","suggested_fix":"Update issuer.yaml with the correct CA and redeploy.","relevant_files":["artifacts/issuer.yaml"],"evidence_citations":[{"path":"artifacts/issuer.yaml","line_start":1,"line_end":1,"quote":"x509 issuer mismatch"}]}`))
 	set := loadSkillsForTest(t, map[string]string{
 		"x509": `
@@ -3623,10 +3623,10 @@ func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
 func TestAgenticBuildLogSelectsAKSBootstrapCauseBeforeCleanup(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]interface{}{
+	srv.push(200, chatRespToolCall("call_1", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "K8sVersionNotSupported|ResourceGroupNotFound", "context_lines": 2,
 	}))
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(`{"summary":"AKS bootstrap-cluster creation failed before tests started.","is_transient":false,"root_cause":"build-log.txt shows K8sVersionNotSupported while creating the AKS bootstrap cluster because Kubernetes 1.33.2 requires Long-Term Support in AKS.","severity":"High","suggested_fix":"Update the repository configuration that selects Kubernetes 1.33.2 to use an AKS-supported version or enable the required Long-Term Support plan before creating the bootstrap cluster.","relevant_files":["build-log.txt"]}`))
 
 	logData := []byte(`2026-07-29T10:00:00Z creating AKS bootstrap cluster
@@ -3698,12 +3698,12 @@ func TestToolResultSnippetsCaptureReadTailAndSeparateGrepMatches(t *testing.T) {
 	cases := []struct {
 		name    string
 		tool    string
-		payload map[string]interface{}
+		payload map[string]any
 		want    [][]string
 	}{
-		{name: "read", tool: "read_artifact", payload: map[string]interface{}{"content": "conversion webhook"}, want: [][]string{{"conversion webhook"}}},
-		{name: "tail", tool: "tail_artifact", payload: map[string]interface{}{"content": "connection refused"}, want: [][]string{{"connection refused"}}},
-		{name: "grep", tool: "grep_artifact", payload: map[string]interface{}{"matches": []map[string]interface{}{
+		{name: "read", tool: "read_artifact", payload: map[string]any{"content": "conversion webhook"}, want: [][]string{{"conversion webhook"}}},
+		{name: "tail", tool: "tail_artifact", payload: map[string]any{"content": "connection refused"}, want: [][]string{{"connection refused"}}},
+		{name: "grep", tool: "grep_artifact", payload: map[string]any{"matches": []map[string]any{
 			{"context": []string{"> 12: ManagedClustersAgentPool", "  13: conversion webhook"}},
 			{"context": []string{"> 90: connection refused"}},
 		}}, want: [][]string{{"ManagedClustersAgentPool", "conversion webhook"}, {"connection refused"}}},
@@ -3817,7 +3817,7 @@ func TestTruncatedToolEnvelopeCreatesNoInvisibleEvidence(t *testing.T) {
 		opts:      AgenticOptions{ModelByteBudget: 200_000, GCSByteBudget: 200_000},
 		startTime: time.Now(),
 	}
-	arguments, err := json.Marshal(map[string]interface{}{
+	arguments, err := json.Marshal(map[string]any{
 		"path": "logs/large.log", "pattern": "MATCH", "context_lines": 0, "max_matches": 100,
 	})
 	if err != nil {
@@ -3917,11 +3917,11 @@ required_evidence:
 }
 
 func TestToolResultSnippetsPreserveReturnedWhitespace(t *testing.T) {
-	snippets := toolResultSnippets("read_artifact", map[string]interface{}{"content": "  ERROR\n"})
+	snippets := toolResultSnippets("read_artifact", map[string]any{"content": "  ERROR\n"})
 	if len(snippets) != 1 || snippets[0] != "  ERROR\n" {
 		t.Fatalf("read snippet = %q", snippets)
 	}
-	grep := toolResultSnippets("grep_artifact", map[string]interface{}{"matches": []map[string]interface{}{{"context": []string{"> 4:   ERROR"}}}})
+	grep := toolResultSnippets("grep_artifact", map[string]any{"matches": []map[string]any{{"context": []string{"> 4:   ERROR"}}}})
 	if len(grep) != 1 || grep[0] != "  ERROR" {
 		t.Fatalf("grep snippet = %q", grep)
 	}
@@ -3944,7 +3944,7 @@ func TestRepoToolReadDoesNotCountAsGCSEvidence(t *testing.T) {
 		opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now(),
 		readArtifactsFull: map[string]bool{}, readArtifactsBase: map[string]bool{},
 	}
-	arguments, _ := json.Marshal(map[string]interface{}{"source_id": tools.PrimarySourceID, "path": "test/e2e/capi_test.go"})
+	arguments, _ := json.Marshal(map[string]any{"source_id": tools.PrimarySourceID, "path": "test/e2e/capi_test.go"})
 	dispatchAgenticTool(context.Background(), state, transport.ToolCall{ID: "repo", Type: "function", Function: transport.FunctionCall{Name: "read_repo_file", Arguments: string(arguments)}})
 	if state.gcsBytes != 0 {
 		t.Fatalf("repo bytes counted as GCS: %d", state.gcsBytes)
@@ -3961,11 +3961,11 @@ func TestAgenticForcedFinalizeUsesExactAnalysisFunction(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal("not json"))
-	srv.push(200, chatRespToolCall("submit", analysisFinalizeToolName, map[string]interface{}{
+	srv.push(200, chatRespToolCall("submit", analysisFinalizeToolName, map[string]any{
 		"summary": "structured", "is_transient": false,
 		"root_cause": "controller configuration mismatch", "severity": "High",
 		"suggested_fix":  "Update the controller configuration.",
-		"relevant_files": []string{}, "search_suggestions": []string{}, "evidence_citations": []interface{}{},
+		"relevant_files": []string{}, "search_suggestions": []string{}, "evidence_citations": []any{},
 	}))
 
 	in := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
@@ -4010,8 +4010,8 @@ func TestAgenticToolBearingStructuredDraftSurvivesInvalidFinalize(t *testing.T) 
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
-	srv.push(200, chatRespToolCallWithContent(fallback, "read", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
-	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCallWithContent(fallback, "read", "read_artifact", map[string]any{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]any{"path": "build-log.txt"}))
 
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
@@ -4047,7 +4047,7 @@ func TestAgenticFinalizeUnexpectedToolCallRetainsDraft(t *testing.T) {
 	srv := newScriptedChatServer(t)
 	fallback := `{"summary":"fallback","is_transient":false,"root_cause":"controller configuration mismatch","severity":"High","suggested_fix":"Update the controller configuration.","relevant_files":[]}`
 	srv.push(200, chatRespFinal(fallback))
-	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]any{"path": "build-log.txt"}))
 
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
@@ -4084,7 +4084,7 @@ func TestAgenticFinalizeUnexpectedToolCallRejectsWithoutDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	srv.push(200, chatRespFinal("not json"))
-	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("unexpected", "read_artifact", map[string]any{"path": "build-log.txt"}))
 
 	store := NewTraceStore()
 	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
@@ -4263,9 +4263,9 @@ const missingCitationRepairedJSON = `{"summary":"deep","is_transient":false,"roo
 func TestAgentic_MissingCitationRepairsFromReadEvidence(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+	srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 	srv.push(200, chatRespFinal(missingCitationFinalJSON))
-	srv.push(200, chatRespToolCall("c2", "grep_artifact", map[string]interface{}{
+	srv.push(200, chatRespToolCall("c2", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
 	}))
 	srv.push(200, chatRespFinal(missingCitationRepairedJSON))
@@ -4305,7 +4305,7 @@ func TestAgentic_MissingCitationPublicationPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			shrinkCallDelay(t)
 			srv := newScriptedChatServer(t)
-			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 			srv.push(200, chatRespFinal(missingCitationFinalJSON))
 			client := newAgenticTestClient(t, srv.URL)
 			browser := &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}
@@ -4337,7 +4337,7 @@ func TestAgentic_SynthesizedFallbackMissingCitationPolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			shrinkCallDelay(t)
 			srv := newScriptedChatServer(t)
-			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]interface{}{"path": "build-log.txt"}))
+			srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
 			srv.push(200, chatRespFinal("unparseable causal claim"))
 			srv.push(200, chatRespFinal("still unparseable causal claim"))
 			client := newAgenticTestClient(t, srv.URL)
@@ -4439,7 +4439,7 @@ func TestRepoReadsObserveAllSourcesButOnlyPrimaryGroundsProjectPaths(t *testing.
 		sourceObserver: func(value SourceEvidenceObservation) { observations = append(observations, value) },
 	}
 	call := func(sourceID string) {
-		arguments, _ := json.Marshal(map[string]interface{}{"source_id": sourceID, "path": "same.go"})
+		arguments, _ := json.Marshal(map[string]any{"source_id": sourceID, "path": "same.go"})
 		dispatchAgenticTool(context.Background(), state, transport.ToolCall{ID: sourceID, Type: "function", Function: transport.FunctionCall{Name: "read_repo_file", Arguments: string(arguments)}})
 	}
 	call("dependency")

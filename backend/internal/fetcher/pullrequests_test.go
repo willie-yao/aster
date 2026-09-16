@@ -342,7 +342,7 @@ func TestBaseBranchFlakinessSurvivesPresubmitRanking(t *testing.T) {
 	now := time.Now().UTC()
 	flaky := func(name string) []models.BuildResult {
 		var runs []models.BuildResult
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			status := "passed"
 			if i%2 == 0 {
 				status = "failed"
@@ -357,7 +357,7 @@ func TestBaseBranchFlakinessSurvivesPresubmitRanking(t *testing.T) {
 	// One periodic flake, plus enough presubmit flakes to fill the ranked report.
 	jobs := []models.ProwJob{{Name: basePeriodic, JobID: basePeriodic, JobType: models.JobTypePeriodic}}
 	results := map[string][]models.BuildResult{basePeriodic: flaky(flakyTest)}
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		name := fmt.Sprintf("pull-project-e2e-%02d", i)
 		id := models.JobIDFor(models.JobTypePresubmit, "example/project", name)
 		jobs = append(jobs, models.ProwJob{Name: name, JobID: id, JobType: models.JobTypePresubmit, Repo: "example/project"})

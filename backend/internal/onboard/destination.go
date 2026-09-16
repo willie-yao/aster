@@ -185,7 +185,7 @@ func inspectDestinationParents(outDir, rel string) error {
 	if parent == "." {
 		return nil
 	}
-	for _, part := range strings.Split(parent, "/") {
+	for part := range strings.SplitSeq(parent, "/") {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if os.IsNotExist(err) {
@@ -356,7 +356,7 @@ func ensureDestinationParents(root *os.Root, rel string) error {
 		return nil
 	}
 	current := ""
-	for _, part := range strings.Split(parent, "/") {
+	for part := range strings.SplitSeq(parent, "/") {
 		if current == "" {
 			current = part
 		} else {
@@ -426,7 +426,7 @@ func createFileExclusive(root *os.Root, filename string, content []byte) error {
 
 func replaceFileAtomic(root *os.Root, filename string, content []byte) error {
 	parent := path.Dir(filename)
-	for attempt := 0; attempt < 10; attempt++ {
+	for range 10 {
 		var suffix [8]byte
 		if _, err := rand.Read(suffix[:]); err != nil {
 			return err

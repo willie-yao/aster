@@ -19,9 +19,7 @@ func TestWithLockSerializesConcurrentReadModifyWrite(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for _, key := range []string{"a", "b", "c", "d"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			err := WithLock(path, func() error {
 				state := Load[string](path, "owner/repo", "test")
 				state.Tracked[key] = key
@@ -30,7 +28,7 @@ func TestWithLockSerializesConcurrentReadModifyWrite(t *testing.T) {
 			if err != nil {
 				t.Errorf("WithLock(%s): %v", key, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

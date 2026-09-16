@@ -460,7 +460,7 @@ func rejectSymlinkPath(root, path string, allowMissing bool) error {
 		return fmt.Errorf("path escapes project directory")
 	}
 	current := root
-	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if part == "." || part == "" {
 			continue
 		}
@@ -549,7 +549,7 @@ func rejectCredentialMaterial(label string, data []byte) error {
 	if gitOpsLocalPathPattern.Match(data) {
 		return fmt.Errorf("%s contains a local workstation or kubeconfig path", label)
 	}
-	for _, field := range strings.Fields(string(data)) {
+	for field := range strings.FieldsSeq(string(data)) {
 		if !strings.Contains(field, "://") {
 			continue
 		}
@@ -955,7 +955,7 @@ func inspectRootParents(root *os.Root, filename string) error {
 		return nil
 	}
 	current := ""
-	for _, part := range strings.Split(parent, "/") {
+	for part := range strings.SplitSeq(parent, "/") {
 		current = path.Join(current, part)
 		info, err := root.Lstat(current)
 		if os.IsNotExist(err) {
@@ -1004,7 +1004,7 @@ func writeRootFile(root *os.Root, filename string, data []byte, replace bool) er
 		return file.Close()
 	}
 	parent := path.Dir(filename)
-	for attempt := 0; attempt < 10; attempt++ {
+	for range 10 {
 		var suffix [8]byte
 		if _, err := rand.Read(suffix[:]); err != nil {
 			return err

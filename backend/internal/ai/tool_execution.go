@@ -27,11 +27,11 @@ func dispatchAgenticTool(ctx context.Context, s *agentState, tc transport.ToolCa
 }
 
 // dispatchAgenticToolWithPayload also returns the uncapped structured payload.
-func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc transport.ToolCall) (string, map[string]interface{}) {
+func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc transport.ToolCall) (string, map[string]any) {
 	s.calls++
 	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
 		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
-		payload := map[string]interface{}{"error": message}
+		payload := map[string]any{"error": message}
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled", Grep: undispatchedGrepObservation(tc)})
 		return toolErrJSON(message), payload
 	}
@@ -39,14 +39,14 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc trans
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "model byte budget exhausted; produce final JSON now"
-		payload := map[string]interface{}{"error": message}
+		payload := map[string]any{"error": message}
 		return toolErrJSON(message), payload
 	}
 	if !isRepoTool(tc.Function.Name) && s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "GCS byte budget exhausted; produce final JSON now"
-		payload := map[string]interface{}{"error": message}
+		payload := map[string]any{"error": message}
 		return toolErrJSON(message), payload
 	}
 
@@ -239,8 +239,8 @@ func (s *agentState) recordAnalysisEvidenceRevisions(rawPath string, before map[
 	}
 }
 
-func modelVisibleToolPayload(envelope string) map[string]interface{} {
-	var payload map[string]interface{}
+func modelVisibleToolPayload(envelope string) map[string]any {
+	var payload map[string]any
 	if json.Unmarshal([]byte(envelope), &payload) != nil {
 		return nil
 	}
@@ -285,7 +285,7 @@ func emitSourceEvidenceObservations(observer SourceEvidenceObserver, tool string
 	}
 }
 
-func visibleRepoReadPaths(tc transport.ToolCall, payload map[string]interface{}) []string {
+func visibleRepoReadPaths(tc transport.ToolCall, payload map[string]any) []string {
 	if payload == nil {
 		return nil
 	}
@@ -299,9 +299,9 @@ func visibleRepoReadPaths(tc transport.ToolCall, payload map[string]interface{})
 	case "grep_repo":
 		seen := map[string]bool{}
 		var out []string
-		if matches, ok := payload["matches"].([]interface{}); ok {
+		if matches, ok := payload["matches"].([]any); ok {
 			for _, raw := range matches {
-				match, _ := raw.(map[string]interface{})
+				match, _ := raw.(map[string]any)
 				p, _ := match["path"].(string)
 				if p != "" && !seen[p] {
 					seen[p] = true
@@ -346,7 +346,7 @@ func extractToolPathArg(raw string) string {
 // toolResultSnippets extracts bounded positive evidence from filesystem reads.
 // Each grep match remains a separate snippet so distant hits cannot fabricate
 // regex adjacency.
-func toolResultSnippets(name string, payload map[string]interface{}) []string {
+func toolResultSnippets(name string, payload map[string]any) []string {
 	switch name {
 	case "read_artifact", "tail_artifact":
 		if content := flattenToolContent(payload["content"]); content != "" {
@@ -355,15 +355,15 @@ func toolResultSnippets(name string, payload map[string]interface{}) []string {
 	case "grep_artifact":
 		var sections []string
 		switch matches := payload["matches"].(type) {
-		case []map[string]interface{}:
+		case []map[string]any:
 			for _, match := range matches {
 				if content := flattenGrepContext(match["context"]); content != "" {
 					sections = append(sections, content)
 				}
 			}
-		case []interface{}:
+		case []any:
 			for _, raw := range matches {
-				match, _ := raw.(map[string]interface{})
+				match, _ := raw.(map[string]any)
 				if content := flattenGrepContext(match["context"]); content != "" {
 					sections = append(sections, content)
 				}
@@ -376,7 +376,7 @@ func toolResultSnippets(name string, payload map[string]interface{}) []string {
 
 var grepContextLineRE = regexp.MustCompile(`^[> ]\s*\d+:\s?(.*)$`)
 
-func flattenGrepContext(value interface{}) string {
+func flattenGrepContext(value any) string {
 	switch context := value.(type) {
 	case string:
 		if match := grepContextLineRE.FindStringSubmatch(context); len(match) == 2 {
@@ -397,7 +397,7 @@ func flattenGrepContext(value interface{}) string {
 			}
 		}
 		return strings.Join(sections, "\n")
-	case []interface{}:
+	case []any:
 		var sections []string
 		for _, item := range context {
 			if content := flattenGrepContext(item); content != "" {
@@ -409,7 +409,7 @@ func flattenGrepContext(value interface{}) string {
 	return ""
 }
 
-func flattenToolContent(value interface{}) string {
+func flattenToolContent(value any) string {
 	switch content := value.(type) {
 	case string:
 		if strings.TrimSpace(content) == "" {
@@ -424,7 +424,7 @@ func flattenToolContent(value interface{}) string {
 			}
 		}
 		return strings.Join(sections, "\n")
-	case []interface{}:
+	case []any:
 		var sections []string
 		for _, item := range content {
 			if section := flattenToolContent(item); section != "" {
@@ -522,7 +522,7 @@ func canonicalTrackedArtifactPath(rawPath string) (string, string) {
 	return casePath, NormalizeArtifactCitation(casePath)
 }
 
-func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[string]interface{}, observation any) bool {
+func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[string]any, observation any) bool {
 	if payload == nil || s.sources == nil {
 		return false
 	}
@@ -653,7 +653,7 @@ func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[stri
 	return true
 }
 
-func toolEnvelopeJSON(s *agentState, payload map[string]interface{}) string {
+func toolEnvelopeJSON(s *agentState, payload map[string]any) string {
 	payload["remaining_model_bytes"] = s.modelRemaining()
 	payload["remaining_gcs_bytes"] = s.gcsRemaining()
 	payload["elapsed_seconds"] = int(time.Since(s.startTime).Seconds())

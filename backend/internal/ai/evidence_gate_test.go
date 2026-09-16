@@ -54,9 +54,9 @@ func TestAgentic_EvidenceGateReopensFinalizeWithUnreadPlannedGroup(t *testing.T)
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, final)
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/beta.log"}))
 	srv.push(200, final)
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -105,8 +105,8 @@ func TestAgentic_EvidenceGateReservesFinalIterationBeforeForcedFinalize(t *testi
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion and beta.log shows the skewed client version","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/beta.log"}))
 	srv.push(200, final)
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -152,8 +152,8 @@ func TestAgentic_EvidenceGateRecordsIterationExhaustion(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/gamma.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/gamma.log"}))
 	srv.push(200, final)
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -188,8 +188,8 @@ func TestAgentic_EvidenceGateRecordsIterationExhaustion(t *testing.T) {
 func TestAgentic_EvidenceGateLeavesEarlyFinalizeUnchanged(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/beta.log"}))
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion and beta.log shows the skewed client version","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`))
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -229,8 +229,8 @@ func TestAgentic_EvidenceGateLeavesEarlyFinalizeUnchanged(t *testing.T) {
 func TestAgentic_ToolEnvelopeReportsUnreadEvidenceGroups(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/beta.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/beta.log"}))
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`))
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -287,9 +287,9 @@ func TestAgentic_EvidenceGateCoversDraftTriggeredGroups(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"a version skew between the client and the test","severity":"High","suggested_fix":"Pin the client version and rerun.","relevant_files":[],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, final)
-	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]interface{}{"path": "logs/gamma.log"}))
+	srv.push(200, chatRespToolCall("call_2", "read_artifact", map[string]any{"path": "logs/gamma.log"}))
 	srv.push(200, final)
 
 	browser := &fakeBrowser{files: map[string][]byte{
@@ -358,7 +358,7 @@ func TestAgentic_EvidenceGatePreservesTheBetterPreNudgeDraft(t *testing.T) {
 	// The reopened answer changes the diagnosis without reading anything new and
 	// cites an artifact it never opened.
 	weaker := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"logs/never-read.log proves a networking fault","severity":"High","suggested_fix":"Restart the network plugin.","relevant_files":["logs/never-read.log"],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, grounded)
 	srv.push(200, weaker)
 
@@ -382,7 +382,7 @@ func TestAgentic_EvidenceGatePreservesTheBetterPreNudgeDraft(t *testing.T) {
 func TestAgentic_ModelErrorAfterDraftPublishesRetainedDraft(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"logs/alpha.log line 1 shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`))
 	srv.push(503, `{"error":{"message":"upstream unavailable"}}`)
 
@@ -427,7 +427,7 @@ func TestAgentic_EvidenceGateStopsWhenModelMakesNoProgress(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
 	final := chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, final)
 	srv.push(200, final)
 
@@ -463,7 +463,7 @@ func TestAgentic_EvidenceGateStopsWhenModelMakesNoProgress(t *testing.T) {
 func TestAgentic_EvidenceGateIgnoresUnavailableGroups(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
-	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]interface{}{"path": "logs/alpha.log"}))
+	srv.push(200, chatRespToolCall("call_1", "read_artifact", map[string]any{"path": "logs/alpha.log"}))
 	srv.push(200, chatRespFinal(`{"summary":"s","is_transient":false,"root_cause":"alpha.log shows the failing assertion","severity":"High","suggested_fix":"Correct the assertion and rerun.","relevant_files":[],"evidence_citations":[]}`))
 
 	browser := &fakeBrowser{files: map[string][]byte{"logs/alpha.log": []byte("failing assertion\n")}}

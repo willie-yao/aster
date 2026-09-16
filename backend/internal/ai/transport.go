@@ -158,9 +158,7 @@ func continuationCalls(api string, message transport.Message, kept []transport.T
 	}
 	skipped := make([]transport.Message, 0, len(message.ToolCalls)-len(kept))
 	for _, call := range message.ToolCalls[len(kept):] {
-		skipped = append(skipped, transport.Message{Role: "tool", ToolCallID: call.ID, Content: strPtr(`{"error":"skipped by single_tool_call; request again if still needed"}`)})
+		skipped = append(skipped, transport.Message{Role: "tool", ToolCallID: call.ID, Content: new(`{"error":"skipped by single_tool_call; request again if still needed"}`)})
 	}
 	return message.ToolCalls, skipped
 }
-
-func strPtr(s string) *string { return &s }

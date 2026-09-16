@@ -477,7 +477,7 @@ func (s *Service[R, W]) Get(ref R) (View[R], error) {
 	// record underneath it. Each pass validates the record it actually read: a
 	// replacement is re-validated rather than trusted, because a completed
 	// result is terminal for the caller and would never be checked again.
-	for attempt := 0; attempt < maxGetRevalidations; attempt++ {
+	for range maxGetRevalidations {
 		s.mu.Lock()
 		rec := s.records[identity]
 		if rec == nil {

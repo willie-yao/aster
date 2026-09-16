@@ -582,8 +582,18 @@ def self_test() -> None:
     if "bash hack/test-release-cli-assets.sh" not in backend_job:
         raise AssertionError("backend job does not run the release CLI asset contract")
     benchmarks_job = workflow[benchmarks_start:frontend_start]
-    if "go test ./... -count=1" not in benchmarks_job:
-        raise AssertionError("benchmark job does not run provider-free harness tests")
+    for name, job, lint_target in (
+        ("backend", backend_job, "lint"),
+        ("benchmark", benchmarks_job, "lint-benchmarks"),
+    ):
+        for command in (
+            "go test ./... -race -count=1",
+            "go mod tidy -diff",
+            "make fmt-check",
+            f"make {lint_target}",
+        ):
+            if f"run: {command}\n" not in job:
+                raise AssertionError(f"{name} job does not run {command}")
     for gate in ("RUN_AI_BENCHMARK", "RUN_CAUSE_RESOLUTION_BENCHMARK", "RUN_BENCHMARK_FIXTURE_VALIDATION"):
         if f'{gate}: ""' not in benchmarks_job:
             raise AssertionError(f"benchmark job does not disable {gate}")

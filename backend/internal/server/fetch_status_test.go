@@ -186,7 +186,7 @@ func TestFetchStatusEndpointReturnsOnlyRecentPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := fetchprogress.History{SchemaVersion: fetchprogress.HistorySchemaVersion}
-	for i := 0; i < fetchStatusRecentPassLimit+2; i++ {
+	for i := range fetchStatusRecentPassLimit + 2 {
 		history.Passes = append(history.Passes, fetchprogress.PassSummary{
 			RunID: "safe-run", PassID: fmt.Sprintf("pass-%02d", i), PassType: fetchprogress.PassLightweightWatch,
 			StartedAt: now.Add(time.Duration(i) * time.Minute), CompletedAt: now.Add(time.Duration(i)*time.Minute + time.Second),
