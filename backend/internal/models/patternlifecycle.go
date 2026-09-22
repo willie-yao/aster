@@ -20,11 +20,6 @@ func PatternIsActive(pattern PatternAnalysis) bool {
 	return pattern.Lifecycle == nil || pattern.Lifecycle.State == PatternLifecycleActive
 }
 
-// PatternIsRecovered reports observation-only recovery without source proof.
-func PatternIsRecovered(pattern PatternAnalysis) bool {
-	return pattern.Lifecycle != nil && pattern.Lifecycle.State == PatternLifecycleRecovered
-}
-
 // RefreshRetainedPatternLifecycle updates observation state while preserving a
 // prior model verdict whose correlated failure may have left the current window.
 func RefreshRetainedPatternLifecycle(detail JobDetail, pattern *PatternAnalysis) {
