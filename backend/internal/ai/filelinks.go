@@ -119,14 +119,6 @@ func NewFileLinkResolver(owner, repo string, token ...string) *FileLinkResolver 
 	return r
 }
 
-// Resolve returns the verified source-file links for one accepted analysis.
-func (r *FileLinkResolver) Resolve(ctx context.Context, client *http.Client, tc *models.TestCase) map[string]string {
-	if r == nil {
-		return map[string]string{}
-	}
-	return r.service.resolveFileLinks(ctx, client, tc)
-}
-
 // ResolveAtRef verifies source links at one immutable build commit.
 func (r *FileLinkResolver) ResolveAtRef(ctx context.Context, client *http.Client, tc *models.TestCase, ref string) map[string]string {
 	if r == nil {

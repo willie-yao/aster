@@ -53,18 +53,6 @@ func AnalysisDisposition(analysis *models.AIAnalysis) (string, []string) {
 	return models.AnalysisDispositionPreliminary, codes
 }
 
-// StampAnalysisDisposition records the current deterministic publication state.
-// It returns false when the analysis must remain unavailable.
-func StampAnalysisDisposition(analysis *models.AIAnalysis) bool {
-	disposition, warnings := AnalysisDisposition(analysis)
-	if disposition == "" {
-		return false
-	}
-	analysis.Disposition = disposition
-	analysis.DispositionWarnings = warnings
-	return true
-}
-
 // AnalysisCitationsVerified reports whether an analysis has passed the current
 // deterministic citation contract. An unstamped or unrecognized disposition
 // must be refreshed before it regains action eligibility.

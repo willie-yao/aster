@@ -10,10 +10,11 @@ import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useColorScheme, useTheme } from "@mui/material/styles";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
+import { LoadingState } from "./LoadingState";
 import { ProfileMenu } from "./ProfileMenu";
 import { FetchStatusControl, FetchStatusStrip } from "./FetchStatus";
 import { AsterMark } from "./AsterMark";
@@ -229,7 +230,9 @@ export function Layout() {
         }}
       >
         <RouteErrorBoundary resetKey={`${location.pathname}${location.search}`}>
-          <Outlet />
+          <Suspense fallback={<Box role="status" aria-label="Loading page"><LoadingState /></Box>}>
+            <Outlet />
+          </Suspense>
         </RouteErrorBoundary>
       </Container>
       </Box>

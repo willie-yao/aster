@@ -37,7 +37,7 @@ export class RouteErrorBoundary extends Component<
         <Box role="alert">
           <ErrorState
             title="Page unavailable"
-            message="This page could not render the published data."
+            message="This page could not load or render. Reload to try again."
             onRetry={() => window.location.reload()}
           />
         </Box>

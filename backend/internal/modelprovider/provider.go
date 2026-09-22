@@ -277,20 +277,6 @@ func (g CredentialGuard) CheckStrings(values ...string) error {
 	return nil
 }
 
-// CheckBytes rejects any exact provider credential in output-bound bytes.
-func (g CredentialGuard) CheckBytes(values ...[]byte) error {
-	if g.value == "" {
-		return nil
-	}
-	needle := []byte(g.value)
-	for _, value := range values {
-		if bytes.Contains(value, needle) {
-			return ErrCredentialExposure
-		}
-	}
-	return nil
-}
-
 // SanitizeReason returns a fixed reason instead of credential-bearing text.
 func (g CredentialGuard) SanitizeReason(value string) string {
 	if g.CheckStrings(value) != nil {

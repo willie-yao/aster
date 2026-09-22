@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -91,28 +90,6 @@ func Run(ctx context.Context, opts Options, out io.Writer, newPrompter func() Pr
 	deps := defaultDependencies(opts, out)
 	deps.newPrompter = newPrompter
 	return run(ctx, opts, deps)
-}
-
-// BuildPlan creates a validated, credential-free onboarding plan without applying it.
-func BuildPlan(ctx context.Context, opts Options) (*Plan, error) {
-	if err := normalizeRepositories(&opts); err != nil {
-		return nil, err
-	}
-	deps := defaultDependencies(opts, io.Discard)
-	plan, err := buildPlan(ctx, opts, planningContext{}, deps)
-	if err != nil {
-		return nil, err
-	}
-	if err := preflightPlan(plan, deps); err != nil {
-		return nil, err
-	}
-	return plan, nil
-}
-
-// Apply revalidates and applies a plan using the provided GitHub write token.
-func Apply(ctx context.Context, plan *Plan, githubToken string) error {
-	opts := Options{GitHubToken: githubToken}
-	return applyPlan(ctx, plan, githubToken, defaultDependencies(opts, os.Stdout))
 }
 
 func run(ctx context.Context, opts Options, deps dependencies) error {

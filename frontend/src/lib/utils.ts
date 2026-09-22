@@ -1,6 +1,6 @@
 import Box from "@mui/material/Box";
 import { createElement, type ElementType, type ReactElement } from "react";
-import type { JobSummary, PatternAnalysis } from "../types/dashboard";
+import type { JobSummary } from "../types/dashboard";
 import type { CategoryRule } from "../types/manifest";
 
 export function formatDuration(seconds: number): string {
@@ -38,27 +38,6 @@ export function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`;
 }
 
-type ConfidenceColor = "success" | "warning";
-
-export function confidenceColor(
-  confidence: PatternAnalysis["confidence"],
-  highColor: ConfidenceColor = "warning",
-): ConfidenceColor | undefined {
-  if (confidence === "high") return highColor;
-  if (confidence === "medium") return "warning";
-  return undefined;
-}
-
-export function meetsConfidenceFloor(
-  confidence: PatternAnalysis["confidence"],
-  minimum: string,
-): boolean {
-  const ranks: Record<string, number> = { low: 1, medium: 2, high: 3 };
-  const rank = ranks[confidence] ?? 0;
-  const floor = ranks[minimum.trim().toLowerCase()] ?? ranks.high;
-  return rank >= floor;
-}
-
 export function jobDataFilename(jobID: string): string {
   const bytes = new TextEncoder().encode(jobID);
   let binary = "";
@@ -73,17 +52,6 @@ export function groupByCategory(
   for (const job of jobs) {
     const cat = job.category || "other";
     (groups[cat] ??= []).push(job);
-  }
-  return groups;
-}
-
-export function groupByBranch(
-  jobs: JobSummary[]
-): Record<string, JobSummary[]> {
-  const groups: Record<string, JobSummary[]> = {};
-  for (const job of jobs) {
-    const branch = job.branch || "unknown";
-    (groups[branch] ??= []).push(job);
   }
   return groups;
 }

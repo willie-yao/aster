@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const dist = join(process.cwd(), "dist");
@@ -52,6 +52,22 @@ for (const [name, html] of [["index", index], ["404", fallback]]) {
   }
   const script = `spa-${name}-redirect.js`;
   assert.ok(readFileSync(join(dist, script), "utf8").trim(), `${script} must not be empty`);
+}
+
+const initialScripts = [
+  ...tags(index, "script").map(tag => attribute(tag, "src")),
+  ...tags(index, "link")
+    .filter(tag => attribute(tag, "rel") === "modulepreload")
+    .map(tag => attribute(tag, "href")),
+].filter(Boolean);
+const assets = readdirSync(join(dist, "assets"));
+for (const page of ["ActionRequestPage", "AIUsagePage", "JobDetailPage"]) {
+  const chunks = assets.filter(name => name.startsWith(`${page}-`) && name.endsWith(".js"));
+  assert.equal(chunks.length, 1, `${page} must have a deferred route chunk`);
+  assert.ok(
+    initialScripts.every(src => !src.endsWith(`/assets/${chunks[0]}`)),
+    `${page} must not load with the initial entry`,
+  );
 }
 
 console.log(`verified built SPA entries under ${base}`);

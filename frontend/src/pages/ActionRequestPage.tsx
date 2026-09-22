@@ -73,6 +73,10 @@ function ActionRequestPageFrame({
 
 export function ActionRequestPage() {
   const { requestID = "" } = useParams();
+  return <ActionRequestReview key={requestID} requestID={requestID} />;
+}
+
+function ActionRequestReview({ requestID }: { requestID: string }) {
   const navigate = useNavigate();
   const { features } = useCapabilities();
   const { status, signIn, login, mode } = useAuth();
@@ -88,6 +92,9 @@ export function ActionRequestPage() {
 
   useEffect(() => {
     activeRequestID.current = requestID;
+    return () => {
+      activeRequestID.current = "";
+    };
   }, [requestID]);
 
   useEffect(() => {
@@ -195,6 +202,7 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
+      if (activeRequestID.current !== startedRequestID) return;
       setError(
         refreshed?.status === "confirmed" ||
           (refreshed !== null && refreshed.id !== request.id)
@@ -202,7 +210,7 @@ export function ActionRequestPage() {
           : message,
       );
     } finally {
-      setConfirming(false);
+      if (activeRequestID.current === startedRequestID) setConfirming(false);
     }
   }
 
@@ -227,6 +235,7 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
+      if (activeRequestID.current !== startedRequestID) return;
       setError(
         refreshed?.status === "cancelled" ||
           refreshed?.status === "cancelling" ||
@@ -235,7 +244,7 @@ export function ActionRequestPage() {
           : message,
       );
     } finally {
-      setCancelling(false);
+      if (activeRequestID.current === startedRequestID) setCancelling(false);
     }
   }
 
@@ -269,11 +278,12 @@ export function ActionRequestPage() {
       if (activeRequestID.current !== startedRequestID) return;
       const message = e instanceof Error ? e.message : String(e);
       const refreshed = await refreshRequestState(request.id);
+      if (activeRequestID.current !== startedRequestID) return;
       setError(
         refreshed !== null && refreshed.id !== request.id ? null : message,
       );
     } finally {
-      setRefining(false);
+      if (activeRequestID.current === startedRequestID) setRefining(false);
     }
   }
 

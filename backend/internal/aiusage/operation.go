@@ -92,21 +92,6 @@ func ObserveModelRequestWithModelAndReasoningEffort(ctx context.Context, usage T
 	accumulateModelRequest(&op.usage, usage)
 }
 
-// AccumulateModelRequest adds one provider request to a detached operation.
-// It is used when encrypted analyzer traces are merged into the fetcher ledger.
-func AccumulateModelRequest(operation *OperationUsage, usage TokenUsage) {
-	if operation == nil {
-		return
-	}
-	operation.CoverageCountsKnown = true
-	if operation.UsageSource == "" {
-		operation.UsageSource = UsageSourceProviderResponse
-	} else if operation.UsageSource != UsageSourceProviderResponse {
-		operation.UsageSource = UsageSourceMixed
-	}
-	accumulateModelRequest(operation, usage)
-}
-
 func accumulateModelRequest(operation *OperationUsage, usage TokenUsage) {
 	if operation.ModelRequests == math.MaxInt {
 		incrementInvalidCount(&operation.UnreportedRequests)

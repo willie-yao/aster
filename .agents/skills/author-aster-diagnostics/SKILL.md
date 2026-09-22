@@ -115,7 +115,7 @@ Write concise operational rules grounded in the corpus and verified baseline pro
 
 Do not invent artifact paths or unavailable investigation capabilities. Separate initiating errors from terminal wrappers. Record transient status as `true`, `false`, or `unresolved`, with separate same-run and cross-run evidence arrays. Only same-run later success or forward progress can establish `true`. State the non-transient boundary and preserve an unresolved reason when evidence is insufficient.
 
-Validate the actual prompt with `promptauthor.Validate` in the disposable engine clone, then run `onboard doctor` against a disposable consumer copy.
+Review the actual prompt against the section list above: require each heading exactly once, in order, with substantive content rather than empty or unfinished placeholders. Ignore headings inside fenced code blocks and require matching closing fences. Run `wc -c prompts/system.md` in the disposable consumer copy and keep the prompt within 65,536 bytes. Then run `onboard doctor` against that copy for configuration and prompt-presence checks; it does not verify the structural rules above.
 
 ## 7. Run prompt-only validation and revision
 
