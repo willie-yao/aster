@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,7 +383,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		}
 		generation := analysisFailureForGeneration(current, input, "main", analysisFixRevision)
 		generated <- generation
-		if err := service.setRequestWarning(ctx, analysisQualityWarnings(current.Failure.AIAnalysis, input, current.SourceHints)...); err != nil {
+		if err := service.setRequestWarning(ctx, analysisQualityWarnings(input)...); err != nil {
 			return PreviewResult{}, err
 		}
 		fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
@@ -479,16 +480,78 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	}
 }
 
-func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
-	input := AnalysisFixInput{
-		Identity: exactIdentity(), ChatSessionID: "session", ChatRequestID: "request",
-		ChatResponseHash: "response", PreviewRequestHash: "preview", AnalysisContentHash: "analysis",
-		SourceRepository: sourceinvestigation.Repository{
-			Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision,
-		},
-		AssistantAnswer:     "Investigate whether reconciliation skips the terminal update.",
-		AssistantUnverified: true, AssistantUnverifiedReason: "no artifact access",
+func TestAnalysisFixUsesCapturedAnalysisAfterReanalysis(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	original := exactJUnitDetail()
+	analysis := original.Runs[0].TestCases[0].AIAnalysis
+	started, release := make(chan struct{}), make(chan struct{})
+	generated := make(chan struct {
+		failure  fixpr.AnalysisFailure
+		warnings []string
+	}, 1)
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, input AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return PreviewResult{}, ctx.Err()
+		}
+		subject, err := service.resolveAnalysisFixTarget(input, true)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		generated <- struct {
+			failure  fixpr.AnalysisFailure
+			warnings []string
+		}{analysisFailureForGeneration(subject, input, "main", analysisFixRevision), analysisQualityWarnings(input)}
+		return handoffTestPreview(t, service, input, owner, &calls)
 	}
+	request, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	regenerated := exactJUnitDetail()
+	regenerated.Runs[0].TestCases[0].AIAnalysis = &models.AIAnalysis{
+		GeneratedAt: "2026-08-14T01:00:00Z", RootCause: "new diagnosis", Severity: "Transient-Ignore",
+		SuggestedFix: "", CritiquePassed: false,
+	}
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(regenerated.JobID), regenerated)
+	close(release)
+	ready := waitRequest(t, service, request.ID, "alice", RequestReady)
+	if ready.Preview == nil || ready.Preview.Token == "" || calls.Load() != 1 {
+		t.Fatalf("captured generation request = %+v, calls = %d", ready, calls.Load())
+	}
+	got := <-generated
+	if got.failure.AnalysisGeneratedAt != analysis.GeneratedAt || got.failure.RootCause != analysis.RootCause ||
+		got.failure.SuggestedFix != analysis.SuggestedFix ||
+		!slices.Equal(got.failure.SourceHints, []string{"controllers/cluster_controller.go"}) ||
+		got.failure.FailureMessage != original.Runs[0].TestCases[0].FailureMessage ||
+		got.failure.FailureBody != original.Runs[0].TestCases[0].FailureBody {
+		t.Fatalf("generation did not use admitted context: %+v", got.failure)
+	}
+	if len(got.warnings) != 0 {
+		t.Fatalf("regenerated analysis changed warnings: %v", got.warnings)
+	}
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
+	input := exactAnalysisRequestInput()
+	input.AssistantAnswer = "Investigate whether reconciliation skips the terminal update."
+	input.AssistantUnverified, input.AssistantUnverifiedReason = true, "no artifact access"
+	if err := validateAnalysisFixCandidateInput(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAnalysisFixInput(input); err == nil {
+		t.Fatal("incomplete captured context was accepted")
+	}
+	testCase := exactJUnitDetail().Runs[0].TestCases[0]
+	input.FailureContentHash = models.TestFailureContentHash(testCase)
+	input.TargetAnalysis = analysisTargetSnapshot{GeneratedAt: testCase.AIAnalysis.GeneratedAt}
 	if err := validateAnalysisFixInput(input); err != nil {
 		t.Fatal(err)
 	}
@@ -504,13 +567,13 @@ func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
 }
 
 func TestAnalysisQualityWarningsPreserveWeakEvidenceSignals(t *testing.T) {
-	analysis := &models.AIAnalysis{Severity: "Transient-Ignore"}
-	warnings := analysisQualityWarnings(analysis, AnalysisFixInput{
+	warnings := analysisQualityWarnings(AnalysisFixInput{
+		TargetAnalysis:      analysisTargetSnapshot{Severity: "Transient-Ignore"},
 		AssistantAnswer:     "The selected hypothesis is nonempty.",
 		AssistantUnverified: true, AssistantUnverifiedReason: "tool budget ended",
 		ProposedRevision: &fixpr.RevisionContext{},
 		EvidenceWarnings: []string{"citation line range was unavailable"},
-	}, nil)
+	})
 	for _, warning := range []string{
 		analysisWarningCritique, analysisWarningSuggestedFix, analysisWarningRootCause,
 		analysisWarningTransient, analysisWarningProse, analysisWarningEvidenceQualified,

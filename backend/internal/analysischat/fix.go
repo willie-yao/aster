@@ -63,6 +63,67 @@ func ValidateFixOrigin(dataDir string, origin FixOrigin) error {
 	return nil
 }
 
+// ValidateAdmittedFixOrigin checks an admitted target without rebinding its analysis generation.
+func ValidateAdmittedFixOrigin(dataDir string, origin FixOrigin) error {
+	ref := origin.Analysis
+	ref.AnalysisGeneratedAt = ""
+	ref, err := normalizeAnalysisRef(ref)
+	if err != nil {
+		return err
+	}
+	if ref.Scope != ScopeTest && ref.Scope != ScopeCause {
+		return ErrAnalysisChanged
+	}
+	detail, err := loadJobDetail(dataDir, ref.JobID)
+	if err != nil {
+		return err
+	}
+	targetRef := origin.FixTarget
+	targetRef.AnalysisGeneratedAt = ""
+	targetRef, err = normalizeAnalysisRef(targetRef)
+	if err != nil || targetRef.Scope != ScopeTest || targetRef.JobID != ref.JobID || targetRef.JUnitFile == "" ||
+		targetRef.Source == models.TestCaseSourceBuild {
+		return ErrAnalysisChanged
+	}
+	if ref.Scope == ScopeTest {
+		if ref != targetRef {
+			return ErrAnalysisChanged
+		}
+	} else {
+		resolved, err := resolveFromDetail(ref, detail)
+		if err != nil {
+			return err
+		}
+		if resolved.pattern == nil || len(resolved.pattern.CausalGroups) != 1 ||
+			!slices.Contains(resolved.pattern.CausalGroups[0].Builds, targetRef.BuildID) ||
+			resolved.testCase.AIAnalysis == nil ||
+			!sameBoundAnalysisSnapshot(ScopeCause, origin.Original, analysisSnapshot(resolved.testCase.AIAnalysis)) {
+			return ErrAnalysisChanged
+		}
+	}
+	matches := 0
+	for _, run := range detail.Runs {
+		if run.BuildID != targetRef.BuildID || run.Passed {
+			continue
+		}
+		for _, testCase := range run.TestCases {
+			if strings.TrimSpace(testCase.Name) != targetRef.TestName ||
+				strings.TrimSpace(testCase.Source) != targetRef.Source ||
+				strings.TrimSpace(testCase.SuiteName) != targetRef.SuiteName ||
+				strings.TrimSpace(testCase.ClassName) != targetRef.ClassName ||
+				strings.TrimSpace(testCase.JUnitFile) != targetRef.JUnitFile ||
+				testCase.Status != "failed" {
+				continue
+			}
+			matches++
+		}
+	}
+	if matches != 1 {
+		return ErrAnalysisChanged
+	}
+	return nil
+}
+
 // FixCandidate is one selected successful answer.
 type FixCandidate struct {
 	SessionID                 string

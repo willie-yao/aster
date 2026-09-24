@@ -325,7 +325,10 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 	if err := s.requireFixActions(); err != nil {
 		return ActionRequestView{}, err
 	}
-	if err := validateAnalysisFixInput(input); err != nil {
+	if input.Version != 0 {
+		return ActionRequestView{}, ErrPreviewTargetChanged
+	}
+	if err := validateAnalysisFixCandidateInput(input); err != nil {
 		return ActionRequestView{}, err
 	}
 	if len(replacesRequestIDs) > 1 {
@@ -441,6 +444,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 
 func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 	clone := input
+	clone.SourceHints = slices.Clone(input.SourceHints)
 	clone.Origin.Original.RelevantFiles = slices.Clone(input.Origin.Original.RelevantFiles)
 	clone.ArtifactCitations = slices.Clone(input.ArtifactCitations)
 	clone.EvidenceWarnings = slices.Clone(input.EvidenceWarnings)
