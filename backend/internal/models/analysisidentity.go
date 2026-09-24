@@ -7,6 +7,19 @@ import (
 	"slices"
 )
 
+// TestFailureContentHash fingerprints the failed JUnit evidence without AI analysis.
+func TestFailureContentHash(testCase TestCase) string {
+	payload, _ := json.Marshal(struct {
+		Name, Source, SuiteName, ClassName, JUnitFile, Status string
+		FailureMessage, FailureBody, FailureLocation          string
+	}{
+		testCase.Name, testCase.Source, testCase.SuiteName, testCase.ClassName, testCase.JUnitFile, testCase.Status,
+		testCase.FailureMessage, testCase.FailureBody, testCase.FailureLocation,
+	})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
 // TestAnalysisContentHash fingerprints one published test analysis and its source evidence.
 func TestAnalysisContentHash(testCase TestCase) string {
 	analysis := testCase.AIAnalysis

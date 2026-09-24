@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		return preview, err
 	}
 	calls.Add(1)
-	subject, err := service.resolveAnalysisFixTarget(input)
+	subject, err := service.resolveAnalysisFixTarget(input, true)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -98,7 +99,7 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped}, Title: "fix: investigate terminal state", Description: "Investigative patch.", Body: "Investigative patch.",
 		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.SourceBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
 	})
-	fix.SetWarnings(analysisQualityWarnings(subject.Failure.AIAnalysis, input, subject.SourceHints))
+	fix.SetWarnings(analysisQualityWarnings(input))
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, fix: fix,
 		targetRepo: input.SourceRepository.Owner + "/" + input.SourceRepository.Name, targetConfig: input.TargetConfig,
@@ -364,7 +365,10 @@ func TestActionOwnedHandoffRechecksCauseBeyondRepresentativeJUnit(t *testing.T) 
 }
 
 func TestActionOwnedHandoffRejectsChangedPublicationAndSource(t *testing.T) {
-	for _, change := range []string{"analysis", "repository", "branch", "generation base", "destination"} {
+	for _, change := range []string{
+		"failure message", "failure body", "failure location", "status", "JUnit file",
+		"repository", "branch", "generation base", "destination",
+	} {
 		t.Run(change, func(t *testing.T) {
 			service, _ := analysisRequestTestService(t)
 			input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
@@ -373,8 +377,16 @@ func TestActionOwnedHandoffRejectsChangedPublicationAndSource(t *testing.T) {
 			}
 			detail := exactJUnitDetail()
 			switch change {
-			case "analysis":
-				detail.Runs[0].TestCases[0].AIAnalysis.SuggestedFix = "New investigation"
+			case "failure message":
+				detail.Runs[0].TestCases[0].FailureMessage = "new JUnit failure"
+			case "failure body":
+				detail.Runs[0].TestCases[0].FailureBody = "new JUnit body"
+			case "failure location":
+				detail.Runs[0].TestCases[0].FailureLocation = "controller.go:42"
+			case "status":
+				detail.Runs[0].TestCases[0].Status = "passed"
+			case "JUnit file":
+				detail.Runs[0].TestCases[0].JUnitFile = "other.xml"
 			case "repository":
 				detail.Runs[0].RepoRefs = map[string]string{"other/repo": "main:" + analysisFixRevision}
 			case "branch":
@@ -392,9 +404,57 @@ func TestActionOwnedHandoffRejectsChangedPublicationAndSource(t *testing.T) {
 	}
 }
 
+func TestActionOwnedHandoffSurvivesReanalysis(t *testing.T) {
+	for _, scope := range []string{"test", "cause"} {
+		t.Run(scope, func(t *testing.T) {
+			service, _ := analysisRequestTestService(t)
+			detail := exactJUnitDetail()
+			var input AnalysisFixInput
+			if scope == "cause" {
+				detail, input = causeHandoff(t, service)
+			} else {
+				var err error
+				input, err = service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			original, err := service.resolveAnalysisFixTarget(input, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := analysisPreviewGenerationHash(original, input.HandoffHash, input.SourceRepository, input.SourceBranch, input.GenerationBaseRevision, input.TargetConfig)
+			failure := &detail.Runs[0].TestCases[0]
+			failure.AIAnalysis.GeneratedAt = "2026-08-14T01:00:00Z"
+			failure.AIAnalysis.RootCause = "A different preliminary diagnosis"
+			failure.AIAnalysis.SuggestedFix = "Different suggestion"
+			failure.AIAnalysis.CritiquePassed = false
+			failure.AIAnalysis.FileLinks = nil
+			writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+			after, err := service.resolveAnalysisFixTarget(input, true)
+			if err != nil {
+				t.Fatalf("admitted target after reanalysis: %v", err)
+			}
+			if !slices.Equal(after.SourceHints, input.SourceHints) || after.ContentHash != original.ContentHash ||
+				analysisPreviewGenerationHash(after, input.HandoffHash, input.SourceRepository, input.SourceBranch, input.GenerationBaseRevision, input.TargetConfig) != before {
+				t.Fatal("regenerated analysis changed captured generation inputs")
+			}
+			if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: &input}); err != nil {
+				t.Fatalf("admitted validation after reanalysis: %v", err)
+			}
+			failure.AIAnalysis = nil
+			writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+			if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: &input}); err != nil {
+				t.Fatalf("admitted validation without current analysis: %v", err)
+			}
+		})
+	}
+}
+
 func TestAnalysisFixRejectsStaleResultBeforeReady(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	detail, input := causeHandoff(t, service)
+	input.Version = 0
 	var calls atomic.Int32
 	produced, release := make(chan struct{}), make(chan struct{})
 	service.analysisRequestGenerator = func(ctx context.Context, input AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
@@ -427,6 +487,138 @@ func TestAnalysisFixRejectsStaleResultBeforeReady(t *testing.T) {
 	}
 }
 
+func TestAnalysisFixReanalysisDuringGenerationStaysReady(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	input := exactAnalysisRequestInput()
+	var calls atomic.Int32
+	produced, release := make(chan struct{}), make(chan struct{})
+	service.analysisRequestGenerator = func(ctx context.Context, handoff AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
+		preview, err := handoffTestPreview(t, service, handoff, owner, &calls)
+		close(produced)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return PreviewResult{}, ctx.Err()
+		}
+		return preview, err
+	}
+	request, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-produced
+	detail := exactJUnitDetail()
+	detail.Runs[0].TestCases[0].AIAnalysis.GeneratedAt = "2026-08-14T01:00:00Z"
+	detail.Runs[0].TestCases[0].AIAnalysis.RootCause = "new diagnosis"
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+	close(release)
+	ready := waitRequest(t, service, request.ID, "alice", RequestReady)
+	if ready.Preview == nil || ready.Preview.Token != idempotentPreviewToken("alice", AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, "")) || calls.Load() != 1 {
+		t.Fatalf("reanalysis during generation: %+v calls=%d", ready, calls.Load())
+	}
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnalysisFixConfirmationAllowsReanalysis(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	preview, err := handoffTestPreview(t, service, input, "alice", &calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := exactJUnitDetail()
+	detail.Runs[0].TestCases[0].AIAnalysis = &models.AIAnalysis{
+		GeneratedAt: "2026-08-14T01:00:00Z", RootCause: "new diagnosis",
+		SuggestedFix: "different proposal", Severity: "Transient-Ignore",
+	}
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+	entry, url, attempt, reconcile, err := service.beginConfirm("alice", preview.Token, time.Minute)
+	if err != nil || url != "" || reconcile {
+		t.Fatalf("confirmation start = %q, reconcile=%t, err=%v", url, reconcile, err)
+	}
+	if _, err := validatedPreviewEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAnalysisPreviewEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); err != nil {
+		t.Fatalf("regenerated analysis rejected at confirmation: %v", err)
+	}
+	detail.Runs[0].TestCases[0].FailureMessage = "different JUnit evidence"
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+	if _, err := validatedPreviewEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAnalysisPreviewEntry(entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed JUnit evidence at confirmation = %v", err)
+	}
+	detail.Runs[0].TestCases[0].FailureMessage = exactJUnitDetail().Runs[0].TestCases[0].FailureMessage
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+	if err := service.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); err != nil {
+		t.Fatalf("restored JUnit evidence at confirmation: %v", err)
+	}
+	const resultURL = "https://github.com/example/repo/pull/1"
+	if err := service.finishConfirm("alice", preview.Token, attempt, resultURL, nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		got, err := service.Confirm(t.Context(), preview.Token, "alice", "token")
+		if err != nil || got != resultURL {
+			t.Fatalf("confirmed receipt = %q, %v", got, err)
+		}
+	}
+	if _, got, _, _, err := service.beginConfirm("alice", preview.Token, time.Minute); err != nil || got != resultURL {
+		t.Fatalf("receipt changed for preview token %q: %q %v", preview.Token, got, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("confirmation regenerated a patch: %d", calls.Load())
+	}
+}
+
+func TestAnalysisFixCapturesBoundedTargetAnalysis(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	detail := exactJUnitDetail()
+	analysis := detail.Runs[0].TestCases[0].AIAnalysis
+	analysis.RootCause = strings.Repeat("r", 40<<10)
+	analysis.SuggestedFix = strings.Repeat("s", 20<<10)
+	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
+	_, input := capturedHandoff(t, service, time.Now)
+	input.AnalysisContentHash = models.TestAnalysisContentHash(detail.Runs[0].TestCases[0])
+	admitted, err := service.prepareAnalysisFix(t.Context(), input, "alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(admitted.TargetAnalysis.RootCause); got != 32<<10 {
+		t.Fatalf("captured root cause length = %d", got)
+	}
+	if got := len(admitted.TargetAnalysis.SuggestedFix); got != 16<<10 {
+		t.Fatalf("captured suggested fix length = %d", got)
+	}
+	if !strings.HasSuffix(admitted.TargetAnalysis.RootCause, "…") ||
+		!strings.HasSuffix(admitted.TargetAnalysis.SuggestedFix, "…") {
+		t.Fatal("captured analysis was not truncated")
+	}
+	if admitted.FailureContentHash != models.TestFailureContentHash(detail.Runs[0].TestCases[0]) ||
+		!slices.Equal(admitted.SourceHints, []string{"controllers/cluster_controller.go"}) {
+		t.Fatal("captured JUnit evidence or verified source hints differ from admission")
+	}
+	cloned := cloneAnalysisFixInput(admitted)
+	cloned.SourceHints[0] = "other.go"
+	if admitted.SourceHints[0] != "controllers/cluster_controller.go" {
+		t.Fatal("cloning a handoff changed its source hints")
+	}
+}
+
 func TestAnalysisFixHandoffRejectsTamperingAndIncompleteState(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
@@ -434,8 +626,12 @@ func TestAnalysisFixHandoffRejectsTamperingAndIncompleteState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*AnalysisFixInput){
-		func(i *AnalysisFixInput) { i.Version-- },
+		func(i *AnalysisFixInput) { i.Version = 4; i.HandoffHash = analysisFixHandoffHash(*i) },
 		func(i *AnalysisFixInput) { i.GenerationBaseRevision = "" },
+		func(i *AnalysisFixInput) { i.FailureContentHash = "" },
+		func(i *AnalysisFixInput) { i.TargetAnalysis.RootCause = "tampered" },
+		func(i *AnalysisFixInput) { i.TargetAnalysis.GeneratedAt = "different" },
+		func(i *AnalysisFixInput) { i.SourceHints = append(i.SourceHints, "extra.go") },
 		func(i *AnalysisFixInput) { i.SourceBranch = "" },
 		func(i *AnalysisFixInput) { i.AssistantAnswer = "Different selected response" },
 		func(i *AnalysisFixInput) { i.AssistantUnverified = !i.AssistantUnverified },
@@ -452,6 +648,13 @@ func TestAnalysisFixHandoffRejectsTamperingAndIncompleteState(t *testing.T) {
 	}
 	if err := validateAnalysisPreviewBinding(&AnalysisPreviewBinding{}); err == nil {
 		t.Fatal("accepted incomplete old binding")
+	}
+	ready := &actionRequest{ActionRequestView: ActionRequestView{Kind: requestKindAnalysisFix, Status: RequestReady, Preview: &PreviewResult{Token: "old"}}}
+	ready.AnalysisFix = cloneAnalysisFixInput(input)
+	ready.AnalysisFix.Version = 4
+	ready.AnalysisFix.HandoffHash = analysisFixHandoffHash(*ready.AnalysisFix)
+	if _, err := validatedReadyPreview(ready); err == nil {
+		t.Fatal("accepted ready version-4 exact Fix handoff")
 	}
 }
 
@@ -518,7 +721,7 @@ func TestAnalysisFixConfirmationRejectsStaleOrTamperedPreview(t *testing.T) {
 				detail.PatternAnalyses[0].CausalGroups[0].Remediation.SuggestedFix = "Changed cause remediation"
 				writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
 			case "JUnit content":
-				detail.Runs[0].TestCases[0].AIAnalysis.RootCause = "Changed JUnit diagnosis"
+				detail.Runs[0].TestCases[0].FailureMessage = "Changed JUnit failure"
 				writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
 			default:
 				state, _, err := service.previewStore.load()

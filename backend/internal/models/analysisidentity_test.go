@@ -2,6 +2,51 @@ package models
 
 import "testing"
 
+func TestTestFailureContentHashTracksOnlyJUnitEvidence(t *testing.T) {
+	base := TestCase{
+		Name: "TestCluster", Source: "junit", SuiteName: "e2e", ClassName: "cluster", JUnitFile: "junit.xml",
+		Status: "failed", FailureMessage: "cluster failed", FailureBody: "expected Ready", FailureLocation: "test.go:42",
+		AIAnalysis: &AIAnalysis{GeneratedAt: "2026-08-13T01:00:00Z", RootCause: "cause"},
+	}
+	hash := TestFailureContentHash(base)
+	if hash == "" {
+		t.Fatal("failure hash is empty")
+	}
+	for _, field := range []struct {
+		name   string
+		mutate func(*TestCase)
+	}{
+		{"name", func(tc *TestCase) { tc.Name = "Different" }},
+		{"source", func(tc *TestCase) { tc.Source = "other" }},
+		{"suite", func(tc *TestCase) { tc.SuiteName = "different" }},
+		{"class", func(tc *TestCase) { tc.ClassName = "different" }},
+		{"JUnit file", func(tc *TestCase) { tc.JUnitFile = "other.xml" }},
+		{"status", func(tc *TestCase) { tc.Status = "passed" }},
+		{"failure message", func(tc *TestCase) { tc.FailureMessage = "different" }},
+		{"failure body", func(tc *TestCase) { tc.FailureBody = "different" }},
+		{"failure location", func(tc *TestCase) { tc.FailureLocation = "other.go:42" }},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			changed := base
+			field.mutate(&changed)
+			if TestFailureContentHash(changed) == hash {
+				t.Fatal("changed JUnit evidence retained failure hash")
+			}
+		})
+	}
+	changed := base
+	changed.AIAnalysis = &AIAnalysis{GeneratedAt: "2026-08-13T02:00:00Z", RootCause: "new cause"}
+	if TestFailureContentHash(changed) != hash {
+		t.Fatal("replacement analysis changed JUnit hash")
+	}
+	changed.AIAnalysis = nil
+	changed.DurationSeconds = 42
+	changed.FailureLocURL = "https://example.invalid/failure"
+	if TestFailureContentHash(changed) != hash {
+		t.Fatal("analysis removal, duration, or URL changed JUnit hash")
+	}
+}
+
 func TestTestAnalysisContentHashTracksAnalysisAndSourceEvidence(t *testing.T) {
 	testCase := TestCase{Name: "TestCluster", Status: "failed", JUnitFile: "junit.xml", AIAnalysis: &AIAnalysis{
 		GeneratedAt: "2026-08-13T01:00:00Z", RootCause: "cause", Severity: "High", SuggestedFix: "fix",

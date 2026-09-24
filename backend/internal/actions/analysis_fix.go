@@ -28,7 +28,7 @@ const (
 	maxAnalysisSourceFiles      = 16
 	maxAnalysisFixCitations     = 16
 	maxAnalysisFailureTextBytes = 8 << 10
-	analysisFixHandoffVersion   = 4
+	analysisFixHandoffVersion   = 5
 )
 
 // AnalysisIdentity identifies one exact published JUnit analysis.
@@ -57,6 +57,14 @@ type AnalysisActionSubject struct {
 	SourceHints         []string
 }
 
+type analysisTargetSnapshot struct {
+	GeneratedAt    string `json:"generated_at"`
+	RootCause      string `json:"root_cause"`
+	Severity       string `json:"severity"`
+	SuggestedFix   string `json:"suggested_fix"`
+	CritiquePassed bool   `json:"critique_passed"`
+}
+
 // AnalysisFixInput is one owner-bound chat finding selected for fix generation.
 type AnalysisFixInput struct {
 	Origin                    analysischat.FixOrigin
@@ -71,6 +79,9 @@ type AnalysisFixInput struct {
 	ChatResponseHash          string
 	PreviewRequestHash        string
 	AnalysisContentHash       string
+	FailureContentHash        string
+	SourceHints               []string
+	TargetAnalysis            analysisTargetSnapshot
 	SourceRepository          sourceinvestigation.Repository
 	FailureRevision           string
 	GenerationBaseRevision    string
@@ -112,6 +123,10 @@ const (
 
 // ResolveAnalysisActionSubject resolves and validates one current failed JUnit analysis.
 func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*AnalysisActionSubject, error) {
+	return s.resolveAnalysisActionSubject(identity, true)
+}
+
+func (s *Service) resolveAnalysisActionSubject(identity AnalysisIdentity, requireAnalysis bool) (*AnalysisActionSubject, error) {
 	identity = normalizeAnalysisIdentity(identity)
 	if err := validateAnalysisIdentity(identity); err != nil {
 		return nil, err
@@ -155,7 +170,7 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	match := matches[0]
 	analysis := match.testCase.AIAnalysis
 	if match.run.Passed || match.testCase.Status != "failed" || match.testCase.Source == models.TestCaseSourceBuild || match.testCase.JUnitFile == "" ||
-		analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt {
+		requireAnalysis && (analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt) {
 		return nil, fmt.Errorf("JUnit analysis is not a current failed-test action target")
 	}
 	analysisRepo := s.cfg.EffectiveAnalysisSourceRepo()
@@ -167,17 +182,22 @@ func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*Anal
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
 		return nil, fmt.Errorf("%w: JUnit analysis immutable source identity is unavailable", ErrPreviewRejected)
 	}
-	sourceHints := verifiedSourceFiles(analysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
-	slices.Sort(sourceHints)
-	sourceHints = slices.Compact(sourceHints)
-	if len(sourceHints) > maxAnalysisSourceFiles {
-		sourceHints = sourceHints[:maxAnalysisSourceFiles]
+	var sourceHints []string
+	if analysis != nil {
+		sourceHints = verifiedSourceFiles(analysis.FileLinks, repository.Owner, repository.Name, repository.Revision)
+		slices.Sort(sourceHints)
+		sourceHints = slices.Compact(sourceHints)
+		if len(sourceHints) > maxAnalysisSourceFiles {
+			sourceHints = sourceHints[:maxAnalysisSourceFiles]
+		}
 	}
 	subject := &AnalysisActionSubject{
 		Identity: identity, JobName: match.jobName, Build: match.run, Failure: match.testCase,
 		SourceRepository: repository, SourceHints: sourceHints,
 	}
-	subject.AnalysisContentHash = models.TestAnalysisContentHash(match.testCase)
+	if requireAnalysis {
+		subject.AnalysisContentHash = models.TestAnalysisContentHash(match.testCase)
+	}
 	subject.ID = analysisActionID(identity)
 	subject.ContentHash = analysisActionHash(subject)
 	return subject, nil
@@ -274,12 +294,9 @@ func (s *Service) PreviewAnalysisFix(
 	if owner != input.Owner || strings.TrimSpace(instruction) != input.Instruction {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
-	subject, err := s.resolveAnalysisFixTarget(input)
+	subject, err := s.resolveAnalysisFixTarget(input, true)
 	if err != nil {
 		return PreviewResult{}, err
-	}
-	if input.AnalysisContentHash != subject.AnalysisContentHash {
-		return PreviewResult{}, ErrPreviewTargetChanged
 	}
 	logicalID := actionRequestID(ctx)
 	if logicalID == "" {
@@ -311,7 +328,6 @@ func (s *Service) PreviewAnalysisFix(
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
 		return PreviewResult{}, fmt.Errorf("%w: immutable source identity is unavailable", ErrPreviewRejected)
 	}
-	sourceHints := slices.Clone(subject.SourceHints)
 	findingText := input.AssistantAnswer
 	if input.ProposedRevision != nil {
 		findingText += "\n" + input.ProposedRevision.RootCause + "\n" + input.ProposedRevision.SuggestedFix
@@ -319,7 +335,7 @@ func (s *Service) PreviewAnalysisFix(
 	if remediationpolicy.RelationshipTextWarning(instruction) != "" {
 		return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 	}
-	warnings := analysisQualityWarnings(subject.Failure.AIAnalysis, input, sourceHints)
+	warnings := analysisQualityWarnings(input)
 	if remediationpolicy.RelationshipTextWarning(findingText) != "" {
 		warnings = append(warnings, analysisWarningPolicy)
 	}
@@ -422,11 +438,10 @@ func (s *Service) PreviewAnalysisFix(
 func analysisFailureForGeneration(
 	subject *AnalysisActionSubject, input AnalysisFixInput, targetBranch, generationBaseRevision string,
 ) fixpr.AnalysisFailure {
-	analysis := subject.Failure.AIAnalysis
 	return fixpr.AnalysisFailure{
 		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
-		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, AnalysisGeneratedAt: subject.Identity.AnalysisGeneratedAt,
-		AnalysisHash: subject.ContentHash, RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix,
+		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, AnalysisGeneratedAt: input.TargetAnalysis.GeneratedAt,
+		AnalysisHash: subject.ContentHash, RootCause: input.TargetAnalysis.RootCause, SuggestedFix: input.TargetAnalysis.SuggestedFix,
 		FailureMessage:  boundedAnalysisFailureText(subject.Failure.FailureMessage),
 		FailureBody:     boundedAnalysisFailureText(subject.Failure.FailureBody),
 		AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
@@ -437,7 +452,7 @@ func analysisFailureForGeneration(
 		SourceRepository: subject.SourceRepository.Owner + "/" + subject.SourceRepository.Name,
 		SourceBranch:     targetBranch,
 		FailureRevision:  subject.SourceRepository.Revision, GenerationBaseRevision: generationBaseRevision,
-		SourceHints: slices.Clone(subject.SourceHints),
+		SourceHints: slices.Clone(input.SourceHints),
 	}
 }
 
@@ -466,10 +481,8 @@ func analysisFixReplacementHash(input AnalysisFixInput) string {
 	return analysisFixHandoffHash(input)
 }
 
-func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput, sourceHints []string) []string {
-	if analysis == nil {
-		return nil
-	}
+func analysisQualityWarnings(input AnalysisFixInput) []string {
+	analysis := input.TargetAnalysis
 	warnings := make([]string, 0, 6)
 	if !analysis.CritiquePassed {
 		warnings = append(warnings, analysisWarningCritique)
@@ -495,7 +508,7 @@ func analysisQualityWarnings(analysis *models.AIAnalysis, input AnalysisFixInput
 	if len(input.ArtifactCitations) == 0 {
 		warnings = append(warnings, analysisWarningNoCitations)
 	}
-	if len(sourceHints) == 0 {
+	if len(input.SourceHints) == 0 {
 		warnings = append(warnings, analysisWarningNoSourceHints)
 	}
 	return warnings
@@ -522,7 +535,7 @@ func validateAnalysisIdentity(identity AnalysisIdentity) error {
 	return nil
 }
 
-func validateAnalysisFixInput(input AnalysisFixInput) error {
+func validateAnalysisFixCandidateInput(input AnalysisFixInput) error {
 	input.Identity = normalizeAnalysisIdentity(input.Identity)
 	if err := validateAnalysisIdentity(input.Identity); err != nil {
 		return err
@@ -539,6 +552,18 @@ func validateAnalysisFixInput(input AnalysisFixInput) error {
 		}
 	}
 	return analysisFixContext(input).Validate()
+}
+
+func validateAnalysisFixInput(input AnalysisFixInput) error {
+	if err := validateAnalysisFixCandidateInput(input); err != nil {
+		return err
+	}
+	if input.FailureContentHash == "" || input.TargetAnalysis.GeneratedAt != input.Identity.AnalysisGeneratedAt ||
+		len(input.SourceHints) > maxAnalysisSourceFiles || len(input.TargetAnalysis.RootCause) > 32<<10 ||
+		len(input.TargetAnalysis.SuggestedFix) > 16<<10 {
+		return ErrPreviewTargetChanged
+	}
+	return nil
 }
 
 func boundedAnalysisFailureText(value string) string {

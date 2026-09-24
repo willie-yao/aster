@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
+	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // AnalysisFixRequestHash identifies one explicit selection and instruction.
@@ -36,21 +39,44 @@ func analysisFixTargetRef(identity AnalysisIdentity) analysischat.AnalysisRef {
 	}
 }
 
-func (s *Service) resolveAnalysisFixTarget(input AnalysisFixInput) (*AnalysisActionSubject, error) {
-	if err := validateAnalysisFixInput(input); err != nil {
+func (s *Service) resolveAnalysisFixTarget(input AnalysisFixInput, admitted bool) (*AnalysisActionSubject, error) {
+	var err error
+	if admitted || input.Version == analysisFixHandoffVersion {
+		err = validateAnalysisFixInput(input)
+	} else if input.Version == 0 {
+		err = validateAnalysisFixCandidateInput(input)
+	} else {
+		return nil, ErrPreviewTargetChanged
+	}
+	if err != nil {
 		return nil, err
 	}
 	if input.Origin.FixTarget != analysisFixTargetRef(input.Identity) {
 		return nil, ErrPreviewTargetChanged
 	}
-	if err := analysischat.ValidateFixOrigin(s.dataDir, input.Origin); err != nil {
+	if admitted {
+		err = analysischat.ValidateAdmittedFixOrigin(s.dataDir, input.Origin)
+	} else {
+		err = analysischat.ValidateFixOrigin(s.dataDir, input.Origin)
+	}
+	if err != nil {
 		return nil, ErrPreviewTargetChanged
 	}
-	subject, err := s.ResolveAnalysisActionSubject(input.Identity)
+	subject, err := s.resolveAnalysisActionSubject(input.Identity, !admitted)
 	if err != nil {
 		return nil, err
 	}
-	if input.AnalysisContentHash != subject.AnalysisContentHash || input.SourceRepository != subject.SourceRepository {
+	if input.SourceRepository != subject.SourceRepository {
+		return nil, ErrPreviewTargetChanged
+	}
+	if admitted {
+		if input.FailureContentHash != models.TestFailureContentHash(subject.Failure) {
+			return nil, ErrPreviewTargetChanged
+		}
+		subject.AnalysisContentHash = input.AnalysisContentHash
+		subject.ContentHash = analysisActionHash(subject)
+		subject.SourceHints = slices.Clone(input.SourceHints)
+	} else if input.AnalysisContentHash != subject.AnalysisContentHash {
 		return nil, ErrPreviewTargetChanged
 	}
 	branch, _ := buildsource.Branch(subject.Build, subject.SourceRepository.Owner, subject.SourceRepository.Name)
@@ -62,13 +88,22 @@ func (s *Service) resolveAnalysisFixTarget(input AnalysisFixInput) (*AnalysisAct
 
 func (s *Service) prepareAnalysisFix(ctx context.Context, input AnalysisFixInput, owner, instruction string) (AnalysisFixInput, error) {
 	input = *cloneAnalysisFixInput(input)
+	input.Version, input.FailureContentHash, input.SourceHints, input.TargetAnalysis = 0, "", nil, analysisTargetSnapshot{}
 	input.Owner, input.Instruction = owner, instruction
 	input.PreviewRequestHash = AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, instruction)
 	// Only actions select the generation base and destination contract.
 	input.FailureRevision, input.GenerationBaseRevision = "", ""
-	subject, err := s.resolveAnalysisFixTarget(input)
+	subject, err := s.resolveAnalysisFixTarget(input, false)
 	if err != nil {
 		return AnalysisFixInput{}, err
+	}
+	analysis := subject.Failure.AIAnalysis
+	input.FailureContentHash = models.TestFailureContentHash(subject.Failure)
+	input.SourceHints = slices.Clone(subject.SourceHints)
+	input.TargetAnalysis = analysisTargetSnapshot{
+		GeneratedAt: analysis.GeneratedAt, RootCause: textutil.Truncate(analysis.RootCause, 32<<10-len("…")),
+		Severity: analysis.Severity, SuggestedFix: textutil.Truncate(analysis.SuggestedFix, 16<<10-len("…")),
+		CritiquePassed: analysis.CritiquePassed,
 	}
 	base, err := s.PreflightAnalysisFixSource(ctx, subject.SourceRepository, input.SourceBranch)
 	if err != nil {
@@ -87,7 +122,7 @@ func (s *Service) prepareAnalysisFix(ctx context.Context, input AnalysisFixInput
 		return AnalysisFixInput{}, err
 	}
 	// Source preflight can outlive a publication refresh.
-	if _, err := s.resolveAnalysisFixTarget(input); err != nil {
+	if _, err := s.resolveAnalysisFixTarget(input, false); err != nil {
 		return AnalysisFixInput{}, err
 	}
 	return input, nil
@@ -98,6 +133,8 @@ func validateAnalysisFixHandoff(input AnalysisFixInput) error {
 		input.HandoffHash == "" || input.HandoffHash != analysisFixHandoffHash(input) || input.TargetConfig == "" ||
 		input.GenerationBaseRevision == "" || input.FailureRevision == "" || input.SourceBranch == "" ||
 		input.PreviewRequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, input.Instruction) ||
+		input.FailureContentHash == "" || input.TargetAnalysis.GeneratedAt != input.Identity.AnalysisGeneratedAt ||
+		len(input.SourceHints) > maxAnalysisSourceFiles ||
 		len(input.Instruction) > 4096 || input.Origin.FixTarget != analysisFixTargetRef(input.Identity) {
 		return ErrPreviewTargetChanged
 	}
@@ -124,7 +161,7 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 	if input.Owner != normalizeActionOwner(owner) {
 		return ErrPreviewTargetChanged
 	}
-	if _, err := s.resolveAnalysisFixTarget(input); err != nil {
+	if _, err := s.resolveAnalysisFixTarget(input, true); err != nil {
 		return ErrPreviewTargetChanged
 	}
 	destination, err := s.cfg.ResolveFixDestination("", "")

@@ -109,6 +109,101 @@ func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *t
 	}
 }
 
+func TestValidateAdmittedFixOriginIgnoresReanalysis(t *testing.T) {
+	service, session, requestID := exactFixService(t, Reply{Answer: "Investigate the terminal update.", Assessment: "explains"}, nil)
+	candidate, err := service.AnalysisFixCandidate(session.ID, "alice", requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := FixOrigin{Analysis: candidate.Analysis, FixTarget: candidate.FixTarget, Original: candidate.Original}
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T02:00:00Z"))
+	detail.Runs[0].TestCases[0].AIAnalysis.RootCause = "a different hypothesis"
+	writeJobDetail(t, service.dataDir, detail)
+	if err := ValidateAdmittedFixOrigin(service.dataDir, origin); err != nil {
+		t.Fatalf("test origin after reanalysis: %v", err)
+	}
+	if err := ValidateFixOrigin(service.dataDir, origin); err == nil {
+		t.Fatal("strict chat admission accepted a regenerated analysis")
+	}
+	detail.Runs[0].TestCases[0].AIAnalysis = nil
+	writeJobDetail(t, service.dataDir, detail)
+	if err := ValidateAdmittedFixOrigin(service.dataDir, origin); err != nil {
+		t.Fatalf("test origin without current AI analysis: %v", err)
+	}
+
+	causeDir, causeDetail, causeOrigin := admittedCauseFixture(t)
+	causeDetail.Runs[1].TestCases[0].AIAnalysis = nil
+	writeJobDetail(t, causeDir, causeDetail)
+	if err := ValidateAdmittedFixOrigin(causeDir, causeOrigin); err != nil {
+		t.Fatalf("cause origin without target analysis: %v", err)
+	}
+	// A different AI-selected representative must not displace the admitted target.
+	causeDetail.Runs[1].TestCases[0].AIAnalysis = &models.AIAnalysis{
+		GeneratedAt: "new", RootCause: "new hypothesis", Severity: "Low",
+		Disposition: models.AnalysisDispositionPreliminary,
+	}
+	causeDetail.Runs[1].TestCases = append(causeDetail.Runs[1].TestCases, analyzedTest("OtherTest", "other.xml", "new"))
+	causeDetail.Runs[1].TestCases[1].AIAnalysis.Severity = "Critical"
+	writeJobDetail(t, causeDir, causeDetail)
+	if err := ValidateAdmittedFixOrigin(causeDir, causeOrigin); err != nil {
+		t.Fatalf("cause origin after representative re-ranking: %v", err)
+	}
+}
+
+func TestValidateAdmittedFixOriginRejectsChangedTargetAndCause(t *testing.T) {
+	for _, change := range []struct {
+		name   string
+		mutate func(*models.JobDetail)
+	}{
+		{"target passed", func(d *models.JobDetail) { d.Runs[1].TestCases[0].Status = "passed" }},
+		{"target removed", func(d *models.JobDetail) { d.Runs[1].TestCases = nil }},
+		{"ambiguous target", func(d *models.JobDetail) {
+			d.Runs[1].TestCases = append(d.Runs[1].TestCases, d.Runs[1].TestCases[0])
+		}},
+		{"membership", func(d *models.JobDetail) { d.PatternAnalyses[0].CausalGroups[0].Builds = []string{"1"} }},
+		{"remediation", func(d *models.JobDetail) {
+			d.PatternAnalyses[0].CausalGroups[0].Remediation.SuggestedFix = "Different remedy"
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			dir, detail, origin := admittedCauseFixture(t)
+			change.mutate(&detail)
+			writeJobDetail(t, dir, detail)
+			if err := ValidateAdmittedFixOrigin(dir, origin); err == nil {
+				t.Fatal("changed target or cause retained admitted origin")
+			}
+		})
+	}
+}
+
+func admittedCauseFixture(t *testing.T) (string, models.JobDetail, FixOrigin) {
+	t.Helper()
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{
+		Builds: []string{"2", "1"}, RootCause: "terminal update", Confidence: "high",
+		Remediation: &models.PatternCausalGroupRemediation{BuildID: "2", SuggestedFix: "Fix the terminal update"},
+	}}, nil)
+	models.AssignPatternIdentity(&pattern)
+	detail := causalPatternDetail(pattern, "1", "2")
+	for i := range detail.Runs {
+		detail.Runs[i].TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")}
+	}
+	writeJobDetail(t, dir, detail)
+	group := pattern.CausalGroups[0]
+	ref := AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: models.PatternHash(pattern),
+		CausalGroupID: group.ID, CausalGroupHash: models.PatternCausalGroupHash(group),
+	}
+	resolved, err := resolveFromDetail(ref, detail)
+	if err != nil || resolved.fixTarget == nil || resolved.fixTarget.ref.BuildID != "2" {
+		t.Fatalf("cause target = %+v, %v", resolved.fixTarget, err)
+	}
+	return dir, detail, FixOrigin{
+		Analysis: ref, FixTarget: resolved.fixTarget.ref,
+		Original: analysisSnapshot(resolved.testCase.AIAnalysis),
+	}
+}
+
 func TestServiceAnalysisFixCandidateAcceptsContextOnlyButRejectsFailedTurns(t *testing.T) {
 	service, session, requestID, runner := exactFixServiceRunner(t, Reply{Answer: "No artifact evidence was needed.", Assessment: "explains"}, nil)
 	if candidate, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); err != nil || len(candidate.ArtifactCitations) != 0 {
