@@ -81,7 +81,7 @@ func writeChatFixRequestError(w http.ResponseWriter, sessionID, login string, er
 		errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged),
 		errors.Is(err, analysischat.ErrRequestPending), errors.Is(err, analysischat.ErrRequestOutcomeUnknown),
 		errors.Is(err, analysischat.ErrInvalidRequest), errors.Is(err, analysischat.ErrRequestFailed),
-		errors.Is(err, sourceinvestigation.ErrUnavailable):
+		errors.Is(err, sourceinvestigation.ErrUnavailable), errors.Is(err, analysischat.ErrSourceRevisionUnknown):
 		writeChatFixError(w, sessionID, login, err)
 	default:
 		writeActionError(w, sessionID, login, err)
@@ -149,6 +149,8 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 		status, message = http.StatusConflict, "fix preview state changed; generate a new preview"
 	case errors.Is(err, analysischat.ErrAnalysisChanged):
 		status, message = http.StatusConflict, analysischat.ErrAnalysisChanged.Error()
+	case errors.Is(err, analysischat.ErrSourceRevisionUnknown):
+		status, message = http.StatusUnprocessableEntity, analysisChatSourceUnknownMessage
 	case errors.Is(err, analysischat.ErrPatternChanged):
 		status, message = http.StatusConflict, analysischat.ErrPatternChanged.Error()
 	case errors.Is(err, analysischat.ErrRequestPending):
@@ -172,6 +174,9 @@ func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error
 	}
 	if status >= 500 || status == http.StatusUnprocessableEntity {
 		log.Printf("chat fix preview failed for %s (by %s): %s", sessionID, login, safeOperatorError(err))
+	}
+	if reason, ok := analysisChatReasonCode(err); ok {
+		w.Header().Set(analysisChatReasonHeader, reason)
 	}
 	http.Error(w, message, status)
 }

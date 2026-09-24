@@ -264,6 +264,14 @@ test("source citations show immutable identity without artifact links", () => {
   assert.match(chat, /citation\.repository \?\? "".*citation\.revision \?\? ""/);
 });
 
+test("an exact-test finding only offers a Fix when the server resolved its source", () => {
+  const chat = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  assert.match(chat, /sourceUnavailable=\{session\.analysis\.scope === "test" && !session\.source_repository\}/);
+  assert.match(chat, /chatFixEnabled && fixEligible && message\.request_id && \(sourceUnavailable \? \(/);
+  assert.match(chat, /A Fix proposal is unavailable because Aster could not determine the exact source commit this build tested\./);
+  assert.match(chat, /sourceUnavailable \? \([\s\S]*\) : \(\s*<Chip[\s\S]*label="Use this finding in a fix proposal"/);
+});
+
 test("missing or expired server sessions restore as empty", async () => {
   globalThis.fetch = async () => new Response(null, { status: 204 });
 

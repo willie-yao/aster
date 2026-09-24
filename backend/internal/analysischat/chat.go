@@ -31,6 +31,8 @@ var (
 	ErrAnalysisNotFound = errors.New("analysis not found")
 	// ErrAnalysisChanged means the selected analysis was replaced after the client loaded it.
 	ErrAnalysisChanged = errors.New("analysis changed")
+	// ErrSourceRevisionUnknown means the tested repository commit cannot be pinned.
+	ErrSourceRevisionUnknown = errors.New("exact source commit tested by this build is unknown")
 	// ErrPatternNotFound means the selected recurring pattern is absent.
 	ErrPatternNotFound = errors.New("recurring pattern not found")
 	// ErrPatternChanged means the selected recurring pattern was replaced.

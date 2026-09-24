@@ -73,7 +73,8 @@ type BuildInfo struct {
 	Commit      string `json:"commit"`
 	Revision    string `json:"revision,omitempty"`
 	RepoVersion string `json:"repo_version,omitempty"`
-	// RepoRefs preserves started.json's repository revision strings.
+	// RepoRefs contains started.json repository refs, with bare branches pinned
+	// to tested commits from clone-records.json when available.
 	RepoRefs    map[string]string `json:"repo_refs,omitempty"`
 	ProwURL     string            `json:"prow_url"`
 	BuildLogURL string            `json:"build_log_url"`

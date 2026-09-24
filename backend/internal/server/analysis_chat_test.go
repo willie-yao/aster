@@ -739,6 +739,18 @@ func TestAnalysisChatRejectionIsDiagnosable(t *testing.T) {
 	}
 }
 
+func TestAnalysisChatUnknownSourceReason(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeAnalysisChatError(recorder, "session-1", "alice", analysischat.ErrSourceRevisionUnknown)
+	if got := recorder.Header().Get(analysisChatReasonHeader); got != analysisChatSourceRevisionUnknown {
+		t.Errorf("reason header = %q", got)
+	}
+	if recorder.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(recorder.Body.String(), analysisChatSourceUnknownMessage) {
+		t.Errorf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestAnalysisChatUnclassifiedRejectionHasNoReasonHeader(t *testing.T) {
 	previous := log.Writer()
 	log.SetOutput(&strings.Builder{})

@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -214,6 +217,108 @@ func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 	}
 	if info.Result != "PENDING" {
 		t.Errorf("running build Result = %q, want PENDING", info.Result)
+	}
+}
+
+func TestFetchBuildInfoPinsCloneRecords(t *testing.T) {
+	sha := "ade57a2918a2c76ab56d9cda31b7319b0bff6aa0"
+	other := "457ebaa229bda1f835c508c402391711adc9c32f"
+	record := func(org, repo, branch, revision string) string {
+		return fmt.Sprintf(`{"refs":{"org":%q,"repo":%q,"base_ref":%q},"final_sha":%q}`, org, repo, branch, revision)
+	}
+	for _, tc := range []struct {
+		name    string
+		refs    string
+		records string
+		want    string
+		other   string
+	}{
+		{name: "two repositories", refs: `{"example/project":"main","example/other":"master"}`,
+			records: "[" + record("", "", "", "") + "," + record("example", "project", "main", sha) + "," +
+				record("example", "other", "master", other) + "]", want: "main:" + sha, other: "master:" + other},
+		{name: "duplicate identical records", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "main", sha) + "," + record("example", "project", "main", sha) + "]",
+			want:    "main:" + sha},
+		{name: "conflicting records", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "main", sha) + "," + record("example", "project", "main", other) + "]",
+			want:    "main"},
+		{name: "conflicting branches", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "main", sha) + "," + record("example", "project", "release", other) + "]",
+			want:    "main"},
+		{name: "pull checkout conflicts with branch record", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "main", sha) +
+				`,{"refs":{"org":"example","repo":"project","base_ref":"release","pulls":[{"number":42}]},"final_sha":"` + other + `"}]`,
+			want: "main"},
+		{name: "pulls present", refs: `{"example/project":"main"}`,
+			records: `[{"refs":{"org":"example","repo":"project","base_ref":"main","pulls":[{"number":42}]},"final_sha":"` + sha + `"}]`,
+			want:    "main"},
+		{name: "failed record", refs: `{"example/project":"main"}`,
+			records: `[{"refs":{"org":"example","repo":"project","base_ref":"main"},"failed":true,"final_sha":"` + sha + `"}]`,
+			want:    "main"},
+		{name: "short SHA", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "main", sha[:8]) + "]", want: "main"},
+		{name: "empty record", refs: `{"example/project":"main"}`,
+			records: `[{"refs":{"org":"","repo":""}},` + record("example", "other", "main", sha) + "]",
+			want:    "main"},
+		{name: "missing file", refs: `{"example/project":"main"}`, want: "main"},
+		{name: "unparseable file", refs: `{"example/project":"main"}`, records: "{", want: "main"},
+		{name: "different base ref", refs: `{"example/project":"main"}`,
+			records: "[" + record("example", "project", "release", sha) + "]", want: "main"},
+		{name: "composite checkout", refs: `{"example/project":"main:0123456789abcdef0123456789abcdef01234567,42:457ebaa229bda1f835c508c402391711adc9c32f"}`,
+			records: "[" + record("example", "project", "main", sha) + "]",
+			want:    "main:0123456789abcdef0123456789abcdef01234567,42:457ebaa229bda1f835c508c402391711adc9c32f"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			buildDir := filepath.Join(root, "logs", "job", "100")
+			if err := os.MkdirAll(buildDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			started := `{"timestamp":1000,"repos":` + tc.refs + `}`
+			if err := os.WriteFile(filepath.Join(buildDir, "started.json"), []byte(started), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.records != "" {
+				if err := os.WriteFile(filepath.Join(buildDir, "clone-records.json"), []byte(tc.records), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := FetchBuildInfo(t.Context(), backend, BuildLocation{
+				JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "100",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.RepoRefs["example/project"]; got != tc.want {
+				t.Errorf("project ref = %q, want %q", got, tc.want)
+			}
+			if tc.other != "" {
+				if got := info.RepoRefs["example/other"]; got != tc.other {
+					t.Errorf("other ref = %q, want %q", got, tc.other)
+				}
+				if source, ok := buildsource.Resolve(*info, "example", "project"); !ok || source.Revision != sha {
+					t.Errorf("multi-repo source = %+v, resolved=%v", source, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestPinBuildRepoRefsSkipsPresubmit(t *testing.T) {
+	backend := &fakeBackend{objects: map[string]string{
+		"pr-logs/pull/example_project/42/job/100/clone-records.json": `[{"refs":{"org":"example","repo":"project","base_ref":"main"},"final_sha":"ade57a2918a2c76ab56d9cda31b7319b0bff6aa0"}]`,
+	}}
+	info := &models.BuildInfo{RepoRefs: map[string]string{"example/project": "main"}}
+	loc := BuildLocation{
+		JobLocation: JobLocation{JobType: models.JobTypePresubmit, Repo: "example/project"},
+		JobName:     "job", BuildID: "100", PullNumber: "42",
+	}
+	if PinBuildRepoRefs(t.Context(), backend, loc, info) || info.RepoRefs["example/project"] != "main" {
+		t.Fatalf("presubmit ref changed: %+v", info.RepoRefs)
 	}
 }
 

@@ -29,14 +29,14 @@ After a completed response, **Use this finding in a fix proposal** admits a sepa
 
 - the exact failed JUnit case and its published analysis remain available and unchanged;
 - the selected conversation request completed with a nonempty answer;
-- build metadata resolves the exact repository and full commit;
+- build metadata resolves the exact repository and full tested commit, using `clone-records.json` to identify each repository's commit in multi-repository builds;
 - the configured Fix destination matches the analyzed repository;
 - the failure revision is the head of its own tested branch or an ancestor of that head;
 - the pinned generation base remains current through preview generation and confirmation.
 
 The coding agent receives the available failure details, selected answer, retained citations, and optional source hints. It investigates the repository before editing. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified; they are not relabeled as verified because a proposal was requested.
 
-The generation base is resolved for the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. A failure whose commit has diverged from its branch head, or whose build reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged` or `source_branch_unknown`) returned in `X-Analysis-Chat-Reason` and recorded in the server log. Repository-access and generation-base errors remain failures, not analysis warnings.
+The generation base is resolved for the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. If Aster cannot determine the exact source commit this build tested, it says a Fix proposal cannot be pinned (`source_revision_unknown`). A failure whose commit has diverged from its branch head, or whose build reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged` or `source_branch_unknown`). These reasons are returned in `X-Analysis-Chat-Reason` and recorded in the server log. Repository-access and generation-base errors remain failures, not analysis warnings.
 
 At admission, the action captures an immutable bounded snapshot of the selected answer, its qualifications, originating test or cause, exact JUnit target, published analysis and source hints, retained citations, repository, tested branch, and generation base. A selected answer may reuse citations validated by earlier turns, but later turns do not alter the snapshot. Only retained validated citations are carried as verified artifact evidence. The action generates from that captured context and rechecks current cause membership and content, exact failed JUnit evidence, and source/base identity before accepting a generated result and before confirmation. Regenerating the analysis text alone does not revoke an admitted Fix; changed JUnit evidence or cause content requires a new preview.
 

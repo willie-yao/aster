@@ -488,7 +488,7 @@ func persistResolvedFixTarget(target *resolvedFixTarget, sourceRepo sourceinvest
 	persisted := persistResolved(resolvedAnalysis{
 		ref: target.ref, build: target.build, testCase: target.testCase,
 	}, sourceRepo)
-	if sourceinvestigation.ValidateRepository(persisted.Source) != nil || persisted.AnalysisHash == "" {
+	if persisted.AnalysisHash == "" {
 		return nil
 	}
 	return &persistedResolvedFixTarget{

@@ -469,6 +469,7 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		{actions.ErrPreviewTargetChanged, http.StatusConflict},
 		{actions.ErrPreviewPending, http.StatusConflict},
 		{analysischat.ErrAnalysisChanged, http.StatusConflict},
+		{analysischat.ErrSourceRevisionUnknown, http.StatusUnprocessableEntity},
 		{analysischat.ErrPatternChanged, http.StatusConflict},
 		{analysischat.ErrRequestPending, http.StatusConflict},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest},
@@ -483,6 +484,26 @@ func TestWriteChatFixErrorMapping(t *testing.T) {
 		}
 		if testCase.want == http.StatusInternalServerError && strings.Contains(recorder.Body.String(), "/private/chat") {
 			t.Fatalf("private path leaked: %q", recorder.Body.String())
+		}
+	}
+}
+
+func TestWriteChatFixUnknownSourceReason(t *testing.T) {
+	for _, writeError := range []func(http.ResponseWriter, string, string, error){
+		writeChatFixError,
+		writeChatFixRequestError,
+	} {
+		recorder := httptest.NewRecorder()
+		writeError(recorder, "session", "alice", analysischat.ErrSourceRevisionUnknown)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Errorf("status = %d, want 422", recorder.Code)
+		}
+		if got := recorder.Header().Get(analysisChatReasonHeader); got != analysisChatSourceRevisionUnknown {
+			t.Errorf("reason header = %q", got)
+		}
+		if got := recorder.Body.String(); !strings.Contains(got, "Aster could not determine the exact source commit this build tested") ||
+			strings.Contains(got, "analysis changed") {
+			t.Errorf("body = %q", got)
 		}
 	}
 }
