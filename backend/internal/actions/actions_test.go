@@ -1230,6 +1230,200 @@ func TestBuildSourceFilesUseAllAuthoritativeLinks(t *testing.T) {
 	}
 }
 
+func readyIssueRequestForConfirmation(t *testing.T, patternIssue bool) (*Service, *fakeIssuePreviewManager, *actionRequest) {
+	t.Helper()
+	var service *Service
+	var failureID, patternHash string
+	var spec issues.IssueSpec
+	var targetRepo string
+	var err error
+	if patternIssue {
+		var pattern models.PatternAnalysis
+		service, pattern = requestTestService(t)
+		failureID = pattern.ID
+		subject, resolveErr := service.resolveSubject(failureID)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		patternHash = subject.ContentHash
+		spec, targetRepo, err = service.buildIssueSpecForPattern(*subject.Pattern)
+	} else {
+		dataDir := t.TempDir()
+		detail := analyzedBuildDetail(false)
+		writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+		service = NewService(&project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}, dataDir, AIConfig{})
+		failureID = BuildFailureID(detail.JobID, "123")
+		subject, resolveErr := service.resolveSubject(failureID)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		patternHash = subject.ContentHash
+		spec, targetRepo, err = service.buildIssueSpecForBuild(subject.Build, failureID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	request := &actionRequest{ActionRequestView: ActionRequestView{
+		ID: "request-audit", FailureID: failureID, PatternHash: patternHash, Kind: "create-issue", Owner: "alice", Status: RequestReady,
+		CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+		Preview: &PreviewResult{Kind: "issue", Title: spec.Title, Body: spec.Body},
+	}, Issue: &spec, TargetRepo: targetRepo, VerificationVersion: sourceVerificationVersion}
+	service.requests.Requests[request.ID] = request
+	if err := service.saveRequestsLocked(); err != nil {
+		t.Fatal(err)
+	}
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/9"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	return service, manager, request
+}
+
+func persistedConfirmationRequest(t *testing.T, service *Service, id string) *actionRequest {
+	t.Helper()
+	data, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state actionRequestState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	request := state.Requests[id]
+	if request == nil {
+		t.Fatalf("request %q missing from disk", id)
+	}
+	return request
+}
+
+func confirmedRequestAudit(t *testing.T, service *Service, request *actionRequest, confirmedBy, url, outcome string) botWriteAuditRecord {
+	t.Helper()
+	audit, err := newBotWriteAuditStore(service.dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := tokenHash("request:" + request.ID)
+	record := audit.Records[id]
+	if len(audit.Records) != 1 || record.ID != id || record.InitiatedBy != request.Owner || record.ConfirmedBy != confirmedBy ||
+		record.Kind != "issue" || record.FailureID != request.FailureID || record.TargetRepo != request.TargetRepo ||
+		record.InitiatedAt != request.CreatedAt || record.ConfirmedAt == "" || record.ResultURL != url || record.Outcome != outcome {
+		t.Fatalf("write audit = %+v", audit.Records)
+	}
+	return record
+}
+
+func TestConfirmRequestRecordsWriteAudit(t *testing.T) {
+	service, manager, request := readyIssueRequestForConfirmation(t, false)
+	url, err := service.ConfirmRequest(t.Context(), request.ID, " ALICE ", "token")
+	if err != nil || url != manager.url {
+		t.Fatalf("confirmation url=%q err=%v", url, err)
+	}
+	if service.requests.Requests[request.ID].Status != RequestConfirmed || persistedConfirmationRequest(t, service, request.ID).Status != RequestConfirmed {
+		t.Fatal("confirmed request was not persisted")
+	}
+	confirmedRequestAudit(t, service, request, "alice", url, botWriteConfirmed)
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.issueManagerFactory = service.issueManagerFactory
+	if again, err := reloaded.ConfirmRequest(t.Context(), request.ID, "alice", "token"); err != nil || again != url {
+		t.Fatalf("reloaded confirmation url=%q err=%v", again, err)
+	}
+	if len(manager.specs) != 1 {
+		t.Fatalf("external writes = %d, want 1", len(manager.specs))
+	}
+	confirmedRequestAudit(t, reloaded, request, "alice", url, botWriteConfirmed)
+}
+
+func TestConfirmRequestAuditFailureReconcilesBeforeSuccess(t *testing.T) {
+	service, manager, request := readyIssueRequestForConfirmation(t, false)
+	auditErr := errors.New("audit unavailable")
+	service.writeAudit = func(botWriteAuditRecord) error { return auditErr }
+	url, err := service.ConfirmRequest(t.Context(), request.ID, "alice", "token")
+	if url != manager.url || !errors.Is(err, auditErr) {
+		t.Fatalf("unaudited confirmation url=%q err=%v", url, err)
+	}
+	if service.requests.Requests[request.ID].Status != RequestUnknown || persistedConfirmationRequest(t, service, request.ID).Status != RequestUnknown {
+		t.Fatal("unaudited request must remain unknown")
+	}
+	if audit, err := newBotWriteAuditStore(service.dataDir).load(); err != nil || len(audit.Records) != 0 {
+		t.Fatalf("unaudited write records=%+v err=%v", audit, err)
+	}
+
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.issueManagerFactory = service.issueManagerFactory
+	manager.findURL = url
+	manager.url = ""
+	reconciled, err := reloaded.ConfirmRequest(t.Context(), request.ID, "alice", "token")
+	if err != nil || reconciled != url {
+		t.Fatalf("reconciled url=%q err=%v", reconciled, err)
+	}
+	if len(manager.specs) != 1 || reloaded.requests.Requests[request.ID].Status != RequestConfirmed ||
+		persistedConfirmationRequest(t, reloaded, request.ID).Status != RequestConfirmed {
+		t.Fatalf("reconciliation writes=%d status=%s", len(manager.specs), reloaded.requests.Requests[request.ID].Status)
+	}
+	confirmedRequestAudit(t, reloaded, request, "alice", url, botWriteReconciled)
+}
+
+func TestConfirmRequestTrackingSaveFailurePreservesURL(t *testing.T) {
+	service, manager, request := readyIssueRequestForConfirmation(t, true)
+	manager.saveErr = errors.New("issue state unavailable")
+	url, err := service.ConfirmRequest(t.Context(), request.ID, "alice", "token")
+	if err != nil || url != manager.url || !manager.saved {
+		t.Fatalf("confirmation url=%q err=%v tracking saved=%t", url, err, manager.saved)
+	}
+	if service.requests.Requests[request.ID].Status != RequestConfirmed || persistedConfirmationRequest(t, service, request.ID).Status != RequestConfirmed {
+		t.Fatal("known external write was not confirmed")
+	}
+	confirmedRequestAudit(t, service, request, "alice", url, botWriteConfirmed)
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.issueManagerFactory = service.issueManagerFactory
+	if again, err := reloaded.ConfirmRequest(t.Context(), request.ID, "alice", "token"); err != nil || again != url {
+		t.Fatalf("reloaded confirmation url=%q err=%v", again, err)
+	}
+	if len(manager.specs) != 1 {
+		t.Fatalf("external writes = %d, want 1", len(manager.specs))
+	}
+	confirmedRequestAudit(t, reloaded, request, "alice", url, botWriteConfirmed)
+}
+
+func TestConfirmRequestStateSaveFailurePreservesURL(t *testing.T) {
+	service, manager, request := readyIssueRequestForConfirmation(t, false)
+	saveErr := errors.New("request state unavailable")
+	service.requestStateWriter = func(path string, value any) error {
+		if service.requests.Requests[request.ID].Status == RequestConfirmed {
+			return saveErr
+		}
+		return statefile.WritePrivateJSONDurable(path, value)
+	}
+	url, err := service.ConfirmRequest(t.Context(), request.ID, "alice", "token")
+	if url != manager.url || !errors.Is(err, saveErr) {
+		t.Fatalf("unpersisted confirmation url=%q err=%v", url, err)
+	}
+	current := service.requests.Requests[request.ID]
+	onDisk := persistedConfirmationRequest(t, service, request.ID)
+	if current.Status != RequestUnknown || current.ResultURL != "" || onDisk.Status != RequestUnknown || onDisk.ResultURL != "" ||
+		current.UpdatedAt != onDisk.UpdatedAt {
+		t.Fatalf("unknown request in memory=%+v on disk=%+v", current.ActionRequestView, onDisk.ActionRequestView)
+	}
+	firstAudit := confirmedRequestAudit(t, service, request, "alice", url, botWriteConfirmed)
+
+	service.requestStateWriter = statefile.WritePrivateJSONDurable
+	manager.findURL = url
+	manager.url = ""
+	reconciled, err := service.ConfirmRequest(t.Context(), request.ID, "alice", "token")
+	if err != nil || reconciled != url {
+		t.Fatalf("reconciled url=%q err=%v", reconciled, err)
+	}
+	if len(manager.specs) != 1 || persistedConfirmationRequest(t, service, request.ID).Status != RequestConfirmed {
+		t.Fatalf("reconciliation writes=%d status=%s", len(manager.specs), service.requests.Requests[request.ID].Status)
+	}
+	if finalAudit := confirmedRequestAudit(t, service, request, "alice", url, botWriteConfirmed); finalAudit != firstAudit {
+		t.Fatalf("audit changed across retry: first=%+v final=%+v", firstAudit, finalAudit)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	if view, err := reloaded.GetRequest(request.ID, "alice"); err != nil || view.Status != RequestConfirmed || view.ResultURL != url {
+		t.Fatalf("reloaded request=%+v err=%v", view, err)
+	}
+}
+
 func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 	dataDir := t.TempDir()
 	detail := analyzedBuildDetail(false)
@@ -1267,6 +1461,14 @@ func TestAsyncBuildIssueLostResponseReconcilesWithoutSecondWrite(t *testing.T) {
 	}
 	if len(manager.specs) != 1 || service.requests.Requests["request"].Status != RequestConfirmed {
 		t.Fatalf("retry wrote again: writes=%d status=%s", len(manager.specs), service.requests.Requests["request"].Status)
+	}
+	audit, err := newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := audit.Records[tokenHash("request:request")]
+	if len(audit.Records) != 1 || record.Outcome != botWriteReconciled || record.ResultURL != url || record.InitiatedAt != now.Format(time.RFC3339) {
+		t.Fatalf("reconciled request audit = %+v", audit.Records)
 	}
 }
 
@@ -1973,6 +2175,33 @@ func TestBotWriteAuditRecordsFixPreviewAttribution(t *testing.T) {
 	record := audit.Records[tokenHash(token)]
 	if record.Kind != gfKind || record.InitiatedBy != "alice" || record.ConfirmedBy != "alice" || record.TargetRepo != "o/r" {
 		t.Fatalf("fix audit record = %+v", record)
+	}
+
+	request := actionRequest{ActionRequestView: ActionRequestView{
+		ID: "fix-request", Owner: "alice", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		FailureID: "pattern", Kind: "propose-fix", Preview: &PreviewResult{Kind: gfKind},
+	}, TargetRepo: "o/r"}
+	requestEntry := &previewEntry{
+		kind: request.Preview.Kind, failureID: request.FailureID, targetRepo: request.TargetRepo,
+		initiatedBy: request.Owner, initiatedAt: request.CreatedAt, fix: generated,
+	}
+	requestURL := "https://github.com/o/r/pull/13"
+	if err := service.recordBotWrite("request:"+request.ID, "Bob", requestEntry, requestURL, botWriteConfirmed); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.recordBotWrite("request:"+request.ID, "bob", requestEntry, requestURL, botWriteReconciled); err != nil {
+		t.Fatal(err)
+	}
+	audit, err = newBotWriteAuditStore(dataDir).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestRecord := audit.Records[tokenHash("request:"+request.ID)]
+	if len(audit.Records) != 2 || requestRecord.ID != tokenHash("request:"+request.ID) ||
+		requestRecord.Kind != gfKind || requestRecord.InitiatedBy != request.Owner || requestRecord.ConfirmedBy != "bob" ||
+		requestRecord.InitiatedAt != request.CreatedAt || requestRecord.TargetRepo != request.TargetRepo ||
+		requestRecord.ResultURL != requestURL || requestRecord.Outcome != botWriteConfirmed {
+		t.Fatalf("request fix audit record = %+v", requestRecord)
 	}
 }
 

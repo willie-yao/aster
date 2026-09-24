@@ -129,6 +129,7 @@ Persistent requests survive normal restarts when ready. Unfinished external runt
 File Issue and Mark Resolved use the standard server runtime. Fix generation is separate, experimental, and uses Agent Sandbox. Its source, patch, warning, regeneration, and confirmation contracts are in [Fix PR generation](fix-prs.md).
 
 Successful GitHub confirmations append a private write-audit record containing the initiating and confirming login, action kind, target, result URL, timestamps, and reconciliation status. Credentials are not stored.
+If audit or request-state persistence fails, the request reconciles the external result before confirmation is reported as complete.
 
 Email delivery after a draft becomes ready is optional and does not change who may review or confirm it. SMTP configuration belongs in [Notifications](notifications.md).
 
