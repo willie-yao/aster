@@ -59,11 +59,11 @@ func (p *pipeline) warnCommentCredentialsMissing() {
 // against. It reads the base-only flakiness report rather than the published
 // one, so publishing presubmits cannot change a verdict. A nil result means the
 // dashboard pass produced nothing, which attribution reports as inconclusive.
-func (r *refreshResult) attributionBaseline() prattribution.Baseline {
+func (r *refreshResult) attributionBaseline(repo prattribution.Repository) map[string]prattribution.Baseline {
 	if r == nil {
-		return prattribution.Baseline{}
+		return nil
 	}
-	return prattribution.BuildBaseline(r.details, r.baseFlakiness)
+	return prattribution.BuildBaseline(r.details, r.baseFlakiness, repo)
 }
 
 // triageOutcome is one triage pass's published result, carried to commenting so
@@ -99,8 +99,8 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	}
 	details := result.Details
 	changes := p.pullRequestChanges(ctx, client, repo, details)
-	prattribution.Annotate(details, res.attributionBaseline(),
-		prattribution.Repository{Owner: repo.Owner, Name: repo.Name}, changes)
+	attributionRepo := prattribution.Repository{Owner: repo.Owner, Name: repo.Name}
+	prattribution.Annotate(details, res.attributionBaseline(attributionRepo), attributionRepo, changes)
 	index := result.Index
 	// Clustering reads the verdicts Annotate just attached, so it runs after it.
 	shared := models.SharedFailureIndex{

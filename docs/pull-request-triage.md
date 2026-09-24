@@ -65,7 +65,7 @@ The verdict never claims that a pull request caused a failure. Observations can 
 
 Important boundaries:
 
-- Attribution uses base-branch history only. Presubmit history belongs to other pull requests and cannot establish the baseline.
+- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`. The branch is determined from that repository's ref in each job's newest run. Jobs without an interpretable ref for that repository do not establish baseline evidence. Presubmit history belongs to other pull requests and cannot establish the baseline.
 - Cross-pull-request matching includes base branch, job name, and test name.
 - One peer is retained as evidence but does not produce `widespread`; two peers are required.
 - Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.

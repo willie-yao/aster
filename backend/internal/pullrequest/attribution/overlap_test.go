@@ -32,7 +32,7 @@ func annotateCase(t *testing.T, failure models.PullRequestFailure, changes PullC
 	t.Helper()
 	details := []models.PullRequestDetail{detail(1, e2eJob, failure)}
 	details[0].Checks[0].Stale = stale
-	Annotate(details, baseline, capzRepo, map[int]PullChanges{1: changes})
+	Annotate(details, map[string]Baseline{"main": baseline}, capzRepo, map[int]PullChanges{1: changes})
 	got := details[0].Checks[0].Failures[0].Attribution
 	if got == nil {
 		t.Fatal("expected an attribution")
@@ -224,7 +224,7 @@ func TestOverlapDoesNotOverrideAnExplainedVerdict(t *testing.T) {
 	details := []models.PullRequestDetail{detail(1, e2eJob,
 		locatedFailure(testName, "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412", e2eSiteURL))}
 
-	Annotate(details, baseline, capzRepo, map[int]PullChanges{1: NewPullChanges([]string{e2eSitePath}, false)})
+	Annotate(details, map[string]Baseline{"main": baseline}, capzRepo, map[int]PullChanges{1: NewPullChanges([]string{e2eSitePath}, false)})
 
 	if got := details[0].Checks[0].Failures[0].Attribution; got.Verdict != models.AttributionPreExisting {
 		t.Fatalf("verdict = %q, want pre_existing to win", got.Verdict)

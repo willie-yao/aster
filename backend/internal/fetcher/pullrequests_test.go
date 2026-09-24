@@ -23,6 +23,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
+	prattribution "github.com/willie-yao/aster/backend/internal/pullrequest/attribution"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
@@ -410,14 +411,15 @@ func hasFlakyEntry(entries []models.TestFlakiness, testName string) bool {
 // Attribution must read the base-only report. Reading the published one would
 // reintroduce the truncation and presubmit leaks it exists to avoid.
 func TestAttributionBaselineReadsTheBaseOnlyReport(t *testing.T) {
-	if got := (*refreshResult)(nil).attributionBaseline(); got.Observed {
+	repo := prattribution.Repository{Owner: "example", Name: "project"}
+	if got := (*refreshResult)(nil).attributionBaseline(repo); got != nil {
 		t.Fatal("a missing dashboard pass must not report base-branch evidence")
 	}
 	res := &refreshResult{
 		details: []models.JobDetail{{
 			Name: basePeriodic, JobID: basePeriodic, JobType: models.JobTypePeriodic,
 			Runs: []models.BuildResult{{
-				BuildInfo: models.BuildInfo{BuildID: "1"},
+				BuildInfo: models.BuildInfo{BuildID: "1", RepoRefs: map[string]string{"example/project": "main"}},
 				TestCases: []models.TestCase{{Name: flakyTest, Status: "passed"}},
 			}},
 		}},
@@ -429,8 +431,84 @@ func TestAttributionBaselineReadsTheBaseOnlyReport(t *testing.T) {
 		}}},
 	}
 
-	if got := res.attributionBaseline().FlakyTests[flakyTest]; len(got) != 0 {
+	if got := res.attributionBaseline(repo)["main"].FlakyTests[flakyTest]; len(got) != 0 {
 		t.Fatalf("FlakyTests[%q] = %v, want the base-only report to be authoritative", flakyTest, got)
+	}
+}
+
+func TestAttributionBaselineUsesConfiguredRepository(t *testing.T) {
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	p := &pipeline{
+		cfg: &project.Config{
+			Discovery: project.Discovery{
+				Source: project.DiscoveryTestGrid, TestGridDashboard: "project-ci",
+				TestInfraRevision: triageDiscoveryRevision,
+			},
+			Branding:     project.Branding{SourceRepo: project.SourceRepo{Owner: "example", Name: "project"}},
+			PullRequests: &project.PullRequests{Enabled: true, Max: 1, BuildsPerJob: 1},
+		},
+		backend: triageDiscoveryBackend(t),
+		client:  &http.Client{Transport: triageDiscoveryTransport{t: t}},
+		opts:    Options{OutDir: t.TempDir(), Workers: 2},
+	}
+	if _, err := p.discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	res := &refreshResult{details: []models.JobDetail{{
+		Name: basePeriodic, JobID: basePeriodic, JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{BuildID: "1", Started: time.Unix(1700000000, 0)},
+			TestCases: []models.TestCase{{Name: "fails", Status: "failed"}},
+		}},
+	}}}
+
+	for _, tt := range []struct {
+		name string
+		refs map[string]string
+		want models.AttributionVerdict
+	}{
+		{
+			name: "matching configured repository",
+			refs: map[string]string{"example/project": "main:abc123", "other/repo": "release-1.30"},
+			want: models.AttributionPreExisting,
+		},
+		{
+			name: "foreign main cannot establish baseline",
+			refs: map[string]string{"example/project": "release-1.30", "other/repo": "main"},
+			want: models.AttributionInconclusive,
+		},
+		{
+			name: "missing configured repository",
+			refs: map[string]string{"other/repo": "main"},
+			want: models.AttributionInconclusive,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res.details[0].Runs[0].RepoRefs = tt.refs
+			if _, err := p.refreshPullRequests(t.Context(), res); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(p.opts.OutDir, "pull-requests/1.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var detail models.PullRequestDetail
+			if err := json.Unmarshal(data, &detail); err != nil {
+				t.Fatal(err)
+			}
+			var got models.AttributionVerdict
+			for _, check := range detail.Checks {
+				for _, failed := range check.Failures {
+					if failed.Name == "fails" {
+						got = failed.Attribution.Verdict
+					}
+				}
+			}
+			if got != tt.want {
+				t.Fatalf("verdict = %q, want %q using configured example/project", got, tt.want)
+			}
+		})
 	}
 }
 
