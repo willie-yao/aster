@@ -4,6 +4,9 @@
 {{- $chat := .Values.server.chat.enabled -}}
 {{- $escalation := .Values.server.pullRequestEscalation.enabled -}}
 {{- $interactive := include "aster.serverInteractive" . -}}
+{{- if and (or $actions $escalation) (gt (int .Values.server.replicaCount) 1) -}}
+{{- fail "server.replicaCount must be 1 when server.actions.enabled or server.pullRequestEscalation.enabled is true" -}}
+{{- end -}}
 {{- $agentSandboxActions := and .Values.agentSandbox.fixRuntime.enabled $actions -}}
 {{- $a := .Values.server.actions -}}
 {{- $extraHSTS := false -}}
@@ -104,8 +107,8 @@ metadata:
     app.kubernetes.io/component: server
 spec:
   replicas: {{ .Values.server.replicaCount }}
-  {{- if $chat }}
-  # Chat state migrations require old replicas to stop before new replicas start.
+  {{- if $interactive }}
+  # Interactive state writers require non-overlapping upgrades.
   strategy:
     type: Recreate
   {{- end }}

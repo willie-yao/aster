@@ -120,10 +120,20 @@ helm template test "$fallback_chart" -n dashboard-test -f "$tmp/values.yaml" \
 grep -Fq 'image: ghcr.io/willie-yao/aster:v9.8.7' "$tmp/app-version-engine.yaml"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.replicaCount=2 \
+  --show-only templates/server-deployment.yaml > "$tmp/read-only-replicas.yaml"
+grep -Fq 'replicas: 2' "$tmp/read-only-replicas.yaml"
+if grep -Fq 'strategy:' "$tmp/read-only-replicas.yaml"; then
+  echo 'read-only server rendered an interactive rollout strategy' >&2
+  exit 1
+fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \
   --set ai.endpoint=https://model.example.test/v1/chat/completions \
   --set ai.model=fixture-model \
   --set ai.token=test-token \
+  --set server.replicaCount=2 \
   --set server.chat.enabled=true \
   --set server.actions.mode=oauth \
   --set server.actions.admins[0]=fixture \
@@ -132,6 +142,7 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.oauth.clientSecret=client-secret \
   --set server.actions.oauth.sessionKey=session-key \
   --show-only templates/server-deployment.yaml > "$tmp/chat.yaml"
+grep -Fq 'replicas: 2' "$tmp/chat.yaml"
 grep -A1 -F 'name: ANALYSIS_CHAT_ENABLED' "$tmp/chat.yaml" | grep -Fq 'value: "true"'
 grep -A1 -F 'strategy:' "$tmp/chat.yaml" | grep -Fq 'type: Recreate'
 test "$(grep -Fc 'name: ANALYSIS_CHAT_TIMEOUT' "$tmp/chat.yaml")" -eq 1
@@ -142,6 +153,39 @@ if grep -Fq 'name: BOT_TOKEN' "$tmp/chat.yaml" || grep -Fq 'name: ACTIONS_ENABLE
   echo 'chat-only OAuth rendered write-action credentials' >&2
   exit 1
 fi
+
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.replicaCount=1 \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=fixture \
+  --set server.actions.proxy.botToken=test-token \
+  --show-only templates/server-deployment.yaml > "$tmp/actions-only.yaml"
+grep -Fq 'replicas: 1' "$tmp/actions-only.yaml"
+grep -A1 -F 'strategy:' "$tmp/actions-only.yaml" | grep -Fq 'type: Recreate'
+grep -A1 -F 'name: ACTIONS_ENABLED' "$tmp/actions-only.yaml" | grep -Fq 'value: "true"'
+grep -Fq 'name: BOT_TOKEN' "$tmp/actions-only.yaml"
+if grep -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/actions-only.yaml"; then
+  echo 'actions-only server enabled chat' >&2
+  exit 1
+fi
+
+replica_error='server.replicaCount must be 1 when server.actions.enabled or server.pullRequestEscalation.enabled is true'
+expect_fail actions-replicas "$replica_error" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set server.replicaCount=2 \
+  --set server.actions.enabled=true \
+  --set server.actions.mode=proxy \
+  --set server.actions.admins[0]=fixture \
+  --set server.actions.proxy.botToken=test-token
+grep -Fq "$replica_error" "$tmp/actions-replicas.out"
 
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set mode=cron \
@@ -172,9 +216,12 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.model=fixture-model \
   --set ai.token=test-token \
   --set ai.githubReadTokenSecretName=read-token \
+  --set server.replicaCount=1 \
   --set server.pullRequestEscalation.enabled=true \
   --set server.actions.mode=proxy \
   --show-only templates/server-deployment.yaml > "$tmp/escalation.yaml"
+grep -Fq 'replicas: 1' "$tmp/escalation.yaml"
+grep -A1 -F 'strategy:' "$tmp/escalation.yaml" | grep -Fq 'type: Recreate'
 grep -A1 -F 'name: PULL_REQUEST_ESCALATION_ENABLED' "$tmp/escalation.yaml" | grep -Fq 'value: "true"'
 grep -A1 -F 'name: AUTH_MODE' "$tmp/escalation.yaml" | grep -Fq 'value: "proxy"'
 grep -Fq 'name: AI_TOKEN' "$tmp/escalation.yaml"
@@ -186,6 +233,17 @@ if grep -Fq 'name: ACTIONS_ENABLED' "$tmp/escalation.yaml" || grep -Fq 'name: BO
 fi
 # Escalation persists its own state, so the shared volume must be writable.
 grep -A3 -F 'mountPath: /data' "$tmp/escalation.yaml" | grep -Fq 'readOnly: false'
+
+expect_fail escalation-replicas "$replica_error" \
+  --set ai.enabled=true \
+  --set ai.endpoint=https://model.example.test/v1/chat/completions \
+  --set ai.model=fixture-model \
+  --set ai.token=test-token \
+  --set ai.githubReadTokenSecretName=read-token \
+  --set server.replicaCount=2 \
+  --set server.pullRequestEscalation.enabled=true \
+  --set server.actions.mode=proxy
+grep -Fq "$replica_error" "$tmp/escalation-replicas.out"
 
 # Escalation must not leak a GitHub read token into a server that cannot use it.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
