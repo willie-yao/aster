@@ -334,11 +334,11 @@ func TestClusterResolveReadsWhatAttributionPublishes(t *testing.T) {
 	baseline := prattribution.BuildBaseline([]models.JobDetail{{
 		Name: "periodic-project-e2e", JobID: "periodic-project-e2e", JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{{
-			BuildInfo: models.BuildInfo{BuildID: "1", Started: clusterStart},
+			BuildInfo: models.BuildInfo{BuildID: "1", Started: clusterStart, RepoRefs: map[string]string{"org/repo": "main"}},
 			TestCases: []models.TestCase{{Name: clusterTest, Status: "passed"}},
 		}},
-	}}, models.FlakinessReport{})
-	prattribution.Annotate(details, baseline, prattribution.Repository{}, nil)
+	}}, models.FlakinessReport{}, prattribution.Repository{Owner: "org", Name: "repo"})
+	prattribution.Annotate(details, baseline, prattribution.Repository{Owner: "org", Name: "repo"}, nil)
 
 	clusters := prattribution.Clusters(details)
 	if len(clusters) != 1 || !clusters[0].Escalatable {

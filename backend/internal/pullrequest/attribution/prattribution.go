@@ -26,7 +26,7 @@ const widespreadHighConfidencePulls = 3
 // base-branch evidence or take the failure out of escalation.
 const widespreadVerdictMinPulls = 2
 
-// Baseline is the observed non-pull-request evidence for one pass.
+// Baseline is the observed non-pull-request evidence for one base branch.
 type Baseline struct {
 	// FailingOnBase maps test name to the base-branch jobs currently reporting
 	// it as failed.
@@ -42,33 +42,28 @@ type Baseline struct {
 	Observed bool
 }
 
-// BuildBaseline derives base-branch evidence from the periodic job details and
-// flakiness report the dashboard pass already produced. Presubmit jobs are
-// excluded from every field so a verdict does not depend on whether the
-// dashboard publishes presubmits. Callers should supply a flakiness report
-// computed over base-branch jobs only, because a report ranked across every
-// published job can drop a base-branch flake before it reaches this filter.
-func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport) Baseline {
-	baseline := Baseline{
-		FailingOnBase: map[string][]string{},
-		FlakyTests:    map[string][]string{},
-		KnownTests:    map[string]bool{},
-	}
-	// Flakiness entries carry no job type, so presubmit job IDs are collected
-	// here to filter the flakiness report below. Matching on the ID rather than
-	// the name keeps a periodic and a presubmit that share a name distinct.
-	presubmitJobs := map[string]bool{}
+// BuildBaseline derives branch-scoped evidence for the configured repository
+// from non-presubmit jobs and a flakiness report computed over those jobs.
+func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport, repo Repository) map[string]Baseline {
+	baselines := make(map[string]Baseline)
+	jobBranches := make(map[string]string)
 	for _, detail := range details {
-		// Presubmit job details describe other pull requests, not the base branch.
-		if detail.JobType == models.JobTypePresubmit {
-			presubmitJobs[detail.JobID] = true
+		if detail.JobType == models.JobTypePresubmit || len(detail.Runs) == 0 {
 			continue
 		}
-		if len(detail.Runs) == 0 {
+		newest := newestRun(detail.Runs)
+		branch, ok := baselineBranch(newest.BuildInfo, repo)
+		if !ok {
 			continue
+		}
+		baseline := baselines[branch]
+		if !baseline.Observed {
+			baseline.FailingOnBase = map[string][]string{}
+			baseline.FlakyTests = map[string][]string{}
+			baseline.KnownTests = map[string]bool{}
 		}
 		baseline.Observed = true
-		newest := newestRun(detail.Runs)
+		jobBranches[detail.JobID] = branch
 		for _, tc := range newest.TestCases {
 			if tc.Source == models.TestCaseSourceBuild {
 				continue
@@ -78,6 +73,7 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport)
 				baseline.FailingOnBase[tc.Name] = appendUnique(baseline.FailingOnBase[tc.Name], detail.Name)
 			}
 		}
+		baselines[branch] = baseline
 	}
 	for _, group := range [][]models.TestFlakiness{
 		flakiness.MostFlaky, flakiness.PersistentFailures, flakiness.RecentlyBroken,
@@ -86,15 +82,16 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport)
 			if entry.Classification != models.ClassificationFlaky {
 				continue
 			}
-			// Presubmit flakiness is measured across other pull requests, so it
-			// is not base-branch history. Peer failures have their own verdict.
-			if presubmitJobs[entry.JobID] {
+			branch, ok := jobBranches[entry.JobID]
+			if !ok {
 				continue
 			}
+			baseline := baselines[branch]
 			baseline.FlakyTests[entry.TestName] = appendUnique(baseline.FlakyTests[entry.TestName], entry.JobName)
+			baselines[branch] = baseline
 		}
 	}
-	return baseline
+	return baselines
 }
 
 // newestRun returns the most recently started run.
@@ -106,6 +103,50 @@ func newestRun(runs []models.BuildResult) models.BuildResult {
 		}
 	}
 	return newest
+}
+
+// baselineBranch reads a single branch for the configured repository without
+// requiring immutable source identity from read-only triage metadata.
+func baselineBranch(build models.BuildInfo, repo Repository) (string, bool) {
+	owner, name := strings.TrimSpace(repo.Owner), strings.TrimSpace(repo.Name)
+	if owner == "" || name == "" {
+		return "", false
+	}
+	wanted := owner + "/" + name
+	var branch string
+	found := false
+	for key, value := range build.RepoRefs {
+		if !strings.EqualFold(strings.TrimSpace(key), wanted) {
+			continue
+		}
+		if strings.Contains(value, ",") || strings.Count(value, ":") > 1 {
+			return "", false
+		}
+		candidate := strings.TrimSpace(value)
+		if strings.Contains(candidate, ":") {
+			var suffix string
+			candidate, suffix, _ = strings.Cut(candidate, ":")
+			suffix = strings.TrimSpace(suffix)
+			if suffix == "" || strings.Trim(suffix, "0123456789abcdefABCDEF") != "" {
+				return "", false
+			}
+		}
+		candidate = strings.TrimSpace(candidate)
+		qualified := strings.HasPrefix(candidate, "refs/heads/")
+		if qualified {
+			candidate = strings.TrimPrefix(candidate, "refs/heads/")
+		} else if strings.HasPrefix(candidate, "refs/") {
+			return "", false
+		}
+		if candidate == "" || strings.EqualFold(candidate, "ambiguous") ||
+			strings.ContainsAny(candidate, " \t\r\n:") ||
+			!qualified && strings.Trim(candidate, "0123456789abcdefABCDEF") == "" ||
+			found && branch != candidate {
+			return "", false
+		}
+		branch, found = candidate, true
+	}
+	return branch, found
 }
 
 // failureKey identifies one failing case across pull requests. Job name is part
@@ -122,7 +163,7 @@ type failureKey struct {
 // Annotate attaches a deterministic attribution to every failing case in
 // details, in place. Overlap between a failure site and a pull request's
 // changed files refines an unexplained verdict; changes may be nil.
-func Annotate(details []models.PullRequestDetail, baseline Baseline, repo Repository, changes map[int]PullChanges) {
+func Annotate(details []models.PullRequestDetail, baselines map[string]Baseline, repo Repository, changes map[int]PullChanges) {
 	otherPulls := pullsByFailure(details)
 	for i := range details {
 		pullChanges := changes[details[i].Number]
@@ -133,7 +174,7 @@ func Annotate(details []models.PullRequestDetail, baseline Baseline, repo Reposi
 				key := failureKey{
 					baseRef: details[i].BaseRef, jobName: check.JobName, testName: failure.Name,
 				}
-				attribution := attribute(details[i].Number, key, failure.TestCase, baseline, otherPulls)
+				attribution := attribute(details[i].Number, key, failure.TestCase, baselines[key.baseRef], otherPulls)
 				// Only the residual set benefits from overlap. A failure already
 				// explained by the base branch or by other pull requests is not
 				// made more explicable by touching changed code.
@@ -183,10 +224,10 @@ func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline
 			return &models.FailureAttribution{
 				Verdict:    models.AttributionPreExisting,
 				Confidence: models.AttributionConfidenceHigh,
-				Summary:    fmt.Sprintf("This test is already failing on the base branch in %s, so this pull request did not introduce it.", humanList(jobs)),
+				Summary:    fmt.Sprintf("This test is already failing on the base branch %s in %s, so this pull request did not introduce it.", key.baseRef, humanList(jobs)),
 				Evidence: []models.AttributionEvidence{{
 					Kind:     models.AttributionEvidenceBaseBranch,
-					Detail:   fmt.Sprintf("The newest base-branch run of %s reports this test as failed.", humanList(jobs)),
+					Detail:   fmt.Sprintf("The newest run on %s of %s reports this test as failed.", key.baseRef, humanList(jobs)),
 					TestName: tc.Name,
 				}},
 			}
@@ -222,10 +263,10 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 			return &models.FailureAttribution{
 				Verdict:    models.AttributionKnownFlake,
 				Confidence: models.AttributionConfidenceMedium,
-				Summary:    fmt.Sprintf("This test is already tracked as flaky in %s, so the failure may not reflect this pull request.", humanList(jobs)),
+				Summary:    fmt.Sprintf("This test is already tracked as flaky on %s in %s, so the failure may not reflect this pull request.", key.baseRef, humanList(jobs)),
 				Evidence: []models.AttributionEvidence{{
 					Kind:     models.AttributionEvidenceFlakiness,
-					Detail:   fmt.Sprintf("Flakiness history classifies this test as flaky in %s.", humanList(jobs)),
+					Detail:   fmt.Sprintf("Flakiness history on %s classifies this test as flaky in %s.", key.baseRef, humanList(jobs)),
 					TestName: tc.Name,
 				}},
 			}
@@ -238,10 +279,10 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionInconclusive,
 			Confidence: models.AttributionConfidenceLow,
-			Summary:    "No base-branch results were available in this pass, so this failure could not be compared against one.",
+			Summary:    fmt.Sprintf("No results from base branch %s were available in this pass, so this failure could not be compared against one.", key.baseRef),
 			Evidence: []models.AttributionEvidence{{
 				Kind:   models.AttributionEvidenceNoBaseline,
-				Detail: "This pass published no base-branch job runs to compare against.",
+				Detail: fmt.Sprintf("This pass published no job runs on %s to compare against.", key.baseRef),
 			}},
 		}
 	}
@@ -263,7 +304,7 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 			Summary:    basePassingSummary(key.baseRef, others),
 			Evidence: []models.AttributionEvidence{{
 				Kind:     models.AttributionEvidenceBaseBranch,
-				Detail:   "The newest base-branch run reports this test as passing.",
+				Detail:   fmt.Sprintf("The newest run on %s reports this test as passing.", key.baseRef),
 				TestName: tc.Name,
 			}},
 		}
@@ -271,10 +312,10 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 	return &models.FailureAttribution{
 		Verdict:    models.AttributionUnexplained,
 		Confidence: models.AttributionConfidenceLow,
-		Summary:    "This test does not run on the base branch, so there is no baseline to compare against.",
+		Summary:    fmt.Sprintf("This test does not run on base branch %s, so there is no baseline to compare against.", key.baseRef),
 		Evidence: []models.AttributionEvidence{{
 			Kind:     models.AttributionEvidenceNoBaseline,
-			Detail:   "No base-branch job observed this test in the current window.",
+			Detail:   fmt.Sprintf("No job on %s observed this test in the current window.", key.baseRef),
 			TestName: tc.Name,
 		}},
 	}
@@ -285,9 +326,9 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 // and the no-peer wording is scoped to the branch the comparison covered.
 func basePassingSummary(baseRef string, others []int) string {
 	if len(others) == 0 {
-		return fmt.Sprintf("This test passes on the base branch and is not failing on other open pull requests%s, so it needs investigation on this pull request.", baseRefScope(baseRef))
+		return fmt.Sprintf("This test passes on base branch %s and is not failing on other open pull requests%s, so it needs investigation on this pull request.", baseRef, baseRefScope(baseRef))
 	}
-	return fmt.Sprintf("This test passes on the base branch. It is also failing on %s, which is not enough to rule this pull request out, so it needs investigation.", pullList(others))
+	return fmt.Sprintf("This test passes on base branch %s. It is also failing on %s, which is not enough to rule this pull request out, so it needs investigation.", baseRef, pullList(others))
 }
 
 // buildLevelSummary states the residual verdict for a job that failed without
