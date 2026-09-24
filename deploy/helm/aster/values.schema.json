@@ -766,7 +766,7 @@
       "properties": {
         "replicaCount": {
           "type": "integer",
-          "description": "Server Deployment replica count.",
+          "description": "Server Deployment replica count. Actions or pull request/shared-failure escalation require one replica per data directory; read-only and chat-only servers may use more.",
           "minimum": 1
         },
         "staticDir": {

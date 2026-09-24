@@ -232,6 +232,8 @@ fetcher:
   affinity: {}
 
 server:
+  # Actions or pull request/shared-failure escalation require one replica per
+  # data directory. Read-only and chat-only servers may use more replicas.
   replicaCount: 1
   # Path to the SPA baked into the image.
   staticDir: /app/web
