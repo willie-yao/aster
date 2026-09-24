@@ -17,6 +17,10 @@ cat > "$tmp/bin/docker" <<'DOCKER'
 set -euo pipefail
 printf '%s\n' "$*" >> "$IMAGE_TEST_LOG"
 case ${1:-} in
+  buildx)
+    [[ ${2:-} == imagetools && ${3:-} == inspect ]]
+    printf '%s\n' "${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000001}"
+    ;;
   pull)
     image=${*: -1}
     if [[ -n ${FAIL_IMAGE_SUFFIX:-} && $image == *"$FAIL_IMAGE_SUFFIX"* ]]; then
@@ -25,6 +29,7 @@ case ${1:-} in
     ;;
   image)
     [[ ${2:-} == inspect ]]
+    [[ ${*: -1} == *@sha256:* ]]
     case $* in
       *org.opencontainers.image.version*) printf '%s\n' "${IMAGE_VERSION:-v1.2.3}" ;;
       *) printf '%s\n' "${IMAGE_REVISION:-reviewed-commit}" ;;
@@ -50,11 +55,20 @@ common_env=(
   REVIEWED_COMMIT=reviewed-commit
   IMAGE_WAIT_ATTEMPTS=1
   IMAGE_WAIT_DELAY_SECONDS=0
+  RELEASE_IMAGE_DIGESTS_OUT="$tmp/verified-images"
 )
 
 env "${common_env[@]}" "$script" >"$tmp/success.out"
 [[ $(grep -Fc 'release_image=verified' "$tmp/success.out") == 3 ]]
-grep -Fq 'ghcr.io/example/aster/agent-sandbox-fix-executor:v1.2.3 v1.2.3 reviewed-commit v1.2.3' "$contract_log"
+grep -Fq 'ghcr.io/example/aster/agent-sandbox-fix-executor@sha256:0000000000000000000000000000000000000000000000000000000000000001 v1.2.3 reviewed-commit v1.2.3' "$contract_log"
+[[ $(wc -l < "$tmp/verified-images") -eq 3 ]]
+grep -Fq 'ghcr.io/example/aster/remote-fixer sha256:0000000000000000000000000000000000000000000000000000000000000001' "$tmp/verified-images"
+
+if env "${common_env[@]}" IMAGE_DIGEST=invalid "$script" >"$tmp/digest.out" 2>&1; then
+  echo 'invalid image digest was accepted' >&2
+  exit 1
+fi
+grep -Fq 'invalid release image digest' "$tmp/digest.out"
 
 if env "${common_env[@]}" IMAGE_REVISION=wrong "$script" >"$tmp/revision.out" 2>&1; then
   echo 'wrong image revision was accepted' >&2

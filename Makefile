@@ -116,6 +116,8 @@ helm-check:
 	bash deploy/helm/aster-platform/test-schema.sh
 	bash deploy/helm/aster-platform/test-release.sh
 	bash deploy/helm/aster-platform/test-kind-cleanup.sh
+	python3 hack/release_policy.py --self-test
+	python3 hack/check_release_intent.py --self-test
 	bash hack/test-publish-release.sh
 	bash hack/test-prepare-release-tag.sh
 	bash hack/test-verify-release-images.sh

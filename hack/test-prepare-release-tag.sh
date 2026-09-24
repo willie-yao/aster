@@ -18,7 +18,8 @@ fixture=$tmp/work
 "$real_git" init --bare --quiet "$tmp/remote.git"
 "$real_git" init --quiet -b main "$fixture"
 mkdir -p "$fixture/hack" "$fixture/changelog" "$fixture/backend" "$tmp/bin"
-cp "$root/hack/prepare-release-tag.sh" "$root/hack/release-checks.sh" "$fixture/hack/"
+cp "$root/hack/prepare-release-tag.sh" "$root/hack/release-checks.sh" \
+  "$root/hack/release_policy.py" "$fixture/hack/"
 # Run the fixture's copy: the script resolves its repository from its own path,
 # so this is what keeps it away from the real checkout and the real remote.
 script=$fixture/hack/prepare-release-tag.sh
@@ -123,11 +124,16 @@ expect_failure 'already released version' 'release tag already exists: v1.1.0' T
 "$real_git" tag -d v1.1.0 > /dev/null
 
 # An uncommitted or unpushed HEAD must not be tagged.
+printf 'Local draft.\n' >> changelog/v1.1.0.md
+expect_failure 'uncommitted release notes' 'release tagging requires a clean checkout' TAG=v1.1.0
+"$real_git" restore -- changelog/v1.1.0.md
+"$real_git" switch --quiet -c local-test
 printf 'local only\n' > local.txt
 "$real_git" add local.txt
 "$real_git" commit --quiet -m 'unpushed'
-expect_failure 'HEAD ahead of origin/main' 'is not the tip of origin/main' TAG=v1.1.0
-"$real_git" reset --quiet --hard origin/main
+expect_failure 'HEAD ahead of origin/main' 'is not the tip of origin/main' TAG=v1.1.0 RELEASE_SOURCE_BRANCH=main
+expect_failure 'unsupported source branch' 'unsupported release source branch: local-test' TAG=v1.1.0
+"$real_git" switch --quiet main
 
 # A version the module mirror is already serving must not be reused, even when
 # its tags were deleted: the mirror can keep serving the original content.
@@ -156,6 +162,8 @@ expect_failure 'exact tag lookup failed' 'failed to inspect release tag: v1.1.0'
   TAG=v1.1.0 LS_REMOTE_EXIT=128
 
 # The happy path validates, then creates both tags atomically at the reviewed tip.
+TAG=v1.1.0 RELEASE_SOURCE_BRANCH=main PREPARE_REVIEW_ONLY=true "$script" |
+  grep -Fq 'validated release intent v1.1.0 for main'
 TAG=v1.1.0 PREPARE_DRY_RUN=true "$script" | grep -Fq 'would create v1.1.0 and backend/v1.1.0'
 if "$real_git" ls-remote --exit-code --refs --tags origin 'refs/tags/v*' > /dev/null 2>&1; then
   echo 'dry run created a tag' >&2
@@ -207,5 +215,43 @@ if grep -Fq 'secrets.GITHUB_TOKEN' "$root/.github/workflows/release-tag.yml"; th
   echo 'release tag workflow pushes with the default token, which publishes nothing' >&2
   exit 1
 fi
+grep -Fq 'RELEASE_SOURCE_BRANCH: ${{ github.ref_name }}' "$root/.github/workflows/release-tag.yml"
+python3 - "$root/.github/workflows/release-pr-check.yml" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+text = Path(sys.argv[1]).read_text()
+workflow = yaml.safe_load(text)
+assert "pull_request_target:" not in text
+assert "secrets." not in text
+assert workflow["permissions"] == {"contents": "read"}
+steps = workflow["jobs"]["validate"]["steps"]
+checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
+assert checkout["with"]["persist-credentials"] is False
+assert any("hack/check_release_intent.py --base-ref" in step.get("run", "") for step in steps)
+PY
+
+"$real_git" switch --quiet -c release/1.1
+write_release v1.1.1
+"$real_git" add -A
+"$real_git" commit --quiet -m 'maintenance patch'
+"$real_git" push --quiet origin release/1.1
+"$real_git" tag v1.2.0 main
+"$real_git" push --quiet origin refs/tags/v1.2.0
+TAG=v1.1.1 RELEASE_SOURCE_BRANCH=release/1.1 PREPARE_DRY_RUN=true "$script" |
+  grep -Fq 'would create v1.1.1 and backend/v1.1.1'
+expect_failure 'backport from main' 'refusing to publish v1.1.1: v1.2.0 is already released' \
+  TAG=v1.1.1 RELEASE_SOURCE_BRANCH=main
+expect_failure 'wrong maintenance line' 'is not a patch release on release/1.2' \
+  TAG=v1.1.1 RELEASE_SOURCE_BRANCH=release/1.2
+write_release v1.1.2
+"$real_git" add -A
+"$real_git" commit --quiet -m 'unpushed maintenance patch'
+expect_failure 'maintenance HEAD ahead' 'is not the tip of origin/release/1.1' \
+  TAG=v1.1.2 RELEASE_SOURCE_BRANCH=release/1.1
+TAG=v1.1.2 RELEASE_SOURCE_BRANCH=release/1.1 PREPARE_REVIEW_ONLY=true "$script" |
+  grep -Fq 'validated release intent v1.1.2 for release/1.1'
 
 echo 'Release tag preparation checks passed.'

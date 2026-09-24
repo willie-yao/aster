@@ -180,6 +180,8 @@ RELEASE_SHARED_PATHS = (
     "hack/prepare-release-tag.sh",
     "hack/publish-release.sh",
     "hack/release-checks.sh",
+    "hack/release_policy.py",
+    "hack/check_release_intent.py",
     "hack/test-prepare-release-tag.sh",
     "hack/test-publish-release.sh",
     "hack/test-release-cli-assets.sh",

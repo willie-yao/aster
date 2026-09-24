@@ -35,46 +35,159 @@ check_release_notes() {
   fi
 }
 
-# The release must be the newest version in the repository. Comparison is by
-# semantic precedence, so a prerelease sorts below the release it leads to and
-# beta sorts below rc. Tags that are not strict release tags, including the
-# moving vMAJOR alias and backend/ module tags, are ignored.
-check_version_moves_forward() {
-  local tag=$1 existing
-  if ! existing=$(git ls-remote --refs --tags origin 'refs/tags/v*' | sed 's|.*refs/tags/||'); then
+release_policy() {
+  python3 "$(dirname "${BASH_SOURCE[0]}")/release_policy.py" "$@"
+}
+
+release_tags() {
+  local tags
+  if ! tags=$(git ls-remote --refs --tags origin 'refs/tags/v*' | sed 's|.*refs/tags/||'); then
     echo "failed to enumerate existing release tags" >&2
     return 1
   fi
-  EXISTING_TAGS="$existing" python3 - "$tag" <<'PY_MONOTONIC'
-import os
-import re
-import sys
+  printf '%s\n' "$tags"
+}
 
-RELEASE = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(beta|rc)\.(0|[1-9][0-9]*))?$")
+check_version_moves_forward() {
+  local tag=$1 branch=${2:-main} tags
+  tags=$(release_tags) || return 1
+  printf '%s\n' "$tags" | release_policy check "$tag" --branch "$branch"
+}
 
+release_promotion_flags() {
+  local tag=$1 tags
+  tags=$(release_tags) || return 1
+  printf '%s\n' "$tags" | release_policy promote "$tag"
+}
 
-def precedence(value):
-    match = RELEASE.fullmatch(value)
-    if not match:
-        return None
-    major, minor, patch, phase, number = match.groups()
-    stage = (0, phase, int(number)) if phase else (1, "", 0)
-    return (int(major), int(minor), int(patch), stage)
+release_branch_for_tag() {
+  local tag=$1
+  check_release_tag_format "$tag" || return 1
+  [[ $tag =~ ^v([0-9]+)[.]([0-9]+)[.] ]] || return 1
+  printf 'release/%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
 
+remote_release_branch_head() {
+  local branch=$1 output sha fetched
+  if ! output=$(git ls-remote --exit-code --refs --heads origin "refs/heads/$branch"); then
+    echo "failed to inspect release source branch: $branch" >&2
+    return 1
+  fi
+  sha=$(printf '%s\n' "$output" | awk -v ref="refs/heads/$branch" '$2 == ref {print $1}')
+  if [[ ! $sha =~ ^[0-9a-f]{40}$ ]] ||
+    ! git fetch --quiet --no-tags origin "refs/heads/$branch"; then
+    echo "failed to fetch release source branch: $branch" >&2
+    return 1
+  fi
+  fetched=$(git rev-parse 'FETCH_HEAD^{commit}') || return 1
+  if [[ $fetched != "$sha" ]]; then
+    echo "release source branch moved during inspection: $branch" >&2
+    return 1
+  fi
+  printf '%s\n' "$fetched"
+}
 
-requested = sys.argv[1]
-requested_precedence = precedence(requested)
-newest = None
-for line in os.environ.get("EXISTING_TAGS", "").splitlines():
-    existing = line.strip()
-    if not existing or existing == requested:
-        continue
-    parsed = precedence(existing)
-    if parsed is None:
-        continue
-    if newest is None or parsed > newest[0]:
-        newest = (parsed, existing)
-if newest is not None and requested_precedence <= newest[0]:
-    raise SystemExit(f"refusing to publish {requested}: {newest[1]} is already released")
-PY_MONOTONIC
+check_release_source_branch() {
+  local tag=$1 branch=$2 commit=$3 mode=$4 anchor anchor_commit head major minor
+  check_release_tag_format "$tag" || return 1
+  case $mode in
+    pr | exact | ancestor) ;;
+    *)
+      echo "invalid release source check: $mode" >&2
+      return 1
+      ;;
+  esac
+  if [[ $branch != main ]]; then
+    if [[ ! $branch =~ ^release/(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]]; then
+      echo "unsupported release source branch: $branch" >&2
+      return 1
+    fi
+    major=${BASH_REMATCH[1]}
+    minor=${BASH_REMATCH[2]}
+    if [[ ! $tag =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.]([1-9][0-9]*)(-(beta|rc)[.](0|[1-9][0-9]*))?$ ]]; then
+      echo "$tag is not a patch release on $branch" >&2
+      return 1
+    fi
+    if [[ ${BASH_REMATCH[1]} != "$major" || ${BASH_REMATCH[2]} != "$minor" ]]; then
+      echo "$tag is not a patch release on $branch" >&2
+      return 1
+    fi
+    anchor="v${major}.${minor}.0"
+    if ! git ls-remote --exit-code --refs --tags origin "refs/tags/$anchor" >/dev/null ||
+      ! git fetch --quiet --no-tags origin "refs/tags/$anchor"; then
+      echo "missing stable release anchor: $anchor" >&2
+      return 1
+    fi
+    anchor_commit=$(git rev-parse 'FETCH_HEAD^{commit}') || return 1
+    if ! git merge-base --is-ancestor "$anchor_commit" "$commit"; then
+      echo "$commit does not descend from stable release $anchor" >&2
+      return 1
+    fi
+  fi
+  [[ $mode == pr ]] && return 0
+  head=$(remote_release_branch_head "$branch") || return 1
+  if [[ $mode == exact && $commit != "$head" ]]; then
+    echo "HEAD $commit is not the tip of origin/$branch $head" >&2
+    return 1
+  fi
+  if [[ $mode == ancestor ]] && ! git merge-base --is-ancestor "$commit" "$head"; then
+    echo "$commit is not reachable from origin/$branch $head" >&2
+    return 1
+  fi
+}
+
+publication_source_branch() {
+  local tag=$1 commit=$2 candidate status head
+  candidate=$(release_branch_for_tag "$tag") || return 1
+  if [[ $tag =~ ^v[0-9]+[.][0-9]+[.]([1-9][0-9]*)(-|$) ]]; then
+    if git ls-remote --exit-code --refs --heads origin "refs/heads/$candidate" >/dev/null; then
+      head=$(remote_release_branch_head "$candidate") || return 1
+      if git merge-base --is-ancestor "$commit" "$head"; then
+        printf '%s\n' "$candidate"
+        return
+      fi
+    else
+      status=$?
+      if [[ $status -ne 2 ]]; then
+        echo "failed to inspect release source branch: $candidate" >&2
+        return 1
+      fi
+    fi
+  fi
+  printf 'main\n'
+}
+
+check_release_tags_available() {
+  local tag=$1 candidate status
+  for candidate in "$tag" "backend/$tag"; do
+    if git ls-remote --exit-code --refs --tags origin "refs/tags/$candidate" >/dev/null; then
+      echo "release tag already exists: $candidate" >&2
+      return 1
+    else
+      status=$?
+      if [[ $status -ne 2 ]]; then
+        echo "failed to inspect release tag: $candidate" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
+check_module_version_unused() {
+  local tag=$1 module_path proxy_status
+  module_path=$(awk '/^module /{print $2; exit}' backend/go.mod)
+  proxy_status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+    "https://proxy.golang.org/cached-only/${module_path}/@v/${tag}.info") || proxy_status=unreachable
+  case $proxy_status in
+    404) ;;
+    200)
+      echo "module version already published and immutable on the Go proxy: ${module_path}@${tag}" >&2
+      echo "pick the next version; a deleted tag does not free its version number" >&2
+      return 1
+      ;;
+    *)
+      echo "failed to check the Go module proxy for ${module_path}@${tag} (status $proxy_status)" >&2
+      return 1
+      ;;
+  esac
 }

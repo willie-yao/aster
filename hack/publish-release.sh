@@ -146,12 +146,12 @@ ensure_release_tag_pair() {
 
 reviewed_commit=$(git rev-parse 'HEAD^{commit}')
 
-# Runs before tag-pair repair and before the tags-only exit, so a backward tag
-# creates no module tag and never satisfies the gate the image workflow uses to
-# authorize version-tagged image pushes. RELEASE_ALLOW_BACKWARD covers module
-# tag recovery on an older published release.
+# Runs before tag-pair repair and the tags-only image gate. Only a reviewed
+# maintenance branch permits an older minor line to publish a new patch.
 if [[ $release_allow_backward != true ]]; then
-  check_version_moves_forward "$TAG" || exit 1
+  source_branch=$(publication_source_branch "$TAG" "$reviewed_commit") || exit 1
+  check_version_moves_forward "$TAG" "$source_branch" || exit 1
+  check_release_source_branch "$TAG" "$source_branch" "$reviewed_commit" ancestor || exit 1
 fi
 
 ensure_release_tag_pair
@@ -175,11 +175,16 @@ chart_version=${TAG#v}
 TAG="$TAG" \
   IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
   REVIEWED_COMMIT="$reviewed_commit" \
+  RELEASE_IMAGE_DIGESTS_OUT="$tmp/verified-images" \
   hack/verify-release-images.sh
 
+promotion=$(release_promotion_flags "$TAG") || exit 1
+read -r advance_major make_latest <<< "$promotion"
 major=""
 if [[ $TAG != *-* ]]; then
   major=$(printf '%s' "$TAG" | sed -E 's/^(v[0-9]+).*/\1/')
+fi
+if [[ $advance_major == true ]]; then
   alias_ref="refs/tags/$major"
   set +e
   git ls-remote --exit-code --refs --tags origin "$alias_ref" > "$tmp/alias-remote"
@@ -309,7 +314,7 @@ ensure_release_tag_pair
 helm push "$app_pkg" "$registry"
 ensure_release_tag_pair
 
-release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --notes-file "$release_notes" --verify-tag)
+release_args=("$TAG" "$app_pkg" "$platform_pkg" "$source_archive" "$release_manifest" "$tmp/SHA256SUMS" "${cli_assets[@]}" --title "$TAG" --notes-file "$release_notes" --verify-tag "--latest=$make_latest")
 if [[ $TAG == *-* ]]; then
   release_args+=(--prerelease)
 fi
@@ -324,7 +329,43 @@ if [[ -n ${RELEASE_CHECKSUMS_OUT:-} ]]; then
   echo "wrote published checksums to $RELEASE_CHECKSUMS_OUT"
 fi
 
-if [[ $TAG != *-* ]]; then
+if [[ $make_latest == true ]]; then
+  verified_images=()
+  while IFS= read -r identity; do
+    verified_images+=("$identity")
+  done < "$tmp/verified-images"
+  repositories=("$IMAGE_REPOSITORY" "$IMAGE_REPOSITORY/remote-fixer" "$IMAGE_REPOSITORY/agent-sandbox-fix-executor")
+  if [[ ${#verified_images[@]} -ne ${#repositories[@]} ]]; then
+    echo "incomplete verified release image set" >&2
+    exit 1
+  fi
+  digests=()
+  for i in "${!repositories[@]}"; do
+    read -r repository digest <<< "${verified_images[i]}"
+    if [[ $repository != "${repositories[i]}" || ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "invalid verified release image identity" >&2
+      exit 1
+    fi
+    current_digest=$(docker buildx imagetools inspect "$repository:$TAG" --format '{{.Manifest.Digest}}')
+    if [[ $current_digest != "$digest" ]]; then
+      echo "release image tag moved after verification: $repository:$TAG" >&2
+      exit 1
+    fi
+    digests+=("$digest")
+  done
+  for i in "${!repositories[@]}"; do
+    repository=${repositories[i]}
+    digest=${digests[i]}
+    docker buildx imagetools create --tag "$repository:latest" "$repository@$digest"
+    latest_digest=$(docker buildx imagetools inspect "$repository:latest" --format '{{.Manifest.Digest}}')
+    if [[ $latest_digest != "$digest" ]]; then
+      echo "latest image digest mismatch: $repository" >&2
+      exit 1
+    fi
+  done
+fi
+
+if [[ $advance_major == true ]]; then
   git tag -f "$major" "$root_remote_ref"
   git push origin -f "refs/tags/$major"
 fi

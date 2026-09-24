@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ steps.token.outputs.token }}
 
@@ -54,4 +54,5 @@ jobs:
         env:
           TAG: ${{ inputs.version }}
           PREPARE_DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_SOURCE_BRANCH: ${{ github.ref_name }}
         run: hack/prepare-release-tag.sh
