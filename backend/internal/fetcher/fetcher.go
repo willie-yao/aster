@@ -1158,6 +1158,12 @@ func fetchJobRunsCachedWithStats(ctx context.Context, backend storage.Backend, c
 	stats := buildFetchStats{}
 	for _, b := range builds {
 		if cached, ok := cachedBuilds[b.ID]; ok {
+			if job.JobType != models.JobTypePresubmit && cached.Result != "" && cached.Result != "PENDING" {
+				prowbuild.PinBuildRepoRefs(ctx, backend, prowbuild.BuildLocation{
+					JobLocation: prowbuild.JobLocation{JobType: job.JobType},
+					JobName:     job.Name, BuildID: b.ID,
+				}, &cached.BuildInfo)
+			}
 			normalizeBuildResult(&cached)
 			runs = append(runs, cached)
 			stats.cached++

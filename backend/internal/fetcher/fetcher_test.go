@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,6 +22,65 @@ import (
 	"github.com/willie-yao/aster/backend/internal/statefile"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
+
+type cloneReadBackend struct {
+	storage.Backend
+	reads int
+}
+
+func (b *cloneReadBackend) Open(ctx context.Context, name string) (io.ReadCloser, int64, error) {
+	if strings.HasSuffix(name, "/clone-records.json") {
+		b.reads++
+	}
+	return b.Backend.Open(ctx, name)
+}
+
+func TestFetchJobRunsCachedPinsSourceOnce(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "logs", "job", "1")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	records := `[{"refs":{"org":"example","repo":"repo","base_ref":"main"},"final_sha":"ade57a2918a2c76ab56d9cda31b7319b0bff6aa0"}]`
+	if err := os.WriteFile(filepath.Join(buildDir, "clone-records.json"), []byte(records), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := &cloneReadBackend{Backend: backend}
+	job := &models.ProwJob{Name: "job", JobType: models.JobTypePeriodic}
+	cached := models.BuildResult{
+		BuildInfo: models.BuildInfo{
+			BuildID: "1", Result: "FAILURE", JUnitComplete: true,
+			RepoRefs: map[string]string{"example/repo": "main"},
+		},
+		TestCases: []models.TestCase{{Name: "TestCluster", Status: "failed"}},
+	}
+	runs, stats, err := fetchJobRunsCachedWithStats(t.Context(), counted, nil, job, 1,
+		map[string]models.BuildResult{"1": cached})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].RepoRefs["example/repo"] != "main:ade57a2918a2c76ab56d9cda31b7319b0bff6aa0" ||
+		counted.reads != 1 ||
+		stats.cached != 1 || stats.fetched != 0 {
+		t.Fatalf("cached pin: runs=%+v reads=%d stats=%+v", runs, counted.reads, stats)
+	}
+	runs, stats, err = fetchJobRunsCachedWithStats(t.Context(), counted, nil, job, 1,
+		map[string]models.BuildResult{"1": runs[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted.reads != 1 {
+		t.Fatalf("pinned ref was reread: %d reads", counted.reads)
+	}
+	if len(runs) != 1 || runs[0].RepoRefs["example/repo"] != "main:ade57a2918a2c76ab56d9cda31b7319b0bff6aa0" ||
+		stats.cached != 1 || stats.fetched != 0 {
+		t.Fatalf("second pass runs=%+v stats=%+v", runs, stats)
+	}
+}
 
 func TestSetupPipelineUsesProjectPresubmitPolicy(t *testing.T) {
 	for _, include := range []bool{false, true} {

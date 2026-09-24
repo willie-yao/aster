@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"path"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/buildsource"
@@ -29,6 +31,17 @@ type finishedJSON struct {
 	Passed    bool   `json:"passed"`
 	Result    string `json:"result"`
 	Revision  string `json:"revision"`
+}
+
+type cloneRecord struct {
+	Refs struct {
+		Org     string            `json:"org"`
+		Repo    string            `json:"repo"`
+		BaseRef string            `json:"base_ref"`
+		Pulls   []json.RawMessage `json:"pulls"`
+	} `json:"refs"`
+	FinalSHA string `json:"final_sha"`
+	Failed   bool   `json:"failed"`
 }
 
 // FetchBuildInfo reads started.json and finished.json for the build at loc.
@@ -57,6 +70,7 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 		RepoVersion: s.RepoVer,
 		RepoRefs:    s.Repos,
 	}
+	PinBuildRepoRefs(ctx, b, loc, info)
 
 	// finished.json is absent while the build is still running.
 	finishedData, err := storage.ReadAll(ctx, b, buildPath+"finished.json")
@@ -74,6 +88,82 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 	info.Revision = f.Revision
 	info.DurationSeconds = float64(f.Timestamp - s.Timestamp)
 	return info, nil
+}
+
+// PinBuildRepoRefs fills bare branch refs with per-repository tested commits
+// when the optional clone records identify them unambiguously.
+func PinBuildRepoRefs(ctx context.Context, b storage.Backend, loc BuildLocation, info *models.BuildInfo) bool {
+	if info == nil || loc.JobType != models.JobTypePeriodic || loc.PullNumber != "" {
+		return false
+	}
+	needsPin := false
+	for _, ref := range info.RepoRefs {
+		if bareBranchRef(ref) {
+			needsPin = true
+			break
+		}
+	}
+	if !needsPin {
+		return false
+	}
+
+	data, err := storage.ReadAll(ctx, b, loc.BuildPath()+"clone-records.json")
+	if err != nil {
+		if !errors.Is(err, storage.ErrNotFound) {
+			log.Printf("    ⚠ %s/%s: reading clone-records.json: %v", loc.JobName, loc.BuildID, err)
+		}
+		return false
+	}
+	var records []cloneRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		log.Printf("    ⚠ %s/%s: parsing clone-records.json: %v", loc.JobName, loc.BuildID, err)
+		return false
+	}
+	revisions := make(map[string]string)
+	conflicts := make(map[string]bool)
+	for _, record := range records {
+		repo := record.Refs.Org + "/" + record.Refs.Repo
+		if record.Refs.Org == "" || record.Refs.Repo == "" {
+			continue
+		}
+		ref, ok := info.RepoRefs[repo]
+		if !ok || !bareBranchRef(ref) {
+			continue
+		}
+		if len(record.Refs.Pulls) != 0 {
+			conflicts[repo] = true
+			continue
+		}
+		if record.Failed || strings.ContainsAny(record.FinalSHA, ",:") {
+			continue
+		}
+		sha, ok := buildsource.NormalizeRevision(record.FinalSHA)
+		if !ok {
+			continue
+		}
+		if ref != record.Refs.BaseRef {
+			conflicts[repo] = true
+			continue
+		}
+		if previous, seen := revisions[repo]; seen && previous != sha {
+			conflicts[repo] = true
+		}
+		revisions[repo] = sha
+	}
+	pinned := false
+	for repo, sha := range revisions {
+		if !conflicts[repo] {
+			info.RepoRefs[repo] += ":" + sha
+			pinned = true
+		}
+	}
+	return pinned
+}
+
+func bareBranchRef(ref string) bool {
+	return ref != "" && !strings.EqualFold(ref, "ambiguous") &&
+		!strings.ContainsAny(ref, ",: \t\r\n") &&
+		strings.Trim(ref, "0123456789abcdefABCDEF") != ""
 }
 
 // junitFileRe matches JUnit XML basenames from common Prow test frameworks.

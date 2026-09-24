@@ -103,6 +103,8 @@ const (
 	analysisChatIdempotencyHeader     = "Idempotency-Key"
 	analysisChatOutcomeHeader         = "X-Analysis-Chat-Outcome"
 	analysisChatReasonHeader          = "X-Analysis-Chat-Reason"
+	analysisChatSourceRevisionUnknown = "source_revision_unknown"
+	analysisChatSourceUnknownMessage  = "Aster could not determine the exact source commit this build tested, so a Fix proposal cannot be pinned"
 	defaultAnalysisChatTimeout        = analysischat.DefaultTurnTimeout
 	maxAnalysisChatReferenceBodyBytes = 128 << 10
 	maxAnalysisChatMessageBodyBytes   = 32 << 10
@@ -333,6 +335,9 @@ func writeAnalysisChatError(w http.ResponseWriter, id, login string, err error) 
 // failure: an action reason code, or the response gate a validation failure
 // tripped.
 func analysisChatReasonCode(err error) (string, bool) {
+	if errors.Is(err, analysischat.ErrSourceRevisionUnknown) {
+		return analysisChatSourceRevisionUnknown, true
+	}
 	if code, ok := actions.ReasonCodeFrom(err); ok {
 		return string(code), true
 	}
@@ -354,6 +359,8 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 		status, message, outcome = http.StatusNotFound, "analysis chat request not found", "rejected"
 	case errors.Is(err, analysischat.ErrAnalysisChanged), errors.Is(err, analysischat.ErrPatternChanged), errors.Is(err, analysischat.ErrCauseChanged):
 		status, message, outcome = http.StatusConflict, "analysis changed; start a new chat", "rejected"
+	case errors.Is(err, analysischat.ErrSourceRevisionUnknown):
+		status, message, outcome = http.StatusUnprocessableEntity, analysisChatSourceUnknownMessage, "rejected"
 	case errors.Is(err, analysischat.ErrSessionBusy):
 		status, message, outcome = http.StatusConflict, analysischat.ErrSessionBusy.Error(), "pending"
 	case errors.Is(err, analysischat.ErrRequestPending):

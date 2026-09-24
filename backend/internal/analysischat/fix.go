@@ -159,6 +159,7 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 	ctx, cancel := s.store.context()
 	defer cancel()
 	var candidate FixCandidate
+	missingCauseTarget := false
 	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
 		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(sessionID)]
@@ -182,6 +183,11 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 			return changed, ErrAnalysisNotFound
 		}
 		target := persistedAnalysisFixTarget(current.Resolved)
+		if target == nil && current.View.Analysis.Scope == ScopeCause {
+			candidate.Analysis = current.View.Analysis
+			missingCauseTarget = true
+			return changed, nil
+		}
 		if target == nil || target.TestCase.AIAnalysis == nil {
 			return changed, fmt.Errorf("%w: conversation has no current failed-test Fix target", ErrInvalidRequest)
 		}
@@ -208,14 +214,25 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 	analysis := resolved.testCase.AIAnalysis
 	target := resolvedAnalysisFixTarget(resolved)
 	if target == nil {
+		if missingCauseTarget {
+			return FixCandidate{}, fmt.Errorf("%w: conversation has no current failed-test Fix target", ErrInvalidRequest)
+		}
 		return FixCandidate{}, ErrAnalysisChanged
+	}
+	if missingCauseTarget {
+		return FixCandidate{}, ErrSourceRevisionUnknown
 	}
 	currentSource, sourceOK := resolveBuildSourceRepository(target.build, candidate.SourceRepositorySnapshot)
 	if analysis == nil ||
 		!sameBoundAnalysisSnapshot(candidate.Analysis.Scope, candidate.Original, analysisSnapshot(analysis)) || candidate.FixTarget != target.ref ||
 		target.testCase.AIAnalysis == nil || target.testCase.Status != "failed" || target.build.Passed ||
-		candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(target.testCase) != candidate.AnalysisContentHash ||
-		sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK || currentSource != candidate.SourceRepositorySnapshot {
+		candidate.AnalysisContentHash == "" || models.TestAnalysisContentHash(target.testCase) != candidate.AnalysisContentHash {
+		return FixCandidate{}, ErrAnalysisChanged
+	}
+	if sourceinvestigation.ValidateRepository(candidate.SourceRepositorySnapshot) != nil || !sourceOK {
+		return FixCandidate{}, ErrSourceRevisionUnknown
+	}
+	if currentSource != candidate.SourceRepositorySnapshot {
 		return FixCandidate{}, ErrAnalysisChanged
 	}
 	currentBranch, currentBranchKnown := buildsource.Branch(

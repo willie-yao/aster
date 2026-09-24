@@ -274,12 +274,14 @@ function AssistantMessage({
   fileCtx,
   chatFixEnabled,
   fixEligible,
+  sourceUnavailable,
   onUseForFix,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
   chatFixEnabled: boolean;
   fixEligible: boolean;
+  sourceUnavailable: boolean;
   onUseForFix: () => void;
 }) {
   const assessment = message.assessment
@@ -489,7 +491,11 @@ function AssistantMessage({
         )}
 
 
-        {chatFixEnabled && fixEligible && message.request_id && (
+        {chatFixEnabled && fixEligible && message.request_id && (sourceUnavailable ? (
+          <Typography variant="caption" color="textSecondary">
+            A Fix proposal is unavailable because Aster could not determine the exact source commit this build tested.
+          </Typography>
+        ) : (
           <Chip
             label="Use this finding in a fix proposal"
             onClick={onUseForFix}
@@ -506,7 +512,7 @@ function AssistantMessage({
               "& .MuiChip-icon": { fontSize: 15 },
             }}
           />
-        )}
+        ))}
       </Stack>
     </Box>
   );
@@ -603,6 +609,7 @@ export function AnalysisChatTranscript({
     if (message.role === "user") return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
     return <AssistantMessage key={entry.key} message={message} fileCtx={fileCtx}
       chatFixEnabled={chatFixEnabled} fixEligible={fixEligible && Boolean(message.request_id && message.content.trim())}
+      sourceUnavailable={session.analysis.scope === "test" && !session.source_repository}
       onUseForFix={() => onUseForFix?.(message)} />;
   });
 }

@@ -3,6 +3,7 @@ package analysischat
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/prowbuild"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 const exactFixSourceRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -88,6 +91,67 @@ func TestServiceAnalysisFixCandidateSharesExactAnalysisAndEvidence(t *testing.T)
 	}
 }
 
+func TestServiceAnalysisFixCandidatePinsMultiRepoCloneRecords(t *testing.T) {
+	root := t.TempDir()
+	buildDir := filepath.Join(root, "logs", "job", "123")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := map[string]string{
+		"started.json": `{"timestamp":1000,"repos":{"example/repo":"main","example/other":"master"},"repo-commit":"` +
+			exactFixSourceRevision + `","repo-version":"` + exactFixSourceRevision + `"}`,
+		"clone-records.json": `[{"refs":{"org":"example","repo":"repo","base_ref":"main"},"final_sha":"` +
+			exactFixSourceRevision + `"},{"refs":{"org":"example","repo":"other","base_ref":"master"},"final_sha":"fedcba9876543210fedcba9876543210fedcba98"}]`,
+	}
+	for name, contents := range artifacts {
+		if err := os.WriteFile(filepath.Join(buildDir, name), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backend, err := storage.New(storage.Config{Provider: storage.ProviderLocal, Base: root}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := prowbuild.FetchBuildInfo(t.Context(), backend, prowbuild.BuildLocation{
+		JobLocation: prowbuild.JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
+	detail.Runs[0].RepoRefs = info.RepoRefs
+	detail.Runs[0].Commit, detail.Runs[0].RepoVersion = info.Commit, info.RepoVersion
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{
+		Answer: "The published analysis explains the failure.", Assessment: "explains",
+	}}, Options{StateDir: filepath.Join(dir, ".chat")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(AnalysisRef{
+		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
+		AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SourceRepository == nil || session.SourceRepository.Revision != exactFixSourceRevision {
+		t.Fatalf("session source = %+v", session.SourceRepository)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Explain the failed test."); err != nil {
+		t.Fatal(err)
+	}
+	if candidate, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); err != nil ||
+		candidate.SourceRepositorySnapshot.Revision != exactFixSourceRevision {
+		t.Fatalf("candidate source = %+v, err=%v", candidate.SourceRepositorySnapshot, err)
+	}
+}
+
 func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *testing.T) {
 	service, session, requestID := exactFixService(t, Reply{
 		Answer: "The artifact shows the terminal branch never records Ready through `markReady`.", Assessment: "supports",
@@ -106,6 +170,18 @@ func TestServiceAnalysisFixCandidateRejectsChangedAnalysisEvidenceAndSource(t *t
 	writeJobDetail(t, service.dataDir, detail)
 	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
 		t.Fatalf("changed source revision error = %v", err)
+	}
+}
+
+func TestServiceAnalysisFixCandidateReportsCurrentUnknownSource(t *testing.T) {
+	service, session, requestID := exactFixService(t, Reply{
+		Answer: "The published analysis explains the failure.", Assessment: "explains",
+	}, nil)
+	detail := testDetail(analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
+	detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main", "example/other": "master"}
+	writeJobDetail(t, service.dataDir, detail)
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrSourceRevisionUnknown) {
+		t.Fatalf("unknown current source error = %v", err)
 	}
 }
 
@@ -478,7 +554,7 @@ func TestServiceExactFixSourceIneligibilityIsProviderFree(t *testing.T) {
 			if turns != 1 {
 				t.Fatalf("normal chat provider calls = %d", turns)
 			}
-			if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
+			if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrSourceRevisionUnknown) {
 				t.Fatalf("ambiguous source candidate error = %v", err)
 			}
 		})
@@ -512,8 +588,64 @@ func TestServiceExactFixDoesNotSalvagePersistedAmbiguousSource(t *testing.T) {
 	} else if view.SourceRepository != nil {
 		t.Fatalf("persisted ambiguous source was salvaged: %+v", view.SourceRepository)
 	}
-	if _, err := restarted.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrAnalysisChanged) {
+	if _, err := restarted.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrSourceRevisionUnknown) {
 		t.Fatalf("ambiguous persisted source error = %v", err)
+	}
+}
+
+func TestServiceCauseAnalysisFixCandidateReportsUnknownSource(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{
+		Builds: []string{"2", "1"}, RootCause: "same cause", Confidence: "high",
+		Remediation: &models.PatternCausalGroupRemediation{BuildID: "2", SuggestedFix: "change the controller"},
+	}}, nil)
+	models.AssignPatternIdentity(&pattern)
+	detail := causalPatternDetail(pattern, "1", "2")
+	for i := range detail.Runs {
+		detail.Runs[i].RepoRefs = map[string]string{"example/repo": "main", "example/other": "master"}
+		detail.Runs[i].TestCases = []models.TestCase{analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")}
+	}
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{
+		Answer: "Both builds show the same failure.", Assessment: "explains",
+	}}, Options{StateDir: filepath.Join(dir, ".chat")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	group := pattern.CausalGroups[0]
+	session, err := service.Create(AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}, "Alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "Alice", requestID, "Explain this cause."); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrSourceRevisionUnknown) {
+		t.Fatalf("cause source error = %v", err)
+	}
+	for i := range detail.Runs {
+		detail.Runs[i].RepoRefs = map[string]string{
+			"example/repo":  "main:" + exactFixSourceRevision,
+			"example/other": "master:fedcba9876543210fedcba9876543210fedcba98",
+		}
+	}
+	writeJobDetail(t, dir, detail)
+	restarted, err := NewService(t.Context(), dir, &fakeRunner{}, Options{StateDir: filepath.Join(dir, ".chat")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.AnalysisFixCandidate(session.ID, "Alice", requestID); !errors.Is(err, ErrSourceRevisionUnknown) {
+		t.Fatalf("cause with later-pinned current source error = %v", err)
 	}
 }
 
