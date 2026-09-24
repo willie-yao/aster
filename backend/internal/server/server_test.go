@@ -794,9 +794,11 @@ type fakeRunner struct {
 	gotUnresolveID                                               string
 	gotResolveCauseID, gotResolveCauseLogin, gotResolveCauseNote string
 	gotUnresolveCauseID                                          string
+	issueDeadline, fixDeadline, confirmDeadline                  time.Time
 }
 
 func (f *fakeRunner) PreviewIssue(ctx context.Context, id, owner, token, instruction string) (actions.PreviewResult, error) {
+	f.issueDeadline, _ = ctx.Deadline()
 	if id == "missing" {
 		return actions.PreviewResult{}, actions.ErrNotFound
 	}
@@ -804,10 +806,12 @@ func (f *fakeRunner) PreviewIssue(ctx context.Context, id, owner, token, instruc
 	return actions.PreviewResult{Token: "ptok", Kind: "issue", Title: "T", Body: "B"}, nil
 }
 func (f *fakeRunner) PreviewFix(ctx context.Context, id, owner, token, instruction string) (actions.PreviewResult, error) {
+	f.fixDeadline, _ = ctx.Deadline()
 	f.gotID, f.gotOwner, f.gotToken, f.gotInstruction = id, owner, token, instruction
 	return actions.PreviewResult{Token: "ptok", Kind: "fix", Title: "T", Body: "B", Diff: "d"}, nil
 }
 func (f *fakeRunner) Confirm(ctx context.Context, token, owner, userToken string) (string, error) {
+	f.confirmDeadline, _ = ctx.Deadline()
 	if token == "missing" {
 		return "", actions.ErrPreviewNotFound
 	}
@@ -848,6 +852,59 @@ func (f *fakeRunner) ActionEligibility(_ context.Context, id string) (actions.El
 	}
 	f.gotID = id
 	return actions.Eligibility{State: actions.EligibilityActionable, Code: actions.ReasonActionable, Reason: "verified"}, nil
+}
+
+func TestHandlerFixPreviewTimeoutIsIndependent(t *testing.T) {
+	for _, testCase := range []struct {
+		name, expected string
+		action, fix    time.Duration
+	}{
+		{name: "default handlers and long Fix", expected: "5m", fix: 35 * time.Minute},
+		{name: "explicit handler and long Fix", expected: "2m", action: 2 * time.Minute, fix: 35 * time.Minute},
+		{name: "unset Fix timeout uses ordinary handler", expected: "2m", action: 2 * time.Minute},
+		{name: "both unset use default", expected: "5m"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &fakeRunner{}
+			h, err := Handler(Options{
+				DataDir: t.TempDir(), Auth: fakeAuth{}, Actions: runner,
+				ActionTimeout: testCase.action, FixPreviewTimeout: testCase.fix,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinary, err := time.ParseDuration(testCase.expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fix := testCase.fix
+			if fix <= 0 {
+				fix = ordinary
+			}
+			for _, request := range []struct {
+				path, body string
+				deadline   *time.Time
+				want       time.Duration
+			}{
+				{path: "/api/failures/failure/create-issue/preview", body: `{}`, deadline: &runner.issueDeadline, want: ordinary},
+				{path: "/api/failures/failure/propose-fix/preview", body: `{}`, deadline: &runner.fixDeadline, want: fix},
+				{path: "/api/actions/confirm", body: `{"token":"ptok"}`, deadline: &runner.confirmDeadline, want: ordinary},
+			} {
+				started := time.Now()
+				req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(request.body))
+				req.Header.Set("Authorization", "ok")
+				req.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				h.ServeHTTP(recorder, req)
+				if recorder.Code != http.StatusOK || request.deadline.IsZero() {
+					t.Fatalf("%s status=%d deadline=%s body=%s", request.path, recorder.Code, request.deadline, recorder.Body.String())
+				}
+				if got := request.deadline.Sub(started); got < request.want || got > request.want+time.Second {
+					t.Errorf("%s deadline=%s, want %s", request.path, got, request.want)
+				}
+			}
+		})
+	}
 }
 
 func TestHandler_ActionsDisabledByDefault(t *testing.T) {

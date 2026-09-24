@@ -430,6 +430,53 @@ func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
 	}
 }
 
+func TestAnalysisFixRequestUsesConfiguredDeadline(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	const budget = 35 * time.Minute
+	service.ConfigureAsyncRequests(budget, nil)
+	type generationContext struct {
+		ctx     context.Context
+		started time.Time
+	}
+	started := make(chan generationContext, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(ctx context.Context, input AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
+		started <- generationContext{ctx: ctx, started: time.Now()}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return PreviewResult{}, ctx.Err()
+		}
+		return handoffTestPreview(t, service, input, owner, &calls)
+	}
+	admission, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, err := service.CreateAnalysisFixRequest(admission, exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := <-started
+	deadline, ok := generation.ctx.Deadline()
+	if got := deadline.Sub(generation.started); !ok || got < budget-time.Second || got > budget {
+		t.Fatalf("generation deadline=%s, want %s after admission", deadline, budget)
+	}
+	cancel()
+	select {
+	case <-generation.ctx.Done():
+		t.Fatal("canceling admission canceled background generation")
+	default:
+	}
+	close(release)
+	ready := waitRequest(t, service, request.ID, "alice", RequestReady)
+	if ready.Preview == nil || calls.Load() != 1 {
+		t.Fatalf("ready=%+v calls=%d", ready, calls.Load())
+	}
+	if err := service.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAnalysisFixRequestTimeoutFailsAndCleansRuntime(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(50*time.Millisecond, nil)

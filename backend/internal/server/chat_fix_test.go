@@ -28,6 +28,7 @@ type fakeChatFixRunner struct {
 	err             error
 	requestCreated  bool
 	deadline        time.Time
+	previewDeadline time.Time
 }
 
 type blockingHTTPChatFixRunner struct {
@@ -115,9 +116,10 @@ func (r *blockingHTTPChatFixRunner) snapshot() (actions.ActionRequestView, int, 
 }
 
 func (f *fakeChatFixRunner) PreviewChatFix(
-	_ context.Context,
+	ctx context.Context,
 	sessionID, owner, requestID, patternID, patternHash, userToken, instruction string,
 ) (actions.PreviewResult, error) {
+	f.previewDeadline, _ = ctx.Deadline()
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
 	f.patternID, f.patternHash = patternID, patternHash
 	f.userToken, f.instruction = userToken, instruction
@@ -189,6 +191,55 @@ func TestHandlerChatFixPreview(t *testing.T) {
 		runner.patternID != "pattern-1" || runner.patternHash != "hash-1" ||
 		runner.userToken != "tok" || runner.instruction != "keep compatibility" {
 		t.Fatalf("runner = %+v", runner)
+	}
+}
+
+func TestHandlerChatFixPreviewUsesGenerationTimeout(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		action, fix   time.Duration
+		wantPreview   time.Duration
+		wantAdmission time.Duration
+	}{
+		{name: "long Fix only", fix: 35 * time.Minute, wantPreview: 35 * time.Minute, wantAdmission: defaultActionTimeout},
+		{name: "explicit ordinary timeout", action: 15 * time.Minute, fix: 35 * time.Minute, wantPreview: 35 * time.Minute, wantAdmission: 15 * time.Minute},
+		{name: "fallback to ordinary", action: 2 * time.Minute, wantPreview: 2 * time.Minute, wantAdmission: 2 * time.Minute},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runner := &fakeChatFixRunner{}
+			h, err := Handler(Options{
+				DataDir: t.TempDir(), Auth: fakeAuth{}, Actions: &fakeRunner{},
+				AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
+				ActionTimeout: testCase.action, FixPreviewTimeout: testCase.fix,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, request := range []struct {
+				path     string
+				deadline *time.Time
+				want     time.Duration
+			}{
+				{path: "/api/analysis-chat/sessions/session/requests/request/fix/preview", deadline: &runner.previewDeadline, want: testCase.wantPreview},
+				{path: "/api/analysis-chat/sessions/session/requests/request/fix/requests", deadline: &runner.deadline, want: testCase.wantAdmission},
+			} {
+				started := time.Now()
+				req := httptest.NewRequest(http.MethodPost, request.path, strings.NewReader(`{}`))
+				req.Header.Set("Authorization", "ok")
+				req.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				h.ServeHTTP(recorder, req)
+				if recorder.Code != http.StatusOK && recorder.Code != http.StatusAccepted {
+					t.Fatalf("%s status=%d body=%s", request.path, recorder.Code, recorder.Body.String())
+				}
+				if request.deadline.IsZero() {
+					t.Fatalf("%s had no deadline", request.path)
+				}
+				if got := request.deadline.Sub(started); got < request.want || got > request.want+time.Second {
+					t.Errorf("%s deadline=%s, want %s", request.path, got, request.want)
+				}
+			}
+		})
 	}
 }
 

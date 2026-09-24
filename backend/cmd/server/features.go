@@ -117,6 +117,10 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 }
 
 func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
+	actionTimeout, generationTimeout, err := actionTimeoutsFromEnv(cfg)
+	if err != nil {
+		return nil, err
+	}
 	normalized := modelprovider.Normalize(modelprovider.Config{
 		API: os.Getenv("AI_API"), Endpoint: os.Getenv("AI_ENDPOINT"), Model: os.Getenv("AI_MODEL"),
 		ReasoningEffort: modelprovider.ReasoningEffort(os.Getenv(project.AIReasoningEffortEnv)),
@@ -131,6 +135,10 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	if err := project.ValidateAIProvider(provider); err != nil {
 		return nil, err
 	}
+	opts.ActionTimeout = actionTimeout
+	if fixActionsEnabled(cfg.EffectiveFixPRs()) {
+		opts.FixPreviewTimeout = generationTimeout
+	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
@@ -140,18 +148,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	actionService.ConfigureFixActions(fixActions)
 	opts.DisableFixActions = !fixActions
 	opts.Actions = actionService
-	if value := os.Getenv("ACTION_TIMEOUT"); value != "" {
-		timeout, err := time.ParseDuration(value)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
-		}
-		opts.ActionTimeout = timeout
-	}
-	requestTimeout := opts.ActionTimeout
-	if requestTimeout <= 0 {
-		requestTimeout = 10 * time.Minute
-	}
-	actionService.ConfigureAsyncRequestsWithContext(ctx, requestTimeout, actionRequestNotifier(cfg))
+	actionService.ConfigureAsyncRequestsWithContext(ctx, generationTimeout, actionRequestNotifier(cfg))
 	return actionService, nil
 }
 

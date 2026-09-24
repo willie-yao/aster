@@ -190,6 +190,7 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 | `server.development.allowInsecureHTTP` | Explicit local HTTP acknowledgement required to disable HSTS outside OAuth cookie testing. |
 | `server.development.allowInsecureCookies` | Local HTTP OAuth testing only. Never enable on a deployed dashboard. |
 | `server.actions.*` | OAuth or proxy authentication and guarded GitHub writes. |
+| `server.extraEnv` | Additional server environment variables, including `ACTION_TIMEOUT` for [Fix generation deadlines](fix-prs.md#required-project-configuration). |
 | `server.service.*` | ClusterIP, NodePort, or LoadBalancer exposure. |
 | `ingress.*` | Optional ingress resources. |
 | `networkPolicy.enabled`, `networkPolicy.ingress` | Complete server ingress rules. Empty ingress denies all traffic when enabled. |

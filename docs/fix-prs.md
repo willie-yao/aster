@@ -102,6 +102,8 @@ ai:
 
 Agent Sandbox is the only Fix runtime. It defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no model critique retry. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
 
+When Fix is enabled, asynchronous generation and synchronous Fix previews default to the greater of 10 minutes or the configured agent timeout plus 5 minutes. This headroom allows for work around the Sandbox run, including source checks, cleanup, and patch reconstruction; it does not guarantee completion of unbounded clone or network work. Set `ACTION_TIMEOUT` through `server.extraEnv` to override the generation deadline. An explicit value also controls ordinary action HTTP handlers and must be a positive duration of at least the agent timeout plus 5 minutes when Fix is enabled; a smaller value is rejected at server startup. Without an explicit value, issue, admission, confirmation, cancellation, and escalation handlers keep their existing timeouts. Upstream proxy deadlines can still cut off synchronous HTTP requests.
+
 When `allowed_commands` is omitted, Aster runs only the mandatory staged-diff check. Additional entries use exact argv lists and explicit timeouts, and the final command must remain exactly:
 
 ```yaml

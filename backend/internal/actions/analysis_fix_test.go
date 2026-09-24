@@ -365,7 +365,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 
 	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
-	service.ConfigureAsyncRequests(time.Minute, nil)
+	service.ConfigureAsyncRequests(35*time.Minute, nil)
 	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
 		base: ghpr.Base{Branch: "main", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
 	}
@@ -377,6 +377,34 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 	service.analysisRequestGenerator = func(
 		ctx context.Context, input AnalysisFixInput, owner, _, _ string,
 	) (PreviewResult, error) {
+		token, _, acquired, err := service.previewStore.reserveIdempotent(
+			owner, input.PreviewRequestHash, input.HandoffHash, service.analysisPreviewLease(),
+		)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		if !acquired {
+			return PreviewResult{}, fmt.Errorf("preview reservation was not acquired")
+		}
+		state, _, err := service.previewStore.load()
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		reservation := state.Previews[tokenHash(token)]
+		if reservation == nil || reservation.Status != previewStatusGenerating {
+			return PreviewResult{}, fmt.Errorf("generating reservation = %+v", reservation)
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, reservation.CreatedAt)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		expiresAt, err := time.Parse(time.RFC3339Nano, reservation.LeaseExpires)
+		if err != nil {
+			return PreviewResult{}, err
+		}
+		if got, want := expiresAt.Sub(createdAt), 35*time.Minute+30*time.Second; got != want {
+			return PreviewResult{}, fmt.Errorf("generation reservation lease = %s, want %s", got, want)
+		}
 		current, err := service.ResolveAnalysisActionSubject(input.Identity)
 		if err != nil {
 			return PreviewResult{}, err
@@ -407,8 +435,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		if err != nil {
 			return PreviewResult{}, err
 		}
-		token, err := service.stash(owner, entry)
-		if err != nil {
+		if err := service.previewStore.completeIdempotent(owner, token, input.PreviewRequestHash, input.HandoffHash, entry); err != nil {
 			return PreviewResult{}, err
 		}
 		preview.Token = token

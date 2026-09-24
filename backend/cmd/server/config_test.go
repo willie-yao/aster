@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,6 +220,59 @@ func TestFixActionsEnabledRequiresAgentSandbox(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			if got := fixActionsEnabled(testCase.cfg); got != testCase.want {
 				t.Fatalf("enabled=%t want=%t", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestActionTimeoutsFromEnv(t *testing.T) {
+	for _, testCase := range []struct {
+		name, agentTimeout string
+		fixEnabled         bool
+		explicit           *string
+		wantAction         time.Duration
+		wantGeneration     time.Duration
+		wantError          string
+	}{
+		{name: "Fix disabled", wantGeneration: 10 * time.Minute},
+		{name: "default agent", fixEnabled: true, wantGeneration: 15 * time.Minute},
+		{name: "short agent", fixEnabled: true, agentTimeout: "1m", wantGeneration: 10 * time.Minute},
+		{name: "long agent", fixEnabled: true, agentTimeout: "30m", wantGeneration: 35 * time.Minute},
+		{name: "equal to minimum", fixEnabled: true, explicit: new("15m"), wantAction: 15 * time.Minute, wantGeneration: 15 * time.Minute},
+		{name: "short agent explicit minimum", fixEnabled: true, agentTimeout: "1m", explicit: new("6m"), wantAction: 6 * time.Minute, wantGeneration: 6 * time.Minute},
+		{name: "above minimum", fixEnabled: true, agentTimeout: "30m", explicit: new("40m"), wantAction: 40 * time.Minute, wantGeneration: 40 * time.Minute},
+		{name: "disabled accepts short override", explicit: new("1m"), wantAction: time.Minute, wantGeneration: time.Minute},
+		{name: "below minimum", fixEnabled: true, explicit: new("14m"), wantError: "at least 15m0s"},
+		{name: "below long minimum", fixEnabled: true, agentTimeout: "30m", explicit: new("30m"), wantError: "at least 35m0s"},
+		{name: "malformed", fixEnabled: true, explicit: new("tomorrow"), wantError: "invalid ACTION_TIMEOUT"},
+		{name: "empty", fixEnabled: true, explicit: new(""), wantError: "invalid ACTION_TIMEOUT"},
+		{name: "zero", fixEnabled: true, explicit: new("0s"), wantError: "positive duration"},
+		{name: "negative", fixEnabled: true, explicit: new("-1m"), wantError: "positive duration"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("ACTION_TIMEOUT", "")
+			if testCase.explicit == nil {
+				if err := os.Unsetenv("ACTION_TIMEOUT"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("ACTION_TIMEOUT", *testCase.explicit)
+			}
+			cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+				Enabled: testCase.fixEnabled,
+				AgentRuntime: &project.FixAgentRuntime{
+					Type: "agent-sandbox", Timeout: testCase.agentTimeout,
+				},
+			}}}
+			action, generation, err := actionTimeoutsFromEnv(cfg)
+			if testCase.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+					t.Fatalf("action=%s generation=%s error=%v; want %q", action, generation, err, testCase.wantError)
+				}
+				return
+			}
+			if err != nil || action != testCase.wantAction || generation != testCase.wantGeneration {
+				t.Fatalf("action=%s generation=%s error=%v; want %s, %s", action, generation, err, testCase.wantAction, testCase.wantGeneration)
 			}
 		})
 	}
