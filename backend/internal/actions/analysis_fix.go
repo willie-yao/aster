@@ -373,7 +373,7 @@ func (s *Service) PreviewAnalysisFix(
 		subject, input.HandoffHash, repository, targetBranch, compatibility.GenerationBaseRevision, targetConfig,
 	)
 	token, existing, acquired, err := s.previewStore.reserveIdempotent(
-		owner, input.PreviewRequestHash, generationHash, s.requestTimeout+30*time.Second,
+		owner, input.PreviewRequestHash, generationHash, s.analysisPreviewLease(),
 	)
 	if err != nil {
 		return PreviewResult{}, err
@@ -433,6 +433,10 @@ func (s *Service) PreviewAnalysisFix(
 	reserved = false
 	preview.Token = token
 	return preview, nil
+}
+
+func (s *Service) analysisPreviewLease() time.Duration {
+	return s.requestTimeout + 30*time.Second
 }
 
 func analysisFailureForGeneration(

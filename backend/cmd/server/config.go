@@ -23,6 +23,35 @@ func fixActionsEnabled(fixConfig project.FixPRs) bool {
 	return fixConfig.AgentRuntime.Type == "" || fixConfig.AgentRuntime.Type == "agent-sandbox"
 }
 
+const fixActionTimeoutHeadroom = 5 * time.Minute
+
+func actionTimeoutsFromEnv(cfg *project.Config) (actionTimeout, generationTimeout time.Duration, err error) {
+	const defaultGenerationTimeout = 10 * time.Minute
+	generationTimeout = defaultGenerationTimeout
+	fix := cfg.EffectiveFixPRs()
+	minimum := time.Duration(0)
+	if fixActionsEnabled(fix) {
+		minimum = fix.AgentRuntime.ParsedTimeout() + fixActionTimeoutHeadroom
+		if generationTimeout < minimum {
+			generationTimeout = minimum
+		}
+	}
+	if value, present := os.LookupEnv("ACTION_TIMEOUT"); present {
+		actionTimeout, err = time.ParseDuration(value)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid ACTION_TIMEOUT %q: %w", value, err)
+		}
+		if actionTimeout <= 0 {
+			return 0, 0, fmt.Errorf("ACTION_TIMEOUT must be a positive duration")
+		}
+		if minimum > 0 && actionTimeout < minimum {
+			return 0, 0, fmt.Errorf("ACTION_TIMEOUT must be at least %s when Fix is enabled (agent timeout plus %s)", minimum, fixActionTimeoutHeadroom)
+		}
+		generationTimeout = actionTimeout
+	}
+	return actionTimeout, generationTimeout, nil
+}
+
 type interactiveFeatures struct {
 	Actions               bool
 	AnalysisChat          bool

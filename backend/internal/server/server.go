@@ -93,6 +93,8 @@ type Options struct {
 	ChatFix ChatFixRunner
 	// ActionTimeout bounds a single action. Zero uses defaultActionTimeout.
 	ActionTimeout time.Duration
+	// FixPreviewTimeout bounds synchronous Fix previews. Zero uses ActionTimeout.
+	FixPreviewTimeout time.Duration
 	// AnalysisChatTimeout bounds one conversation turn.
 	AnalysisChatTimeout time.Duration
 	// AuthMode is advertised to the frontend: "oauth" (show a sign-in button),
@@ -275,10 +277,14 @@ func Handler(opts Options) (http.Handler, error) {
 		if timeout <= 0 {
 			timeout = defaultActionTimeout
 		}
+		fixTimeout := opts.FixPreviewTimeout
+		if fixTimeout <= 0 {
+			fixTimeout = timeout
+		}
 		trusted := trustedOriginSet(opts.TrustedOrigins)
 		guard := func(next http.Handler) http.Handler { return csrfGuard(trusted, next) }
 		mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview",
-			auth.Middleware(opts.Auth, guard(previewChatFixHandler(timeout, opts.ChatFix))))
+			auth.Middleware(opts.Auth, guard(previewChatFixHandler(fixTimeout, opts.ChatFix))))
 		if requests, ok := opts.ChatFix.(ChatFixRequestRunner); ok {
 			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
 				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(timeout, requests))))
@@ -334,8 +340,12 @@ func Handler(opts Options) (http.Handler, error) {
 			auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewIssue))))
 		if !opts.DisableFixActions {
 			caps.Features.FixPRs = true
+			fixTimeout := opts.FixPreviewTimeout
+			if fixTimeout <= 0 {
+				fixTimeout = timeout
+			}
 			mux.Handle("POST /api/failures/{id}/propose-fix/preview",
-				auth.Middleware(opts.Auth, guard(previewHandler(timeout, opts.Actions.PreviewFix))))
+				auth.Middleware(opts.Auth, guard(previewHandler(fixTimeout, opts.Actions.PreviewFix))))
 		}
 		mux.Handle("POST /api/actions/confirm",
 			auth.Middleware(opts.Auth, guard(confirmHandler(timeout, opts.Actions.Confirm))))
