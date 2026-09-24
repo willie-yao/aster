@@ -522,7 +522,11 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 		return "", fmt.Errorf("action request has no persisted preview")
 	}
-	entry := &previewEntry{failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind, targetRepo: request.TargetRepo, targetConfig: request.TargetConfig, verificationVersion: request.VerificationVersion}
+	entry := &previewEntry{
+		failureID: request.FailureID, patternHash: request.PatternHash, kind: entryKind,
+		targetRepo: request.TargetRepo, targetConfig: request.TargetConfig, verificationVersion: request.VerificationVersion,
+		initiatedBy: request.Owner, initiatedAt: request.CreatedAt,
+	}
 	switch entry.kind {
 	case "issue":
 		if request.Issue == nil {
@@ -560,9 +564,11 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 			return "", err
 		}
 		request.Status = RequestUnknown
+		previousUpdatedAt := request.UpdatedAt
 		request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.saveRequestsLocked(); err != nil {
 			request.Status = RequestReady
+			request.UpdatedAt = previousUpdatedAt
 			s.rmu.Unlock()
 			return "", err
 		}
@@ -576,42 +582,63 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		s.rmu.Unlock()
 	}()
 
-	var url string
+	var url, outcome string
 	if reconcileOnly {
 		reconciledURL, found, err := s.reconcileEntry(ctx, entry, userToken)
 		if err != nil {
 			return "", err
 		}
-		if !found {
+		if !found || reconciledURL == "" {
 			return "", ErrPreviewOutcomeUnknown
 		}
 		url = reconciledURL
+		outcome = botWriteReconciled
 	} else {
 		confirmedURL, err := s.confirmEntry(ctx, entry, userToken)
-		if errors.Is(err, ErrPreviewOutcomeUnknown) {
-			return "", err
-		}
-		if err != nil {
+		if confirmedURL == "" {
+			if errors.Is(err, ErrPreviewOutcomeUnknown) {
+				return "", err
+			}
+			if err == nil {
+				return "", ErrPreviewOutcomeUnknown
+			}
 			s.rmu.Lock()
 			if current := s.requests.Requests[id]; current != nil {
+				previousUpdatedAt := current.UpdatedAt
 				current.Status = RequestReady
 				current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-				_ = s.saveRequestsLocked()
+				if saveErr := s.saveRequestsLocked(); saveErr != nil {
+					current.Status = RequestUnknown
+					current.UpdatedAt = previousUpdatedAt
+					err = errors.Join(err, saveErr)
+				}
 			}
 			s.rmu.Unlock()
 			return "", err
 		}
 		url = confirmedURL
+		outcome = botWriteConfirmed
+		if err != nil {
+			log.Printf("Warning: action request %s tracking failed after confirming %s: %v", id, url, err)
+		}
+	}
+	if err := s.recordBotWrite("request:"+id, owner, entry, url, outcome); err != nil {
+		return url, err
 	}
 	s.rmu.Lock()
-	if current := s.requests.Requests[id]; current != nil {
-		current.Status = RequestConfirmed
-		current.ResultURL = url
-		current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := s.saveRequestsLocked(); err != nil {
-			s.rmu.Unlock()
-			return "", err
-		}
+	current := s.requests.Requests[id]
+	if current == nil {
+		s.rmu.Unlock()
+		return url, ErrRequestNotFound
+	}
+	previousStatus, previousURL, previousUpdatedAt := current.Status, current.ResultURL, current.UpdatedAt
+	current.Status = RequestConfirmed
+	current.ResultURL = url
+	current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.saveRequestsLocked(); err != nil {
+		current.Status, current.ResultURL, current.UpdatedAt = previousStatus, previousURL, previousUpdatedAt
+		s.rmu.Unlock()
+		return url, err
 	}
 	s.rmu.Unlock()
 	return url, nil
