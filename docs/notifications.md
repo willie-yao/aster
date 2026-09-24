@@ -131,6 +131,8 @@ State tracks both persistent-test alerts and systemic-pattern alerts. Systemic p
 - A failed recovery email keeps its state entry and is retried.
 - Delivery failures are logged and do not fail the fetch or block other side effects.
 
+A per-job build-listing failure retains the last observed runs, so an unavailable listing is not treated as a recovery. Notification or issue follow-up failures remain visible in fetch progress without failing a published refresh.
+
 The email implementation uses the state channel `email-v1`. On the first run after upgrading from Slack notifications, old channel-less state is reset. Each currently persistent failure therefore receives one initial email.
 
 ## Verifying delivery

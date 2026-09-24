@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/issues"
@@ -136,6 +137,179 @@ func TestMissingIssueTokenDoesNotFailPublishedRefresh(t *testing.T) {
 		status.FollowUp.AutomaticIssues.State != fetchprogress.FollowUpSkipped ||
 		status.FollowUp.AutomaticIssues.Reason != fetchprogress.FollowUpReasonNotConfigured {
 		t.Fatalf("automatic issues follow-up = %+v", status.FollowUp)
+	}
+}
+
+type failingNotifySender struct {
+	calls int
+}
+
+func (s *failingNotifySender) Send(context.Context, notify.Message) error {
+	s.calls++
+	return errors.New("smtp unavailable")
+}
+
+func TestFullPassFollowUpFailureKeepsPublishedRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		failEmail        bool
+		failIssues       bool
+		notifications    fetchprogress.FollowUpState
+		notificationCode fetchprogress.FollowUpFailureCode
+		issues           fetchprogress.FollowUpState
+		issueCode        fetchprogress.FollowUpFailureCode
+	}{
+		{
+			name: "email delivery", failEmail: true,
+			notifications: fetchprogress.FollowUpFailed, notificationCode: fetchprogress.FollowUpFailureNotificationDelivery,
+			issues: fetchprogress.FollowUpCompleted,
+		},
+		{
+			name: "issue recovery", failIssues: true,
+			notifications: fetchprogress.FollowUpCompleted,
+			issues:        fetchprogress.FollowUpFailed, issueCode: fetchprogress.FollowUpFailureAutomaticIssues,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir, bucketDir := installRefreshLifecycleFixture(t)
+			p := refreshLifecyclePipeline(t, dataDir, bucketDir, nil)
+			p.enableAI = false
+			p.cfg.Attention = &project.Attention{PersistentAfter: 1}
+			p.cfg.Branding.SourceRepo = project.SourceRepo{Owner: "example", Name: "repo"}
+			p.cfg.Issues = &project.Issues{Enabled: true, Triggers: []string{project.IssueTriggerPersistent}}
+			p.progress = fetchprogress.New(dataDir, "sha-test")
+			p.progress.StartPass(fetchprogress.PassOneShot)
+			t.Setenv("ISSUE_TOKEN", "test-token")
+
+			successSender := &countingNotifySender{}
+			failedSender := &failingNotifySender{}
+			oldEmailSender := newEmailSender
+			newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) {
+				if tc.failEmail {
+					return failedSender, nil
+				}
+				return successSender, nil
+			}
+			manager := &recordingScheduledIssueManager{}
+			if tc.failIssues {
+				manager.recoverErr = errors.New("issue recovery unavailable")
+			}
+			oldIssueManager := newBatchIssueManager
+			newBatchIssueManager = func(*issues.Client, string, string, issues.Options) scheduledIssueManager {
+				return manager
+			}
+			t.Cleanup(func() {
+				newEmailSender = oldEmailSender
+				newBatchIssueManager = oldIssueManager
+			})
+
+			jobs, err := p.fullPass(t.Context())
+			finishProgressPass(p.progress, err, false)
+			if err != nil || len(jobs) != 1 || jobs[0].JobID != "periodic-test" {
+				t.Fatalf("published pass jobs=%+v error=%v", jobs, err)
+			}
+			details, err := loadPublishedJobDetails(dataDir)
+			if err != nil || len(details) != 1 || len(details["periodic-test"].Runs) != 1 {
+				t.Fatalf("published details=%+v error=%v", details, err)
+			}
+			for _, name := range []string{"dashboard.json", "flakiness.json", "manifest.json"} {
+				if _, err := os.Stat(filepath.Join(dataDir, name)); err != nil {
+					t.Fatalf("published %s: %v", name, err)
+				}
+			}
+			status := p.progress.Snapshot()
+			if status.Outcome != fetchprogress.OutcomeSucceeded ||
+				status.PublicationPhase != fetchprogress.StageCompleted ||
+				status.SideEffectPhase != fetchprogress.StageCompleted ||
+				status.LastSuccessfulPublicationAt == nil || status.FollowUp == nil ||
+				status.FollowUp.Notifications == nil || status.FollowUp.AutomaticIssues == nil {
+				t.Fatalf("published pass progress = %+v", status)
+			}
+			if got := status.FollowUp.Notifications; got.State != tc.notifications || got.Code != tc.notificationCode {
+				t.Fatalf("notification follow-up = %+v", got)
+			}
+			if got := status.FollowUp.AutomaticIssues; got.State != tc.issues || got.Code != tc.issueCode {
+				t.Fatalf("issue follow-up = %+v", got)
+			}
+			if manager.recoverCalls != 1 || manager.saveCalls != 1 || len(manager.activeKeys) != 1 ||
+				manager.activeKeys[0] != issues.KeyPrefixPersistent+"periodic-test::fails" {
+				t.Fatalf("issue recovery was skipped: %+v", manager)
+			}
+			if got := successSender.calls.Load() + int64(failedSender.calls); got != 1 {
+				t.Fatalf("notification delivery calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestFullPassFollowUpFailureStillPreparesCauses(t *testing.T) {
+	dataDir, bucketDir := installRefreshLifecycleFixture(t)
+	for _, id := range []string{"2", "3"} {
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+id+"/started.json", `{"timestamp":1}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+id+"/finished.json", `{"timestamp":2,"passed":false,"result":"FAILURE"}`)
+		writeFixtureFile(t, bucketDir, "logs/periodic-test/"+id+"/artifacts/junit.xml", `<testsuite name="suite"><testcase name="fails" classname="suite"><failure message="failed">failed</failure></testcase></testsuite>`)
+	}
+	analyzer := &resultLifecycleAnalyzer{result: ai.FailureAnalysisResult{
+		Summary: &models.AISummary{GeneratedAt: "2026-08-25T00:00:00Z", Summary: "analyzed"},
+		Analysis: &models.AIAnalysis{
+			GeneratedAt: "2026-08-25T00:00:00Z", RootCause: "controller defect", Severity: "High",
+			SuggestedFix: "inspect the controller", Mode: "agentic", EvidencePlanCovered: true,
+			Disposition: models.AnalysisDispositionCitationsVerified,
+		},
+	}}
+	p := refreshLifecyclePipeline(t, dataDir, bucketDir, analyzer)
+	p.opts.BuildsPerJob = 3
+	p.opts.PrepareCauseFindings = true
+	p.cfg.Attention = &project.Attention{PersistentAfter: 1}
+	configureRefreshLifecycleRuntime(t, p, dataDir)
+	runtime := p.aiRuntime
+	runner := &recordingPreparedCauseRunner{reply: analysischat.Reply{
+		Answer: "Inspect the controller.", Assessment: "supports",
+		Citations: []analysischat.Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}},
+	}}
+	installPreparedCauseRunner(t, runner)
+	failedSender := &failingNotifySender{}
+	oldEmailSender := newEmailSender
+	newEmailSender = func(notify.SMTPConfig) (notify.Sender, error) { return failedSender, nil }
+	oldPatternAnalysis := analyzePatternsAcrossBuilds
+	analyzePatternsAcrossBuilds = func(_ context.Context, _ *ai.Service, details []models.JobDetail, options patterns.AnalyzeOptions) error {
+		seed := preparedCauseJob("periodic-test", true, models.PatternLifecycleActive, "controller defect")
+		details[0].Runs[2].TestCases = seed.Runs[0].TestCases
+		details[0].PatternAnalyses = seed.PatternAnalyses
+		options.OnPlan(1)
+		options.OnOutcome(patterns.JobOutcome{JobID: "periodic-test", Succeeded: true, Systemic: true, Attempts: 1})
+		options.OnAttempt(patterns.Attempt{Number: 1, Succeeded: true, Final: true})
+		return nil
+	}
+	t.Cleanup(func() {
+		newEmailSender = oldEmailSender
+		analyzePatternsAcrossBuilds = oldPatternAnalysis
+	})
+	p.progress = fetchprogress.New(dataDir, "sha-test")
+	p.progress.StartPass(fetchprogress.PassOneShot)
+
+	jobs, err := p.fullPass(t.Context())
+	finishProgressPass(p.progress, err, false)
+	if err != nil || len(jobs) != 1 || failedSender.calls != 2 {
+		t.Fatalf("published jobs=%+v send calls=%d error=%v", jobs, failedSender.calls, err)
+	}
+	if p.aiRuntime != runtime {
+		t.Fatal("follow-up failure discarded the committed analysis runtime")
+	}
+	details, err := loadPublishedJobDetails(dataDir)
+	if err != nil || len(details["periodic-test"].PatternAnalyses) != 1 {
+		t.Fatalf("published cause=%+v error=%v", details, err)
+	}
+	status := p.progress.Snapshot()
+	if status.Outcome != fetchprogress.OutcomeSucceeded || status.SideEffectPhase != fetchprogress.StageCompleted ||
+		status.FollowUp == nil || status.FollowUp.Notifications == nil ||
+		status.FollowUp.Notifications.Code != fetchprogress.FollowUpFailureNotificationDelivery {
+		t.Fatalf("follow-up progress = %+v", status)
+	}
+	state, err := analysischat.LoadPreparedCauseFindings(
+		filepath.Join(dataDir, analysischat.PreparedCauseFindingsFilename), analysischat.PreparedCauseGeneration("runtime"))
+	if err != nil || runner.calls != 1 || len(state.Findings) != 1 {
+		t.Fatalf("prepared causes=%+v runner calls=%d error=%v", state, runner.calls, err)
 	}
 }
 

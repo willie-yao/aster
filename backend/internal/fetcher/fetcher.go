@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -197,8 +198,7 @@ func (p *pipeline) fullPass(ctx context.Context) ([]models.ProwJob, error) {
 	} else {
 		p.startProgressPhase(fetchprogress.PhaseSideEffects)
 		if err := p.runSideEffects(fetchCtx, res); err != nil {
-			p.invalidateAnalysisRuntime()
-			return nil, err
+			log.Printf("Warning: refresh follow-up failed: %v", err)
 		}
 		p.completeProgressPhase()
 	}
@@ -343,6 +343,17 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
 				mu.Unlock()
 				log.Printf("  ⚠ %s: %v", j.Name, err)
+				if prior, ok := priorDetails[j.JobID]; ok {
+					carried := slices.Clone(prior.Runs)
+					for i := range carried {
+						carried[i].TestCases = slices.Clone(carried[i].TestCases)
+						normalizeBuildResult(&carried[i])
+					}
+					results[idx] = jobResult{
+						job: j, runs: carried, retained: selectRetainedRuns(carried, priorHistory[j.JobID]),
+					}
+					log.Printf("  ⚠ %s (%s): carrying forward prior published runs", j.Name, j.JobID)
+				}
 				return
 			}
 
