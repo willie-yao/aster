@@ -60,6 +60,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
           labels: |
             org.opencontainers.image.title=Aster
           tags: |
@@ -128,6 +129,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/remote-fixer
+          flavor: latest=false
           labels: |
             org.opencontainers.image.title=Aster Remote Fixer
           tags: |
@@ -197,6 +199,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}/agent-sandbox-fix-executor
+          flavor: latest=false
           labels: |
             org.opencontainers.image.title=Aster Agent Sandbox Fix Executor
           tags: |

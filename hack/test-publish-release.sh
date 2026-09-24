@@ -123,6 +123,32 @@ set -euo pipefail
 printf 'docker %s\n' "$*" >> "$RELEASE_TEST_LOG"
 case ${1:-} in
   pull) exit 0 ;;
+  buildx)
+    [[ ${2:-} == imagetools ]]
+    case ${3:-} in
+      inspect)
+        if [[ ${REPLACE_RELEASE_TAG_AFTER_VERIFY:-false} == true &&
+          ${4:-} == ghcr.io/example/aster/remote-fixer:v1.2.3 ]]; then
+          count=0
+          [[ ! -f ${RELEASE_TEST_TAG_INSPECT_COUNT_FILE:-} ]] ||
+            count=$(cat "$RELEASE_TEST_TAG_INSPECT_COUNT_FILE")
+          count=$((count + 1))
+          printf '%s\n' "$count" > "$RELEASE_TEST_TAG_INSPECT_COUNT_FILE"
+          if ((count > 1)); then
+            printf 'sha256:%064d\n' 2
+            exit 0
+          fi
+        fi
+        printf 'sha256:%064d\n' 1
+        ;;
+      create)
+        if [[ -n ${FAIL_LATEST_IMAGE_SUFFIX:-} && $* == *"$FAIL_LATEST_IMAGE_SUFFIX"* ]]; then
+          exit 47
+        fi
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
   image)
     case $* in
       *org.opencontainers.image.version*) printf '%s\n' "${TAG:-v1.2.3}" ;;
@@ -161,6 +187,18 @@ printf '\n' >> "$RELEASE_TEST_LOG"
 case ${1:-} in
   ls-remote)
     ref=${*: -1}
+    if [[ $ref == refs/heads/* ]]; then
+      if [[ $ref == refs/heads/main ]]; then
+        printf '%s\t%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}" "$ref"
+        exit 0
+      fi
+      if [[ ${MAINTENANCE_BRANCH_STATE:-missing} == present &&
+        $ref == refs/heads/release/* ]]; then
+        printf '%s\t%s\n' "${MAINTENANCE_BRANCH_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}" "$ref"
+        exit 0
+      fi
+      exit 2
+    fi
     if [[ $ref == 'refs/tags/v*' ]]; then
       # Enumeration of every release tag, used by the monotonicity guard.
       printf '%b\n' "${EXISTING_RELEASE_TAGS:-}" | while read -r release_tag; do
@@ -196,6 +234,13 @@ case ${1:-} in
     if [[ -n ${FAIL_FETCH_TAG:-} && $refspec == refs/tags/"$FAIL_FETCH_TAG":* ]]; then
       exit 45
     fi
+    if [[ -n ${RELEASE_TEST_FETCH_FILE:-} ]]; then
+      if [[ $refspec == refs/heads/release/* ]]; then
+        printf '%s\n' "${MAINTENANCE_BRANCH_COMMIT:-${HEAD_COMMIT:-2222222222222222222222222222222222222222}}" > "$RELEASE_TEST_FETCH_FILE"
+      else
+        printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}" > "$RELEASE_TEST_FETCH_FILE"
+      fi
+    fi
     ;;
   archive)
     output=
@@ -208,6 +253,12 @@ case ${1:-} in
   rev-parse)
     if [[ ${2:-} == 'HEAD^{commit}' ]]; then
       printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}"
+    elif [[ ${2:-} == 'FETCH_HEAD^{commit}' ]]; then
+      if [[ -s ${RELEASE_TEST_FETCH_FILE:-/dev/null} ]]; then
+        cat "$RELEASE_TEST_FETCH_FILE"
+      else
+        printf '%s\n' "${HEAD_COMMIT:-2222222222222222222222222222222222222222}"
+      fi
     elif [[ ${2:-} == refs/aster-release/*/module'^{commit}' ]]; then
       if [[ ${MODULE_TAG_PEEL_FAIL:-false} == true ]]; then
         exit 46
@@ -243,6 +294,9 @@ case ${1:-} in
       fi
     done
     ;;
+  merge-base)
+    [[ ${SOURCE_REACHABLE:-true} == true ]]
+    ;;
   update-ref)
     ;;
 esac
@@ -255,6 +309,8 @@ chmod +x "$tmp/bin/helm" "$tmp/bin/gh" "$tmp/bin/docker" "$tmp/bin/go" "$tmp/bin
 export IMAGE_REPOSITORY=ghcr.io/example/aster
 export FIX_IMAGE_CONTRACT_SCRIPT="$tmp/contract.sh"
 export RELEASE_TEST_SHA_COPY="$tmp/release.SHA256SUMS"
+export RELEASE_TEST_FETCH_FILE="$tmp/FETCH_HEAD"
+export RELEASE_TEST_TAG_INSPECT_COUNT_FILE="$tmp/tag-inspects"
 export MODULE_TAG_STATE_FILE="$tmp/module-tag-created"
 
 if (cd "$root" && RELEASE_TEST_LOG="$log" ROOT_TAG_STATE=missing MODULE_TAG_STATE=missing PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") >"$tmp/missing-tag.out" 2>&1; then
@@ -421,6 +477,15 @@ fi
 : > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script")
 grep -Eq '^git-argv <tag> <-f> <v1> <refs/aster-release/[0-9]+/root>$' "$log"
+[[ $(grep -Fc 'docker buildx imagetools create --tag ' "$log") -eq 3 ]]
+grep -Fq 'docker pull --platform linux/amd64 --quiet ghcr.io/example/aster@sha256:' "$log"
+if grep -Fq 'docker pull --platform linux/amd64 --quiet ghcr.io/example/aster:v1.2.3' "$log"; then
+  echo 'release verification pulled a mutable version tag' >&2
+  exit 1
+fi
+grep -Fq 'docker buildx imagetools create --tag ghcr.io/example/aster:latest ghcr.io/example/aster@sha256:' "$log"
+grep -Fq 'docker buildx imagetools create --tag ghcr.io/example/aster/remote-fixer:latest ghcr.io/example/aster/remote-fixer@sha256:' "$log"
+grep -Fq 'docker buildx imagetools create --tag ghcr.io/example/aster/agent-sandbox-fix-executor:latest ghcr.io/example/aster/agent-sandbox-fix-executor@sha256:' "$log"
 if grep -Fq 'git-argv <tag> <-f> <v1> <v1.2.3>' "$log"; then
   echo 'stable alias used the unchecked local release tag' >&2
   exit 1
@@ -432,9 +497,11 @@ lines = Path(sys.argv[1]).read_text().splitlines()
 app_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'aster-1.2.3.tgz' in line and 'platform' not in line)
 platform_push = next(i for i, line in enumerate(lines) if line.startswith('helm push ') and 'aster-platform-1.2.3.tgz' in line)
 release = next(i for i, line in enumerate(lines) if line.startswith('gh release create '))
+latest = [i for i, line in enumerate(lines) if line.startswith('docker buildx imagetools create --tag ') and ':latest ' in line]
 alias = next(i for i, line in enumerate(lines) if line.startswith('git push origin '))
-assert platform_push < app_push < release < alias, lines
+assert len(latest) == 3 and platform_push < app_push < release < min(latest) <= max(latest) < alias, lines
 release_line = lines[release]
+assert '--latest=true' in release_line, release_line
 assert 'aster-1.2.3.tgz' in release_line
 assert 'aster-platform-1.2.3.tgz' in release_line
 assert '--verify-tag' in release_line
@@ -464,9 +531,10 @@ PY
 : > "$log"
 (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3-rc.1 REPOSITORY_OWNER=example "$script")
 grep -F 'gh release create ' "$log" | grep -Fq -- '--prerelease'
+grep -F 'gh release create ' "$log" | grep -Fq -- '--latest=false'
 grep -F 'gh release create ' "$log" | grep -Fq -- 'changelog/v1.2.3-rc.1.md'
-if grep -Fq 'git push origin' "$log"; then
-  echo 'pre-release moved the stable major alias' >&2
+if grep -Eq 'git push origin|docker buildx imagetools create' "$log"; then
+  echo 'pre-release moved a stable alias or image latest tag' >&2
   exit 1
 fi
 
@@ -626,6 +694,86 @@ if (cd "$root" && RELEASE_TEST_LOG="$log" PATH="$tmp/bin:$PATH" TAG=v1.2.3 \
 fi
 grep -Fq 'RELEASE_ALLOW_BACKWARD must be true or false' "$tmp/bad-override.out"
 
+# An older maintained patch is publishable from its reviewed line without
+# claiming the newest stable release or changing the current major alias.
+: > "$log"
+(cd "$root" && RELEASE_TEST_LOG="$log" MAINTENANCE_BRANCH_STATE=present \
+  MAINTENANCE_BRANCH_COMMIT=3333333333333333333333333333333333333333 \
+  EXISTING_RELEASE_TAGS='v1.2.0\nv1.2.3\nv1.9.5' EXISTING_STABLE_VERSION=v1.9.5 \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") > "$tmp/backport.out"
+grep -F 'gh release create ' "$log" | grep -Fq -- '--latest=false'
+if grep -Eq '^docker buildx imagetools create|^git tag -f|^git push origin' "$log"; then
+  echo 'older minor backport moved an alias or latest image' >&2
+  exit 1
+fi
+
+# A patch to an older major still advances that major when it is the highest
+# stable version there, but never becomes the global latest release.
+: > "$log"
+(cd "$root" && RELEASE_TEST_LOG="$log" MAINTENANCE_BRANCH_STATE=present \
+  EXISTING_RELEASE_TAGS='v1.2.0\nv2.0.0' EXISTING_STABLE_VERSION=v1.2.0 \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") > "$tmp/old-major.out"
+grep -F 'gh release create ' "$log" | grep -Fq -- '--latest=false'
+grep -Eq '^git-argv <tag> <-f> <v1> <refs/aster-release/[0-9]+/root>$' "$log"
+if grep -Fq 'docker buildx imagetools create' "$log"; then
+  echo 'older major backport replaced the newest stable image' >&2
+  exit 1
+fi
+
+# A branch without its stable anchor, or one that does not contain the tagged
+# commit, must not repair the module tag or publish any artifacts.
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" MAINTENANCE_BRANCH_STATE=present \
+  EXISTING_RELEASE_TAGS='v1.9.5' PATH="$tmp/bin:$PATH" TAG=v1.2.3 \
+  RELEASE_TAGS_ONLY=true "$script") > "$tmp/no-anchor.out" 2>&1; then
+  echo 'maintenance line without stable anchor was accepted' >&2
+  exit 1
+fi
+grep -Fq 'requires an existing stable release tag v1.2.0' "$tmp/no-anchor.out"
+if grep -Eq '^(helm push|gh release create|git (-c )?tag|git push)' "$log"; then
+  echo 'missing stable anchor caused a publication write' >&2
+  exit 1
+fi
+
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" MAINTENANCE_BRANCH_STATE=present \
+  SOURCE_REACHABLE=false EXISTING_RELEASE_TAGS='v1.2.0\nv1.9.5' \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 RELEASE_TAGS_ONLY=true "$script") > "$tmp/unreachable.out" 2>&1; then
+  echo 'tag commit outside the maintenance line was accepted' >&2
+  exit 1
+fi
+if grep -Eq '^(helm push|gh release create|git (-c )?tag|git push)' "$log"; then
+  echo 'unreachable maintenance tag caused a publication write' >&2
+  exit 1
+fi
+
+# A failed latest-image promotion never advances the major alias.
+: > "$log"
+if (cd "$root" && RELEASE_TEST_LOG="$log" FAIL_LATEST_IMAGE_SUFFIX=remote-fixer \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") > "$tmp/latest-failure.out" 2>&1; then
+  echo 'failed latest image promotion was accepted' >&2
+  exit 1
+fi
+if grep -Eq '^git tag -f|^git push origin' "$log"; then
+  echo 'major alias advanced after latest image promotion failed' >&2
+  exit 1
+fi
+
+# A version tag replaced after its digest was verified cannot redirect OCI
+# latest to the replacement, even if the Image workflow races publication.
+: > "$log"
+rm -f "$RELEASE_TEST_TAG_INSPECT_COUNT_FILE"
+if (cd "$root" && RELEASE_TEST_LOG="$log" REPLACE_RELEASE_TAG_AFTER_VERIFY=true \
+  PATH="$tmp/bin:$PATH" TAG=v1.2.3 REPOSITORY_OWNER=example "$script") > "$tmp/replaced-image.out" 2>&1; then
+  echo 'release accepted a moved image tag' >&2
+  exit 1
+fi
+grep -Fq 'release image tag moved after verification: ghcr.io/example/aster/remote-fixer:v1.2.3' "$tmp/replaced-image.out"
+if grep -Eq '^docker buildx imagetools create|^git tag -f|^git push origin' "$log"; then
+  echo 'moved image tag changed a latest image or major alias' >&2
+  exit 1
+fi
+
 for workflow in "$root/.github/workflows/release.yml" "$root/.github/workflows/image.yml"; do
   grep -Fq -- '- "v*.*.*"' "$workflow"
   # Provenance signing needs both an OIDC token and attestation write access.
@@ -673,6 +821,9 @@ for job, subject in expected.items():
 # tag-pair declares its own permissions and must not gain signing rights it
 # does not use.
 assert "attestations" not in image["jobs"]["tag-pair"]["permissions"], image["jobs"]["tag-pair"]
+for job in expected:
+    meta = next(s for s in image["jobs"][job]["steps"] if s.get("id") == "meta")
+    assert meta["with"]["flavor"] == "latest=false", (job, meta)
 
 release = yaml.safe_load(open(sys.argv[2]))
 steps = release["jobs"]["release"]["steps"]
@@ -684,13 +835,14 @@ assert attest[0]["with"]["subject-checksums"] == "${{ runner.temp }}/SHA256SUMS"
 publish = next(s for s in steps if s.get("run") == "hack/publish-release.sh")
 assert publish["env"]["RELEASE_CHECKSUMS_OUT"] == "${{ runner.temp }}/SHA256SUMS", publish["env"]
 assert steps.index(publish) < steps.index(attest[0]), "assets attested before they are published"
+assert any(s.get("uses") == "docker/setup-buildx-action@v3" for s in steps[:steps.index(publish)])
 print("provenance wiring checks passed")
 PY
 
 fixture=$tmp/tag-fixture
 mkdir -p "$fixture"
 "$real_git" init --bare --quiet "$fixture/remote.git"
-"$real_git" init --quiet "$fixture/work"
+"$real_git" init --quiet -b main "$fixture/work"
 (
   cd "$fixture/work"
   "$real_git" config user.name 'Release Test'
@@ -701,6 +853,7 @@ mkdir -p "$fixture"
   "$real_git" add fixture.txt
   "$real_git" commit --quiet -m fixture
   "$real_git" remote add origin "$fixture/remote.git"
+  "$real_git" push --quiet origin main
   "$real_git" tag -a -m v0.9.0-rc.2 v0.9.0-rc.2
   "$real_git" push --quiet origin refs/tags/v0.9.0-rc.2
   PATH="$(dirname "$real_git"):/usr/bin:/bin" TAG=v0.9.0-rc.2 RELEASE_TAGS_ONLY=true "$script" > "$tmp/fixture-recovery.out"

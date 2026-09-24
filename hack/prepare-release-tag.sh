@@ -9,10 +9,18 @@ set -euo pipefail
 : "${TAG:?TAG is required}"
 
 dry_run=${PREPARE_DRY_RUN:-false}
+review_only=${PREPARE_REVIEW_ONLY:-false}
 case $dry_run in
   true | false) ;;
   *)
     echo "PREPARE_DRY_RUN must be true or false" >&2
+    exit 1
+    ;;
+esac
+case $review_only in
+  true | false) ;;
+  *)
+    echo "PREPARE_REVIEW_ONLY must be true or false" >&2
     exit 1
     ;;
 esac
@@ -23,30 +31,13 @@ cd "$root"
 source "$root/hack/release-checks.sh"
 
 module_tag="backend/$TAG"
+source_branch=${RELEASE_SOURCE_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}
+head_commit=$(git rev-parse 'HEAD^{commit}')
 
 check_release_tag_format "$TAG"
 check_release_notes "$TAG"
-check_version_moves_forward "$TAG"
-
-# Neither tag may exist yet. Distinguish absence from an inspection failure so a
-# transport or auth error is never read as "the tag is free".
-for tag in "$TAG" "$module_tag"; do
-  set +e
-  git ls-remote --exit-code --refs --tags origin "refs/tags/$tag" > /dev/null
-  status=$?
-  set -e
-  case $status in
-    0)
-      echo "release tag already exists: $tag" >&2
-      exit 1
-      ;;
-    2) ;;
-    *)
-      echo "failed to inspect release tag: $tag" >&2
-      exit 1
-      ;;
-  esac
-done
+check_version_moves_forward "$TAG" "$source_branch"
+check_release_tags_available "$TAG"
 
 # Reusing a version is unsafe once the module mirror is serving it: the mirror
 # can keep returning the original content after the tag is gone, and the version
@@ -57,36 +48,24 @@ done
 # The cached-only endpoint answers from what the proxy already has, so this
 # never triggers an origin fetch that would negatively cache the version we are
 # about to create.
-module_path=$(awk '/^module /{print $2; exit}' backend/go.mod)
-proxy_info="https://proxy.golang.org/cached-only/${module_path}/@v/${TAG}.info"
-proxy_status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$proxy_info") || proxy_status=unreachable
-case $proxy_status in
-  404) ;;
-  200)
-    echo "module version already published and immutable on the Go proxy: ${module_path}@${TAG}" >&2
-    echo "pick the next version; a deleted tag does not free its version number" >&2
-    exit 1
-    ;;
-  *)
-    # Includes 410, which the proxy protocol defines only as "not available"
-    # and not as proof the version was never served. Fail closed.
-    echo "failed to check the Go module proxy for ${module_path}@${TAG} (status $proxy_status)" >&2
-    exit 1
-    ;;
-esac
+check_module_version_unused "$TAG"
 
-# Tag the reviewed tip of the default branch, never a local commit that was
-# never pushed or reviewed.
-git fetch --quiet origin main
-reviewed_commit=$(git rev-parse 'refs/remotes/origin/main^{commit}')
-head_commit=$(git rev-parse 'HEAD^{commit}')
-if [[ $head_commit != "$reviewed_commit" ]]; then
-  echo "HEAD $head_commit is not the tip of origin/main $reviewed_commit" >&2
-  exit 1
+if [[ $review_only == true ]]; then
+  check_release_source_branch "$TAG" "$source_branch" "$head_commit" pr
+  echo "validated release intent $TAG for $source_branch"
+  exit 0
 fi
 
+# The notes checked above must be in the tagged commit, not only in the
+# working tree. The workflow checkout is clean; local dry runs must be too.
+if [[ -n $(git status --porcelain) ]]; then
+  echo "release tagging requires a clean checkout with committed notes" >&2
+  exit 1
+fi
+check_release_source_branch "$TAG" "$source_branch" "$head_commit" exact
+
 if [[ $dry_run == true ]]; then
-  echo "would create $TAG and $module_tag at $reviewed_commit"
+  echo "would create $TAG and $module_tag at $head_commit from $source_branch"
   exit 0
 fi
 
@@ -94,6 +73,6 @@ fi
 # half-created the way backend/v0.9.0-rc.1 was, and creating no local tags means
 # a rejected push leaves nothing behind to clean up before a retry.
 git push --atomic origin \
-  "$reviewed_commit:refs/tags/$TAG" \
-  "$reviewed_commit:refs/tags/$module_tag"
-echo "created release tags $TAG and $module_tag at $reviewed_commit"
+  "$head_commit:refs/tags/$TAG" \
+  "$head_commit:refs/tags/$module_tag"
+echo "created release tags $TAG and $module_tag at $head_commit from $source_branch"
