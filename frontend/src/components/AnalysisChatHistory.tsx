@@ -1,18 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
+import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
+import ChevronRight from "@mui/icons-material/ChevronRight";
 import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import { analysisChatHistoryQuery, isAnalysisChatOAuthExpired, listAnalysisChatSessions } from "../lib/analysisChat";
 import { useAuth } from "../hooks/useAuth";
 import type { AnalysisChatHistoryPage } from "../types/analysisChat";
-import { overviewTypography } from "../theme/overview";
+import { overviewTypography, touchTargetSx } from "../theme/overview";
 
 export function AnalysisChatHistoryList({ jobID = "", scope = "", currentSessionID, refreshKey = "", pageSize = 20 }: {
   jobID?: string; scope?: string; currentSessionID?: string; refreshKey?: string; pageSize?: number;
@@ -68,17 +71,69 @@ export function AnalysisChatHistoryList({ jobID = "", scope = "", currentSession
   );
 }
 
+// AnalysisChatHistory starts collapsed and loads the list only when opened, so
+// earlier conversations never take room from the current one by default.
 export function AnalysisChatHistory({ jobID, scope, currentSessionID, refreshKey }: {
   jobID: string; scope: string; currentSessionID?: string; refreshKey: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const listID = useId();
   return (
-    <Box component="section" aria-label="Earlier conversations" sx={{ px: 2, py: 1.5, borderTop: "1px solid", borderColor: "divider", bgcolor: "surface.container" }}>
-      <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
-        <HistoryOutlined fontSize="small" color="action" />
-        <Typography component="h4" variant="subtitle2" sx={{ flex: 1 }}>Earlier conversations</Typography>
+    <Box component="section" aria-label="Earlier conversations" sx={{ px: 2, py: 0.5, borderTop: "1px solid", borderColor: "divider", bgcolor: "surface.container", flexShrink: 0 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+        <ButtonBase
+          type="button"
+          onClick={() => setOpen((wasOpen) => !wasOpen)}
+          aria-expanded={open}
+          aria-controls={open ? listID : undefined}
+          sx={{
+            ...touchTargetSx,
+            flex: 1,
+            minWidth: 0,
+            mx: -0.5,
+            px: 0.5,
+            justifyContent: "flex-start",
+            gap: 1,
+            borderRadius: 1,
+            color: "text.primary",
+            textAlign: "left",
+            "&:hover": { bgcolor: "action.hover" },
+            "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
+          }}
+        >
+          <HistoryOutlined fontSize="small" color="action" sx={{ display: { xs: "none", sm: "inline-block" } }} />
+          <Typography component="span" variant="subtitle2" noWrap sx={{ minWidth: 0 }}>Earlier conversations</Typography>
+          <ChevronRight
+            aria-hidden="true"
+            sx={{
+              fontSize: 20,
+              color: "text.secondary",
+              transform: open ? "rotate(90deg)" : "rotate(0deg)",
+              transition: (theme) => theme.transitions.create("transform", { duration: theme.transitions.duration.shortest }),
+              "@media (prefers-reduced-motion: reduce)": { transition: "none" },
+            }}
+          />
+        </ButtonBase>
         <Link component={RouterLink} to={`/investigations?${analysisChatHistoryQuery(jobID, scope)}`} variant="body2">View history</Link>
       </Stack>
-      <AnalysisChatHistoryList key={`${jobID}:${scope}`} jobID={jobID} scope={scope} currentSessionID={currentSessionID} refreshKey={refreshKey} pageSize={5} />
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        {/* Capped with its own scroll so an open list still leaves the
+            current conversation most of the panel. */}
+        <Box
+          id={listID}
+          sx={{
+            maxHeight: { xs: "28vh", sm: "min(32vh, 280px)" },
+            overflowY: "auto",
+            pt: 0.5,
+            pb: 1,
+            pr: 0.5,
+            scrollbarWidth: "thin",
+            scrollbarColor: (theme) => `${theme.palette.divider} transparent`,
+          }}
+        >
+          <AnalysisChatHistoryList key={`${jobID}:${scope}`} jobID={jobID} scope={scope} currentSessionID={currentSessionID} refreshKey={refreshKey} pageSize={5} />
+        </Box>
+      </Collapse>
     </Box>
   );
 }
