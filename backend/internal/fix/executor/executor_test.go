@@ -170,6 +170,24 @@ func TestOpenCodeStepCounterHandlesSplitEvents(t *testing.T) {
 	}
 }
 
+func TestOpenCodeStepCounterToleratesOtherOutput(t *testing.T) {
+	cancelled := false
+	counter := &openCodeStepCounter{limit: 2, cancel: func() { cancelled = true }}
+	for _, line := range []string{
+		"\n  \n",
+		`{"part":{"type":"step-finish"},"type":"step_finish"}` + "\n",
+		"not a JSON event\n",
+		`{"type":"step_finish","part":{"type":"step-finish"}}` + "\n",
+	} {
+		if _, err := counter.Write([]byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if counter.count != 2 || counter.err != nil || cancelled {
+		t.Fatalf("counter count=%d err=%v cancelled=%t", counter.count, counter.err, cancelled)
+	}
+}
+
 func TestExecuteFailsClosedOnUnsafePolicy(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	for _, tc := range []struct {

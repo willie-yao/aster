@@ -626,11 +626,12 @@ func runOpenCodeCommand(ctx context.Context, dir string, env []string, credentia
 }
 
 type openCodeStepCounter struct {
-	pending []byte
-	limit   int
-	count   int
-	cancel  context.CancelFunc
-	err     error
+	pending   []byte
+	truncated bool
+	limit     int
+	count     int
+	cancel    context.CancelFunc
+	err       error
 }
 
 func (w *openCodeStepCounter) Write(data []byte) (int, error) {
@@ -642,16 +643,26 @@ func (w *openCodeStepCounter) Write(data []byte) (int, error) {
 			break
 		}
 		w.appendPrefix(data[:end])
-		decoder := json.NewDecoder(bytes.NewReader(w.pending))
-		start, startErr := decoder.Token()
-		key, keyErr := decoder.Token()
-		kind, kindErr := decoder.Token()
-		if startErr != nil || keyErr != nil || kindErr != nil || start != json.Delim('{') || key != "type" {
-			w.err = fmt.Errorf("decode coding agent output event type")
-			w.cancel()
-			break
+		var eventType string
+		if w.truncated {
+			decoder := json.NewDecoder(bytes.NewReader(w.pending))
+			if start, err := decoder.Token(); err == nil && start == json.Delim('{') {
+				if key, err := decoder.Token(); err == nil && key == "type" {
+					kind, err := decoder.Token()
+					if err == nil {
+						eventType, _ = kind.(string)
+					}
+				}
+			}
+		} else {
+			var event struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(w.pending, &event) == nil {
+				eventType = event.Type
+			}
 		}
-		if kind == "step_finish" {
+		if eventType == "step_finish" {
 			w.count++
 			if w.count > w.limit {
 				w.err = openCodeStepLimitError(w.limit)
@@ -660,6 +671,7 @@ func (w *openCodeStepCounter) Write(data []byte) (int, error) {
 			}
 		}
 		w.pending = w.pending[:0]
+		w.truncated = false
 		data = data[end+1:]
 	}
 	return size, nil
@@ -668,6 +680,11 @@ func (w *openCodeStepCounter) Write(data []byte) (int, error) {
 func (w *openCodeStepCounter) appendPrefix(data []byte) {
 	if remaining := maxCapturedStream - len(w.pending); remaining > 0 {
 		w.pending = append(w.pending, data[:min(len(data), remaining)]...)
+		if len(data) > remaining {
+			w.truncated = true
+		}
+	} else if len(data) > 0 {
+		w.truncated = true
 	}
 }
 
