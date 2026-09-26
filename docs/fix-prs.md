@@ -127,6 +127,8 @@ The provider protocol and OpenCode compatibility details are in [AI providers](a
 
 After OpenCode returns, the executor rejects credential leakage in process output, structured results, patches, changed files, command output, and failure data. It then runs validators with a credential-free environment. A validator failure, missing executable, unexpected command result, or invalid final diff produces no actionable preview.
 
+When the model provider rejects a Fix request, the failed request names the failure category and shows a bounded, redacted operator diagnostic with the HTTP status, provider error code, configured Secret reference, endpoint host and path, model, and provider message. Authentication failures remain `provider_credential`; other non-transient 4xx rejections are `provider_request`. Coding-agent and runtime failures show a bounded reason. The server logs the operator diagnostic for failed requests.
+
 The generic executor image contains the pinned Go toolchain, OpenCode, git, and CA certificates. It does not promise repository-specific tools. Configure only commands available in the selected immutable image. Public repositories are required because no Git credential enters the Sandbox.
 
 ## Freshness, deduplication, and private state

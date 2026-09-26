@@ -549,17 +549,21 @@ export function ChatFixDialog({
                   {isProviderCredentialRetry ? "Provider request refused" : "Generation completed without a patch"}
                 </Typography>
                 <Typography variant="body2">{requestPresentation.message}</Typography>
-                {request?.failure?.operator_summary && (
-                  <Box sx={{ mt: 1.1 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                      {isProviderCredentialRetry ? "Provider diagnostic" : "Coding agent summary"}
-                    </Typography>
-                    <Typography variant="body2" color="textSecondary">
-                      {request.failure.operator_summary}
-                    </Typography>
-                  </Box>
-                )}
               </Alert>
+            )}
+            {request?.status === "failed" && request.failure?.operator_summary && busy === null && !observationMessage && (
+              <Box sx={{ mt: 1.1 }}>
+                <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
+                  {request.failure.category === "no_reviewable_patch"
+                    ? "Coding agent summary"
+                    : request.failure.category === "provider_credential" || request.failure.category === "provider_request"
+                      ? "Provider diagnostic"
+                      : "Runtime diagnostic"}
+                </Typography>
+                <Typography variant="body2" color="textSecondary" sx={{ overflowWrap: "anywhere" }}>
+                  {request.failure.operator_summary}
+                </Typography>
+              </Box>
             )}
 
             <TextField

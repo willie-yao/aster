@@ -75,11 +75,12 @@ const (
 	// ExecutionFailureProviderCredential means the model provider rejected the
 	// execution credential, which no retry can recover from.
 	ExecutionFailureProviderCredential ExecutionFailureCode = "provider_credential"
+	ExecutionFailureProviderRequest    ExecutionFailureCode = "provider_request"
 )
 
 func supportedExecutionFailureCode(code ExecutionFailureCode) bool {
 	switch code {
-	case ExecutionFailureRuntime, ExecutionFailureReviewScope, ExecutionFailureSafetyIntegrity, ExecutionFailureProviderCredential:
+	case ExecutionFailureRuntime, ExecutionFailureReviewScope, ExecutionFailureSafetyIntegrity, ExecutionFailureProviderCredential, ExecutionFailureProviderRequest:
 		return true
 	default:
 		return false
@@ -117,6 +118,7 @@ type ProviderErrorDetail struct {
 	StatusCode     int    `json:"status_code,omitempty"`
 	Message        string `json:"message,omitempty"`
 	ProviderID     string `json:"provider_id,omitempty"`
+	Code           string `json:"code,omitempty"`
 	AuthSecretName string `json:"auth_secret_name,omitempty"`
 	AuthSecretKey  string `json:"auth_secret_key,omitempty"`
 	Endpoint       string `json:"endpoint,omitempty"`

@@ -427,9 +427,10 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 				ChangedFiles: []string{"a", "b"}, Files: map[string]string{"a": "1", "b": "2"}, Diff: "diff", CommandResults: results},
 		},
 		{
-			name: "runtime", maxFiles: 2, want: AnalysisFailureRuntimeInfrastructure,
-			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureRuntime},
-			err:    runtime.ErrUnavailable,
+			name: "runtime", maxFiles: 2, want: AnalysisFailureRuntimeInfrastructure, wantSummary: true,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureRuntime,
+				FailureReason: "coding agent failed: UnknownError: stream decode failed"},
+			err: runtime.ErrUnavailable,
 		},
 		{
 			name: "provider credential", maxFiles: 2, want: AnalysisFailureProviderCredential,
@@ -438,6 +439,15 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 				ProviderError:  &runtime.ProviderErrorDetail{StatusCode: 403, Message: "Forbidden", AuthSecretName: "agent-sandbox-model", AuthSecretKey: "AI_TOKEN", Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "gpt-fixture"},
 				CommandResults: results},
 			err: errors.New("agent Sandbox execution failed: model provider refused the sandbox request (HTTP 403)"),
+		},
+		{
+			name: "provider request", maxFiles: 2, want: AnalysisFailureProviderRequest, wantSummary: true,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalFailed, FailureCode: runtime.ExecutionFailureProviderRequest,
+				ProviderError: &runtime.ProviderErrorDetail{StatusCode: 400, Code: "unsupported_api_for_model",
+					Message: "This model requires /responses", AuthSecretName: "agent-sandbox-model", AuthSecretKey: "AI_TOKEN",
+					Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "gpt-fixture"},
+				CommandResults: results},
+			err: errors.New("agent Sandbox execution failed: model provider rejected the request (HTTP 400 unsupported_api_for_model)"),
 		},
 		{
 			name: "review scope wire outcome", maxFiles: 2, want: AnalysisFailureNoReviewablePatch, wantDetail: AnalysisFailureDetailReviewScopeExceeded,
@@ -496,6 +506,37 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 				t.Fatalf("diagnostic exposed agent summary: %q", diagnostic.OperatorSummary)
 			}
 		})
+	}
+}
+
+func TestProviderRequestOperatorSummaryBoundsAndRedacts(t *testing.T) {
+	detail := &runtime.ProviderErrorDetail{
+		StatusCode: 400, Code: "model_not_supported", Message: strings.Repeat("provider-detail-", 50) + " token=fixture-secret",
+		ProviderID: "github-copilot", AuthSecretName: "agent-sandbox-model", AuthSecretKey: "AI_TOKEN",
+		Endpoint: "https://api.githubcopilot.com/chat/completions?token=fixture-secret", Model: "gpt-fixture",
+	}
+	summary := providerRequestOperatorSummary(detail)
+	for _, want := range []string{
+		"HTTP 400 model_not_supported", "Secret agent-sandbox-model/AI_TOKEN",
+		"endpoint https|api.githubcopilot.com/chat/completions", "model gpt-fixture", "Provider github-copilot",
+		"Provider message: provider-detail-",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %q", want, summary)
+		}
+	}
+	if len(summary) > providerOperatorSummaryBytes || redact.OperatorText(summary) != summary || strings.Contains(summary, "fixture-secret") {
+		t.Fatalf("summary is not bounded and redacted: len=%d summary=%q", len(summary), summary)
+	}
+	detail.ProviderID = strings.Repeat("provider-", 60)
+	detail.AuthSecretName = strings.Repeat("secret-", 36)
+	detail.AuthSecretKey = strings.Repeat("key-", 63)
+	detail.Endpoint = "https://" + strings.Repeat("endpoint", 80) + ".example/v1/chat/completions"
+	detail.Model = strings.Repeat("model-", 80)
+	detail.Code = strings.Repeat("code-", 60)
+	summary = providerRequestOperatorSummary(detail)
+	if len(summary) > providerOperatorSummaryBytes || redact.OperatorText(summary) != summary {
+		t.Fatalf("pathological summary exceeded bound: len=%d summary=%q", len(summary), summary)
 	}
 }
 
@@ -567,6 +608,16 @@ func TestProviderCredentialOperatorSummaryDistinguishesStatusAndRedactsMessage(t
 	for _, secret := range []string{"ghp-fixture-secret", "second-secret"} {
 		if strings.Contains(unauthorizedSummary, secret) || strings.Contains(forbiddenSummary, secret) {
 			t.Fatalf("provider summary disclosed %q: 401=%q 403=%q", secret, unauthorizedSummary, forbiddenSummary)
+		}
+	}
+	for _, statusCode := range []int{401, 403} {
+		detail := base
+		detail.StatusCode = statusCode
+		detail.Code = "model_access_denied"
+		summary := providerCredentialOperatorSummary(&detail)
+		want := fmt.Sprintf("HTTP %d model_access_denied:", statusCode)
+		if !strings.Contains(summary, want) || len(summary) > providerOperatorSummaryBytes {
+			t.Fatalf("provider code missing or unbounded: %q", summary)
 		}
 	}
 }

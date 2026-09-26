@@ -52,6 +52,7 @@ export type AnalysisFixFailureCategory =
   | "no_reviewable_patch"
   | "runtime_infrastructure"
   | "provider_credential"
+  | "provider_request"
   | "result_contract"
   | "safety_integrity"
   | "source_changed"

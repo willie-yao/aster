@@ -37,6 +37,8 @@ function failureMessage(request: ChatFixRequest): string {
       return "Fix preview generation failed in the isolated runtime.";
     case "provider_credential":
       return providerCredentialMessage(request);
+    case "provider_request":
+      return "The model provider rejected the request. Check the configured model, API, and endpoint.";
     case "result_contract":
       return "Fix preview generation returned an invalid result contract.";
     case "safety_integrity":

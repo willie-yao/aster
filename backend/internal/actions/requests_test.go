@@ -604,6 +604,89 @@ func TestAnalysisFixRequestReportsProviderCredentialRejection(t *testing.T) {
 	}
 }
 
+func TestAnalysisFixRequestPersistsProviderRequestDiagnosticWithoutRawResponse(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	summary := "HTTP 400 model_not_supported: request rejected. Secret sandbox-model/AI_TOKEN; " +
+		"endpoint https|api.githubcopilot.com/chat/completions; model fixture-model. " +
+		"Provider message: model not supported token=fixture-secret"
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		return PreviewResult{}, &classifiedAnalysisFixError{
+			failure: &AnalysisFixFailureView{
+				Category: AnalysisFixFailureProviderRequest, TerminalState: runtime.TerminalFailed,
+				OperatorSummary: summary,
+			},
+			cause: withReason(ReasonGenerationFailed, errors.New("private provider response"), ReasonMessage(ReasonGenerationFailed)),
+		}
+	}
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if final.ReasonCode != ReasonGenerationFailed || final.Error != ReasonMessage(ReasonGenerationFailed) ||
+		final.Failure == nil || final.Failure.Category != AnalysisFixFailureProviderRequest {
+		t.Fatalf("failed request = %+v", final)
+	}
+	if !strings.Contains(final.Failure.OperatorSummary, "HTTP 400 model_not_supported") ||
+		!strings.Contains(final.Failure.OperatorSummary, "token=[redacted]") {
+		t.Fatalf("operator summary = %q", final.Failure.OperatorSummary)
+	}
+	encoded, err := json.Marshal(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{string(encoded), string(persisted)} {
+		for _, forbidden := range []string{"fixture-secret", "responseHeaders", "responseBody", "private provider response"} {
+			if strings.Contains(data, forbidden) {
+				t.Fatalf("request record persisted %q: %s", forbidden, data)
+			}
+		}
+		if !strings.Contains(data, "model_not_supported") {
+			t.Fatalf("request record lost provider code: %s", data)
+		}
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	restored, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || restored.Failure == nil || restored.Failure.OperatorSummary != final.Failure.OperatorSummary {
+		t.Fatalf("restored=%+v err=%v", restored, err)
+	}
+	if !strings.Contains(logs.String(), `operator_summary="HTTP 400 model_not_supported`) || strings.Contains(logs.String(), "fixture-secret") {
+		t.Fatalf("log omitted safe summary: %q", logs.String())
+	}
+}
+
+func TestLogGenerationFailureQuotesOperatorSummaryForAllCategories(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	for _, category := range []AnalysisFixFailureCategory{
+		AnalysisFixFailureNoReviewablePatch, AnalysisFixFailureRuntimeInfrastructure,
+		AnalysisFixFailureProviderCredential, AnalysisFixFailureProviderRequest,
+		AnalysisFixFailureResultContract, AnalysisFixFailureSafetyIntegrity,
+	} {
+		logs.Reset()
+		failure := &AnalysisFixFailureView{
+			Category: category, OperatorSummary: "detail from https://private.example/path token=fixture-secret",
+		}
+		if category == AnalysisFixFailureNoReviewablePatch {
+			failure.Detail = AnalysisFixFailureDetailNoRepositoryChange
+			failure.TerminalState = runtime.TerminalSucceeded
+		}
+		logGenerationFailure("request-fixture", ReasonGenerationFailed, failure, errors.New("failed"))
+		if !strings.Contains(logs.String(), `operator_summary="detail from [redacted-url] token=[redacted]"`) {
+			t.Fatalf("%s log = %q", category, logs.String())
+		}
+	}
+}
+
 func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	serverCtx, stopServer := context.WithCancel(context.Background())

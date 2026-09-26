@@ -223,6 +223,35 @@ test("exact JUnit request presentation separates recoverable hard and observatio
   assert.equal(pending?.shouldObserve, true);
 });
 
+test("provider request failures explain configuration and show diagnostics without regeneration", () => {
+  const request = {
+    id: "request", failure_id: "failure", kind: "analysis-fix" as const, owner: "alice",
+    status: "failed" as const, reason_code: "generation_failed" as const,
+    created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z",
+    expires_at: "2026-08-15T00:00:00Z",
+    failure: {
+      category: "provider_request" as const,
+      operator_summary: "HTTP 400 model_not_supported: request rejected.",
+    },
+  };
+  assert.deepEqual(chatFixRequestPresentation(request), {
+    severity: "error",
+    message: "The model provider rejected the request. Check the configured model, API, and endpoint.",
+    canRegenerate: false,
+    shouldObserve: false,
+  });
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const hardFailure = dialog.indexOf("requestPresentation && !requestPresentation.canRegenerate");
+  const recoverableFailure = dialog.indexOf("requestPresentation?.canRegenerate && busy");
+  const summary = dialog.indexOf('request?.status === "failed" && request.failure?.operator_summary');
+  const instruction = dialog.indexOf('label="Maintainer instruction (optional)"');
+  assert.ok(hardFailure > 0 && recoverableFailure > hardFailure);
+  assert.ok(summary > recoverableFailure && summary < instruction);
+  assert.match(dialog.slice(summary, instruction), /request\.failure\.operator_summary/);
+  assert.match(dialog.slice(summary, instruction), /Provider diagnostic/);
+  assert.match(dialog.slice(summary, instruction), /Runtime diagnostic/);
+});
+
 test("exact JUnit regeneration keeps feedback replacement separate from provider retry", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
   const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
