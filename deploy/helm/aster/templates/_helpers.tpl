@@ -363,6 +363,9 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- $fixTimeout := default "10m" (get $projectRuntime "timeout") -}}
   {{- $outputLimitBytes := int64 (default 524288 (get $projectRuntime "output_limit_bytes")) -}}
   {{- $allowedCommands := get $projectRuntime "allowed_commands" | default list -}}
+  {{- if eq (len $allowedCommands) 0 -}}
+    {{- $allowedCommands = list (dict "argv" (list "git" "diff" "--cached" "--check") "timeout" "1m") -}}
+  {{- end -}}
   {{- if ne (default "agent-sandbox" (get $projectRuntime "type")) "agent-sandbox" -}}{{- fail "agentSandbox.fixRuntime requires project ai.fix_prs.agent_runtime.type=agent-sandbox" -}}{{- end -}}
   {{- if not .Values.server.actions.enabled -}}{{- fail "agentSandbox.fixRuntime requires server.actions.enabled=true; Fix generation is a maintainer-initiated server action" -}}{{- end -}}
   {{- if .Values.server.actions.oauth.privateRepositories -}}{{- fail "agentSandbox.fixRuntime supports public repositories only; OAuth privateRepositories must be false" -}}{{- end -}}

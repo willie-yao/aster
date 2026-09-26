@@ -76,6 +76,100 @@ func TestExecuteProducesCredentialFreeStagedPatch(t *testing.T) {
 	}
 }
 
+func TestExecuteFetchesOnlyPinnedCommit(t *testing.T) {
+	repository, _ := fixtureRepository(t)
+	runGit(t, repository, "config", "uploadpack.allowAnySHA1InWant", "true")
+	if err := os.WriteFile(filepath.Join(repository, "README"), []byte("second commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "commit", "-qam", "second")
+	pinnedSHA := strings.TrimSpace(runGit(t, repository, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repository, "README"), []byte("third commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repository, "commit", "-qam", "third")
+	request := fixtureRequest(repository, pinnedSHA)
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			for _, check := range []struct {
+				args []string
+				want string
+			}{
+				{[]string{"rev-parse", "--is-shallow-repository"}, "true"},
+				{[]string{"rev-list", "--count", "HEAD"}, "1"},
+				{[]string{"rev-parse", "HEAD"}, pinnedSHA},
+				{[]string{"remote"}, ""},
+			} {
+				if got := strings.TrimSpace(runGit(t, spec.WorkDir, check.args...)); got != check.want {
+					t.Fatalf("git %v = %q, want %q", check.args, got, check.want)
+				}
+			}
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("generated change\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalSucceeded || result.BaseSHA != pinnedSHA {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestExecuteStopsAgentAfterStepBudget(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	bin := filepath.Join(t.TempDir(), "fake-opencode")
+	script := `#!/bin/sh
+printf '{"type":"tool_use","part":{"output":"%082000d"}}\n' 0
+i=0
+while [ "$i" -lt 5 ]; do
+  printf '{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls"}}\n'
+  i=$((i+1))
+  sleep 0.05
+done
+sleep 10
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	request := fixtureRequest(repository, sha)
+	request.OutputLimitBytes = 4096
+	started := time.Now()
+	result := Execute(t.Context(), request, Options{WorkspaceRoot: t.TempDir(), OpenCodeBin: bin})
+	if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureRuntime ||
+		result.FailureReason != "coding agent exceeded 2 steps" {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.StdoutSummary != "" {
+		t.Fatalf("step-limit failure retained oversized output: %+v", result)
+	}
+	if err := result.Validate(request); err != nil {
+		t.Fatalf("step-limit failure violates result contract: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("step cap took %v instead of stopping the coding agent", elapsed)
+	}
+}
+
+func TestOpenCodeStepCounterHandlesSplitEvents(t *testing.T) {
+	counter := &openCodeStepCounter{limit: 2, cancel: func() {}}
+	for _, part := range []string{
+		`{"type":"text","part":{"text":"\"type\":\"step_finish\""}}` + "\n" +
+			`{"type":"step_fin`,
+		`ish","part":{"type":"step-finish"}}` + "\n" +
+			`{"type":"step_finish","part":{"type":"step-finish"}}` + "\n",
+	} {
+		if _, err := counter.Write([]byte(part)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if counter.count != 2 || counter.err != nil {
+		t.Fatalf("counter = %+v", counter)
+	}
+	counter.Write([]byte("{\"type\":\"step_finish\"}\n"))
+	var limitErr openCodeStepLimitError
+	if !errors.As(counter.err, &limitErr) || int(limitErr) != 2 {
+		t.Fatalf("step limit error = %v", counter.err)
+	}
+}
+
 func TestExecuteFailsClosedOnUnsafePolicy(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	for _, tc := range []struct {
@@ -694,6 +788,72 @@ fi
 	}
 	if len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 0 {
 		t.Fatalf("command results = %+v", result.CommandResults)
+	}
+}
+
+func TestValidationCommandsUseLocalGoToolchain(t *testing.T) {
+	repository, sha := fixtureRepository(t)
+	binDir := t.TempDir()
+	validator := filepath.Join(binDir, "check-go-toolchain")
+	if err := os.WriteFile(validator, []byte("#!/bin/sh\n[ \"$GOTOOLCHAIN\" = local ]\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOTOOLCHAIN", "auto")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := fixtureRequest(repository, sha)
+	request.MaxSteps = 3
+	request.CommandPolicy.Commands = []engineruntime.ExecutionCommand{
+		{Argv: []string{"check-go-toolchain"}, TimeoutSeconds: 10},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 10},
+	}
+	result := Execute(t.Context(), request, Options{
+		WorkspaceRoot: t.TempDir(),
+		RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+			return "", "", os.WriteFile(filepath.Join(spec.WorkDir, "README"), []byte("changed\n"), 0o644)
+		},
+	})
+	if result.TerminalState != engineruntime.TerminalSucceeded || len(result.CommandResults) != 2 || result.CommandResults[0].ExitCode != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestExecuteReportsDeletionAndRenameAsReviewScope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(string) error
+		want string
+	}{
+		{"deletion", func(work string) error { return os.Remove(filepath.Join(work, "README")) }, "attempted deletion"},
+		{"rename", func(work string) error {
+			return os.Rename(filepath.Join(work, "README"), filepath.Join(work, "renamed.txt"))
+		}, "attempted rename"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repository, sha := fixtureRepository(t)
+			request := fixtureRequest(repository, sha)
+			result := Execute(t.Context(), request, Options{
+				WorkspaceRoot: t.TempDir(),
+				RunOpenCode: func(_ context.Context, spec OpenCodeSpec) (string, string, error) {
+					return "", "", tc.edit(spec.WorkDir)
+				},
+			})
+			if result.TerminalState != engineruntime.TerminalFailed || result.FailureCode != engineruntime.ExecutionFailureReviewScope ||
+				!strings.Contains(result.FailureReason, tc.want) {
+				t.Fatalf("result = %+v", result)
+			}
+			if len(result.CommandResults) != len(request.CommandPolicy.Commands) || len(result.Files) != 0 || result.Diff != "" {
+				t.Fatalf("review-scope result retained patch or lost command identity: %+v", result)
+			}
+		})
+	}
+}
+
+func TestOpenCodeSummaryUsesFinalText(t *testing.T) {
+	output := `{"type":"text","part":{"text":"I'll start by reading the repository."}}` + "\n" +
+		`{"type":"step_finish","part":{"type":"step-finish"}}` + "\n" +
+		`{"type":"text","part":{"text":"No repository edit is warranted."}}` + "\n"
+	if summary := openCodeSummary(output); summary != "No repository edit is warranted." {
+		t.Fatalf("summary = %q", summary)
 	}
 }
 

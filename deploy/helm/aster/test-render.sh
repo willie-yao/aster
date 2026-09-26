@@ -502,6 +502,57 @@ PROJECT
 expect_fail agent-sandbox-command-agent 'must not invoke a coding agent or executor' \
   -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-command.yaml"
 
+cat > "$tmp/project-agent-default.yaml" <<'PROJECT'
+id: test
+name: Test
+testgrid:
+  dashboard: test
+storage:
+  provider: local
+  base: .test-work/storage
+branding:
+  title: Test
+  base_path: /
+  site_url: https://example.test
+  source_repo:
+    owner: octocat
+    name: Hello-World
+ai:
+  fix_prs:
+    enabled: true
+    author_name: Fixture
+    author_email: fixture@example.test
+    max_files: 3
+    critique_retries: 0
+    agent_runtime:
+      type: agent-sandbox
+      max_turns: 30
+      allow_bash: false
+      timeout: 10m
+      output_limit_bytes: 1048576
+      model_provider:
+        credential_mode: direct
+        api: chat_completions
+        endpoint: https://api.githubcopilot.com/chat/completions
+        model: fixture-model
+        reasoning_effort: high
+        auth:
+          type: bearer
+PROJECT
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  --set-file project.config="$tmp/project-agent-default.yaml" > "$tmp/agent-sandbox-default-command.yaml"
+grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-default-command.yaml"
+awk '/^      max_turns: 30$/ { print; print "      allowed_commands: []"; next } { print }' \
+  "$tmp/project-agent-default.yaml" > "$tmp/project-agent-empty-command.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  --set-file project.config="$tmp/project-agent-empty-command.yaml" > "$tmp/agent-sandbox-empty-command.yaml"
+grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-empty-command.yaml"
+awk '/^      max_turns: 30$/ { sub(/30/, "1") } { print }' \
+  "$tmp/project-agent-default.yaml" > "$tmp/project-agent-one-step.yaml"
+expect_fail agent-sandbox-default-command-step 'must reserve at least one coding-agent step' \
+  -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-one-step.yaml"
+grep -Fq 'must reserve at least one coding-agent step' "$tmp/agent-sandbox-default-command-step.out"
+
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set ai.enabled=true \
   --set ai.endpoint=https://model.example.test/v1/chat/completions \

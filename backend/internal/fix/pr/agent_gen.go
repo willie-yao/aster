@@ -162,6 +162,7 @@ func agentInstruction(p models.PatternAnalysis, generationContext *GenerationCon
 	b.WriteString("- Investigate the repository before deciding whether the published hypothesis is correct.\n")
 	b.WriteString("- Make the smallest change supported by repository evidence. Prefer configuration, template, or manifest files when appropriate.\n")
 	b.WriteString("- Do not reformat or touch unrelated code.\n")
+	b.WriteString("- Do not delete or rename files.\n")
 	if maxFiles > 0 {
 		fmt.Fprintf(&b, "- Change at most %d file(s).\n", maxFiles)
 	}

@@ -29,6 +29,12 @@ const (
 	commandCleanupGrace  = time.Second
 )
 
+type openCodeStepLimitError int
+
+func (limit openCodeStepLimitError) Error() string {
+	return fmt.Sprintf("coding agent exceeded %d steps", limit)
+}
+
 // OpenCodeSpec is the non-secret invocation passed to the coding agent.
 type OpenCodeSpec struct {
 	Bin         string
@@ -133,16 +139,20 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		}
 	}
 
-	cloneOut, cloneErr, err := runCommand(ctx, workspaceRoot, gitEnvironment(home, temp), maxCapturedStream,
-		"git", "-c", "credential.helper=", "clone", "--no-checkout", request.RepositoryURL, work)
-	result.StdoutSummary = tail(cloneOut, maxCapturedStream)
-	result.StderrSummary = tail(cloneErr, maxCapturedStream)
-	if err != nil {
-		return finish(stateForContext(ctx), fmt.Sprintf("clone repository: %v", err))
-	}
-	if _, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "checkout", "--detach", request.CommitSHA); err != nil {
-		result.StderrSummary = appendSummary(result.StderrSummary, stderr)
-		return finish(stateForContext(ctx), fmt.Sprintf("checkout immutable commit: %v", err))
+	for _, step := range []struct {
+		name string
+		args []string
+	}{
+		{"initialize repository", []string{"init", "-q"}},
+		{"add repository remote", []string{"remote", "add", "origin", request.RepositoryURL}},
+		{"fetch immutable commit", []string{"fetch", "-q", "--depth", "1", "origin", request.CommitSHA}},
+		{"checkout immutable commit", []string{"-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"}},
+	} {
+		args := append([]string{"-c", "core.hooksPath=/dev/null"}, step.args...)
+		if _, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, append([]string{"git"}, args...)...); err != nil {
+			result.StderrSummary = appendSummary(result.StderrSummary, stderr)
+			return finish(stateForContext(ctx), fmt.Sprintf("%s: %v", step.name, err))
+		}
 	}
 	head, stderr, err := runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil {
@@ -198,6 +208,10 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 		}
 		state := stateForContext(ctx)
+		var stepLimit openCodeStepLimitError
+		if errors.As(agentErr, &stepLimit) {
+			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureRuntime, agentErr)
+		}
 		if code, reason, detail, rejected := providerRejection(stdout); rejected && state == engineruntime.TerminalFailed {
 			result.FailureCode = code
 			result.ProviderError = detail
@@ -305,6 +319,11 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	if err != nil {
 		if ctx.Err() != nil {
 			return finish(stateForContext(ctx), err.Error())
+		}
+		if errors.Is(err, engineruntime.ErrResultDeletion) || errors.Is(err, engineruntime.ErrResultRename) {
+			return compactFailureWithCommandResults(
+				request, now().Sub(started), engineruntime.ExecutionFailureReviewScope, result.CommandResults, err,
+			)
 		}
 		return finishSafety(err.Error())
 	}
@@ -433,6 +452,10 @@ func stagedResult(ctx context.Context, work, home, temp string, outputLimit int)
 		}
 		switch parts[0][0] {
 		case 'A', 'M':
+		case 'D':
+			return nil, nil, "", fmt.Errorf("%w: %s", engineruntime.ErrResultDeletion, parts[1])
+		case 'R':
+			return nil, nil, "", fmt.Errorf("%w: %s", engineruntime.ErrResultRename, parts[1])
 		default:
 			return nil, nil, "", fmt.Errorf("unsupported staged change %q", line)
 		}
@@ -490,7 +513,7 @@ func runOpenCodeAdapter(ctx context.Context, spec OpenCodeSpec, adapter modelpro
 	if err != nil {
 		return "", "", err
 	}
-	return runOpenCodeCommand(ctx, spec.WorkDir, env, credential, min(int(spec.OutputLimit), maxCapturedStream), argv...)
+	return runOpenCodeCommand(ctx, spec.WorkDir, env, credential, min(int(spec.OutputLimit), maxCapturedStream), spec.MaxSteps, argv...)
 }
 
 func writeOpenCodeConfig(home string, provider modelprovider.Config, adapter modelprovider.OpenCodeAdapter, maxSteps int) error {
@@ -558,7 +581,9 @@ func gitEnvironment(home, temp string) []string {
 	return append(baseEnvironment(home, temp), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1")
 }
 
-func executionEnvironment(home, temp string) []string { return baseEnvironment(home, temp) }
+func executionEnvironment(home, temp string) []string {
+	return append(baseEnvironment(home, temp), "GOTOOLCHAIN=local")
+}
 
 func baseEnvironment(home, temp string) []string {
 	env := []string{"HOME=" + home, "TMPDIR=" + temp, "TMP=" + temp, "TEMP=" + temp}
@@ -570,18 +595,22 @@ func baseEnvironment(home, temp string) []string {
 	return env
 }
 
-func runOpenCodeCommand(ctx context.Context, dir string, env []string, credential modelprovider.CredentialGuard, limit int, argv ...string) (string, string, error) {
+func runOpenCodeCommand(ctx context.Context, dir string, env []string, credential modelprovider.CredentialGuard, limit, agentSteps int, argv ...string) (string, string, error) {
 	if len(argv) == 0 {
 		return "", "", fmt.Errorf("empty command")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	commandCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = env
+	cmd.WaitDelay = commandCleanupGrace
 	stdout := newTailBuffer(limit)
 	stderr := newTailBuffer(limit)
 	stdoutCredential := credential.NewDetector()
 	stderrCredential := credential.NewDetector()
-	cmd.Stdout = io.MultiWriter(stdout, stdoutCredential)
+	steps := &openCodeStepCounter{limit: agentSteps + 1, cancel: cancel}
+	cmd.Stdout = io.MultiWriter(stdout, stdoutCredential, steps)
 	cmd.Stderr = io.MultiWriter(stderr, stderrCredential)
 	err := cmd.Run()
 	if stdoutCredential.Detected() || stderrCredential.Detected() {
@@ -590,7 +619,56 @@ func runOpenCodeCommand(ctx context.Context, dir string, env []string, credentia
 	if ctx.Err() != nil {
 		return stdout.String(), stderr.String(), ctx.Err()
 	}
+	if steps.err != nil {
+		return stdout.String(), stderr.String(), steps.err
+	}
 	return stdout.String(), stderr.String(), err
+}
+
+type openCodeStepCounter struct {
+	pending []byte
+	limit   int
+	count   int
+	cancel  context.CancelFunc
+	err     error
+}
+
+func (w *openCodeStepCounter) Write(data []byte) (int, error) {
+	size := len(data)
+	for len(data) > 0 && w.err == nil {
+		end := bytes.IndexByte(data, '\n')
+		if end < 0 {
+			w.appendPrefix(data)
+			break
+		}
+		w.appendPrefix(data[:end])
+		decoder := json.NewDecoder(bytes.NewReader(w.pending))
+		start, startErr := decoder.Token()
+		key, keyErr := decoder.Token()
+		kind, kindErr := decoder.Token()
+		if startErr != nil || keyErr != nil || kindErr != nil || start != json.Delim('{') || key != "type" {
+			w.err = fmt.Errorf("decode coding agent output event type")
+			w.cancel()
+			break
+		}
+		if kind == "step_finish" {
+			w.count++
+			if w.count > w.limit {
+				w.err = openCodeStepLimitError(w.limit)
+				w.cancel()
+				break
+			}
+		}
+		w.pending = w.pending[:0]
+		data = data[end+1:]
+	}
+	return size, nil
+}
+
+func (w *openCodeStepCounter) appendPrefix(data []byte) {
+	if remaining := maxCapturedStream - len(w.pending); remaining > 0 {
+		w.pending = append(w.pending, data[:min(len(data), remaining)]...)
+	}
 }
 
 func runCommand(ctx context.Context, dir string, env []string, limit int, argv ...string) (string, string, error) {
@@ -696,7 +774,7 @@ func setGitMetadataWritable(root string, writable bool) error {
 }
 
 func openCodeSummary(output string) string {
-	var summaries []string
+	var summary string
 	for line := range strings.SplitSeq(output, "\n") {
 		var event struct {
 			Type string `json:"type"`
@@ -705,13 +783,13 @@ func openCodeSummary(output string) string {
 			} `json:"part"`
 		}
 		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "text" && strings.TrimSpace(event.Part.Text) != "" {
-			summaries = append(summaries, strings.TrimSpace(event.Part.Text))
+			summary = strings.TrimSpace(event.Part.Text)
 		}
 	}
-	if len(summaries) == 0 {
+	if summary == "" {
 		return tail(output, maxCapturedStream)
 	}
-	return strings.Join(summaries, "\n")
+	return summary
 }
 
 func stateForContext(ctx context.Context) engineruntime.TerminalState {

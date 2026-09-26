@@ -304,7 +304,7 @@ The focused feature guides own their credential, admission, timeout, and securit
 | Field | Contract |
 | --- | --- |
 | `type` | Optional. Defaults to and accepts only `agent-sandbox`. |
-| `max_turns` | Defaults to `30`; must not exceed `1000`. |
+| `max_turns` | Defaults to `30`; must not exceed `1000`. The executor stops runs exceeding the coding-agent model-step allowance, with one additional wrap-up step. Validator commands reserve steps from this total, and the elapsed timeout also applies. |
 | `allow_bash` | Defaults to `false` and must remain false. |
 | `timeout` | Defaults to `10m`; must be positive and at most `30m`. |
 | `output_limit_bytes` | Defaults to `524288`; accepts `4096` through `1048576`. |
