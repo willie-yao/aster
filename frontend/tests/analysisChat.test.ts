@@ -734,3 +734,11 @@ test("history reuses the transcript and remains separate from the current chat",
   assert.doesNotMatch(history, /streamAnalysisChatMessage|createAnalysisChatSession/);
   assert.doesNotMatch(chat, /await deleteAnalysisChatSession/);
 });
+
+test("earlier conversations start collapsed and load only when opened", () => {
+  const history = readFileSync(resolve("src/components/AnalysisChatHistory.tsx"), "utf8");
+  assert.match(history, /const \[open, setOpen\] = useState\(false\)/);
+  assert.match(history, /aria-expanded=\{open\}/);
+  assert.match(history, /<Collapse in=\{open\} timeout="auto" unmountOnExit>/);
+  assert.match(history, /maxHeight: \{ xs: "28vh", sm: "min\(32vh, 280px\)" \}/);
+});
