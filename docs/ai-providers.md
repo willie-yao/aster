@@ -147,16 +147,19 @@ See [Agentic analysis](agentic.md#private-operational-data) and [Server mode](se
 
 Agent Sandbox Fix generation uses a separate version-pinned OpenCode transport.
 
-| `model_provider.api` | OpenCode transport | Supported authentication |
+| Endpoint host and `model_provider.api` | OpenCode transport | Supported authentication |
 | --- | --- | --- |
-| `chat_completions` | `@ai-sdk/openai-compatible` | Direct bearer, direct unauthenticated, or explicit tokenless gateway. |
-| `responses` | `@ai-sdk/openai` | Direct bearer only with pinned OpenCode 1.18.2. |
+| GitHub Copilot, `chat_completions` or `responses` | OpenCode's `github-copilot` provider with `@ai-sdk/github-copilot` | Direct bearer only. |
+| Other hosts, `chat_completions` | Generic `@ai-sdk/openai-compatible` provider | Direct bearer, direct unauthenticated, or explicit tokenless gateway. |
+| Other hosts, `responses` | Generic `@ai-sdk/openai` provider | Direct bearer only with pinned OpenCode 1.18.2. |
 
 Configure the complete HTTPS operation endpoint. Chat Completions must end in `/chat/completions`; Responses must end in `/responses`. Aster rejects an API and path mismatch instead of guessing a provider base URL.
 
+For `githubcopilot.com` and its subdomains, pinned OpenCode chooses the API by model ID, not by the `api` field. GPT-5 and later use Responses, except `gpt-5-mini`, which uses Chat Completions. Other models, including Claude, use Chat Completions. The pinned provider removes the `gpt-5-chat-latest` alias. Declare the matching `api` and endpoint path in both the project and Helm values. Mismatches fail validation before Fix starts. The Copilot SDK handles reasoning streams that the generic OpenAI Responses client cannot parse.
+
 Direct bearer mode exposes one dedicated inference credential through the fixed executor environment. Direct unauthenticated mode renders no Secret reference. Gateway mode is tokenless, requires `auth.type: none`, and depends on gateway-side workload authorization that the executor cannot impersonate. Network reachability alone is not authentication.
 
-Pinned OpenCode 1.18.2 supports empty provider-default effort plus `none`, `low`, `medium`, `high`, and `xhigh`. It rejects `max` even when the engine-native provider transport supports that value. The project and Helm reasoning-effort values must match.
+Pinned OpenCode 1.18.2 supports empty provider-default effort plus `none`, `low`, `medium`, `high`, and `xhigh`. It rejects `max` even when the engine-native provider transport supports that value. For Copilot Responses, the pinned SDK omits explicit effort on GPT-6 models, so Aster rejects it instead of ignoring it. Leave `reasoning_effort` unset in `project.yaml` and `reasoningEffort` empty in Helm for GPT-6. GPT-5 Responses and Claude Chat Completions support explicit effort. The project and Helm values must match.
 
 Every deployed endpoint must use HTTPS. The `public_ca_private_dns` or Helm `publicCAPrivateDNS` field must remain false for direct providers and may be true only for a privately resolved public gateway FQDN whose certificate chains to a public CA.
 

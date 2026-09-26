@@ -308,9 +308,7 @@ func TestExecuteMapsAgentDeadline(t *testing.T) {
 func TestWriteOpenCodeConfigOmitsCredentials(t *testing.T) {
 	home := t.TempDir()
 	provider := testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model")
-	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
-		t.Fatal(err)
-	}
+	writeTestOpenCodeConfig(t, home, provider)
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +346,9 @@ func TestOpenCodeEnvironmentDoesNotInheritCredentials(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("environment contains %q: %s", forbidden, joined)
 		}
+	}
+	if !strings.Contains(joined, "OPENCODE_DISABLE_MODELS_FETCH=true") {
+		t.Fatalf("OpenCode environment permits remote model catalog fetch: %s", joined)
 	}
 }
 
@@ -396,9 +397,7 @@ func TestWriteOpenCodeConfigReferencesDirectCredentialEnvironment(t *testing.T) 
 	home := t.TempDir()
 	provider := testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model")
 	provider.ReasoningEffort = modelprovider.ReasoningEffortXHigh
-	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
-		t.Fatal(err)
-	}
+	writeTestOpenCodeConfig(t, home, provider)
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -524,9 +523,7 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	home := t.TempDir()
 	provider := testResponsesProvider("https://provider.example/v1/responses", "fixture-model")
 	provider.ReasoningEffort = modelprovider.ReasoningEffortHigh
-	if err := writeOpenCodeConfig(home, provider, 4); err != nil {
-		t.Fatal(err)
-	}
+	writeTestOpenCodeConfig(t, home, provider)
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -541,11 +538,99 @@ func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 		t.Fatalf("provider config = %v", engine)
 	}
 	modelConfig := engine["models"].(map[string]any)["fixture-model"].(map[string]any)
+	if modelConfig["limit"] == nil {
+		t.Fatalf("generic provider lost its model limit: %v", modelConfig)
+	}
 	if modelConfig["options"].(map[string]any)["reasoningEffort"] != "high" {
 		t.Fatalf("model config = %v", modelConfig)
 	}
+	if config["agent"].(map[string]any)["title"].(map[string]any)["disable"] != true {
+		t.Fatalf("title agent remains enabled: %v", config["agent"])
+	}
 	if strings.Contains(string(data), "/responses") {
 		t.Fatalf("config retained the operation path: %s", data)
+	}
+}
+
+func TestWriteOpenCodeConfigUsesCopilotProvider(t *testing.T) {
+	credential := "fixture-only-copilot-token"
+	t.Setenv(modelprovider.TokenEnv, credential)
+	home := t.TempDir()
+	provider := testResponsesProvider("https://api.githubcopilot.com/responses", "gpt-6-sol")
+	writeTestOpenCodeConfig(t, home, provider)
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), credential) {
+		t.Fatal("Copilot config contains the literal credential")
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	providers := config["provider"].(map[string]any)
+	if len(providers) != 1 {
+		t.Fatalf("providers = %v", providers)
+	}
+	copilot := providers[modelprovider.OpenCodeCopilotProviderID].(map[string]any)
+	options := copilot["options"].(map[string]any)
+	model := copilot["models"].(map[string]any)["gpt-6-sol"].(map[string]any)
+	if copilot["npm"] != "@ai-sdk/github-copilot" || copilot["name"] != modelprovider.OpenCodeCopilotProviderID ||
+		options["baseURL"] != "https://api.githubcopilot.com" || options["apiKey"] != "{env:"+modelprovider.TokenEnv+"}" {
+		t.Fatalf("Copilot provider = %v", copilot)
+	}
+	headers := options["headers"].(map[string]any)
+	if headers[modelprovider.CopilotIntegrationHeader] != modelprovider.CopilotIntegrationID {
+		t.Fatalf("Copilot headers = %v", headers)
+	}
+	if env := copilot["env"].([]any); len(env) != 1 || env[0] != modelprovider.TokenEnv {
+		t.Fatalf("Copilot env = %v", env)
+	}
+	if whitelist := copilot["whitelist"].([]any); len(whitelist) != 1 || whitelist[0] != provider.Model {
+		t.Fatalf("Copilot whitelist = %v", whitelist)
+	}
+	if enabled := config["enabled_providers"].([]any); len(enabled) != 1 || enabled[0] != modelprovider.OpenCodeCopilotProviderID {
+		t.Fatalf("enabled providers = %v", enabled)
+	}
+	if _, ok := model["limit"]; ok {
+		t.Fatalf("Copilot model overrides catalog limits: %v", model)
+	}
+	if config["agent"].(map[string]any)["title"].(map[string]any)["disable"] != true {
+		t.Fatalf("title agent remains enabled: %v", config["agent"])
+	}
+}
+
+func TestDefaultRunOpenCodeUsesSelectedProviderID(t *testing.T) {
+	t.Setenv(modelprovider.TokenEnv, "fixture-only-copilot-token")
+	for _, tc := range []struct {
+		name, endpoint, model, wantID string
+	}{
+		{"Copilot", "https://api.githubcopilot.com/responses", "gpt-6-sol", modelprovider.OpenCodeCopilotProviderID},
+		{"generic", "https://provider.example/v1/responses", "fixture-model", modelprovider.OpenCodeCustomProviderID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			temp := t.TempDir()
+			bin := filepath.Join(temp, "opencode")
+			if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TMPDIR/argv\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			argvDir := t.TempDir()
+			stdout, stderr, err := defaultRunOpenCode(t.Context(), OpenCodeSpec{
+				Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: argvDir,
+				Provider: testResponsesProvider(tc.endpoint, tc.model), Prompt: "fixture prompt", MaxSteps: 4, OutputLimit: maxCapturedStream,
+			})
+			if err != nil {
+				t.Fatalf("defaultRunOpenCode: %v stdout=%q stderr=%q", err, stdout, stderr)
+			}
+			argv, err := os.ReadFile(filepath.Join(argvDir, "argv"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(argv), "\n--model\n"+tc.wantID+"/"+tc.model+"\n") {
+				t.Fatalf("OpenCode argv = %q", argv)
+			}
+		})
 	}
 }
 
@@ -630,15 +715,13 @@ func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 		want     bool
 	}{
 		{"copilot chat completions", testDirectBearerProvider("https://api.githubcopilot.com/chat/completions", "fixture-model"), true},
-		{"copilot responses", testResponsesProvider("https://api.githubcopilot.com/responses", "fixture-model"), true},
+		{"copilot responses", testResponsesProvider("https://api.githubcopilot.com/responses", "gpt-6-sol"), true},
 		{"other provider", testDirectBearerProvider("https://provider.example/v1/chat/completions", "fixture-model"), false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			if err := writeOpenCodeConfig(home, tt.provider, 4); err != nil {
-				t.Fatal(err)
-			}
-			options := readOpenCodeProviderOptions(t, home)
+			writeTestOpenCodeConfig(t, home, tt.provider)
+			options := readOpenCodeProviderOptions(t, home, tt.provider)
 			headers, ok := options["headers"].(map[string]any)
 			if !tt.want {
 				if ok {
@@ -653,7 +736,18 @@ func TestWriteOpenCodeConfigSetsCopilotIntegrationHeader(t *testing.T) {
 	}
 }
 
-func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
+func writeTestOpenCodeConfig(t *testing.T, home string, provider modelprovider.Config) {
+	t.Helper()
+	adapter, err := modelprovider.OpenCodeAdapterFor(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpenCodeConfig(home, provider, adapter, 4); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readOpenCodeProviderOptions(t *testing.T, home string, provider modelprovider.Config) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
@@ -663,7 +757,11 @@ func readOpenCodeProviderOptions(t *testing.T, home string) map[string]any {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	options, ok := config["provider"].(map[string]any)["engine"].(map[string]any)["options"].(map[string]any)
+	adapter, err := modelprovider.OpenCodeAdapterFor(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, ok := config["provider"].(map[string]any)[adapter.ProviderID].(map[string]any)["options"].(map[string]any)
 	if !ok {
 		t.Fatalf("provider options missing: %s", data)
 	}

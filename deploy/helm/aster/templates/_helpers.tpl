@@ -400,6 +400,18 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- if and (eq $providerAPI "chat_completions") (not (hasSuffix "/chat/completions" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider chat_completions endpoint must end with /chat/completions" -}}{{- end -}}
   {{- if and (eq $providerAPI "responses") (not (hasSuffix "/responses" (trimSuffix "/" $provider.endpoint))) -}}{{- fail "agentSandbox.fixRuntime.modelProvider responses endpoint must end with /responses" -}}{{- end -}}
   {{- if or (not $provider.model) (gt (len $provider.model) 256) (contains "\n" $provider.model) (contains "\r" $provider.model) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.model must be non-empty, at most 256 bytes, and single-line" -}}{{- end -}}
+  {{- $host := regexReplaceAll ":[0-9]+$" (lower (get (urlParse $provider.endpoint) "host")) "" | trimSuffix "." -}}
+  {{- if regexMatch "(^|[.])githubcopilot[.]com$" $host -}}
+    {{- if eq $provider.model "gpt-5-chat-latest" -}}{{- fail "pinned OpenCode 1.18.2 removes GitHub Copilot model gpt-5-chat-latest from its built-in provider" -}}{{- end -}}
+    {{- $gptVersion := regexFind "^gpt-[0-9]+" $provider.model | trimPrefix "gpt-" | int -}}
+    {{- $route := "chat_completions" -}}
+    {{- if and (ge $gptVersion 5) (not (hasPrefix "gpt-5-mini" $provider.model)) -}}
+      {{- $route = "responses" -}}
+    {{- end -}}
+    {{- if ne $providerAPI $route -}}{{- fail (printf "pinned OpenCode 1.18.2 routes GitHub Copilot model %q to %s; set agentSandbox.fixRuntime.modelProvider.api to %q with the matching endpoint" $provider.model $route $route) -}}{{- end -}}
+    {{- if and (eq $route "responses") $provider.reasoningEffort (not (or (and (hasPrefix "gpt-5" $provider.model) (not (hasPrefix "gpt-5-chat" $provider.model))) (hasPrefix "o" $provider.model) (hasPrefix "codex-" $provider.model) (hasPrefix "computer-use" $provider.model))) -}}{{- fail (printf "pinned OpenCode 1.18.2 omits reasoning effort for GitHub Copilot Responses model %q; leave reasoningEffort empty" $provider.model) -}}{{- end -}}
+    {{- if or (ne $credentialMode "direct") (ne $authType "bearer") -}}{{- fail "GitHub Copilot requires direct bearer auth with pinned OpenCode 1.18.2" -}}{{- end -}}
+  {{- end -}}
   {{- if not (has $authType (list "none" "bearer")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.type must be none or bearer" -}}{{- end -}}
   {{- if and (eq $providerAPI "responses") (or (ne $credentialMode "direct") (ne $authType "bearer")) -}}{{- fail "agentSandbox.fixRuntime.modelProvider responses requires direct bearer auth with the pinned OpenCode provider" -}}{{- end -}}
   {{- if eq $credentialMode "gateway" -}}

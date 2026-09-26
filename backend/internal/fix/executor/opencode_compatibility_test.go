@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,10 +19,7 @@ import (
 )
 
 func TestOpenCode1182FixResponsesCompatibility(t *testing.T) {
-	bin := os.Getenv("OPENCODE_1_18_2_BIN")
-	if bin == "" {
-		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
-	}
+	bin := openCode1182Binary(t)
 	credential := strings.Repeat("fixture-fix-responses-credential-", 2)
 	t.Setenv(modelprovider.TokenEnv, credential)
 	workDir := t.TempDir()
@@ -97,6 +95,22 @@ func TestOpenCode1182FixResponsesCompatibility(t *testing.T) {
 	if strings.Contains(stdout, credential) || strings.Contains(stderr, credential) {
 		t.Fatal("Fix Responses output retained the provider credential")
 	}
+}
+
+func openCode1182Binary(t *testing.T) string {
+	t.Helper()
+	bin := os.Getenv("OPENCODE_1_18_2_BIN")
+	if bin == "" {
+		t.Skip("set OPENCODE_1_18_2_BIN to the exact OpenCode 1.18.2 executable")
+	}
+	output, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		t.Fatalf("OpenCode version: %v", err)
+	}
+	if version := strings.TrimSpace(string(output)); version != "1.18.2" {
+		t.Fatalf("OpenCode version = %q, want 1.18.2", version)
+	}
+	return bin
 }
 
 func fixResponsesToolNames(request map[string]any) []string {

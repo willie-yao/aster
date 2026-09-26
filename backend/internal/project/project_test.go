@@ -1279,16 +1279,27 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 		{"Responses provider", func(r *FixAgentRuntime) {
 			r.ModelProvider.API = "responses"
 			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+			r.ModelProvider.Model = "gpt-5.6-sol"
 		}, ""},
 		{"Responses max reasoning effort", func(r *FixAgentRuntime) {
 			r.ModelProvider.API = "responses"
 			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+			r.ModelProvider.Model = "gpt-5.6-sol"
 			r.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortMax
 		}, "OpenCode 1.18.2"},
 		{"Responses endpoint mismatch", func(r *FixAgentRuntime) {
 			r.ModelProvider.API = "responses"
-		}, "responses endpoint"},
-		{"unauthenticated direct provider", func(r *FixAgentRuntime) { r.ModelProvider.Auth.Type = "none" }, ""},
+			r.ModelProvider.Model = "gpt-5.6-sol"
+		}, "endpoint must end with /responses"},
+		{"unauthenticated direct provider", func(r *FixAgentRuntime) {
+			r.ModelProvider.Auth.Type = "none"
+			r.ModelProvider.Endpoint = "https://provider.example/v1/chat/completions"
+		}, ""},
+		{"Copilot GPT-6 effort", func(r *FixAgentRuntime) {
+			r.ModelProvider.API = "responses"
+			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"
+			r.ModelProvider.Model = "gpt-6-sol"
+		}, "leave reasoning_effort empty"},
 		{"gateway provider", func(r *FixAgentRuntime) {
 			r.ModelProvider = FixModelProvider{
 				CredentialMode: "gateway", API: "chat_completions",

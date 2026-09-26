@@ -79,26 +79,44 @@ func TestConfigReasoningEffortJSONIdentity(t *testing.T) {
 
 func TestOpenCodeAdapterFor(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		api      string
-		endpoint string
-		base     string
-		npm      string
+		name, api, endpoint, model, effort, base, providerID, npm, wantErr string
 	}{
-		{name: "chat", api: APIChatCompletions, endpoint: "https://provider.example/v1/chat/completions", base: "https://provider.example/v1", npm: "@ai-sdk/openai-compatible"},
-		{name: "responses", api: APIResponses, endpoint: "https://provider.example/v1/responses", base: "https://provider.example/v1", npm: "@ai-sdk/openai"},
+		{name: "generic chat", api: APIChatCompletions, endpoint: "https://provider.example/v1/chat/completions", model: "fixture", base: "https://provider.example/v1", providerID: OpenCodeCustomProviderID, npm: "@ai-sdk/openai-compatible"},
+		{name: "generic responses", api: APIResponses, endpoint: "https://provider.example/v1/responses", model: "gpt-6-sol", base: "https://provider.example/v1", providerID: OpenCodeCustomProviderID, npm: "@ai-sdk/openai"},
+		{name: "Copilot Claude chat", api: APIChatCompletions, endpoint: "https://api.githubcopilot.com/chat/completions", model: "claude-sonnet-5", effort: "high", base: "https://api.githubcopilot.com", providerID: OpenCodeCopilotProviderID, npm: "@ai-sdk/github-copilot"},
+		{name: "Copilot GPT-5 mini chat", api: APIChatCompletions, endpoint: "https://api.githubcopilot.com/chat/completions", model: "gpt-5-mini", base: "https://api.githubcopilot.com", providerID: OpenCodeCopilotProviderID, npm: "@ai-sdk/github-copilot"},
+		{name: "Copilot GPT-6 responses", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "gpt-6-sol", base: "https://api.githubcopilot.com", providerID: OpenCodeCopilotProviderID, npm: "@ai-sdk/github-copilot"},
+		{name: "Copilot GPT-5 effort", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "gpt-5.6-sol", effort: "high", base: "https://api.githubcopilot.com", providerID: OpenCodeCopilotProviderID, npm: "@ai-sdk/github-copilot"},
+		{name: "normalized Copilot host", api: APIResponses, endpoint: "https://API.GitHubCopilot.com.:443/responses", model: "gpt-6-sol", base: "https://API.GitHubCopilot.com.:443", providerID: OpenCodeCopilotProviderID, npm: "@ai-sdk/github-copilot"},
+		{name: "lookalike host", api: APIResponses, endpoint: "https://notgithubcopilot.com/responses", model: "gpt-6-sol", base: "https://notgithubcopilot.com", providerID: OpenCodeCustomProviderID, npm: "@ai-sdk/openai"},
+		{name: "Copilot GPT-6 routed to responses", api: APIChatCompletions, endpoint: "https://api.githubcopilot.com/chat/completions", model: "gpt-6-sol", wantErr: "routes GitHub Copilot model \"gpt-6-sol\" to responses"},
+		{name: "Copilot Claude routed to chat", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "claude-sonnet-5", wantErr: "to chat_completions"},
+		{name: "Copilot GPT-5 mini routed to chat", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "gpt-5-mini", wantErr: "to chat_completions"},
+		{name: "Copilot GPT-6 suffix mismatch", api: APIResponses, endpoint: "https://api.githubcopilot.com/chat/completions", model: "gpt-6-sol", wantErr: "endpoint must end with /responses"},
+		{name: "Copilot Claude suffix mismatch", api: APIChatCompletions, endpoint: "https://api.githubcopilot.com/responses", model: "claude-sonnet-5", wantErr: "endpoint must end with /chat/completions"},
+		{name: "Copilot GPT-6 effort omitted", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "gpt-6-sol", effort: "high", wantErr: "leave reasoning_effort empty"},
+		{name: "Copilot removed GPT-5 chat alias", api: APIResponses, endpoint: "https://api.githubcopilot.com/responses", model: "gpt-5-chat-latest", wantErr: "removes GitHub Copilot model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			auth := Auth{Type: AuthTypeNone}
-			if tc.api == APIResponses {
+			if tc.api == APIResponses || strings.Contains(tc.endpoint, "githubcopilot.com") || strings.Contains(tc.endpoint, "GitHubCopilot.com") {
 				auth = Auth{Type: AuthTypeBearer}
 			}
-			config := Normalize(Config{API: tc.api, Endpoint: tc.endpoint, Model: "fixture", Auth: auth})
+			config := Normalize(Config{API: tc.api, Endpoint: tc.endpoint, Model: tc.model, ReasoningEffort: ReasoningEffort(tc.effort), Auth: auth})
 			adapter, err := OpenCodeAdapterFor(config)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("OpenCodeAdapterFor() error = %v, want %q", err, tc.wantErr)
+				}
+				if err := ValidateOpenCode(config); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("ValidateOpenCode() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if adapter.BaseURL != tc.base || adapter.NPM != tc.npm {
+			if adapter.BaseURL != tc.base || adapter.ProviderID != tc.providerID || adapter.NPM != tc.npm {
 				t.Fatalf("adapter = %+v", adapter)
 			}
 		})
@@ -111,6 +129,10 @@ func TestOpenCodeAdapterFor(t *testing.T) {
 		if _, err := OpenCodeAdapterFor(config); err == nil {
 			t.Fatalf("mismatched endpoint accepted: %+v", config)
 		}
+	}
+	unauthenticated := Normalize(Config{API: APIChatCompletions, Endpoint: "https://api.githubcopilot.com/chat/completions", Model: "claude-sonnet-5", Auth: Auth{Type: AuthTypeNone}})
+	if err := ValidateOpenCode(unauthenticated); err == nil || !strings.Contains(err.Error(), "direct bearer auth") {
+		t.Fatalf("Copilot unauthenticated error = %v", err)
 	}
 }
 

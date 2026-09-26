@@ -318,6 +318,27 @@ func TestExecutionRequestAcceptsResponsesWithoutContractVersionChange(t *testing
 	}
 }
 
+func TestExecutionRequestRejectsCopilotRouteAndEffortMismatch(t *testing.T) {
+	request := executionRequest()
+	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{
+		API: modelprovider.APIResponses, Endpoint: "https://api.githubcopilot.com/responses",
+		Model: "gpt-6-sol", Auth: modelprovider.Auth{Type: modelprovider.AuthTypeBearer},
+	})
+	if err := request.Validate(); err != nil {
+		t.Fatalf("valid Copilot Responses request: %v", err)
+	}
+	request.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
+	if err := request.Validate(); err == nil || !strings.Contains(err.Error(), "leave reasoning_effort empty") {
+		t.Fatalf("unusable Copilot reasoning effort error = %v", err)
+	}
+	request.ModelProvider.ReasoningEffort = ""
+	request.ModelProvider.API = modelprovider.APIChatCompletions
+	request.ModelProvider.Endpoint = "https://api.githubcopilot.com/chat/completions"
+	if err := request.Validate(); err == nil || !strings.Contains(err.Error(), "to responses") {
+		t.Fatalf("Copilot route mismatch error = %v", err)
+	}
+}
+
 func TestExecutionRequestDirectBearerContractContainsNoSecretReference(t *testing.T) {
 	request := executionRequest()
 	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{
