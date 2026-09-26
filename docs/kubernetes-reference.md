@@ -223,6 +223,8 @@ The shared volume contains public dashboard data and private operational state. 
 
 The project owns generation limits and exact validators under `ai.fix_prs.agent_runtime`. Helm owns the runtime namespace, immutable images, ServiceAccounts, network policy, provider Secret reference, CA trust, and platform resources. Those two configurations must agree. The schema rejects stale duplicate execution bounds under `agentSandbox.fixRuntime`.
 
+When this runtime is enabled, Helm requires `ai.fix_prs.agent_runtime.timeout` in whole minutes from `1m` through `30m`. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts accept positive whole seconds or minutes within the execution timeout.
+
 The Sandbox receives public pinned source and returns a patch plus ordered command results. It receives no GitHub credential or dashboard PVC. The dashboard uses the immutable `remote-fixer` image only to reapply and verify the patch at the pinned revision; it never runs target validation commands.
 
 Required platform properties:

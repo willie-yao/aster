@@ -44,7 +44,7 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	if agent.spec.Repo.Ref != exactAnalysisRevision || agent.spec.ExpectedBaseSHA != exactAnalysisRevision || agent.spec.Repo.Token != "" {
 		t.Fatalf("runtime spec = %+v", agent.spec)
 	}
-	for _, want := range []string{"exact failed JUnit", "TestCluster", "ArtifactCitations", "SourceHints", "cluster failed", "expected Ready", "preserve compatibility"} {
+	for _, want := range []string{"exact failed JUnit", "TestCluster", "ArtifactCitations", "SourceHints", "cluster failed", "expected Ready", "preserve compatibility", "Do not delete or rename files."} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}

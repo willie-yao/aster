@@ -164,7 +164,7 @@ func runCopilotWithoutEnv(ctx context.Context, spec OpenCodeSpec, adapter modelp
 	if err != nil {
 		return "", "", err
 	}
-	return runOpenCodeCommand(ctx, spec.WorkDir, env, guard, maxCapturedStream,
+	return runOpenCodeCommand(ctx, spec.WorkDir, env, guard, maxCapturedStream, spec.MaxSteps,
 		spec.Bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build",
 		"--model", adapter.ProviderID+"/"+spec.Provider.Model, spec.Prompt)
 }

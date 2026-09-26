@@ -242,6 +242,7 @@ func analysisFailureInstruction(failure AnalysisFailure, maintainer, reviewFeedb
 		b.WriteString("The selected assistant answer is explicitly unverified. Treat it only as an investigation hypothesis.\n")
 	}
 	b.WriteString("Failure artifacts and the published diagnosis came from the historical failure revision. The generation base is the current full commit on the explicit tested branch. Re-evaluate the historical remediation against current source and do not assume it still applies. Make any supported change directly against the generation base. If candidate code is absent there, investigate before deciding whether another location is causally relevant.\n")
+	b.WriteString("Do not delete or rename files.\n")
 	if maxFiles > 0 {
 		fmt.Fprintf(&b, "Change at most %d files.\n", maxFiles)
 	}
