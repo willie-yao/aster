@@ -25,6 +25,7 @@ const (
 	defaultWorkspaceRoot = "/workspace"
 	defaultOpenCodeBin   = "opencode"
 	maxCapturedStream    = 64 << 10
+	maxFailureStream     = 512
 	commandCleanupGrace  = time.Second
 )
 
@@ -73,6 +74,9 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		}
 		if err := validateCredentialFreeResult(credential, result); err != nil {
 			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
+		}
+		if state != engineruntime.TerminalSucceeded {
+			fitFailureSummaries(request.OutputLimitBytes, &result)
 		}
 		if err := result.Validate(request); err != nil {
 			if errors.Is(err, engineruntime.ErrResultScope) {
@@ -175,22 +179,35 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	if err := credential.CheckStrings(stdout, stderr); err != nil {
 		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 	}
-	result.StdoutSummary = appendSummary(result.StdoutSummary, openCodeSummary(stdout))
+	var stdoutSummary string
+	if agentErr != nil {
+		stdoutSummary = openCodeFailureSummary(stdout)
+	} else {
+		stdoutSummary = openCodeSummary(stdout)
+	}
+	result.StdoutSummary = appendSummary(result.StdoutSummary, stdoutSummary)
 	result.StderrSummary = appendSummary(result.StderrSummary, stderr)
 	if errors.Is(agentErr, modelprovider.ErrCredentialExposure) {
 		return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, modelprovider.ErrCredentialExposure)
 	}
 	if agentErr != nil {
+		streamLimit := max(1, min(maxFailureStream, int(request.OutputLimitBytes)/8))
+		result.StdoutSummary = tail(result.StdoutSummary, streamLimit)
+		result.StderrSummary = tail(result.StderrSummary, streamLimit)
 		if err := credential.CheckStrings(agentErr.Error()); err != nil {
 			return compactFailure(request, now().Sub(started), engineruntime.ExecutionFailureSafetyIntegrity, err)
 		}
 		state := stateForContext(ctx)
-		if reason, detail, rejected := providerCredentialRejection(stdout); rejected && state == engineruntime.TerminalFailed {
-			result.FailureCode = engineruntime.ExecutionFailureProviderCredential
+		if code, reason, detail, rejected := providerRejection(stdout); rejected && state == engineruntime.TerminalFailed {
+			result.FailureCode = code
 			result.ProviderError = detail
 			return finish(state, reason)
 		}
-		return finish(state, safeOpenCodeFailure(agentErr))
+		reason := safeOpenCodeFailure(agentErr)
+		if detail := openCodeFailureDetail(stdout, stderr); detail != "" {
+			reason += ": " + detail
+		}
+		return finish(state, reason)
 	}
 	head, stderr, err = runCommand(ctx, work, gitEnvironment(home, temp), maxCapturedStream, "git", "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(head) != request.ExpectedBaseSHA {
@@ -297,6 +314,18 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 	return finish(engineruntime.TerminalSucceeded, "")
 }
 
+func fitFailureSummaries(limit int64, result *engineruntime.ExecutionResult) {
+	for _, summary := range []*string{&result.StdoutSummary, &result.StderrSummary} {
+		payload := *result
+		payload.Resources = engineruntime.ResourceMetadata{}
+		encoded, err := json.Marshal(payload)
+		if err != nil || int64(len(encoded)+1) <= limit {
+			return
+		}
+		*summary = ""
+	}
+}
+
 func baseResult(request engineruntime.ExecutionRequest) engineruntime.ExecutionResult {
 	return engineruntime.ExecutionResult{
 		Version: engineruntime.ExecutionContractVersion, BaseSHA: request.ExpectedBaseSHA,
@@ -336,7 +365,7 @@ func validateCredentialFreeResult(credential modelprovider.CredentialGuard, resu
 	}
 	if result.ProviderError != nil {
 		if err := credential.CheckStrings(
-			result.ProviderError.Message, result.ProviderError.ProviderID,
+			result.ProviderError.Message, result.ProviderError.ProviderID, result.ProviderError.Code,
 			result.ProviderError.Endpoint, result.ProviderError.Model,
 		); err != nil {
 			return err
@@ -452,7 +481,7 @@ func runOpenCodeAdapter(ctx context.Context, spec OpenCodeSpec, adapter modelpro
 	if err != nil {
 		return "", "", fmt.Errorf("opencode executable: %w", err)
 	}
-	argv := []string{bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", adapter.ProviderID + "/" + spec.Provider.Model, spec.Prompt}
+	argv := []string{bin, "run", "--print-logs", "--log-level", "ERROR", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", adapter.ProviderID + "/" + spec.Provider.Model, spec.Prompt}
 	env, err := openCodeEnvironment(spec.HomeDir, spec.TempDir, spec.Provider)
 	if err != nil {
 		return "", "", err

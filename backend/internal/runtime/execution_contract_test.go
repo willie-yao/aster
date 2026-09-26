@@ -301,6 +301,32 @@ func TestExecutionResultAcceptsProviderCredentialFailure(t *testing.T) {
 	}
 }
 
+func TestExecutionResultAcceptsProviderRequestFailure(t *testing.T) {
+	request := executionRequest()
+	result := executionResult()
+	result.TerminalState = TerminalFailed
+	result.FailureReason = "model provider rejected the request (HTTP 400 model_not_supported)"
+	result.FailureCode = ExecutionFailureProviderRequest
+	result.ChangedFiles = nil
+	result.Files = map[string]string{}
+	result.Diff = ""
+	result.ProviderError = &ProviderErrorDetail{StatusCode: 400, Code: "model_not_supported", Message: "The requested model is not supported."}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ExecutionResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.FailureCode != ExecutionFailureProviderRequest || decoded.ProviderError == nil || decoded.ProviderError.Code != "model_not_supported" {
+		t.Fatalf("decoded result = %+v", decoded)
+	}
+	if err := decoded.Validate(request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecutionRequestAcceptsResponsesWithoutContractVersionChange(t *testing.T) {
 	request := executionRequest()
 	request.ModelProvider = modelprovider.Normalize(modelprovider.Config{

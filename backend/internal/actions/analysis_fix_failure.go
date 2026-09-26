@@ -16,6 +16,7 @@ const (
 	AnalysisFixFailureNoReviewablePatch     AnalysisFixFailureCategory = "no_reviewable_patch"
 	AnalysisFixFailureRuntimeInfrastructure AnalysisFixFailureCategory = "runtime_infrastructure"
 	AnalysisFixFailureProviderCredential    AnalysisFixFailureCategory = "provider_credential"
+	AnalysisFixFailureProviderRequest       AnalysisFixFailureCategory = "provider_request"
 	AnalysisFixFailureResultContract        AnalysisFixFailureCategory = "result_contract"
 	AnalysisFixFailureSafetyIntegrity       AnalysisFixFailureCategory = "safety_integrity"
 	AnalysisFixFailureSourceChanged         AnalysisFixFailureCategory = "source_changed"

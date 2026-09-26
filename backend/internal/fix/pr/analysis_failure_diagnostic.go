@@ -21,6 +21,7 @@ const (
 	AnalysisFailureNoReviewablePatch     AnalysisFailureCategory = "no_reviewable_patch"
 	AnalysisFailureRuntimeInfrastructure AnalysisFailureCategory = "runtime_infrastructure"
 	AnalysisFailureProviderCredential    AnalysisFailureCategory = "provider_credential"
+	AnalysisFailureProviderRequest       AnalysisFailureCategory = "provider_request"
 	AnalysisFailureResultContract        AnalysisFailureCategory = "result_contract"
 	AnalysisFailureSafetyIntegrity       AnalysisFailureCategory = "safety_integrity"
 	AnalysisFailureSourceChanged         AnalysisFailureCategory = "source_changed"
@@ -74,8 +75,16 @@ func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentCo
 	if detail == AnalysisFailureDetailNoRepositoryChange {
 		diagnostic.OperatorSummary = redact.OperatorText(result.StdoutSummary)
 	}
-	if category == AnalysisFailureProviderCredential {
+	switch category {
+	case AnalysisFailureProviderCredential:
 		diagnostic.OperatorSummary = providerCredentialOperatorSummary(result.ProviderError)
+	case AnalysisFailureProviderRequest:
+		diagnostic.OperatorSummary = providerRequestOperatorSummary(result.ProviderError)
+		if diagnostic.OperatorSummary == "" {
+			diagnostic.OperatorSummary = boundedOperatorComponent(result.FailureReason, providerOperatorSummaryBytes)
+		}
+	case AnalysisFailureRuntimeInfrastructure:
+		diagnostic.OperatorSummary = boundedOperatorComponent(result.FailureReason, providerOperatorSummaryBytes)
 	}
 	if agent != nil && agent.RequireCommandResults && runtime.ValidateCommandResults(agent.CommandPolicy.Commands, result.CommandResults) == nil {
 		diagnostic.CommandResults = cloneCommandResults(result.CommandResults)
@@ -114,7 +123,6 @@ func providerCredentialOperatorSummary(detail *runtime.ProviderErrorDetail) stri
 	if detail == nil {
 		return ""
 	}
-
 	status := "Provider authentication failed; check credential and authorization."
 	switch detail.StatusCode {
 	case 401:
@@ -122,14 +130,39 @@ func providerCredentialOperatorSummary(detail *runtime.ProviderErrorDetail) stri
 	case 403:
 		status = "HTTP 403: request refused."
 	}
+	if detail.Code != "" {
+		code := boundedOperatorComponent(detail.Code, 64)
+		if detail.StatusCode == 401 || detail.StatusCode == 403 {
+			status = strings.Replace(status, ":", " "+code+":", 1)
+		} else {
+			status += " Provider code: " + code + "."
+		}
+	}
 	config := providerConfigSummary(detail, providerConfigSummaryBytes)
 	advisory := ""
 	if detail.StatusCode == 403 {
 		advisory = " Check credential access or provider entitlement, organization policy, quota, and proxy or mesh authorization."
 	}
 	rest := status + config + advisory + " Provider message: "
-	messageBudget := max(providerMessageSummaryBytes, providerOperatorSummaryBytes-len(rest))
+	messageBudget := providerOperatorSummaryBytes - len(rest)
 	message := boundedOperatorComponent(detail.Message, messageBudget)
+	if message == "" {
+		message = "unavailable"
+	}
+	return rest + message
+}
+
+func providerRequestOperatorSummary(detail *runtime.ProviderErrorDetail) string {
+	if detail == nil {
+		return ""
+	}
+	status := fmt.Sprintf("HTTP %d", detail.StatusCode)
+	if detail.Code != "" {
+		status += " " + boundedOperatorComponent(detail.Code, 64)
+	}
+	rest := status + ": request rejected; check the configured model, API, and endpoint." +
+		providerConfigSummary(detail, providerConfigSummaryBytes) + " Provider message: "
+	message := boundedOperatorComponent(detail.Message, providerOperatorSummaryBytes-len(rest))
 	if message == "" {
 		message = "unavailable"
 	}
@@ -226,6 +259,8 @@ func classifyAnalysisRuntimeFailure(result runtime.ExecutionResult, err error) A
 		return AnalysisFailureCancelled
 	case result.FailureCode == runtime.ExecutionFailureProviderCredential:
 		return AnalysisFailureProviderCredential
+	case result.FailureCode == runtime.ExecutionFailureProviderRequest:
+		return AnalysisFailureProviderRequest
 	case errors.Is(err, runtime.ErrMalformedResult), errors.Is(err, runtime.ErrResultContract):
 		return AnalysisFailureResultContract
 	case errors.Is(err, runtime.ErrResultDeletion), errors.Is(err, runtime.ErrResultRename), errors.Is(err, runtime.ErrResultExtraFile), result.FailureCode == runtime.ExecutionFailureSafetyIntegrity:

@@ -519,6 +519,24 @@ func TestDefaultRunOpenCodeRejectsCredentialOutsideRetainedTail(t *testing.T) {
 	}
 }
 
+func TestDefaultRunOpenCodeEnablesErrorLogs(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := defaultRunOpenCode(t.Context(), OpenCodeSpec{
+		Bin: bin, WorkDir: t.TempDir(), HomeDir: t.TempDir(), TempDir: t.TempDir(),
+		Provider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture-model"),
+		Prompt:   "edit", MaxSteps: 2, OutputLimit: maxCapturedStream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stdout, "run\n--print-logs\n--log-level\nERROR\n") {
+		t.Fatalf("OpenCode argv omitted bounded error logs: %q", stdout)
+	}
+}
+
 func TestWriteOpenCodeConfigUsesNativeResponsesProvider(t *testing.T) {
 	home := t.TempDir()
 	provider := testResponsesProvider("https://provider.example/v1/responses", "fixture-model")
@@ -777,7 +795,7 @@ func TestValidateCredentialFreeResultChecksProviderError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"message", "provider_id", "endpoint", "model"} {
+	for _, field := range []string{"message", "provider_id", "code", "endpoint", "model"} {
 		t.Run(field, func(t *testing.T) {
 			detail := &engineruntime.ProviderErrorDetail{}
 			switch field {
@@ -785,6 +803,8 @@ func TestValidateCredentialFreeResultChecksProviderError(t *testing.T) {
 				detail.Message = credentialValue
 			case "provider_id":
 				detail.ProviderID = credentialValue
+			case "code":
+				detail.Code = credentialValue
 			case "endpoint":
 				detail.Endpoint = credentialValue
 			case "model":
