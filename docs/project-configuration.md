@@ -310,9 +310,9 @@ The focused feature guides own their credential, admission, timeout, and securit
 | `output_limit_bytes` | Defaults to `524288`; accepts `4096` through `1048576`. |
 | `allowed_commands` | Optional exact argv validators with explicit timeouts. Empty uses only the mandatory staged-diff check. |
 | `model_provider.credential_mode` | `direct` by default or explicit `gateway`. |
-| `model_provider.api` | `chat_completions` or `responses`. |
-| `model_provider.endpoint`, `model` | Required complete provider coordinates. |
-| `model_provider.reasoning_effort` | Optional `none`, `low`, `medium`, `high`, or `xhigh`. |
+| `model_provider.api` | `chat_completions` or `responses`. On GitHub Copilot, GPT-5 and later use Responses except `gpt-5-mini`; all other models use Chat Completions. Pinned OpenCode removes the `gpt-5-chat-latest` alias. |
+| `model_provider.endpoint`, `model` | Required complete provider coordinates. The endpoint suffix must match the declared API and Copilot's pinned model route. |
+| `model_provider.reasoning_effort` | Optional `none`, `low`, `medium`, `high`, or `xhigh`. Leave unset for GPT-6 on Copilot Responses because pinned OpenCode 1.18.2 drops explicit effort there. |
 | `model_provider.auth.type` | `bearer` or `none` for direct mode; `none` for gateway mode. |
 | `model_provider.public_ca_private_dns` | Fix-only acknowledgement for an explicit gateway using a privately resolved public FQDN. |
 

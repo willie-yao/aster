@@ -93,14 +93,14 @@ ai:
     agent_runtime:
       model_provider:
         credential_mode: direct
-        api: chat_completions
-        endpoint: https://provider.example/v1/chat/completions
-        model: provider-model-id
+        api: responses
+        endpoint: https://api.githubcopilot.com/responses
+        model: gpt-6-sol
         auth:
           type: bearer
 ```
 
-Agent Sandbox is the only Fix runtime. It defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no model critique retry. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
+Agent Sandbox is the only Fix runtime. The example uses provider-default reasoning effort: pinned OpenCode 1.18.2 ignores explicit effort for GPT-6 on Copilot Responses, so Aster rejects it. Copilot's GPT-5 and later models use Responses except `gpt-5-mini`, which uses Chat Completions. Other Copilot models, including Claude, use Chat Completions; the pinned provider removes the `gpt-5-chat-latest` alias. Non-Copilot endpoints continue to use OpenCode's generic OpenAI-compatible or OpenAI transport. The runtime defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no model critique retry. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
 
 When Fix is enabled, asynchronous generation and synchronous Fix previews default to the greater of 10 minutes or the configured agent timeout plus 5 minutes. This headroom allows for work around the Sandbox run, including source checks, cleanup, and patch reconstruction; it does not guarantee completion of unbounded clone or network work. Set `ACTION_TIMEOUT` through `server.extraEnv` to override the generation deadline. An explicit value also controls ordinary action HTTP handlers and must be a positive duration of at least the agent timeout plus 5 minutes when Fix is enabled; a smaller value is rejected at server startup. Without an explicit value, issue, admission, confirmation, cancellation, and escalation handlers keep their existing timeouts. Upstream proxy deadlines can still cut off synchronous HTTP requests.
 
@@ -123,7 +123,7 @@ Agent Sandbox is installed and upgraded separately from Aster. The Aster chart d
 
 The runtime supports direct provider access or an explicit tokenless gateway. Use a dedicated inference-only credential in the execution namespace. The chart references one existing Secret name and key; it does not create, copy, read, or print the value. Admission pins the credential shape and rejects `envFrom`, Secret volumes, projected tokens, extra credentials, arbitrary environment entries, and unexpected images or identities.
 
-The provider protocol and OpenCode compatibility details are in [AI providers](ai-providers.md#agent-sandbox-provider-compatibility). TLS, egress, RuntimeClass, and provider-neutral isolation requirements are in [Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract).
+The provider protocol and OpenCode compatibility details are in [AI providers](ai-providers.md#agent-sandbox-provider-compatibility). The executor selects OpenCode's Copilot SDK for Copilot endpoints, with the dedicated credential passed only through the fixed environment variable. It disables the title agent and background model catalog fetch. TLS, egress, RuntimeClass, and provider-neutral isolation requirements are in [Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract).
 
 After OpenCode returns, the executor rejects credential leakage in process output, structured results, patches, changed files, command output, and failure data. It then runs validators with a credential-free environment. A validator failure, missing executable, unexpected command result, or invalid final diff produces no actionable preview.
 

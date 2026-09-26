@@ -233,6 +233,21 @@ jobs:
             "${{ github.sha }}" \
             "${{ steps.build_identity.outputs.image_tag }}"
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+
+      - name: Test pinned OpenCode provider compatibility
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go -C backend test -c -o "$RUNNER_TEMP/executor.test" ./internal/fix/executor
+          docker run --rm --init --network none \
+            --env OPENCODE_1_18_2_BIN=opencode \
+            --mount "type=bind,src=$RUNNER_TEMP/executor.test,dst=/test/executor.test,readonly" \
+            --entrypoint /test/executor.test \
+            aster/agent-sandbox-fix-executor:release-test \
+            -test.run '^TestOpenCode1182' -test.v
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 

@@ -385,6 +385,38 @@ server:
 VALUES
 
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-render.yaml"
+
+sed -e 's@chat_completions@responses@g' -e 's@/chat/completions@/responses@g' \
+  -e 's@fixture-model@gpt-6-sol@g' -e 's@reasoning_effort: high@reasoning_effort: ""@g' \
+  -e 's@reasoningEffort: high@reasoningEffort: ""@g' \
+  "$tmp/agent-sandbox.yaml" > "$tmp/copilot-responses.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/copilot-responses.yaml" > "$tmp/copilot-responses-render.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MODEL_PROVIDER_API' "$tmp/copilot-responses-render.yaml" | grep -Fq 'value: "responses"'
+sed 's@fixture-model@claude-sonnet-5@g' "$tmp/agent-sandbox.yaml" > "$tmp/copilot-claude.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/copilot-claude.yaml" > "$tmp/copilot-claude-render.yaml"
+sed 's@fixture-model@gpt-5-mini@g' "$tmp/agent-sandbox.yaml" > "$tmp/copilot-mini.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/copilot-mini.yaml" > "$tmp/copilot-mini-render.yaml"
+sed 's@fixture-model@gpt-5-chat-latest@g' "$tmp/agent-sandbox.yaml" > "$tmp/copilot-removed-model.yaml"
+expect_fail copilot-removed-model 'removes GitHub Copilot model gpt-5-chat-latest' -f "$tmp/copilot-removed-model.yaml"
+grep -Fq 'removes GitHub Copilot model gpt-5-chat-latest' "$tmp/copilot-removed-model.out"
+sed 's@fixture-model@gpt-6-sol@g' "$tmp/agent-sandbox.yaml" > "$tmp/copilot-wrong-api.yaml"
+expect_fail copilot-wrong-api 'routes GitHub Copilot model "gpt-6-sol" to responses' -f "$tmp/copilot-wrong-api.yaml"
+grep -Fq 'routes GitHub Copilot model "gpt-6-sol" to responses' "$tmp/copilot-wrong-api.out"
+sed 's@/responses@/chat/completions@g' "$tmp/copilot-responses.yaml" > "$tmp/copilot-wrong-suffix.yaml"
+expect_fail copilot-wrong-suffix 'responses endpoint must end with /responses' -f "$tmp/copilot-wrong-suffix.yaml"
+grep -Fq 'responses endpoint must end with /responses' "$tmp/copilot-wrong-suffix.out"
+sed -e 's@reasoning_effort: ""@reasoning_effort: high@g' \
+  -e 's@reasoningEffort: ""@reasoningEffort: high@g' \
+  "$tmp/copilot-responses.yaml" > "$tmp/copilot-wrong-effort.yaml"
+expect_fail copilot-wrong-effort 'leave reasoningEffort empty' -f "$tmp/copilot-wrong-effort.yaml"
+grep -Fq 'leave reasoningEffort empty' "$tmp/copilot-wrong-effort.out"
+sed 's@gpt-6-sol@gpt-5.6-sol@g' "$tmp/copilot-wrong-effort.yaml" > "$tmp/copilot-gpt5-effort.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/copilot-gpt5-effort.yaml" > "$tmp/copilot-gpt5-effort-render.yaml"
+sed 's@api.githubcopilot.com@API.GitHubCopilot.com.@g' "$tmp/copilot-responses.yaml" > "$tmp/copilot-normalized-host.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/copilot-normalized-host.yaml" > "$tmp/copilot-normalized-host-render.yaml"
+sed 's@api.githubcopilot.com@notgithubcopilot.com@g' "$tmp/copilot-wrong-effort.yaml" > "$tmp/non-copilot-host.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/non-copilot-host.yaml" > "$tmp/non-copilot-host-render.yaml"
+
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"

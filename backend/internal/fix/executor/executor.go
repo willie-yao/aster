@@ -434,17 +434,25 @@ func renderStagedDiff(ctx context.Context, work, home, temp string, outputLimit 
 }
 
 func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (string, string, error) {
+	adapter, err := modelprovider.OpenCodeAdapterFor(spec.Provider)
+	if err != nil {
+		return "", "", err
+	}
+	return runOpenCodeAdapter(ctx, spec, adapter)
+}
+
+func runOpenCodeAdapter(ctx context.Context, spec OpenCodeSpec, adapter modelprovider.OpenCodeAdapter) (string, string, error) {
 	if err := modelprovider.ValidateProcessCABundleEnvironment(); err != nil {
 		return "", "", err
 	}
-	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, spec.MaxSteps); err != nil {
+	if err := writeOpenCodeConfig(spec.HomeDir, spec.Provider, adapter, spec.MaxSteps); err != nil {
 		return "", "", err
 	}
 	bin, err := exec.LookPath(spec.Bin)
 	if err != nil {
 		return "", "", fmt.Errorf("opencode executable: %w", err)
 	}
-	argv := []string{bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", "engine/" + spec.Provider.Model, spec.Prompt}
+	argv := []string{bin, "run", "--dir", spec.WorkDir, "--format", "json", "--agent", "build", "--model", adapter.ProviderID + "/" + spec.Provider.Model, spec.Prompt}
 	env, err := openCodeEnvironment(spec.HomeDir, spec.TempDir, spec.Provider)
 	if err != nil {
 		return "", "", err
@@ -456,13 +464,9 @@ func defaultRunOpenCode(ctx context.Context, spec OpenCodeSpec) (string, string,
 	return runOpenCodeCommand(ctx, spec.WorkDir, env, credential, min(int(spec.OutputLimit), maxCapturedStream), argv...)
 }
 
-func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps int) error {
+func writeOpenCodeConfig(home string, provider modelprovider.Config, adapter modelprovider.OpenCodeAdapter, maxSteps int) error {
 	dir := filepath.Join(home, ".config", "opencode")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	adapter, err := modelprovider.OpenCodeAdapterFor(provider)
-	if err != nil {
 		return err
 	}
 	providerOptions := map[string]any{"baseURL": adapter.BaseURL}
@@ -472,21 +476,30 @@ func writeOpenCodeConfig(home string, provider modelprovider.Config, maxSteps in
 	if headers := modelprovider.EndpointHeaders(provider.Endpoint); len(headers) > 0 {
 		providerOptions["headers"] = headers
 	}
-	modelOptions := map[string]any{"limit": map[string]any{"context": 128000, "output": 8192}}
+	modelOptions := map[string]any{}
+	providerConfig := map[string]any{"npm": adapter.NPM, "name": adapter.ProviderID, "options": providerOptions}
+	if adapter.ProviderID == modelprovider.OpenCodeCopilotProviderID {
+		providerConfig["env"] = []string{modelprovider.TokenEnv}
+		providerConfig["whitelist"] = []string{provider.Model}
+	} else {
+		modelOptions["limit"] = map[string]any{"context": 128000, "output": 8192}
+	}
 	if provider.ReasoningEffort != "" {
 		modelOptions["options"] = map[string]any{"reasoningEffort": string(provider.ReasoningEffort)}
 	}
+	providerConfig["models"] = map[string]any{provider.Model: modelOptions}
 	config := map[string]any{
 		"$schema": "https://opencode.ai/config.json", "share": "disabled", "autoupdate": false, "snapshot": false,
-		"provider": map[string]any{"engine": map[string]any{
-			"npm": adapter.NPM, "name": "engine",
-			"options": providerOptions,
-			"models":  map[string]any{provider.Model: modelOptions},
-		}},
-		"agent": map[string]any{"build": map[string]any{"steps": maxSteps}},
+		"provider": map[string]any{adapter.ProviderID: providerConfig},
+		"agent": map[string]any{
+			"build": map[string]any{"steps": maxSteps}, "title": map[string]any{"disable": true},
+		},
 		"permission": map[string]any{
 			"edit": "allow", "bash": "deny", "webfetch": "deny", "task": "deny", "skill": "deny", "external_directory": "deny",
 		},
+	}
+	if adapter.ProviderID == modelprovider.OpenCodeCopilotProviderID {
+		config["enabled_providers"] = []string{adapter.ProviderID}
 	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -507,6 +520,7 @@ func openCodeEnvironment(home, temp string, provider modelprovider.Config) ([]st
 		"XDG_STATE_HOME="+filepath.Join(home, ".local", "state"),
 		"OPENCODE_CONFIG="+filepath.Join(home, ".config", "opencode", "opencode.json"),
 		"OPENCODE_DISABLE_PROJECT_CONFIG=true", "OPENCODE_DISABLE_AUTOUPDATE=true", "OPENCODE_DISABLE_EXTERNAL_SKILLS=true",
+		"OPENCODE_DISABLE_MODELS_FETCH=true",
 	)
 	return append(env, credential.Environment()...), nil
 }

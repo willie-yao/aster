@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -110,11 +112,34 @@ func EndpointHeaders(endpoint string) map[string]string {
 	if err != nil {
 		return nil
 	}
-	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
-	if host == "githubcopilot.com" || strings.HasSuffix(host, ".githubcopilot.com") {
+	if isGitHubCopilotHost(parsed.Hostname()) {
 		return map[string]string{CopilotIntegrationHeader: CopilotIntegrationID}
 	}
 	return nil
+}
+
+func isGitHubCopilotHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == "githubcopilot.com" || strings.HasSuffix(host, ".githubcopilot.com")
+}
+
+var copilotGPTModel = regexp.MustCompile(`^gpt-(\d+)`)
+
+// CopilotOpenCodeAPI returns the API selected by pinned OpenCode 1.18.2.
+func CopilotOpenCodeAPI(model string) string {
+	if match := copilotGPTModel.FindStringSubmatch(model); match != nil {
+		major, err := strconv.Atoi(match[1])
+		if err == nil && major >= 5 && !strings.HasPrefix(model, "gpt-5-mini") {
+			return APIResponses
+		}
+	}
+	return APIChatCompletions
+}
+
+func copilotResponsesSendsReasoning(model string) bool {
+	return strings.HasPrefix(model, "o") ||
+		strings.HasPrefix(model, "gpt-5") && !strings.HasPrefix(model, "gpt-5-chat") ||
+		strings.HasPrefix(model, "codex-") || strings.HasPrefix(model, "computer-use")
 }
 
 // ValidateOpenCode validates the Agent Sandbox OpenCode provider contract.
@@ -152,6 +177,27 @@ func ValidateOpenCode(config Config) error {
 	}
 	if config.ReasoningEffort == ReasoningEffortMax {
 		return fmt.Errorf("pinned OpenCode 1.18.2 does not support reasoning effort max")
+	}
+	if isGitHubCopilotHost(parsed.Hostname()) {
+		if config.CredentialMode != CredentialModeDirect || config.Auth.Type != AuthTypeBearer {
+			return fmt.Errorf("GitHub Copilot requires direct bearer auth with pinned OpenCode 1.18.2")
+		}
+		if config.Model == "gpt-5-chat-latest" {
+			return fmt.Errorf("pinned OpenCode 1.18.2 removes GitHub Copilot model %q from its built-in provider", config.Model)
+		}
+		if want := CopilotOpenCodeAPI(config.Model); config.API != want {
+			return fmt.Errorf("pinned OpenCode 1.18.2 routes GitHub Copilot model %q to %s; set api to %q with the matching endpoint", config.Model, want, want)
+		}
+		if config.API == APIResponses && config.ReasoningEffort != "" && !copilotResponsesSendsReasoning(config.Model) {
+			return fmt.Errorf("pinned OpenCode 1.18.2 omits reasoning effort for GitHub Copilot Responses model %q; leave reasoning_effort empty", config.Model)
+		}
+		suffix := "/chat/completions"
+		if config.API == APIResponses {
+			suffix = "/responses"
+		}
+		if !strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), suffix) {
+			return fmt.Errorf("pinned OpenCode 1.18.2 routes GitHub Copilot model %q to %s; endpoint must end with %s", config.Model, config.API, suffix)
+		}
 	}
 	if config.CredentialMode == CredentialModeGateway {
 		if config.Auth.Type != AuthTypeNone || config.Auth.TokenEnv != "" {
@@ -194,9 +240,15 @@ func ValidateDeploymentEndpoint(config Config) error {
 
 // OpenCodeAdapter describes the native AI SDK package and base URL OpenCode uses.
 type OpenCodeAdapter struct {
-	NPM     string
-	BaseURL string
+	ProviderID string
+	NPM        string
+	BaseURL    string
 }
+
+const (
+	OpenCodeCopilotProviderID = "github-copilot"
+	OpenCodeCustomProviderID  = "engine"
+)
 
 // OpenCodeAdapterFor derives the native provider package from one full operation endpoint.
 func OpenCodeAdapterFor(config Config) (OpenCodeAdapter, error) {
@@ -223,7 +275,10 @@ func OpenCodeAdapterFor(config Config) (OpenCodeAdapter, error) {
 	if parsed.Path == "" {
 		parsed.Path = "/"
 	}
-	return OpenCodeAdapter{NPM: npm, BaseURL: strings.TrimRight(parsed.String(), "/")}, nil
+	if isGitHubCopilotHost(parsed.Hostname()) {
+		return OpenCodeAdapter{ProviderID: OpenCodeCopilotProviderID, NPM: "@ai-sdk/github-copilot", BaseURL: strings.TrimRight(parsed.String(), "/")}, nil
+	}
+	return OpenCodeAdapter{ProviderID: OpenCodeCustomProviderID, NPM: npm, BaseURL: strings.TrimRight(parsed.String(), "/")}, nil
 }
 
 // OpenCodeBaseURL derives the native provider base URL.

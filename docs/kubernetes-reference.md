@@ -239,6 +239,8 @@ The Fix client ServiceAccount is used only by the server. Its default name deriv
 
 Direct bearer mode references one existing Secret key. The chart and dashboard do not read or print the value. Gateway mode keeps the executor tokenless but still requires gateway-side workload authorization. Optional CA bundles use the Fix-only ConfigMap, digest, RBAC, and mount contract. See [Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract) for the provider-neutral isolation boundary and [Fix PR generation](fix-prs.md) for the user workflow and configuration example.
 
+For Copilot Fix, match `model_provider.api` and the operation endpoint to OpenCode 1.18.2's model route: GPT-5 and later use Responses except `gpt-5-mini`, while Claude and other models use Chat Completions. GPT-6 Copilot Responses cannot use an explicit `reasoning_effort`; clear it in both `project.yaml` and `agentSandbox.fixRuntime.modelProvider.reasoningEffort`. The executor selects OpenCode's Copilot SDK for these endpoints. Upgrade the immutable executor digest and the dashboard image together so the running server and executor use the same Fix runtime configuration and result contract.
+
 ## Related references
 
 - [Kubernetes quickstart](kubernetes.md)
