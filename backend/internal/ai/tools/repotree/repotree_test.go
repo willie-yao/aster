@@ -457,11 +457,142 @@ func TestRepoToolSchemasRequireSourceID(t *testing.T) {
 }
 
 func TestGrepRepoDoesNotObserveTruncatedTrailingLine(t *testing.T) {
-	prefix := "match " + strings.Repeat("x", grepMaxBytes)
+	prefix := "match " + strings.Repeat("x", grepMaxScanBytes)
 	env := envFor(&fakeRepo{files: map[string]string{"large.txt": prefix + "\ncomplete\n"}})
 	result := (&grepTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{"pattern": "match", "path_glob": "*.txt"})))
 	observation, _ := result.Observation.(GrepObservation)
-	if len(observation.Matches) != 0 {
-		t.Fatalf("truncated line was observed as complete: %+v", observation.Matches)
+	if len(observation.Matches) != 0 || observation.Call.MatchCount != 0 {
+		t.Fatalf("truncated line was observed as complete: %+v", observation)
+	}
+	if !observation.Call.FileScanTruncated || result.Payload["scan_truncated"] != true {
+		t.Fatalf("partial scan not reported: payload=%v call=%+v", result.Payload, observation.Call)
+	}
+}
+
+func TestGrepRepoSearchesPastFirst16KiB(t *testing.T) {
+	var b strings.Builder
+	for i := range 1000 {
+		fmt.Fprintf(&b, "// filler line %04d %s\n", i+1, strings.Repeat("x", 40))
+	}
+	b.WriteString("func target() {}\n")
+	b.WriteString("// after\n")
+	content := b.String()
+	if len(content) <= 16384 {
+		t.Fatalf("fixture is %d bytes, want more than 16 KiB", len(content))
+	}
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "lf", content: content},
+		{name: "crlf", content: strings.ReplaceAll(content, "\n", "\r\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := envFor(&fakeRepo{files: map[string]string{"test/e2e/helpers.go": tc.content}})
+			result := (&grepTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+				"pattern": `^func target\(`, "path_glob": "test/e2e/", "context_lines": 1,
+			})))
+			raw, _ := json.Marshal(result.Payload["matches"])
+			var got []struct {
+				Path    string   `json:"path"`
+				Line    int      `json:"line"`
+				Context []string `json:"context"`
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			wantContext := []string{"// filler line 1000 " + strings.Repeat("x", 40), "func target() {}", "// after"}
+			if len(got) != 1 || got[0].Path != "test/e2e/helpers.go" || got[0].Line != 1001 || !reflect.DeepEqual(got[0].Context, wantContext) {
+				t.Fatalf("matches=%+v", got)
+			}
+			if result.Payload["scan_truncated"] != nil || result.Payload["partially_scanned_files"] != nil {
+				t.Fatalf("unexpected partial scan report: %v", result.Payload)
+			}
+			if result.BytesFetched != len(tc.content) {
+				t.Fatalf("bytes fetched=%d, want %d", result.BytesFetched, len(tc.content))
+			}
+			observation := result.Observation.(GrepObservation)
+			want := GrepMatchObservation{SourceID: tools.PrimarySourceID, Path: "test/e2e/helpers.go", LineStart: 1000, LineEnd: 1002}
+			wantRanges := []tools.GrepRangeObservation{{SelectorID: tools.PrimarySourceID, Path: want.Path, LineStart: 1000, LineEnd: 1002}}
+			if len(observation.Matches) != 1 || observation.Matches[0] != want || !reflect.DeepEqual(observation.Call.ReturnedRanges, wantRanges) || observation.Call.FileScanTruncated {
+				t.Fatalf("observation=%+v", observation)
+			}
+		})
+	}
+}
+
+func TestGrepRepoReportsFilesLargerThanScanCap(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("early marker\n")
+	line := strings.Repeat("y", 99) + "\n"
+	for b.Len() < grepMaxScanBytes+len(line) {
+		b.WriteString(line)
+	}
+	b.WriteString("late marker\n")
+	repo := &fakeRepo{files: map[string]string{
+		"gen/big.go":   b.String(),
+		"gen/small.go": "late marker\n",
+	}}
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		matches int
+		outcome string
+	}{
+		{name: "match inside cap", pattern: "early marker", matches: 1, outcome: tools.GrepOutcomeMatched},
+		{name: "match only past cap", pattern: "late marker", matches: 1, outcome: tools.GrepOutcomeMatched},
+		{name: "zero matches", pattern: "absent marker", matches: 0, outcome: tools.GrepOutcomeZeroMatches},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := (&grepTool{}).Dispatch(context.Background(), envFor(repo), mustJSON(withPrimary(map[string]any{
+				"pattern": tc.pattern, "path_glob": "gen/",
+			})))
+			observation := result.Observation.(GrepObservation)
+			partial, _ := result.Payload["partially_scanned_files"].([]string)
+			hint, _ := result.Payload["scan_hint"].(string)
+			if result.Payload["scan_truncated"] != true || !reflect.DeepEqual(partial, []string{"gen/big.go"}) || !strings.Contains(hint, "does not prove the pattern is absent") {
+				t.Fatalf("payload=%v", result.Payload)
+			}
+			if result.Payload["truncated"] != nil || observation.Call.ResultTruncated {
+				t.Fatalf("file-count truncation reported: payload=%v call=%+v", result.Payload, observation.Call)
+			}
+			if !observation.Call.FileScanTruncated || observation.Call.MatchCount != tc.matches || observation.Call.Outcome != tc.outcome || observation.Call.FilesScanned != 2 {
+				t.Fatalf("call=%+v", observation.Call)
+			}
+			if want := grepMaxScanBytes + len("late marker\n"); result.BytesFetched != want {
+				t.Fatalf("bytes fetched=%d, want %d", result.BytesFetched, want)
+			}
+			for _, match := range observation.Matches {
+				if match.Path == "gen/big.go" && match.LineStart != 1 {
+					t.Fatalf("unexpected match past cap: %+v", match)
+				}
+			}
+		})
+	}
+}
+
+func TestGrepRepoClipsLongContextLines(t *testing.T) {
+	long := "match " + strings.Repeat("z", 2*grepMaxLineBytes)
+	env := envFor(&fakeRepo{files: map[string]string{"assets/app.min.js": long + "\n"}})
+	result := (&grepTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"pattern": "match", "path_glob": "assets/", "context_lines": 0,
+	})))
+	raw, _ := json.Marshal(result.Payload["matches"])
+	var got []struct {
+		Line    int      `json:"line"`
+		Context []string `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Line != 1 || len(got[0].Context) != 1 || got[0].Context[0] != long[:grepMaxLineBytes]+"...<truncated>" {
+		t.Fatalf("matches=%+v", got)
+	}
+	observation := result.Observation.(GrepObservation)
+	if len(observation.Matches) != 0 || observation.Call.MatchCount != 1 || len(observation.Call.ReturnedRanges) != 1 {
+		t.Fatalf("clipped line observed as complete: %+v", observation)
+	}
+	if result.ContentBytes != grepMaxLineBytes+len("...<truncated>") {
+		t.Fatalf("content bytes=%d", result.ContentBytes)
 	}
 }
