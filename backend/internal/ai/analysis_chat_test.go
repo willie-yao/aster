@@ -2214,6 +2214,47 @@ func TestAnalysisChatUnprovenCitationDegradesAfterCorrectiveRounds(t *testing.T)
 		t.Fatalf("provider calls = %d, want %d", got, want)
 	}
 }
+
+// A citation failure that a corrective round repairs is logged as a retry
+// followed by the accepted answer, so the log never reports a published turn
+// as an error.
+func TestAnalysisChatCorrectedCitationLogsRetryThenSuccess(t *testing.T) {
+	shrinkCallDelay(t)
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	server := newScriptedChatServer(t)
+	server.push(200, chatRespToolCall("call-1", "read_artifact", map[string]any{"path": "build-log.txt", "offset": 0, "length": 1024}))
+	server.push(200, chatRespFinal(`{"answer":"The artifact supports it.","citations":[{"path":"build-log.txt","quote":"different evidence"}],"assessment":"supports","proposed_revision":null}`))
+	server.push(200, chatRespFinal(`{"answer":"The artifact supports it.","citations":[{"path":"build-log.txt","quote":"controller stopped"}],"assessment":"supports","proposed_revision":null}`))
+	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("controller stopped\n"),
+	}}, AnalysisChatOptions{MaxIters: 3, Timeout: time.Second})
+	store := NewTraceStore()
+	trace := store.Start(TraceMetadata{JobID: "job", BuildID: "1", TestName: "test", APIMode: APIChatCompletions})
+
+	reply, err := agent.Reply(withAnalysisTrace(t.Context(), trace), analysisChatTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace.Finish("success", nil)
+	if reply.Unverified || len(reply.Citations) != 1 || reply.ValidationRetries != 1 {
+		t.Fatalf("reply = %+v", reply)
+	}
+	var outcomes []string
+	for _, event := range store.Snapshot().Traces[0].Events {
+		if event.Kind == "analysis_chat_response" {
+			outcomes = append(outcomes, event.Outcome+" "+event.Status)
+		}
+	}
+	if !slices.Equal(outcomes, []string{"retry tool_loop_validation", "success tool_loop"}) {
+		t.Fatalf("response outcomes = %v", outcomes)
+	}
+	if strings.Contains(logs.String(), "outcome=error") || !strings.Contains(logs.String(), "outcome=retry stage=tool_loop_validation") ||
+		!strings.Contains(logs.String(), "outcome=success stage=tool_loop ") {
+		t.Fatalf("logs = %s", logs.String())
+	}
+}
 func TestAnalysisChatPartialEvidenceTraceAfterCorrectiveRounds(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)

@@ -471,6 +471,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			turn.ReportProgress(analysischat.PhaseFinalizing)
 			reply, stats, validationErr := parseAnalysisChatReplyCandidatesWithSource(answer.Content, evidence, sourceCitationContext)
 			if validationErr == nil && stats.EvidenceGate == "" {
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
+				)
 				accepted = &reply
 				return toolLoopAccept()
 			}
@@ -481,18 +484,22 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				detail = validationErr.Error()
 			}
 			stats.ValidationDetail = detail
-			recordAnalysisChatResponseFailure(
-				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
-			)
 			// A failed gate re-enters the tool loop with the specific failure so
-			// the model can read the artifact it could not cite.
+			// the model can read the artifact it could not cite. The attempt is
+			// logged as a retry because the turn can still succeed.
 			if correctiveRounds < analysisChatMaxCorrectiveRounds {
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "retry", "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+				)
 				correctiveRounds++
 				turn.ReportProgress(analysischat.PhaseValidationRetrying)
 				return toolLoopCorrect(analysisChatRepairPrompt(answer.Content, stats, validationErr, detail)).granting()
 			}
 			if validationErr == nil {
 				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceStatus(reply), stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
+				)
 				accepted = &reply
 				return toolLoopAccept()
 			}
@@ -510,6 +517,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				accepted = &salvaged
 				return toolLoopAccept()
 			}
+			recordAnalysisChatResponseFailure(
+				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+			)
 			return toolLoopStop(analysisChatSafeValidationError(validationErr))
 		},
 		onDispatch: func(dispatched *toolLoopDispatch) {

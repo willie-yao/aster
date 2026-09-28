@@ -555,6 +555,24 @@ export async function reconcileAnalysisChatTurn(
   return { session, state };
 }
 
+// Decides what became of an interrupted request. A snapshot that already
+// records the request's final outcome is used as is, because outcomes never
+// revert. Anything else is read from the server, which is polled while the
+// request is active, so a request is never reported lost from a cached view.
+export async function settleAnalysisChatTurn(
+  snapshot: AnalysisChatSession | null,
+  sessionID: string,
+  requestID: string,
+  onProgress: (progress: AnalysisChatProgress) => void,
+  options: AnalysisChatResumeOptions = {},
+): Promise<AnalysisChatReconciliation> {
+  if (snapshot?.id === sessionID) {
+    const state = analysisChatRequestState(snapshot, requestID);
+    if (state === "answered" || state === "succeeded" || state === "terminal") return { session: snapshot, state };
+  }
+  return reconcileAnalysisChatTurn(sessionID, requestID, onProgress, options);
+}
+
 async function streamAnalysisChatMessageOnce(
   sessionID: string,
   message: string,
