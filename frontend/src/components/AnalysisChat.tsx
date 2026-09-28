@@ -1247,6 +1247,8 @@ export function AnalysisChat({
         await archiveAnalysisChatSession(discarded.id, controller.signal);
       }
       if (identityRef.current !== resetIdentity) return;
+      // Archiving dismisses a prepared finding for every later conversation.
+      if (discarded?.messages.some((message) => message.prepared)) onPreparedResolved?.(false);
       // The next question creates a replacement session, so a fresh create key
       // is what keeps that create from being deduped against the discarded one.
       createRequestIDRef.current = newAnalysisChatRequestID();

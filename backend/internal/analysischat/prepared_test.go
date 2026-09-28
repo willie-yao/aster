@@ -1,8 +1,10 @@
 package analysischat
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,5 +223,65 @@ func TestServicePreparedAvailable(t *testing.T) {
 	}
 	if got := stale.PreparedAvailable([]AnalysisRef{ready}); !reflect.DeepEqual(got, []bool{false}) {
 		t.Fatalf("stale generation = %v", got)
+	}
+}
+
+func TestServiceArchiveDismissesPreparedCauseFinding(t *testing.T) {
+	dir := t.TempDir()
+	pattern := causalPatternForChat([]models.PatternCausalGroup{{Builds: []string{"1"}, RootCause: "cause", Confidence: "high"}}, nil)
+	pattern.Lifecycle = &models.PatternLifecycle{State: models.PatternLifecycleActive}
+	models.AssignPatternIdentity(&pattern)
+	writeJobDetail(t, dir, causalPatternDetail(pattern, "1"))
+	group := pattern.CausalGroups[0]
+	ref := AnalysisRef{
+		Scope: ScopeCause, JobID: pattern.JobID, PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+		CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+	}
+	key, err := PreparedCauseKey(ref, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := PreparedCauseGeneration("runtime")
+	if err := SavePreparedCauseFindings(preparedFindingPath(dir), PreparedCauseFindings{
+		Generation: generation,
+		Findings: map[string]PreparedCauseFinding{key: {
+			Ref: ref, PreparedAt: "2026-08-25T01:00:00Z",
+			Reply: Reply{Answer: "The artifact supports the cause.", Assessment: "supports", Citations: []Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var nowNanos atomic.Int64
+	start := time.Date(2026, 8, 25, 2, 0, 0, 0, time.UTC)
+	nowNanos.Store(start.UnixNano())
+	service := newTestService(t, t.Context(), dir, &fakeRunner{}, Options{
+		HistoryRetention: 24 * time.Hour,
+		Now:              func() time.Time { return time.Unix(0, nowNanos.Load()).UTC() },
+	})
+	if err := service.ConfigurePreparedCauseFindings(generation); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := service.CreatePrepared(ref, "alice", "prepared-first")
+	if err != nil || len(first.Messages) != 1 || !first.Messages[0].Prepared {
+		t.Fatalf("prepared session = %+v %v", first, err)
+	}
+	if err := service.Archive(first.ID, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.PreparedAvailable([]AnalysisRef{ref}); !reflect.DeepEqual(got, []bool{false}) {
+		t.Fatalf("dismissed availability = %v", got)
+	}
+	if _, err := service.CreatePrepared(ref, "alice", "prepared-second"); !errors.Is(err, ErrPreparedFindingNotFound) {
+		t.Fatalf("dismissed prepared create: %v", err)
+	}
+	replacement, err := service.Create(ref, "alice", "replacement")
+	if err != nil || replacement.ID == first.ID || len(replacement.Messages) != 0 || len(replacement.Attempts) != 0 {
+		t.Fatalf("replacement = %+v %v", replacement, err)
+	}
+
+	nowNanos.Store(start.Add(25 * time.Hour).UnixNano())
+	if got := service.PreparedAvailable([]AnalysisRef{ref}); !reflect.DeepEqual(got, []bool{true}) {
+		t.Fatalf("lapsed dismissal availability = %v", got)
 	}
 }

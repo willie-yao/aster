@@ -508,8 +508,9 @@ func (s *Service) preparedFinding(resolved resolvedAnalysis) (PreparedCauseFindi
 	return lookupPreparedFinding(prepared, resolved.ref, causeComparisonBuildID(resolved.comparison))
 }
 
-// PreparedAvailable reports which references have a usable prepared finding.
-// The result is parallel to refs; the cache is read once for the whole batch.
+// PreparedAvailable reports which references have a usable prepared finding
+// that no archived conversation dismissed. The result is parallel to refs; the
+// cache and session state are each read once for the whole batch.
 func (s *Service) PreparedAvailable(refs []AnalysisRef) []bool {
 	available := make([]bool, len(refs))
 	if len(refs) == 0 || s.preparedGeneration == "" {
@@ -523,6 +524,7 @@ func (s *Service) PreparedAvailable(refs []AnalysisRef) []bool {
 		detail models.JobDetail
 		err    error
 	}{}
+	requestIDs := make([]string, len(refs))
 	for i, ref := range refs {
 		normalized, err := normalizeAnalysisRef(ref)
 		if err != nil || normalized.Scope != ScopeCause {
@@ -540,7 +542,26 @@ func (s *Service) PreparedAvailable(refs []AnalysisRef) []bool {
 		if err != nil {
 			continue
 		}
-		_, _, available[i] = lookupPreparedFinding(prepared, resolved.ref, causeComparisonBuildID(resolved.comparison))
+		if _, key, ok := lookupPreparedFinding(prepared, resolved.ref, causeComparisonBuildID(resolved.comparison)); ok {
+			requestIDs[i] = preparedRequestID(key)
+		}
+	}
+	if !slices.ContainsFunc(requestIDs, func(id string) bool { return id != "" }) {
+		return available
+	}
+	now := s.opts.Now().UTC()
+	ctx, cancel := s.store.context()
+	defer cancel()
+	err = s.store.update(ctx, func(state *persistedState) (bool, error) {
+		changed := s.cleanup(state, now)
+		for i, requestID := range requestIDs {
+			_, dismissed := state.DismissedPrepared[requestID]
+			available[i] = requestID != "" && !dismissed
+		}
+		return changed, nil
+	})
+	if err != nil {
+		return make([]bool, len(refs))
 	}
 	return available
 }
@@ -607,10 +628,12 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 	}
 	seedMessages := []Message{}
 	seedRequests := map[string]persistedRequest{}
+	preparedID := ""
 	if finding, key, ok := s.preparedFinding(resolved); ok {
 		message, request := preparedMessage(finding, key, now)
 		seedMessages = append(seedMessages, message)
 		seedRequests[message.RequestID] = request
+		preparedID = message.RequestID
 	} else if preparedOnly {
 		return SessionView{}, ErrPreparedFindingNotFound
 	}
@@ -651,6 +674,13 @@ func (s *Service) create(ref AnalysisRef, owner, requestID string, preparedOnly 
 		if current != nil {
 			existing = s.sessionView(current)
 			return changed, nil
+		}
+		if _, dismissed := state.DismissedPrepared[preparedID]; dismissed {
+			if preparedOnly {
+				return changed, ErrPreparedFindingNotFound
+			}
+			created.Requests = map[string]persistedRequest{}
+			created.View.Messages = []Message{}
 		}
 		if s.sessionLimitReached(state, owner) {
 			return changed, ErrSessionLimit
@@ -811,6 +841,12 @@ func (s *Service) cleanup(state *persistedState, now time.Time) bool {
 		}
 		if !now.Before(current.ExpiresAt) && !now.Before(current.HistoryExpiresAt) && current.Active == nil {
 			delete(state.Sessions, id)
+			changed = true
+		}
+	}
+	for requestID, expires := range state.DismissedPrepared {
+		if !now.Before(expires) {
+			delete(state.DismissedPrepared, requestID)
 			changed = true
 		}
 	}

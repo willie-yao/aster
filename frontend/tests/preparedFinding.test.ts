@@ -115,3 +115,11 @@ test("the marker is resolved read-only, never by creating a shared session", () 
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /onPreparedResolved\?\.\(Boolean\(created\)\);/);
 });
+
+test("archiving a prepared conversation clears the marker for the replacement", () => {
+  const chat = source("src/components/AnalysisChat.tsx");
+  assert.match(
+    chat,
+    /await archiveAnalysisChatSession\(discarded\.id[\s\S]*discarded\?\.messages\.some\(\(message\) => message\.prepared\)\) onPreparedResolved\?\.\(false\);/,
+  );
+});
