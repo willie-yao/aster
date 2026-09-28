@@ -30,6 +30,9 @@ type persistedState struct {
 	Version       int                          `json:"version"`
 	Sessions      map[string]*persistedSession `json:"sessions"`
 	OwnerRequests map[string][]time.Time       `json:"owner_requests,omitempty"`
+	// DismissedPrepared maps an archived prepared finding's request ID to when
+	// the dismissal lapses, so replacement conversations start without it.
+	DismissedPrepared map[string]time.Time `json:"dismissed_prepared,omitempty"`
 }
 
 type persistedSession struct {

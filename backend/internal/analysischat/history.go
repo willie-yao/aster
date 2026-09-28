@@ -118,14 +118,16 @@ func (s *Service) List(query HistoryQuery, owner string) (HistoryPage, error) {
 }
 
 // Archive stops new turns without removing the conversation or its evidence.
+// A prepared finding it carries is dismissed for replacement conversations.
 func (s *Service) Archive(id, owner string) error {
 	if normalizeOwner(owner) == "" {
 		return fmt.Errorf("%w: owner is required", ErrInvalidRequest)
 	}
+	now := s.opts.Now().UTC()
 	ctx, cancel := s.store.context()
 	defer cancel()
 	return s.store.update(ctx, func(state *persistedState) (bool, error) {
-		changed := s.cleanup(state, s.opts.Now().UTC())
+		changed := s.cleanup(state, now)
 		current := state.Sessions[strings.TrimSpace(id)]
 		if current == nil || current.Retired {
 			return changed, ErrSessionNotFound
@@ -137,6 +139,15 @@ func (s *Service) Archive(id, owner string) error {
 			return changed, nil
 		}
 		current.Archived = true
+		for requestID, request := range current.Requests {
+			if !request.Prepared {
+				continue
+			}
+			if state.DismissedPrepared == nil {
+				state.DismissedPrepared = map[string]time.Time{}
+			}
+			state.DismissedPrepared[requestID] = now.Add(s.opts.HistoryRetention)
+		}
 		return true, nil
 	})
 }
