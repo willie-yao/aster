@@ -250,64 +250,87 @@ func TestRecordSourceContentFromVisibleGrepPayload(t *testing.T) {
 	}
 }
 
-func TestRecordSourceContentMapsOnlyObservedCompleteReadLines(t *testing.T) {
+func TestRecordSourceContentMapsNumberedReadLines(t *testing.T) {
 	repo := &fakeSourceRepo{files: map[string]string{}}
 	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
 		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
 	})
-	content := "partial\ncomplete one\ncomplete two\ntrailing"
-	byteStart := strings.Index(content, "complete one")
-	byteEnd := strings.Index(content, "trailing")
+	call := transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}}
+	observation := repotree.ReadObservation{
+		SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 12,
+		Lines: []string{"complete one", "", "11: looks numbered"},
+	}
 	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
-	state.recordSourceContent(
-		transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"pkg/controller.go"}`}},
-		map[string]any{"source_id": tools.PrimarySourceID, "content": content, "length": len(content)},
-		repotree.ReadObservation{
-			SourceID: tools.PrimarySourceID, Path: "pkg/controller.go", LineStart: 10, LineEnd: 11,
-			ByteStart: byteStart, ByteEnd: byteEnd,
-		},
-	)
+	state.recordSourceContent(call, map[string]any{
+		"source_id": tools.PrimarySourceID, "content": "10: complete one\n11: \n12: 11: looks numbered",
+	}, observation)
 	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "pkg/controller.go"}]
-	if evidence == nil || len(evidence.Segments) != 1 || evidence.Segments[0] != content {
+	if evidence == nil || len(evidence.Segments) != 1 || evidence.Segments[0] != "complete one\n\n11: looks numbered" {
 		t.Fatalf("read citation segments = %+v", evidence)
 	}
-	if evidence.Lines[10] != "complete one" || evidence.Lines[11] != "complete two" || len(evidence.Lines) != 2 {
+	if evidence.Lines[10] != "complete one" || evidence.Lines[11] != "" || evidence.Lines[12] != "11: looks numbered" || len(evidence.Lines) != 3 {
 		t.Fatalf("read citation lines = %+v", evidence.Lines)
+	}
+	if got := state.sourceContentByPath["pkg/controller.go"]; len(got) != 1 || got[0] != "complete one\n\n11: looks numbered" {
+		t.Fatalf("primary grounding = %q", got)
+	}
+
+	misnumbered := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
+	misnumbered.recordSourceContent(call, map[string]any{
+		"source_id": tools.PrimarySourceID, "content": "9: complete one\n10: \n11: 11: looks numbered",
+	}, observation)
+	if len(misnumbered.sourceEvidenceByPath) != 0 || len(misnumbered.sourceContentByPath) != 0 {
+		t.Fatalf("misnumbered read recorded evidence: %+v %v", misnumbered.sourceEvidenceByPath, misnumbered.sourceContentByPath)
 	}
 }
 
-func TestRecordSourceContentSkipsLinesWhenJSONChangesReadLength(t *testing.T) {
+// grep_repo context is verbatim source, so text that resembles a grep_artifact
+// line prefix is kept as written.
+func TestRecordSourceContentKeepsGrepRepoContextVerbatim(t *testing.T) {
 	repo := &fakeSourceRepo{files: map[string]string{}}
 	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
 		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
 	})
-	full := "// café comment here\nabc\ndef\n\nafter\n"
-	raw := full[7:31]
+	state := &agentState{sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{}}
+	state.recordSourceContent(transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_repo", Arguments: `{"source_id":"primary","pattern":"8080"}`,
+	}}, map[string]any{
+		"source_id": tools.PrimarySourceID,
+		"matches":   []any{map[string]any{"path": "ports.yaml", "line": 2, "context": []any{"ports:", "  8080: http"}}},
+	}, repotree.GrepObservation{Call: tools.GrepCallObservation{SelectorID: tools.PrimarySourceID}})
+	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "ports.yaml"}]
+	if evidence == nil || len(evidence.Segments) != 1 || evidence.Segments[0] != "ports:\n  8080: http" {
+		t.Fatalf("grep_repo evidence = %+v", evidence)
+	}
+}
+
+func TestRecordSourceContentSkipsLinesWhenJSONChangesReadText(t *testing.T) {
+	repo := &fakeSourceRepo{files: map[string]string{}}
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: strings.Repeat("1", 40), Reader: repo,
+	})
+	raw := []string{"abc \xff def", "ghi"}
 	state := &agentState{
 		sources: catalog, sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 		startTime: time.Now(),
 	}
 	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, map[string]any{
-		"source_id": tools.PrimarySourceID, "content": raw, "length": len(raw),
+		"source_id": tools.PrimarySourceID, "content": "2: " + raw[0] + "\n3: " + raw[1],
 	}))
-	visibleContent, _ := visible["content"].(string)
-	if len(visibleContent) == len(raw) {
-		t.Fatalf("test did not exercise JSON UTF-8 replacement: raw=%d visible=%d", len(raw), len(visibleContent))
+	if visibleContent, _ := visible["content"].(string); strings.Contains(visibleContent, "\xff") {
+		t.Fatalf("test did not exercise JSON UTF-8 replacement: %q", visibleContent)
 	}
 	state.recordSourceContent(
 		transport.ToolCall{Function: transport.FunctionCall{Name: "read_repo_file", Arguments: `{"source_id":"primary","path":"path.go"}`}},
 		visible,
-		repotree.ReadObservation{
-			SourceID: tools.PrimarySourceID, Path: "path.go", LineStart: 2, LineEnd: 4,
-			ByteStart: 15, ByteEnd: 24,
-		},
+		repotree.ReadObservation{SourceID: tools.PrimarySourceID, Path: "path.go", LineStart: 2, LineEnd: 3, Lines: raw},
 	)
 	evidence := state.sourceEvidenceByPath[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "path.go"}]
-	if evidence == nil || len(evidence.Segments) != 1 {
+	if evidence == nil || len(evidence.Segments) != 1 || strings.HasPrefix(evidence.Segments[0], "2: ") {
 		t.Fatalf("quote-only source evidence = %+v", evidence)
 	}
 	if len(evidence.Lines) != 0 {
-		t.Fatalf("JSON-shifted line mapping was recorded: %+v", evidence.Lines)
+		t.Fatalf("JSON-changed line mapping was recorded: %+v", evidence.Lines)
 	}
 }
 

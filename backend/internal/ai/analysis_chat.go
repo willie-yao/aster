@@ -49,8 +49,10 @@ the immutable source catalog. Source citations are allowed only when repository
 tools and an immutable source catalog are present. grep_repo locates code and
 can support quote-only evidence with null line coordinates. Call read_repo_file
 before publishing a line-ranged source citation. Only read_repo_file provides
-authoritative source coordinates. Choose a narrow sub-range inside its returned
-line_start/line_end and set quote to exactly the text from that cited sub-range.
+authoritative source coordinates: it prefixes every returned line with its
+line number, as in "812: return err". Choose a narrow sub-range of those lines,
+copy its first and last numbers into line_start and line_end, and set quote to
+exactly the text from that cited sub-range without the number prefixes.
 Assessment is optional and,
 when present, must be "supports",
 "challenges", "inconclusive", or null. proposed_revision is optional and may be a

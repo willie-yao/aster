@@ -7,7 +7,7 @@
 // Tools:
 //
 //	list_repo_tree(source_id, path)              - immediate children of a directory
-//	read_repo_file(source_id, path, offset, len) - byte-range read of one file
+//	read_repo_file(source_id, path, offset, len) - numbered whole lines of one file
 //	grep_repo(source_id, pattern, path_glob?)    - RE2 search over a bounded file set
 //
 // Reads go through GitHub's REST API (one call per file), which is rate-limited
@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
@@ -183,46 +184,60 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	}}
 }
 
-// ReadObservation identifies complete source lines returned by read_repo_file.
+// ReadObservation identifies the complete source lines read_repo_file returned.
+// Lines holds their source text in order, without line terminators.
 type ReadObservation struct {
 	SourceID           string
 	Path               string
 	LineStart, LineEnd int
-	ByteStart, ByteEnd int
+	Lines              []string
 }
 
-func completeReadLineRange(content string, offset, end int) (int, int, int, int, bool) {
-	if offset < 0 || end <= offset || end > len(content) {
-		return 0, 0, 0, 0, false
-	}
-	start := offset
-	if start > 0 && content[start-1] != '\n' {
-		if next := strings.IndexByte(content[start:end], '\n'); next >= 0 {
-			start += next + 1
-		} else {
-			return 0, 0, 0, 0, false
+// ReadLineSeparator follows the 1-based line number that prefixes every line
+// read_repo_file returns, as in "812: <source text>".
+const ReadLineSeparator = ": "
+
+// readWindow is the numbered text of the whole lines covering source bytes
+// [start, next), beginning at line first.
+type readWindow struct {
+	numbered    string
+	start, next int
+	first       int
+	lines       []string
+}
+
+// numberedReadLines returns the whole lines from the start of the line
+// containing offset, each prefixed with its line number, while the numbered
+// text fits in limit bytes.
+func numberedReadLines(content string, offset, limit int) readWindow {
+	window := readWindow{start: strings.LastIndexByte(content[:offset], '\n') + 1}
+	window.first = 1 + strings.Count(content[:window.start], "\n")
+	var numbered strings.Builder
+	window.next = window.start
+	for window.next < len(content) {
+		end, following := len(content), len(content)
+		if i := strings.IndexByte(content[window.next:], '\n'); i >= 0 {
+			end, following = window.next+i, window.next+i+1
 		}
-	}
-	finish := end
-	if finish < len(content) && finish > 0 && content[finish-1] != '\n' {
-		if prior := strings.LastIndexByte(content[start:finish], '\n'); prior >= 0 {
-			finish = start + prior + 1
-		} else {
-			return 0, 0, 0, 0, false
+		text := strings.TrimSuffix(content[window.next:end], "\r")
+		prefix := strconv.Itoa(window.first+len(window.lines)) + ReadLineSeparator
+		size := len(prefix) + len(text)
+		if len(window.lines) > 0 {
+			size++
 		}
+		if numbered.Len()+size > limit {
+			break
+		}
+		if len(window.lines) > 0 {
+			numbered.WriteByte('\n')
+		}
+		numbered.WriteString(prefix)
+		numbered.WriteString(text)
+		window.lines = append(window.lines, text)
+		window.next = following
 	}
-	if finish <= start || strings.TrimSpace(content[start:finish]) == "" {
-		return 0, 0, 0, 0, false
-	}
-	lineStart := 1 + strings.Count(content[:start], "\n")
-	lineEnd := lineStart + strings.Count(content[start:finish], "\n")
-	if strings.HasSuffix(content[start:finish], "\n") {
-		lineEnd--
-	}
-	if lineEnd < lineStart {
-		lineEnd = lineStart
-	}
-	return lineStart, lineEnd, start - offset, finish - offset, true
+	window.numbered = numbered.String()
+	return window
 }
 
 type readTool struct{}
@@ -234,15 +249,17 @@ func (*readTool) Schema() transport.ToolSchema {
 		Type: "function",
 		Function: transport.FunctionDecl{
 			Name: "read_repo_file",
-			Description: "Read a byte range of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call. " +
-				"When line_start and line_end are present, they are absolute source coordinates for complete lines wholly contained in content; partial leading or trailing lines are outside the range.",
+			Description: "Read whole lines of a source file. Read a file before choosing it as an edit target. Returns up to 16384 bytes per call. " +
+				"Each line in content is prefixed with its 1-based line number and \": \", as in \"812: return err\", and line_start and line_end are the first and last numbers. " +
+				"Cite those numbers as source coordinates and quote the text after the prefix. offset and length give the byte range the returned lines cover; next_offset, when present, is where the next read continues. " +
+				"A line too long to return whole comes back as unnumbered text with partial_line set and no line_start or line_end.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"source_id": map[string]any{"type": "string", "description": "Stable source ID from the system prompt. Use primary for a single project source."},
 					"path":      map[string]any{"type": "string", "description": "File path relative to the repo root."},
-					"offset":    map[string]any{"type": "integer", "description": "Byte offset to start from (default 0).", "default": 0},
-					"length":    map[string]any{"type": "integer", "description": "Bytes to read (default 8192, max 16384).", "default": 8192},
+					"offset":    map[string]any{"type": "integer", "description": "Byte offset to start from (default 0). Reading begins at the start of the line containing it.", "default": 0},
+					"length":    map[string]any{"type": "integer", "description": "Maximum bytes of content to return, line numbers included (default 8192, max 16384).", "default": 8192},
 				},
 				"required": []string{"source_id", "path"},
 			},
@@ -285,31 +302,41 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	if offset > size {
 		offset = size
 	}
-	end := offset + length
-	if end > size {
-		end = size
+	payload := map[string]any{
+		"source_id": selected.ID,
+		"path":      args.Path,
+		"file_size": size,
 	}
-	slice := content[offset:end]
-	result := tools.Result{
-		BytesFetched: len(slice), ContentBytes: len(slice),
-		Payload: map[string]any{
-			"source_id": selected.ID,
-			"path":      args.Path,
-			"file_size": size,
-			"offset":    offset,
-			"length":    len(slice),
-			"content":   slice,
+	if offset == size {
+		payload["offset"], payload["length"], payload["content"] = offset, 0, ""
+		return tools.Result{Payload: payload}
+	}
+	window := numberedReadLines(content, offset, length)
+	if len(window.lines) == 0 {
+		end := min(offset+length, size)
+		// Stop at the end of the overlong line so the next read is numbered.
+		if i := strings.IndexByte(content[offset:end], '\n'); i >= 0 {
+			end = offset + i + 1
+		}
+		payload["offset"], payload["length"], payload["content"] = offset, end-offset, content[offset:end]
+		payload["partial_line"] = true
+		if end < size {
+			payload["next_offset"] = end
+		}
+		return tools.Result{BytesFetched: end - offset, ContentBytes: end - offset, Payload: payload}
+	}
+	lineEnd := window.first + len(window.lines) - 1
+	payload["offset"], payload["length"], payload["content"] = window.start, window.next-window.start, window.numbered
+	payload["line_start"], payload["line_end"] = window.first, lineEnd
+	if window.next < size {
+		payload["next_offset"] = window.next
+	}
+	return tools.Result{
+		BytesFetched: window.next - window.start, ContentBytes: len(window.numbered), Payload: payload,
+		Observation: ReadObservation{
+			SourceID: selected.ID, Path: args.Path, LineStart: window.first, LineEnd: lineEnd, Lines: window.lines,
 		},
 	}
-	if lineStart, lineEnd, byteStart, byteEnd, ok := completeReadLineRange(content, offset, end); ok {
-		result.Payload["line_start"] = lineStart
-		result.Payload["line_end"] = lineEnd
-		result.Observation = ReadObservation{
-			SourceID: selected.ID, Path: args.Path, LineStart: lineStart, LineEnd: lineEnd,
-			ByteStart: byteStart, ByteEnd: byteEnd,
-		}
-	}
-	return result
 }
 
 // GrepMatchObservation identifies one canonical source range returned by grep_repo.

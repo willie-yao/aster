@@ -103,18 +103,21 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 
 	res := tool.Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{"path": "config/dev.yaml"})))
 	p := res.Payload
-	if p["content"] != "replicas: 1\nimage: foo:v1\n" {
-		t.Errorf("content = %q", p["content"])
+	if p["content"] != "1: replicas: 1\n2: image: foo:v1" || p["line_start"] != 1 || p["line_end"] != 2 {
+		t.Errorf("payload = %v", p)
 	}
-	if res.ContentBytes != len("replicas: 1\nimage: foo:v1\n") {
-		t.Errorf("content bytes = %d", res.ContentBytes)
+	if res.ContentBytes != len("1: replicas: 1\n2: image: foo:v1") || res.BytesFetched != len("replicas: 1\nimage: foo:v1\n") {
+		t.Errorf("content bytes = %d, fetched = %d", res.ContentBytes, res.BytesFetched)
 	}
 	if p["file_size"].(int) != len("replicas: 1\nimage: foo:v1\n") {
 		t.Errorf("file_size = %v", p["file_size"])
 	}
+	if _, more := p["next_offset"]; more {
+		t.Errorf("whole-file read reported next_offset: %v", p)
+	}
 	observation, ok := res.Observation.(ReadObservation)
 	if !ok || observation.LineStart != 1 || observation.LineEnd != 2 ||
-		observation.ByteStart != 0 || observation.ByteEnd != len("replicas: 1\nimage: foo:v1\n") {
+		!reflect.DeepEqual(observation.Lines, []string{"replicas: 1", "image: foo:v1"}) {
 		t.Fatalf("observation = %#v", res.Observation)
 	}
 	// Second read is served from the cache: no extra ReadFile call.
@@ -125,13 +128,126 @@ func TestReadRepoFile_RangeAndCache(t *testing.T) {
 	if repo.reads != 1 {
 		t.Errorf("reads = %d after cached read, want still 1", repo.reads)
 	}
-	if cached.ContentBytes != len("replicas: 1\nimage: foo:v1\n") {
+	if cached.ContentBytes != res.ContentBytes {
 		t.Errorf("cached content bytes = %d", cached.ContentBytes)
 	}
+}
 
-	sl := dispatch(t, tool, env, withPrimary(withPrimary(map[string]any{"path": "config/dev.yaml", "offset": 10, "length": 6})))
-	if sl["content"] != "1\nimag" {
-		t.Errorf("sliced content = %q, want \"1\\nimag\"", sl["content"])
+// Every returned line carries its absolute number, so a citation never depends
+// on the model counting lines inside the window.
+func TestReadRepoFileNumbersWholeLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, file            string
+		offset, length        int
+		content               string
+		lineStart, lineEnd    int
+		lines                 []string
+		byteOffset, byteCount int
+		nextOffset            any
+	}{
+		{
+			name: "mid-file start at a line boundary", file: "one\ntwo\nthree\nfour\n", offset: 4, length: 100,
+			content: "2: two\n3: three\n4: four", lineStart: 2, lineEnd: 4, lines: []string{"two", "three", "four"},
+			byteOffset: 4, byteCount: 15,
+		},
+		{
+			name: "mid-line start returns the whole line", file: "one\ntwo\nthree\nfour\n", offset: 10, length: 100,
+			content: "3: three\n4: four", lineStart: 3, lineEnd: 4, lines: []string{"three", "four"},
+			byteOffset: 8, byteCount: 11,
+		},
+		{
+			name: "window ends before a partial line", file: "one\ntwo\nthree\nfour\n", offset: 0, length: 14,
+			content: "1: one\n2: two", lineStart: 1, lineEnd: 2, lines: []string{"one", "two"},
+			byteOffset: 0, byteCount: 8, nextOffset: 8,
+		},
+		{
+			name: "CRLF line endings", file: "alpha\r\nbeta\r\ngamma\r\n", offset: 7, length: 100,
+			content: "2: beta\n3: gamma", lineStart: 2, lineEnd: 3, lines: []string{"beta", "gamma"},
+			byteOffset: 7, byteCount: 13,
+		},
+		{
+			name: "EOF without newline", file: "first\nsecond\nlast", offset: 0, length: 100,
+			content: "1: first\n2: second\n3: last", lineStart: 1, lineEnd: 3, lines: []string{"first", "second", "last"},
+			byteOffset: 0, byteCount: 17,
+		},
+		{
+			name: "source text that looks numbered", file: "a\n1: b\n", offset: 0, length: 100,
+			content: "1: a\n2: 1: b", lineStart: 1, lineEnd: 2, lines: []string{"a", "1: b"},
+			byteOffset: 0, byteCount: 7,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := envFor(&fakeRepo{files: map[string]string{"f.go": tc.file}})
+			res := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+				"path": "f.go", "offset": tc.offset, "length": tc.length,
+			})))
+			p := res.Payload
+			if p["content"] != tc.content || p["line_start"] != tc.lineStart || p["line_end"] != tc.lineEnd ||
+				p["offset"] != tc.byteOffset || p["length"] != tc.byteCount || p["next_offset"] != tc.nextOffset {
+				t.Fatalf("payload = %#v", p)
+			}
+			observation, ok := res.Observation.(ReadObservation)
+			if !ok || observation.LineStart != tc.lineStart || observation.LineEnd != tc.lineEnd || !reflect.DeepEqual(observation.Lines, tc.lines) {
+				t.Fatalf("observation = %#v", res.Observation)
+			}
+		})
+	}
+}
+
+func TestReadRepoFileBoundsNumberedContent(t *testing.T) {
+	file := strings.Repeat("\n", 40000)
+	env := envFor(&fakeRepo{files: map[string]string{"blank.txt": file}})
+	res := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"path": "blank.txt", "length": 1 << 20,
+	})))
+	content, _ := res.Payload["content"].(string)
+	if len(content) > readMaxBytes || len(content) < readMaxBytes-16 {
+		t.Fatalf("numbered content = %d bytes, want at most %d", len(content), readMaxBytes)
+	}
+	next, _ := res.Payload["next_offset"].(int)
+	lineEnd, _ := res.Payload["line_end"].(int)
+	if next != lineEnd || res.Payload["length"] != next {
+		t.Fatalf("paging fields = %v", res.Payload)
+	}
+
+	following := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"path": "blank.txt", "offset": next, "length": 64,
+	})))
+	if following.Payload["line_start"] != lineEnd+1 {
+		t.Fatalf("next read starts at line %v, want %d", following.Payload["line_start"], lineEnd+1)
+	}
+}
+
+func TestReadRepoFileReturnsAnOverlongLineUnnumbered(t *testing.T) {
+	file := "short\n" + strings.Repeat("x", 100) + "\nafter\n"
+	env := envFor(&fakeRepo{files: map[string]string{"min.js": file}})
+	res := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"path": "min.js", "offset": 10, "length": 20,
+	})))
+	p := res.Payload
+	if p["content"] != strings.Repeat("x", 20) || p["partial_line"] != true || p["offset"] != 10 || p["next_offset"] != 30 {
+		t.Fatalf("payload = %#v", p)
+	}
+	if _, numbered := p["line_start"]; numbered || res.Observation != nil {
+		t.Fatalf("overlong line carried line coordinates: %#v %#v", p, res.Observation)
+	}
+
+	tail := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"path": "min.js", "offset": 90, "length": 20,
+	})))
+	if tail.Payload["content"] != strings.Repeat("x", 16)+"\n" || tail.Payload["next_offset"] != 107 {
+		t.Fatalf("overlong line tail = %#v", tail.Payload)
+	}
+	after := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{
+		"path": "min.js", "offset": 107, "length": 20,
+	})))
+	if after.Payload["content"] != "3: after" || after.Payload["line_start"] != 3 {
+		t.Fatalf("read after overlong line = %#v", after.Payload)
+	}
+
+	eof := (&readTool{}).Dispatch(context.Background(), env, mustJSON(withPrimary(map[string]any{"path": "min.js", "offset": len(file) + 5})))
+	if eof.Payload["content"] != "" || eof.Payload["offset"] != len(file) || eof.Observation != nil {
+		t.Fatalf("EOF payload = %#v", eof.Payload)
 	}
 }
 
@@ -371,23 +487,6 @@ func mustJSON(v map[string]any) json.RawMessage {
 	return b
 }
 
-func TestCompleteReadLineRange(t *testing.T) {
-	content := "first\nsecond\nthird"
-	for _, tc := range []struct {
-		offset, end, start, finish, byteStart, byteEnd int
-		ok                                             bool
-	}{
-		{0, len(content), 1, 3, 0, len(content), true},
-		{2, 13, 2, 2, 4, 11, true},
-		{1, 4, 0, 0, 0, 0, false},
-	} {
-		start, finish, byteStart, byteEnd, ok := completeReadLineRange(content, tc.offset, tc.end)
-		if start != tc.start || finish != tc.finish || byteStart != tc.byteStart || byteEnd != tc.byteEnd || ok != tc.ok {
-			t.Fatalf("%+v got %d %d %d %d %t", tc, start, finish, byteStart, byteEnd, ok)
-		}
-	}
-}
-
 func TestRepoToolsRequireSourceIDBeforeReaderAccess(t *testing.T) {
 	repo := sampleRepo()
 	env := envFor(repo)
@@ -431,14 +530,14 @@ func TestRepoToolCacheKeysIncludeSourceID(t *testing.T) {
 	tool := &readTool{}
 	clientResult := tool.Dispatch(context.Background(), env, mustJSON(map[string]any{"source_id": "client", "path": "same.go"}))
 	serverResult := tool.Dispatch(context.Background(), env, mustJSON(map[string]any{"source_id": "server", "path": "same.go"}))
-	if clientResult.Payload["content"] != "client\n" || serverResult.Payload["content"] != "server\n" {
+	if clientResult.Payload["content"] != "1: client" || serverResult.Payload["content"] != "1: server" {
 		t.Fatalf("client=%v server=%v", clientResult.Payload, serverResult.Payload)
 	}
 	if client.reads != 1 || server.reads != 1 {
 		t.Fatalf("reads client=%d server=%d", client.reads, server.reads)
 	}
 	clientAgain := tool.Dispatch(context.Background(), env, mustJSON(map[string]any{"source_id": "client", "path": "same.go"}))
-	if clientAgain.Payload["content"] != "client\n" || client.reads != 1 || server.reads != 1 {
+	if clientAgain.Payload["content"] != "1: client" || client.reads != 1 || server.reads != 1 {
 		t.Fatalf("cache contamination: client=%v reads=%d/%d", clientAgain.Payload, client.reads, server.reads)
 	}
 }

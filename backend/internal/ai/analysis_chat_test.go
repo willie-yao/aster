@@ -504,8 +504,9 @@ func TestAnalysisChatPromptShowsTheCitationShape(t *testing.T) {
 		"grep_repo locates code",
 		"Call read_repo_file",
 		"Only read_repo_file provides\nauthoritative source coordinates",
-		"Choose a narrow sub-range inside its returned",
-		"set quote to exactly the text from that cited sub-range",
+		"prefixes every returned line with its\nline number",
+		"copy its first and last numbers into line_start and line_end",
+		"set quote to\nexactly the text from that cited sub-range without the number prefixes",
 	} {
 		if !strings.Contains(analysisChatResponseFormat, want) {
 			t.Fatalf("prompt missing source citation rule %q", want)
@@ -783,11 +784,11 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		path     = "pkg/controller.go"
 		revision = "0123456789abcdef0123456789abcdef01234567"
 	)
-	content := "partial leading line\ncomplete line two\ncomplete line three\npartial trailing line"
-	offset := strings.Index(content, "leading")
-	end := strings.Index(content, " trailing")
-	length := end - offset
-	requested := content[offset:end]
+	content := "package controller\nfunc reconcile() error {\n\treturn errNotReady\n}\n"
+	offset := strings.Index(content, "reconcile")
+	lineTwo := strings.Index(content, "func")
+	lineFour := strings.LastIndex(content, "}")
+	numbered := "2: func reconcile() error {\n3: \treturn errNotReady"
 
 	registry := tools.NewRegistry()
 	repotree.Register(registry)
@@ -806,7 +807,7 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 		sourceEvidenceByPath: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{},
 	}
 	arguments, err := json.Marshal(map[string]any{
-		"source_id": tools.PrimarySourceID, "path": path, "offset": offset, "length": length,
+		"source_id": tools.PrimarySourceID, "path": path, "offset": offset, "length": len(numbered) + 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -819,12 +820,11 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 	if visible == nil {
 		t.Fatalf("model-visible payload is not JSON: %q", envelope)
 	}
-	if visible["offset"] != float64(offset) || visible["length"] != float64(length) || visible["content"] != requested {
-		t.Fatalf("visible raw range = offset %v length %v content %q, want %d %d %q", visible["offset"], visible["length"], visible["content"], offset, length, requested)
+	if visible["content"] != numbered || visible["offset"] != float64(lineTwo) ||
+		visible["length"] != float64(lineFour-lineTwo) || visible["next_offset"] != float64(lineFour) {
+		t.Fatalf("visible read = %v", visible)
 	}
-	lineStart, startOK := visible["line_start"].(float64)
-	lineEnd, endOK := visible["line_end"].(float64)
-	if !startOK || !endOK || lineStart != 2 || lineEnd != 3 {
+	if visible["line_start"] != float64(2) || visible["line_end"] != float64(3) {
 		t.Fatalf("visible line range = %v-%v, want 2-3", visible["line_start"], visible["line_end"])
 	}
 
@@ -832,26 +832,99 @@ func TestAnalysisChatRepoReadPublishesRecordedSourceLineRange(t *testing.T) {
 	if evidence == nil {
 		t.Fatal("source evidence was not recorded")
 	}
-	if len(evidence.Lines) != 2 || evidence.Lines[2] != "complete line two" || evidence.Lines[3] != "complete line three" {
+	if len(evidence.Lines) != 2 || evidence.Lines[2] != "func reconcile() error {" || evidence.Lines[3] != "\treturn errNotReady" {
 		t.Fatalf("recorded source lines = %+v", evidence.Lines)
 	}
-	if _, ok := evidence.Lines[1]; ok {
-		t.Fatalf("partial leading line became line-addressable: %+v", evidence.Lines)
-	}
-	if _, ok := evidence.Lines[4]; ok {
-		t.Fatalf("partial trailing line became line-addressable: %+v", evidence.Lines)
+	if len(evidence.Segments) != 1 || strings.Contains(evidence.Segments[0], "2: ") {
+		t.Fatalf("recorded source segments carry the numbered presentation: %q", evidence.Segments)
 	}
 
-	citation := analysischat.Citation{
-		Repository: "example/project", Revision: revision, Path: path,
-		LineStart: int(lineStart), LineEnd: int(lineStart), Quote: evidence.Lines[int(lineStart)],
-	}
 	source := &analysisChatSourceCitationContext{Catalog: state.sources, Evidence: state.sourceEvidenceByPath}
-	if failure := validateAnalysisChatCitation(&citation, nil, source, 1); failure != nil {
-		t.Fatalf("published line citation did not validate: %+v", failure)
+	cite := func(lineStart, lineEnd int, quote string) (analysischat.Citation, *analysisChatEvidenceFailure) {
+		citation := analysischat.Citation{
+			Repository: "example/project", Revision: revision, Path: path,
+			LineStart: lineStart, LineEnd: lineEnd, Quote: quote,
+		}
+		return citation, validateAnalysisChatCitation(&citation, nil, source, 1)
 	}
-	if citation.Quote != "complete line two" || citation.LineStart != 2 || citation.LineEnd != 2 {
-		t.Fatalf("validated citation = %+v", citation)
+	// A range read straight off the numbered lines validates against source text.
+	if citation, failure := cite(3, 3, "return errNotReady"); failure != nil ||
+		citation.Quote != "\treturn errNotReady" || citation.LineStart != 3 || citation.LineEnd != 3 {
+		t.Fatalf("numbered range citation = %+v failure = %+v", citation, failure)
+	}
+	// A quote copied with its number prefixes publishes the source text alone.
+	if citation, failure := cite(2, 3, numbered); failure != nil ||
+		citation.Quote != "func reconcile() error {\n\treturn errNotReady" || citation.LineStart != 2 || citation.LineEnd != 3 {
+		t.Fatalf("prefixed citation = %+v failure = %+v", citation, failure)
+	}
+	// Prefixes that name lines outside the cited range are not stripped.
+	if citation, failure := cite(2, 2, "3: \treturn errNotReady"); failure == nil ||
+		!strings.Contains(failure.Detail, "does not appear in the cited source line range") {
+		t.Fatalf("out-of-range prefixed citation = %+v failure = %+v", citation, failure)
+	}
+	// A quote-only citation copied with prefixes resolves to the source text.
+	if citation, failure := cite(0, 0, "3: \treturn errNotReady"); failure != nil ||
+		citation.Quote != "\treturn errNotReady" || citation.LineStart != 0 {
+		t.Fatalf("prefixed quote-only citation = %+v failure = %+v", citation, failure)
+	}
+}
+
+func TestStripReadLineNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		quote      string
+		start, end int
+		want       string
+		ok         bool
+	}{
+		{quote: "12: a\n13:\n14: \tb", start: 12, end: 14, want: "a\n\n\tb", ok: true},
+		{quote: "  12: a\n  13: b", want: "a\nb", ok: true},
+		{quote: "12: a\n14: b", start: 12, end: 14},
+		{quote: "12: a\n13: b", start: 13, end: 14},
+		{quote: "12:a", start: 12, end: 12},
+		{quote: "return err", start: 12, end: 12},
+		{quote: "0: zero"},
+	} {
+		got, ok := stripReadLineNumbers(tc.quote, tc.start, tc.end)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("stripReadLineNumbers(%q, %d, %d) = %q, %t; want %q, %t", tc.quote, tc.start, tc.end, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// Source text that already looks numbered matches as written before any prefix
+// is removed.
+func TestAnalysisChatSourceCitationPrefersLiteralNumberedText(t *testing.T) {
+	revision := strings.Repeat("1", 40)
+	catalog := testSourceCatalog(t, tools.PrimarySourceID, tools.RepoSource{
+		ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: revision, Reader: &fakeSourceRepo{},
+	})
+	source := &analysisChatSourceCitationContext{
+		Catalog: catalog,
+		Evidence: map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
+			{SourceID: tools.PrimarySourceID, Path: "ports.yaml"}: {
+				Segments: []string{"7: http\n8: https"},
+				Lines:    map[int]string{7: "7: http", 8: "8: https"},
+			},
+		},
+	}
+	citation := analysischat.Citation{
+		Repository: "example/project", Revision: revision, Path: "ports.yaml", LineStart: 7, LineEnd: 8, Quote: "7: http\n8: https",
+	}
+	if failure := validateAnalysisChatCitation(&citation, nil, source, 1); failure != nil || citation.Quote != "7: http\n8: https" {
+		t.Fatalf("literal numbered source = %+v failure = %+v", citation, failure)
+	}
+
+	// A prefix does not count toward the minimum quote length.
+	source.Evidence[analysisChatSourceEvidenceKey{SourceID: tools.PrimarySourceID, Path: "pkg/close.go"}] = &analysisChatEvidence{
+		Segments: []string{"}"}, Lines: map[int]string{5: "}"},
+	}
+	for _, lines := range [][2]int{{5, 5}, {0, 0}} {
+		short := analysischat.Citation{
+			Repository: "example/project", Revision: revision, Path: "pkg/close.go", LineStart: lines[0], LineEnd: lines[1], Quote: "5: }",
+		}
+		if failure := validateAnalysisChatCitation(&short, nil, source, 1); failure == nil {
+			t.Fatalf("prefixed one-byte quote validated: %+v", short)
+		}
 	}
 }
 
@@ -3151,11 +3224,9 @@ func TestRecordSourceContentKeepsCurrentEvidenceSeparateFromPrimaryGrounding(t *
 	call := transport.ToolCall{Function: transport.FunctionCall{
 		Name: "read_repo_file", Arguments: `{"source_id":"current","path":"pkg/same.go"}`,
 	}}
-	payload := map[string]any{
-		"source_id": analysisChatCurrentSourceID, "content": "current line\n", "length": len("current line\n"),
-	}
+	payload := map[string]any{"source_id": analysisChatCurrentSourceID, "content": "1: current line"}
 	badObservation := repotree.ReadObservation{
-		SourceID: tools.PrimarySourceID, Path: "pkg/same.go", LineStart: 1, LineEnd: 1, ByteStart: 0, ByteEnd: len("current line\n"),
+		SourceID: tools.PrimarySourceID, Path: "pkg/same.go", LineStart: 1, LineEnd: 1, Lines: []string{"current line"},
 	}
 	state.recordSourceContent(call, payload, badObservation)
 	key := analysisChatSourceEvidenceKey{SourceID: analysisChatCurrentSourceID, Path: "pkg/same.go"}
