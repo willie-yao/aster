@@ -359,7 +359,7 @@ Three rules are not yet satisfied everywhere. Each is a tracked follow-up, liste
 
 | Rule | Current state |
 | --- | --- |
-| Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` and `ChatFixDialog` |
+| Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` |
 | `aria-current="page"` on exact match only | `NavRail` marks the active section `page` on nested routes |
 | The Tint Roles Rule | `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
 

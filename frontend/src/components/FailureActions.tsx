@@ -26,7 +26,7 @@ import {
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
 import { useSearchParams } from "react-router-dom";
-import { ActionDraftPreview } from "./ActionDraftPreview";
+import { ActionDraftPreview, WarningLines } from "./ActionDraftPreview";
 import { DialogHeader } from "./ActionDialog";
 import { dialogGutter, dialogPaperSx } from "../theme/overview";
 import type {
@@ -63,7 +63,7 @@ function requestedAction(value: string | null): Action | null {
 
 function requestStateError(request: ActionRequest): string | null {
   if (actionRequestHasBlockingVerification(request)) return null;
-  if (request.status === "failed" && !request.warning) {
+  if (request.status === "failed" && !request.warnings?.length) {
     const title = actionRequestReasonTitle(request);
     const detail = request.error || "Draft generation failed.";
     return title && !detail.startsWith(title) ? `${title}: ${detail}` : detail;
@@ -1007,15 +1007,15 @@ export function FailureActions({
               </Typography>
             </Alert>
           )}
-          {request?.warning && (
+          {request?.warnings?.length ? (
             <Alert
               severity="warning"
               variant="outlined"
               sx={{ mb: 2 }}
             >
-              <Typography variant="body2">{request.warning}</Typography>
+              <WarningLines messages={request.warnings.map((warning) => warning.message)} />
             </Alert>
-          )}
+          ) : null}
 
           {request?.status === "cancelled" && (
             <Alert role="status" severity="info">This request was cancelled.</Alert>
@@ -1027,7 +1027,7 @@ export function FailureActions({
           {preview &&
             (request?.status === "ready" ||
               request?.status === "unknown" ||
-              (request?.status === "failed" && Boolean(request.warning))) && (
+              (request?.status === "failed" && Boolean(request.warnings?.length))) && (
             <Stack spacing={2.5}>
               <ActionDraftPreview preview={preview} />
               {request.status === "ready" && <Box>
@@ -1105,7 +1105,7 @@ export function FailureActions({
             {request?.status === "unknown"
               ? "Check GitHub result"
               : isFix
-                ? request?.warning || preview?.warning
+                ? request?.warnings?.length || preview?.warnings?.length
                   ? "Open draft PR with warnings"
                   : "Open draft PR"
                 : "File issue"}

@@ -1,3 +1,5 @@
+import type { ActionWarning, ActionWarningCode } from "../types/actions.js";
+import type { AnalysisChatMessage } from "../types/analysisChat.js";
 import type { ChatFixRequest } from "./chatFix.js";
 
 export interface ChatFixRequestPresentation {
@@ -74,4 +76,43 @@ function noReviewablePatchMessage(request: ChatFixRequest): string {
     return "The coding agent completed, but no repository change was generated. If the remedy belongs in this repository, revise the maintainer instruction and regenerate. If it is external or operational, no patch can be generated.";
   }
   return `${detail} Regenerate only if a different instruction could produce a reviewable repository change.`;
+}
+
+/**
+ * Lists each reason to treat a chat finding as a hypothesis once: facts the
+ * message itself carries first, then request warnings the message does not
+ * already cover.
+ */
+export function chatFixFindingCaveats(
+  message: Pick<AnalysisChatMessage, "unverified" | "citations" | "evidence_warnings">,
+  warnings: ActionWarning[] = [],
+): string[] {
+  const covered = new Set<ActionWarningCode>();
+  const caveats: string[] = [];
+  if (message.unverified) {
+    caveats.push("This finding is unverified.");
+    covered.add("assistant_unverified");
+  }
+  if (!message.citations?.length) {
+    caveats.push("No validated artifact citations accompany this finding.");
+    covered.add("no_citations");
+  }
+  for (const warning of message.evidence_warnings ?? []) {
+    caveats.push(`Evidence not validated: ${warning}`);
+    covered.add("evidence_qualified");
+  }
+  for (const warning of warnings) {
+    if (!warning.code || !covered.has(warning.code)) caveats.push(warning.message);
+  }
+  return [...new Set(caveats)];
+}
+
+/** Combines warning lists, keeping the first occurrence of each message. */
+export function mergeActionWarnings(...lists: (ActionWarning[] | undefined)[]): ActionWarning[] {
+  const seen = new Set<string>();
+  return lists.flatMap((list) => list ?? []).filter((warning) => {
+    if (seen.has(warning.message)) return false;
+    seen.add(warning.message);
+    return true;
+  });
 }

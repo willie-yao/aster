@@ -253,7 +253,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		}
 		logGenerationFailure(id, request.ReasonCode, request.Failure, err)
 		if fallbackPreview {
-			request.Warning = draftRefinementWarning
+			request.Warnings = plainWarnings(draftRefinementWarning)
 			request.Preview = &preview
 		} else {
 			request.Error = generationFailureMessage(analysisRequest, request.ReasonCode, request.Failure, err)

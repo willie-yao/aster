@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { MemoryStorage } from "./helpers/memoryStorage.js";
 
-import { chatFixRequestPresentation } from "../src/lib/chatFixPresentation.js";
+import { chatFixFindingCaveats, chatFixRequestPresentation, mergeActionWarnings } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
   clearStoredChatFixRequest,
@@ -58,7 +58,7 @@ test("cause chat fixes use a representative failure and replace the global patte
   assert.match(chat, /causeScope=\{causeScope\}/);
   assert.match(nextStep, /fixTarget=\{routable\?\.target \?\? undefined\}/);
   assert.match(banner, /causalGroups\.length === 0 && chatAvailability === "ready"/);
-  assert.match(dialog, /representative failed JUnit target for this cause/);
+  assert.match(dialog, /the cause's representative failed JUnit test/);
 });
 
 
@@ -79,18 +79,16 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /loadAnalysisChatFixRequest/);
   assert.match(dialog, /Generation continues in the background/);
   assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
-  assert.match(dialog, /server resolves the repository and tested branch from build metadata/);
-  assert.match(dialog, /rejects the preview if that identity changes/);
-  assert.match(dialog, /Source paths from the analysis are optional investigation hints/);
-  assert.match(dialog, /This finding is unverified/);
-  assert.match(dialog, /No validated artifact citations accompany this finding/);
+  assert.match(dialog, /repository and generation base are pinned from build metadata/);
+  assert.match(dialog, /The preview is rejected if either changes/);
+  assert.match(dialog, /chatFixFindingCaveats\(message, request\?\.warnings\)/);
   assert.match(dialog, /Generate fix preview/);
   assert.match(dialog, /Open draft PR with warnings/);
   assert.match(dialog, /Regenerate with feedback/);
-  assert.match(dialog, /request\.warning/);
+  assert.match(dialog, /request\?\.warnings/);
   assert.match(dialog, /instruction\.trim\(\) !== submittedInstruction\.trim\(\)/);
   assert.match(dialog, /Change the previous instruction to enable regeneration/);
-  assert.match(dialog, /Investigation warning/);
+  assert.match(dialog, /Treat this finding as a hypothesis/);
   assert.match(dialog, /Coding agent summary/);
   assert.match(dialog, /cancelAnalysisChatFixRequest\(request\.id\)/);
   assert.match(dialog, /clearStoredChatFixRequest[\s\S]*createAnalysisChatFixRequest/);
@@ -98,6 +96,48 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(api, /patternID \? \{ pattern_id: patternID \} : \{\}/);
   assert.match(api, /cancelActionRequest\(API_BASE, id\)/);
   assert.match(api, /api\/actions\/confirm/);
+});
+
+test("fix finding caveats state each hypothesis reason once", () => {
+  const qualified = {
+    code: "evidence_qualified" as const,
+    message: "The selected chat finding has evidence qualification warnings; treat warned claims as hypotheses.",
+  };
+  const noCitations = {
+    code: "no_citations" as const,
+    message: "The selected chat answer has no retained artifact citations; treat it as an investigation hypothesis.",
+  };
+  const critique = { message: "The original analysis critique did not pass." };
+  assert.deepEqual(
+    chatFixFindingCaveats(
+      { citations: [{ path: "test/e2e/aks_byo_node.go" }], evidence_warnings: ["citation 2 quote does not appear in the cited source line range"] },
+      [qualified, noCitations, critique],
+    ),
+    [
+      "Evidence not validated: citation 2 quote does not appear in the cited source line range",
+      noCitations.message,
+      critique.message,
+    ],
+  );
+  assert.deepEqual(
+    chatFixFindingCaveats({ unverified: true }, [
+      { code: "assistant_unverified", message: "The selected chat answer is unverified." },
+      noCitations,
+    ]),
+    ["This finding is unverified.", "No validated artifact citations accompany this finding."],
+  );
+  assert.deepEqual(chatFixFindingCaveats({ citations: [{ path: "a.go" }] }), []);
+});
+
+test("fix preview warnings merge by message", () => {
+  assert.deepEqual(
+    mergeActionWarnings(
+      [{ message: "a" }, { code: "no_citations", message: "b" }],
+      undefined,
+      [{ message: "a" }, { message: "c" }],
+    ),
+    [{ message: "a" }, { code: "no_citations", message: "b" }, { message: "c" }],
+  );
 });
 
 test("exact JUnit fix request storage preserves the durable request identity and instruction", () => {
@@ -155,7 +195,7 @@ test("exact JUnit terminal requests render persisted state without false reconne
   const observer = dialog.slice(dialog.indexOf("const observeAnalysisFixRequest"), dialog.indexOf("useEffect(() => {", dialog.indexOf("const observeAnalysisFixRequest")));
   assert.doesNotMatch(observer, /throw new Error\(current\.error/);
   assert.doesNotMatch(dialog, /If the connection was lost after admission, select Generate again/);
-  assert.match(dialog, /request\?\.warning && !preview/);
+  assert.match(dialog, /mergeActionWarnings\(request\?\.warnings, preview\.warnings\)/);
   assert.match(dialog, /Regenerate with feedback/);
   assert.match(dialog, /requestPresentation\.severity/);
 });
@@ -276,7 +316,7 @@ test("exact JUnit regeneration keeps feedback replacement separate from provider
 
 test("recoverable no-patch feedback is grouped with regeneration controls", () => {
   const dialog = source("src/components/ChatFixDialog.tsx");
-  const finding = dialog.indexOf("Investigation warning");
+  const finding = dialog.indexOf("<FindingCaveats");
   const noPatch = dialog.indexOf("Generation completed without a patch");
   const instruction = dialog.indexOf('label="Maintainer instruction (optional)"');
   const regenerate = dialog.indexOf("Regenerate with feedback");

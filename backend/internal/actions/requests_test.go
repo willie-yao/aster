@@ -54,6 +54,38 @@ func writeActionRequestState(t *testing.T, dataDir string, state actionRequestSt
 	}
 }
 
+func warningMessages(warnings []ActionWarning) []string {
+	messages := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		messages = append(messages, warning.Message)
+	}
+	return messages
+}
+
+func warningText(warnings []ActionWarning) string {
+	return strings.Join(warningMessages(warnings), " ")
+}
+
+func TestBoundedWarningsDeduplicatesAndCapsMessages(t *testing.T) {
+	long := strings.Repeat("é", 1500)
+	got := boundedWarnings(
+		ActionWarning{Code: WarningNoCitations, Message: "  first\n warning "},
+		ActionWarning{Message: "first warning"},
+		ActionWarning{},
+		ActionWarning{Message: long},
+		ActionWarning{Message: "dropped after the budget"},
+	)
+	if len(got) != 2 || got[0] != (ActionWarning{Code: WarningNoCitations, Message: "first warning"}) {
+		t.Fatalf("warnings = %+v", got)
+	}
+	if total := len(got[0].Message) + len(got[1].Message); total > 2048 || !strings.HasPrefix(long, got[1].Message) {
+		t.Fatalf("bounded message is %d bytes or not a rune-aligned prefix", total)
+	}
+	if boundedWarnings(ActionWarning{Message: " "}) != nil {
+		t.Fatal("empty warnings should bound to nil")
+	}
+}
+
 func waitRequest(t *testing.T, service *Service, id, owner string, want ...string) ActionRequestView {
 	t.Helper()
 	allowed := map[string]bool{}
@@ -867,7 +899,7 @@ func TestRejectedRefinementRetainsSafePreviewWithoutConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Status != RequestFailed || view.Warning == "" || view.Preview == nil {
+	if view.Status != RequestFailed || len(view.Warnings) == 0 || view.Preview == nil {
 		t.Fatalf("view = %+v", view)
 	}
 	if view.Preview.Body != safeSpec.Body || strings.Contains(strings.ToLower(view.Preview.Body), "the user wants me") {
@@ -910,7 +942,7 @@ func TestAsyncRequestRejectsUnsafeGeneratedDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Status != RequestFailed || view.Preview != nil || view.Warning != "" {
+	if view.Status != RequestFailed || view.Preview != nil || len(view.Warnings) > 0 {
 		t.Fatalf("unsafe draft became previewable: %+v", view)
 	}
 	service.rmu.Lock()
@@ -945,7 +977,7 @@ func TestRejectedRefinementUsesSupersededIssueSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := waitRequest(t, service, replacement.ID, "alice", RequestFailed)
-	if view.Warning == "" || view.Preview == nil {
+	if len(view.Warnings) == 0 || view.Preview == nil {
 		t.Fatalf("replacement = %+v", view)
 	}
 	if view.Preview.Title != prior.Title || view.Preview.Body != prior.Body {
@@ -1162,7 +1194,7 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Status != RequestFailed || view.Warning == "" || view.Error != "" || view.Preview == nil {
+	if view.Status != RequestFailed || len(view.Warnings) == 0 || view.Error != "" || view.Preview == nil {
 		t.Fatalf("view = %+v", view)
 	}
 	if view.Preview.Title != base.Title || view.Preview.Body != base.Body {
@@ -1199,7 +1231,7 @@ func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Status != RequestFailed || view.Error == "" || view.Warning != "" || view.Preview != nil {
+	if view.Status != RequestFailed || view.Error == "" || len(view.Warnings) > 0 || view.Preview != nil {
 		t.Fatalf("unsafe fallback was exposed: %+v", view)
 	}
 }
@@ -2222,11 +2254,11 @@ func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
-		if err := service.setRequestWarning(ctx,
+		if err := service.setRequestWarnings(ctx, plainWarnings(
 			analysisWarningCritique,
 			analysisWarningSuggestedFix,
 			analysisWarningCritique,
-		); err != nil {
+		)...); err != nil {
 			return PreviewResult{}, err
 		}
 		close(started)
@@ -2239,16 +2271,16 @@ func TestAnalysisFixReadyRequestPreservesBoundedWarnings(t *testing.T) {
 	}
 	<-started
 	pending := waitRequest(t, service, created.ID, "alice", RequestPending)
-	if pending.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix {
+	if warningText(pending.Warnings) != analysisWarningCritique+" "+analysisWarningSuggestedFix {
 		t.Fatalf("pending = %+v", pending)
 	}
 	close(release)
 	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
-	if ready.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix || ready.Preview == nil {
+	if warningText(ready.Warnings) != analysisWarningCritique+" "+analysisWarningSuggestedFix || ready.Preview == nil {
 		t.Fatalf("ready = %+v", ready)
 	}
-	if strings.Contains(ready.Warning, "test/e2e/cni.go") || len(ready.Warning) > 2048 {
-		t.Fatalf("warning leaked private data or exceeded bound: %q", ready.Warning)
+	if strings.Contains(warningText(ready.Warnings), "test/e2e/cni.go") || len(warningText(ready.Warnings)) > 2048 {
+		t.Fatalf("warning leaked private data or exceeded bound: %q", warningText(ready.Warnings))
 	}
 	if _, err := service.GetRequest(created.ID, "bob"); !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("wrong owner read warning: %v", err)
@@ -2259,7 +2291,7 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	service.ConfigureAsyncRequests(time.Minute, nil)
 	service.analysisRequestGenerator = func(ctx context.Context, _ AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
-		if err := service.setRequestWarning(ctx, analysisWarningCritique, analysisWarningSuggestedFix); err != nil {
+		if err := service.setRequestWarnings(ctx, plainWarnings(analysisWarningCritique, analysisWarningSuggestedFix)...); err != nil {
 			return PreviewResult{}, err
 		}
 		return PreviewResult{}, &classifiedAnalysisFixError{
@@ -2276,8 +2308,8 @@ func TestAnalysisFixFailedRequestPreservesWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
-	if failed.Warning != analysisWarningCritique+" "+analysisWarningSuggestedFix {
-		t.Fatalf("failed warning = %q", failed.Warning)
+	if warningText(failed.Warnings) != analysisWarningCritique+" "+analysisWarningSuggestedFix {
+		t.Fatalf("failed warning = %q", warningText(failed.Warnings))
 	}
 	if failed.ReasonCode != ReasonNoReviewablePatch {
 		t.Fatalf("reason code = %q", failed.ReasonCode)

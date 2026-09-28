@@ -99,7 +99,7 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped}, Title: "fix: investigate terminal state", Description: "Investigative patch.", Body: "Investigative patch.",
 		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.SourceBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
 	})
-	fix.SetWarnings(analysisQualityWarnings(input))
+	fix.SetWarnings(warningMessages(analysisQualityWarnings(input)))
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, fix: fix,
 		targetRepo: input.SourceRepository.Owner + "/" + input.SourceRepository.Name, targetConfig: input.TargetConfig,

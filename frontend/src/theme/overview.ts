@@ -100,6 +100,18 @@ export const dialogPaperSx = {
   border: "1px solid",
   borderColor: "divider",
   backgroundImage: "none",
+  boxShadow: "none",
+} as const;
+
+/** Uppercase micro-label that introduces one region inside an action dialog. */
+export const dialogRegionLabelSx = {
+  display: "block",
+  textTransform: "uppercase",
+  fontSize: "0.6875rem",
+  fontWeight: 700,
+  letterSpacing: "0.06em",
+  color: "text.secondary",
+  mb: 0.75,
 } as const;
 
 /**

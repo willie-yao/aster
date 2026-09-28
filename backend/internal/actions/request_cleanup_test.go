@@ -22,7 +22,7 @@ func TestCleanupPreservesFailedFixWarnings(t *testing.T) {
 			service.requests.Requests["request"] = &actionRequest{
 				ActionRequestView: ActionRequestView{
 					ID: "request", FailureID: pattern.ID, Owner: "alice",
-					Kind: testCase.kind, Status: RequestCancelling, Warning: warning,
+					Kind: testCase.kind, Status: RequestCancelling, Warnings: plainWarnings(warning),
 					CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339),
 					ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 				},
@@ -36,12 +36,12 @@ func TestCleanupPreservesFailedFixWarnings(t *testing.T) {
 			if testCase.retain {
 				want = warning
 			}
-			if view.Status != testCase.finalStatus || view.Warning != want {
+			if view.Status != testCase.finalStatus || warningText(view.Warnings) != want {
 				t.Fatalf("view=%+v", view)
 			}
 			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 			restored, err := reloaded.GetRequest("request", "alice")
-			if err != nil || restored.Warning != want {
+			if err != nil || warningText(restored.Warnings) != want {
 				t.Fatalf("restored=%+v err=%v", restored, err)
 			}
 		})
