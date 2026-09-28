@@ -9,32 +9,14 @@ import (
 
 // ExecutionVerification is the retained tokenless validator result for one
 // Agent Sandbox fix. Command output is intentionally omitted from persistence.
+// Authentic failed or timed-out commands are retained and reported, not rejected.
 type ExecutionVerification struct {
-	BaseSHA       string                     `json:"base_sha"`
-	Commands      []runtime.ExecutionCommand `json:"commands"`
-	Results       []runtime.CommandResult    `json:"results"`
-	AllowFailures bool                       `json:"allow_failures,omitempty"`
+	BaseSHA  string                     `json:"base_sha"`
+	Commands []runtime.ExecutionCommand `json:"commands"`
+	Results  []runtime.CommandResult    `json:"results"`
 }
 
 func executionVerificationForAgent(agent *AgentConfig, result runtime.ExecutionResult, expectedBaseSHA string) (*ExecutionVerification, error) {
-	if agent == nil || !agent.RequireCommandResults {
-		return nil, nil
-	}
-	if err := runtime.ValidateSuccessfulCommandResults(agent.CommandPolicy.Commands, result.CommandResults); err != nil {
-		return nil, fmt.Errorf("agent executor command results: %w", err)
-	}
-	verification := &ExecutionVerification{
-		BaseSHA:  strings.TrimSpace(result.BaseSHA),
-		Commands: cloneExecutionCommands(agent.CommandPolicy.Commands),
-		Results:  cloneCommandResults(result.CommandResults),
-	}
-	if err := verification.validate(expectedBaseSHA); err != nil {
-		return nil, fmt.Errorf("agent executor verification: %w", err)
-	}
-	return verification, nil
-}
-
-func executionVerificationForAnalysisAgent(agent *AgentConfig, result runtime.ExecutionResult, expectedBaseSHA string) (*ExecutionVerification, error) {
 	if agent == nil || !agent.RequireCommandResults {
 		return nil, nil
 	}
@@ -43,7 +25,7 @@ func executionVerificationForAnalysisAgent(agent *AgentConfig, result runtime.Ex
 	}
 	verification := &ExecutionVerification{
 		BaseSHA: strings.TrimSpace(result.BaseSHA), Commands: cloneExecutionCommands(agent.CommandPolicy.Commands),
-		Results: cloneCommandResults(result.CommandResults), AllowFailures: true,
+		Results: cloneCommandResults(result.CommandResults),
 	}
 	if err := verification.validate(expectedBaseSHA); err != nil {
 		return nil, fmt.Errorf("agent executor verification: %w", err)
@@ -58,13 +40,7 @@ func (v *ExecutionVerification) validate(baseSHA string) error {
 	if strings.TrimSpace(v.BaseSHA) == "" || !strings.EqualFold(strings.TrimSpace(v.BaseSHA), strings.TrimSpace(baseSHA)) {
 		return fmt.Errorf("executor result base SHA does not match the preview base")
 	}
-	var err error
-	if v.AllowFailures {
-		err = runtime.ValidateCommandResults(v.Commands, v.Results)
-	} else {
-		err = runtime.ValidateSuccessfulCommandResults(v.Commands, v.Results)
-	}
-	if err != nil {
+	if err := runtime.ValidateCommandResults(v.Commands, v.Results); err != nil {
 		return fmt.Errorf("executor command results: %w", err)
 	}
 	return nil
@@ -78,7 +54,7 @@ func (v *ExecutionVerification) verifyResult() VerifyResult {
 	for index, command := range v.Commands {
 		label := strings.Join(command.Argv, " ")
 		labels = append(labels, label)
-		if v.AllowFailures && (v.Results[index].TimedOut || v.Results[index].ExitCode != 0) {
+		if v.Results[index].TimedOut || v.Results[index].ExitCode != 0 {
 			return VerifyResult{Status: VerifyFailed, Summary: label + " failed in Agent Sandbox"}
 		}
 	}
@@ -91,7 +67,6 @@ func cloneExecutionVerification(in *ExecutionVerification) *ExecutionVerificatio
 	}
 	return &ExecutionVerification{
 		BaseSHA: in.BaseSHA, Commands: cloneExecutionCommands(in.Commands), Results: cloneCommandResults(in.Results),
-		AllowFailures: in.AllowFailures,
 	}
 }
 

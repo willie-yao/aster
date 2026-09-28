@@ -672,8 +672,8 @@ type FixPRs struct {
 	// Labels are applied to every fix PR. Defaults to ["ai-proposed-fix"].
 	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	// CritiqueRetries bounds how many times generation is re-prompted to resolve
-	// an LLM reviewer's objections before the fix is dropped. Defaults to 1; 0
-	// disables the review. Excluded from manifest.json.
+	// an LLM reviewer's objections; remaining objections become preview warnings.
+	// Defaults to 1; 0 disables the review. Excluded from manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
 	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
 	// real workspace clone). A nil block uses opencode with defaults. Excluded

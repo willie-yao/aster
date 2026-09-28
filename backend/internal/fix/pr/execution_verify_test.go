@@ -77,7 +77,7 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	}
 }
 
-func TestAgentSandboxCommandResultsFailClosed(t *testing.T) {
+func TestAgentSandboxCommandResultsFailClosedOnIntegrity(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	valid := sandboxCommandResults()
 	cases := []struct {
@@ -92,8 +92,6 @@ func TestAgentSandboxCommandResultsFailClosed(t *testing.T) {
 		{name: "added", edit: func(_ *[]runtime.ExecutionCommand, results *[]runtime.CommandResult) {
 			*results = append(*results, runtime.CommandResult{Argv: []string{"go", "test", "./extra"}})
 		}, want: "every allowed command"},
-		{name: "failed", edit: func(_ *[]runtime.ExecutionCommand, results *[]runtime.CommandResult) { (*results)[0].ExitCode = 1 }, want: "failed with exit code"},
-		{name: "timed out", edit: func(_ *[]runtime.ExecutionCommand, results *[]runtime.CommandResult) { (*results)[0].TimedOut = true }, want: "timed out"},
 		{name: "malformed", edit: func(_ *[]runtime.ExecutionCommand, results *[]runtime.CommandResult) { (*results)[0].DurationMs = -1 }, want: "negative duration"},
 		{name: "malformed command", edit: func(commands *[]runtime.ExecutionCommand, _ *[]runtime.CommandResult) {
 			(*commands)[0].TimeoutSeconds = 0
@@ -128,7 +126,7 @@ func TestAgentSandboxConfirmationRejectsPersistedCommandOrPatchDrift(t *testing.
 		copy := RestoreGeneratedFix(generated.Snapshot())
 		copy.executionVerification.Results[0].ExitCode = 1
 		manager := NewManager(&fakePR{base: base}, t.TempDir()+"/state.json", Options{SourceOwner: "o", SourceName: "r"})
-		if _, err := manager.OpenFromPreview(t.Context(), copy); err == nil || !strings.Contains(err.Error(), "exit code") {
+		if _, err := manager.OpenFromPreview(t.Context(), copy); err == nil || !strings.Contains(err.Error(), "does not match executor results") {
 			t.Fatalf("error=%v", err)
 		}
 	})

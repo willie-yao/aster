@@ -77,6 +77,19 @@ func TestExecutionContractAcceptsCredentialFreeResult(t *testing.T) {
 	}
 }
 
+func TestExecutionResultBoundsAgentSummary(t *testing.T) {
+	request := executionRequest()
+	result := executionResult()
+	result.AgentSummary = strings.Repeat("x", MaxAgentSummaryBytes)
+	if err := result.Validate(request); err != nil {
+		t.Fatalf("bounded agent summary rejected: %v", err)
+	}
+	result.AgentSummary += "x"
+	if err := result.Validate(request); err == nil || !strings.Contains(err.Error(), "agent summary") {
+		t.Fatalf("oversized agent summary error = %v", err)
+	}
+}
+
 func TestExecutionResultAllowsAuthenticFailedVerificationOutcomes(t *testing.T) {
 	request := executionRequest()
 	for _, tc := range []struct {
@@ -95,9 +108,6 @@ func TestExecutionResultAllowsAuthenticFailedVerificationOutcomes(t *testing.T) 
 			tc.edit(&result.CommandResults[0])
 			if err := result.Validate(request); err != nil {
 				t.Fatalf("completed execution rejected authentic command result: %v", err)
-			}
-			if err := ValidateSuccessfulCommandResults(request.CommandPolicy.Commands, result.CommandResults); err == nil {
-				t.Fatal("strict command validation accepted a failed result")
 			}
 		})
 	}

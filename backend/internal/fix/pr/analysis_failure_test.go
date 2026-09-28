@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/aster/backend/internal/actiondraft"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/runtime"
@@ -95,7 +96,7 @@ func TestGenerateAnalysisPreviewInvestigatesUnverifiedUncitedAnswerWithoutHints(
 	for _, want := range []string{
 		"explicitly unverified", "artifact access ended before verification",
 		"ArtifactCitations\":null", "SourceHints\":null", "Search the repository as needed",
-		"do not manufacture a patch",
+		"Make no change when no code in this repository is causally involved",
 	} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
@@ -143,23 +144,52 @@ func TestGenerateAnalysisPreviewAllowsEmptyOriginalSuggestedFix(t *testing.T) {
 	if fix == nil || len(pr.opened) != 0 {
 		t.Fatalf("fix=%+v opened=%+v", fix, pr.opened)
 	}
-	if fix.Preview.Rationale != failure.AssistantAnswer {
+	if fix.Preview.Rationale != "Edits `templates/cluster.yaml`; see the proposed diff." {
 		t.Fatalf("rationale = %q", fix.Preview.Rationale)
 	}
 }
 
-func TestGenerateAnalysisPreviewUsesMaintainerDirectionAsRationaleFallback(t *testing.T) {
+func TestAnalysisPreviewDescribesGeneratedChange(t *testing.T) {
 	failure := validAnalysisFailure()
-	failure.SuggestedFix = ""
+	failure.SuggestedFix = "Publish the missing image to the region."
 	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
-	manager := newManager(t, pr, goodAgent(), Options{})
+	agent := goodAgent()
+	agent.res.AgentSummary = "Select a disk type the region offers (`templates/cluster.yaml:12`).\n\nCaveat: the region list is not verified."
+	manager := newManager(t, pr, agent, Options{})
 
 	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "keep the retry scoped to reconciliation")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fix.Preview.Rationale != "keep the retry scoped to reconciliation" {
-		t.Fatalf("rationale = %q", fix.Preview.Rationale)
+	want := "Select a disk type the region offers (`templates/cluster.yaml:12`). Caveat: the region list is not verified."
+	if fix.Preview.Rationale != want || !strings.Contains(fix.Description, "**Proposed change:** "+want) {
+		t.Fatalf("rationale=%q description=%q", fix.Preview.Rationale, fix.Description)
+	}
+	if strings.Contains(fix.Description, failure.SuggestedFix) || strings.Contains(fix.Description, "keep the retry scoped") {
+		t.Fatalf("description described the published suggestion or instruction: %s", fix.Description)
+	}
+
+	agent.res.AgentSummary = "I need to check the template. Let me draft the change."
+	fix, err = manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fix.Preview.Rationale != "Edits `templates/cluster.yaml`; see the proposed diff." {
+		t.Fatalf("unusable summary rationale = %q", fix.Preview.Rationale)
+	}
+}
+
+func TestAnalysisPreviewBoundsLongTestTitles(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.TestName = "[It] " + strings.Repeat("very long test name ", 20)
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := actiondraft.ValidateTitleBody(fix.Title, fix.Description); err != nil {
+		t.Fatalf("title %q: %v", fix.Title, err)
 	}
 }
 
@@ -293,6 +323,19 @@ func TestAnalysisPreviewDedupIdentityIncludesSelectedChatAndRequest(t *testing.T
 	}
 }
 
+func TestAnalysisPreviewCritiqueErrorWarns(t *testing.T) {
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{Critique: &fakeCompleter{critiqueErr: errors.New("review endpoint down")}, CritiqueRetries: 1})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.calls != 1 || !slices.Contains(fix.Warnings, patchCritiqueUnavailableWarning) {
+		t.Fatalf("calls=%d warnings=%v", agent.calls, fix.Warnings)
+	}
+}
+
 func TestAnalysisPreviewCritiqueConcernWarnsWithoutRetry(t *testing.T) {
 	failure := validAnalysisFailure()
 	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
@@ -302,7 +345,7 @@ func TestAnalysisPreviewCritiqueConcernWarnsWithoutRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.calls != 1 || !slices.Contains(fix.Warnings, analysisPatchCritiqueWarning) {
+	if agent.calls != 1 || !slices.Contains(fix.Warnings, patchCritiqueWarning("patch needs a narrower condition")) {
 		t.Fatalf("calls=%d warnings=%v", agent.calls, fix.Warnings)
 	}
 }
@@ -328,11 +371,11 @@ func TestAnalysisPreviewFailedAuthenticCommandsWarnAndRemainConfirmable(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
+	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, patchVerifyWarning) {
 		t.Fatalf("calls=%d verify=%+v warnings=%v", agent.calls, fix.Preview.Verify, fix.Warnings)
 	}
 	restored := RestoreGeneratedFix(fix.Snapshot())
-	if restored.executionVerification == nil || !restored.executionVerification.AllowFailures || restored.executionVerification.Results[0].ExitCode != 1 {
+	if restored.executionVerification == nil || restored.executionVerification.Results[0].ExitCode != 1 {
 		t.Fatalf("restored verification = %+v", restored.executionVerification)
 	}
 	if _, err := manager.OpenFromPreview(t.Context(), restored); err != nil {
@@ -367,7 +410,7 @@ func TestAnalysisPreviewTimedOutAuthenticCommandWarnsWithoutRetry(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, analysisPatchVerifyWarning) {
+	if agent.calls != 1 || fix.Preview.Verify.Status != VerifyFailed || !slices.Contains(fix.Warnings, patchVerifyWarning) {
 		t.Fatalf("calls=%d verify=%+v warnings=%v", agent.calls, fix.Preview.Verify, fix.Warnings)
 	}
 }

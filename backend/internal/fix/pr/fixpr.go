@@ -16,7 +16,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/willie-yao/aster/backend/internal/actiondraft"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
@@ -437,7 +439,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		key:                   key,
 		base:                  base,
 	}
-	generated.SetWarnings(generationContextWarnings(generationContext))
+	generated.SetWarnings(append(slices.Clone(fix.warnings), generationContextWarnings(generationContext)...))
 	return generated, nil
 }
 
@@ -652,7 +654,16 @@ func prTitle(p models.PatternAnalysis) string {
 	if subj == "" {
 		subj = "a CI failure"
 	}
-	return "fix: address CI failure in " + subj
+	return boundedTitle("fix: address CI failure in " + subj)
+}
+
+// boundedTitle keeps a generated PR title within the draft title limit.
+func boundedTitle(title string) string {
+	title = oneLine(title)
+	if utf8.RuneCountInString(title) <= actiondraft.MaxTitleRunes {
+		return title
+	}
+	return string([]rune(title)[:actiondraft.MaxTitleRunes-1]) + "…"
 }
 
 func prBody(p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key, dashboardURL, description string) string {
