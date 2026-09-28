@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -591,35 +593,21 @@ func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[stri
 		if content == "" {
 			return true
 		}
-		add(path, content)
-		entry := addCitationEvidence(path, content)
-		if entry == nil {
+		if read.LineStart <= 0 {
+			add(path, content)
+			addCitationEvidence(path, content)
 			return true
 		}
-		visibleLengthMatches := false
-		switch length := payload["length"].(type) {
-		case int:
-			visibleLengthMatches = length == len(content)
-		case float64:
-			visibleLengthMatches = length == float64(len(content))
-		}
-		// JSON replaces invalid UTF-8, so raw byte offsets are valid only
-		// when the visible content kept the same byte length.
-		if !visibleLengthMatches {
+		lines, ok := readRepoFileLines(content, read)
+		if !ok {
 			return true
 		}
-		safePath, err := artifacts.SafePath(strings.TrimSpace(path))
-		observationPath, observationErr := artifacts.SafePath(strings.TrimSpace(read.Path))
-		if err != nil || observationErr != nil || safePath == "" || observationPath != safePath ||
-			read.SourceID != sourceID || read.LineStart <= 0 || read.LineEnd < read.LineStart ||
-			read.ByteStart < 0 || read.ByteEnd <= read.ByteStart || read.ByteEnd > len(content) {
-			return true
-		}
-		lines := strings.Split(content[read.ByteStart:read.ByteEnd], "\n")
-		if strings.HasSuffix(content[read.ByteStart:read.ByteEnd], "\n") {
-			lines = lines[:len(lines)-1]
-		}
-		if len(lines) != read.LineEnd-read.LineStart+1 {
+		text := strings.Join(lines, "\n")
+		add(path, text)
+		entry := addCitationEvidence(path, text)
+		// JSON replaces invalid UTF-8, so line coordinates hold only when the
+		// model saw the source text unchanged.
+		if entry == nil || read.SourceID != sourceID || read.Path == "" || !slices.Equal(lines, read.Lines) {
 			return true
 		}
 		for i, line := range lines {
@@ -645,12 +633,32 @@ func (s *agentState) recordSourceContent(tc transport.ToolCall, payload map[stri
 		}
 		for _, match := range analysisChatEvidenceMatches(payload["matches"]) {
 			path, _ := match["path"].(string)
-			content := flattenGrepContext(match["context"])
+			// grep_repo context lines are verbatim source, so none of them
+			// carries a line-number prefix to strip.
+			content := strings.Join(analysisChatEvidenceContexts(match["context"]), "\n")
 			add(path, content)
 			addCitationEvidence(path, content)
 		}
 	}
 	return true
+}
+
+// readRepoFileLines strips the line-number prefixes from model-visible
+// read_repo_file content. It fails unless every line carries exactly the number
+// the observation assigns to its position.
+func readRepoFileLines(content string, read repotree.ReadObservation) ([]string, bool) {
+	lines := strings.Split(content, "\n")
+	if read.LineEnd-read.LineStart+1 != len(lines) {
+		return nil, false
+	}
+	for i, line := range lines {
+		text, ok := strings.CutPrefix(line, strconv.Itoa(read.LineStart+i)+repotree.ReadLineSeparator)
+		if !ok {
+			return nil, false
+		}
+		lines[i] = text
+	}
+	return lines, true
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]any) string {

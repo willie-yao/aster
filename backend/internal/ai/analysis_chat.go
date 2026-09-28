@@ -49,8 +49,10 @@ the immutable source catalog. Source citations are allowed only when repository
 tools and an immutable source catalog are present. grep_repo locates code and
 can support quote-only evidence with null line coordinates. Call read_repo_file
 before publishing a line-ranged source citation. Only read_repo_file provides
-authoritative source coordinates. Choose a narrow sub-range inside its returned
-line_start/line_end and set quote to exactly the text from that cited sub-range.
+authoritative source coordinates: it prefixes every returned line with its
+line number, as in "812: return err". Choose a narrow sub-range of those lines,
+copy its first and last numbers into line_start and line_end, and set quote to
+exactly the text from that cited sub-range without the number prefixes.
 Assessment is optional and,
 when present, must be "supports",
 "challenges", "inconclusive", or null. proposed_revision is optional and may be a
@@ -471,6 +473,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			turn.ReportProgress(analysischat.PhaseFinalizing)
 			reply, stats, validationErr := parseAnalysisChatReplyCandidatesWithSource(answer.Content, evidence, sourceCitationContext)
 			if validationErr == nil && stats.EvidenceGate == "" {
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
+				)
 				accepted = &reply
 				return toolLoopAccept()
 			}
@@ -481,18 +486,22 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				detail = validationErr.Error()
 			}
 			stats.ValidationDetail = detail
-			recordAnalysisChatResponseFailure(
-				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
-			)
 			// A failed gate re-enters the tool loop with the specific failure so
-			// the model can read the artifact it could not cite.
+			// the model can read the artifact it could not cite. The attempt is
+			// logged as a retry because the turn can still succeed.
 			if correctiveRounds < analysisChatMaxCorrectiveRounds {
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "retry", "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+				)
 				correctiveRounds++
 				turn.ReportProgress(analysischat.PhaseValidationRetrying)
 				return toolLoopCorrect(analysisChatRepairPrompt(answer.Content, stats, validationErr, detail)).granting()
 			}
 			if validationErr == nil {
 				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceStatus(reply), stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
+				recordAnalysisChatResponseTelemetry(
+					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
+				)
 				accepted = &reply
 				return toolLoopAccept()
 			}
@@ -510,6 +519,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				accepted = &salvaged
 				return toolLoopAccept()
 			}
+			recordAnalysisChatResponseFailure(
+				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
+			)
 			return toolLoopStop(analysisChatSafeValidationError(validationErr))
 		},
 		onDispatch: func(dispatched *toolLoopDispatch) {

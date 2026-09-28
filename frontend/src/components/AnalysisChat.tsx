@@ -66,6 +66,7 @@ import {
   reconcileAnalysisChatTurn,
   resumeAnalysisChatTurn,
   saveAnalysisChatPendingIntent,
+  settleAnalysisChatTurn,
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
@@ -685,6 +686,7 @@ export function AnalysisChat({
   const panelHadFocus = useRef(false);
   const analysisRefRef = useRef(analysisRef);
   const sessionRef = useRef<AnalysisChatSession | null>(null);
+  const pendingTurnRef = useRef<PendingTurn | null>(null);
   const sessionGenerationRef = useRef(0);
   const patternScope = analysisRef.scope === "pattern";
   const causeScope = analysisRef.scope === "cause";
@@ -725,6 +727,7 @@ export function AnalysisChat({
   analysisRefRef.current = analysisRef;
   identityRef.current = identity;
   sessionRef.current = session;
+  pendingTurnRef.current = pendingTurn;
 
   useEffect(() => {
     preparedLookupIdentityRef.current = "";
@@ -794,41 +797,45 @@ export function AnalysisChat({
         setValidationRetries(restored.active.validation_retries ?? 0);
         setMaxValidationRetries(restored.active.max_validation_retries ?? 0);
         if (restoredRecorded === undefined) return;
-        restoredTurn = {
+        const turn: PendingTurn = {
           sessionID: restored.id,
           requestID: restored.active.request_id,
           question: restored.active.question ?? "",
           requestRecorded: restoredRecorded,
         };
-        setPendingTurn(restoredTurn);
-        setQuestion(restoredTurn.question);
+        restoredTurn = turn;
+        setPendingTurn(turn);
+        setQuestion(turn.question);
         setBusy(true);
-        const updated = await resumeAnalysisChatTurn(
+        const resumed = await resumeAnalysisChatTurn(
           restored,
           recordProgress,
           { requestRecorded: restoredRecorded, signal: controller.signal },
         );
         if (identityRef.current !== restoreIdentity) return;
-        setSession(updated);
-        const restoredState = restoredTurn ? analysisChatRequestState(updated, restoredTurn.requestID) : "unresolved";
-        if (restoredState === "answered" || restoredState === "succeeded") {
+        const settled = await settleAnalysisChatTurn(
+          resumed, turn.sessionID, turn.requestID, recordProgress, { signal: controller.signal },
+        );
+        if (identityRef.current !== restoreIdentity) return;
+        setSession(settled.session);
+        if (settled.state === "answered" || settled.state === "succeeded") {
           clearComposer();
-          if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
+          clearAnalysisChatPendingIntent(analysisChatIntentStorage(), turn.sessionID, turn.requestID);
           setPendingTurn(null);
           setContinueMode(false);
           setError(null);
-        } else if (restoredState === "terminal") {
-          if (restoredTurn) clearAnalysisChatPendingIntent(analysisChatIntentStorage(), restoredTurn.sessionID, restoredTurn.requestID);
+        } else if (settled.state === "terminal") {
+          clearAnalysisChatPendingIntent(analysisChatIntentStorage(), turn.sessionID, turn.requestID);
           setPendingTurn(null);
           setError(null);
-        } else if (restoredTurn?.requestRecorded === undefined) {
-          setPendingTurn(null);
-          clearComposer();
-          setContinueMode(false);
-          setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
+        } else if (settled.state === "pending") {
+          setPendingTurn(turn);
+          setQuestion(turn.question);
+          setContinueMode(true);
+          setError("The restored question is still running. Select Continue to observe the same request.");
         } else {
           setPendingTurn(null);
-          setQuestion(restoredTurn.question);
+          setQuestion(turn.question);
           setContinueMode(true);
           setError("The restored question ended without an answer. Select Continue to try again with the same intent.");
         }
@@ -938,6 +945,20 @@ export function AnalysisChat({
         }
         setSession(refreshed);
         if (refreshed?.active) recordProgress(refreshed.active);
+        // An interrupted turn waiting on Continue is released as soon as the
+        // server shows its outcome, so a finished answer is not left beside a
+        // stale warning.
+        const interrupted = pendingTurnRef.current;
+        if (refreshed && interrupted && interrupted.sessionID === refreshed.id) {
+          const state = analysisChatRequestState(refreshed, interrupted.requestID);
+          if (state === "answered" || state === "succeeded" || state === "terminal") {
+            clearAnalysisChatPendingIntent(analysisChatIntentStorage(), interrupted.sessionID, interrupted.requestID);
+            setPendingTurn(null);
+            setContinueMode(false);
+            setError(null);
+            if (state !== "terminal") clearComposer();
+          }
+        }
       } catch (refreshError) {
         if (refreshError instanceof Error && refreshError.name === "AbortError") return;
         if (isAnalysisChatOAuthExpired(refreshError, authMode)) signIn();
@@ -951,7 +972,7 @@ export function AnalysisChat({
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [authMode, authStatus, busy, expanded, features.analysis_chat, identity, recordProgress, resetting, restoring, signIn]);
+  }, [authMode, authStatus, busy, clearComposer, expanded, features.analysis_chat, identity, recordProgress, resetting, restoring, signIn]);
 
   useEffect(() => {
     if (!expanded || (history.length === 0 && !busy)) return;
@@ -1066,28 +1087,36 @@ export function AnalysisChat({
           requestRecorded: activeTurn.requestRecorded ?? true,
         });
       }
-      const updated = activeTurn.requestRecorded === undefined
-        ? await resumeAnalysisChatTurn(activeSession, recordProgress, { signal: controller.signal })
-        : await streamAnalysisChatMessage(
-          activeTurn.sessionID,
-          activeTurn.question,
-          activeTurn.requestID,
-          recordProgress,
-          { requestRecorded: activeTurn.requestRecorded, signal: controller.signal },
-        );
-      setSession(updated);
       if (activeTurn.requestRecorded === undefined) {
-        const requestState = analysisChatRequestState(updated, activeTurn.requestID);
-        clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
-        setPendingTurn(null);
-        if (requestState === "answered" || requestState === "succeeded" || requestState === "terminal") {
-          clearComposer();
+        // The turn was interrupted without a known outcome, so the verdict
+        // comes from the server rather than from the session held here.
+        const settled = await settleAnalysisChatTurn(
+          activeSession, activeTurn.sessionID, activeTurn.requestID, recordProgress, { signal: controller.signal },
+        );
+        setSession(settled.session);
+        if (settled.state === "pending") {
+          setPendingTurn(activeTurn);
+          setQuestion(activeTurn.question);
+          setContinueMode(true);
+          setError("The question is still running. Select Continue to observe the same request.");
           return;
         }
+        clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
+        setPendingTurn(null);
         clearComposer();
-        setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
+        if (settled.state === "unresolved") {
+          setError("The restored request ended without an answer and its intent cannot be recovered safely. Select New conversation to start over.");
+        }
         return;
       }
+      const updated = await streamAnalysisChatMessage(
+        activeTurn.sessionID,
+        activeTurn.question,
+        activeTurn.requestID,
+        recordProgress,
+        { requestRecorded: activeTurn.requestRecorded, signal: controller.signal },
+      );
+      setSession(updated);
       clearComposer();
       clearAnalysisChatPendingIntent(analysisChatIntentStorage(), activeTurn.sessionID, activeTurn.requestID);
       setPendingTurn(null);

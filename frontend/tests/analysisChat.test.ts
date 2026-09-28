@@ -32,6 +32,7 @@ import {
   resumeAnalysisChatTurn,
   saveAnalysisChatPendingIntent,
   sendAnalysisChatMessage,
+  settleAnalysisChatTurn,
   streamAnalysisChatMessage,
 } from "../src/lib/analysisChat.js";
 import type {
@@ -613,6 +614,101 @@ test("deterministic reconnect failure observes an admitted request without a sec
     "GET /api/analysis-chat/sessions/session-1",
     "GET /api/analysis-chat/sessions/session-1",
   ]);
+});
+
+// The failing sequence behind "the restored request ended without an answer":
+// the stream and the reconciliation read both failed, which left the turn
+// interrupted with the session from before the question, and Continue then
+// judged that stale snapshot instead of asking the server.
+test("an interrupted turn is settled from the server, never from the session it was asked from", async () => {
+  const requestID = "request-second";
+  const beforeQuestion: AnalysisChatSession = {
+    ...session,
+    active: undefined,
+    attempts: [{ request_id: "request-first", outcome: "succeeded", turn: 1 }],
+  };
+  const running: AnalysisChatSession = {
+    ...beforeQuestion,
+    active: { request_id: requestID, question: "Where is the code?", phase: "validation_retrying", updated_at: "2026-07-26T12:05:00Z" },
+    attempts: [...beforeQuestion.attempts!, { request_id: requestID, outcome: "pending", turn: 2 }],
+  };
+  const answered: AnalysisChatSession = {
+    ...beforeQuestion,
+    messages: [
+      ...session.messages,
+      { role: "user", request_id: requestID, content: "Where is the code?", created_at: "2026-07-26T12:06:00Z" },
+      { role: "assistant", request_id: requestID, content: "In helpers.go.", created_at: "2026-07-26T12:06:00Z" },
+    ],
+    attempts: [...beforeQuestion.attempts!, { request_id: requestID, outcome: "succeeded", turn: 2 }],
+  };
+
+  globalThis.fetch = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  await assert.rejects(streamAnalysisChatMessage("session-1", "Where is the code?", requestID, () => {}));
+  await assert.rejects(reconcileAnalysisChatTurn("session-1", requestID, () => {}, { pollDelayMs: 0 }));
+
+  const calls: string[] = [];
+  const reads = [running, answered];
+  globalThis.fetch = async (input, init) => {
+    calls.push(`${init?.method ?? "GET"} ${String(input)}`);
+    return new Response(JSON.stringify(reads.shift() ?? answered), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  };
+  // The snapshot alone cannot tell a lost request from one it never saw.
+  assert.equal(analysisChatRequestState(beforeQuestion, requestID), "unresolved");
+  assert.equal(await resumeAnalysisChatTurn(beforeQuestion, () => {}), beforeQuestion);
+  assert.deepEqual(calls, []);
+
+  const phases: string[] = [];
+  const settled = await settleAnalysisChatTurn(
+    beforeQuestion, "session-1", requestID, (progress) => phases.push(progress.phase), { pollDelayMs: 0 },
+  );
+
+  assert.equal(settled.state, "answered");
+  assert.equal(settled.session.messages.at(-1)?.content, "In helpers.go.");
+  assert.deepEqual(calls, ["GET /api/analysis-chat/sessions/session-1", "GET /api/analysis-chat/sessions/session-1"]);
+  assert.deepEqual(phases, ["validation_retrying"]);
+});
+
+test("settling trusts a snapshot only for an outcome the server already recorded", async () => {
+  let reads = 0;
+  globalThis.fetch = async () => {
+    reads++;
+    return new Response(JSON.stringify({ ...session, attempts: [{ request_id: "request", outcome: "failed" }] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  };
+  const answered: AnalysisChatSession = {
+    ...session,
+    messages: [{ role: "assistant", request_id: "request", content: "answer", created_at: "2026-07-26T12:03:00Z" }],
+  };
+  assert.equal((await settleAnalysisChatTurn(answered, "session-1", "request", () => {})).state, "answered");
+  const failed: AnalysisChatSession = { ...session, attempts: [{ request_id: "request", outcome: "cancelled" }] };
+  assert.equal((await settleAnalysisChatTurn(failed, "session-1", "request", () => {})).state, "terminal");
+  assert.equal(reads, 0);
+
+  const pending: AnalysisChatSession = { ...session, attempts: [{ request_id: "request", outcome: "pending" }] };
+  assert.equal((await settleAnalysisChatTurn(pending, "session-1", "request", () => {})).state, "terminal");
+  assert.equal((await settleAnalysisChatTurn(answered, "session-2", "request", () => {})).state, "terminal");
+  assert.equal((await settleAnalysisChatTurn(null, "session-1", "request", () => {})).state, "terminal");
+  assert.equal(reads, 3);
+});
+
+test("the chat reports an interrupted turn lost only after settling it with the server", () => {
+  const chat = readFileSync(resolve("src/components/AnalysisChat.tsx"), "utf8");
+  assert.doesNotMatch(chat, /resumeAnalysisChatTurn\(activeSession/);
+  for (const verdict of [
+    "intent cannot be recovered safely",
+    "The restored question ended without an answer",
+  ]) {
+    assert.equal(chat.split(verdict).length, 2, verdict);
+    const before = chat.slice(0, chat.indexOf(verdict));
+    const settle = before.lastIndexOf("await settleAnalysisChatTurn(");
+    assert.ok(settle >= 0 && !before.slice(settle).includes("async function"), verdict);
+  }
+  assert.match(chat, /const interrupted = pendingTurnRef\.current;[\s\S]{0,200}analysisChatRequestState\(refreshed, interrupted\.requestID\)[\s\S]{0,400}setError\(null\)/);
 });
 
 test("OAuth expiry is recognized for lookup and active-turn restoration", async () => {

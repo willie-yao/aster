@@ -7,9 +7,11 @@ import (
 	"io"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/repotree"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
@@ -718,14 +720,24 @@ func validateAnalysisChatCitationEvidence(
 			"citation %d quote is too long to record; quote the passage that supports the answer", index,
 		),
 	}
+	var unnumbered, unnumberedLocator string
+	if kind == "source" {
+		// The prefixes do not count toward the minimum quote length.
+		if stripped, ok := stripReadLineNumbers(citation.Quote, citation.LineStart, citation.LineEnd); ok && len(strings.TrimSpace(stripped)) >= 4 {
+			unnumbered, unnumberedLocator = stripped, NormalizeCitationText(stripped)
+		}
+	}
 	if coordinatesUsable && citation.LineStart > 0 && len(recorded.Lines) > 0 && citation.LineEnd-citation.LineStart <= analysisChatMaxQuoteLines {
 		quote, ok := analysisChatQuoteForRange(recorded.Lines, citation.LineStart, citation.LineEnd)
 		if ok && analysisChatEvidenceContains(recorded, quote) {
 			if kind == "source" && !strings.Contains(NormalizeCitationText(quote), locator) {
-				return &analysisChatEvidenceFailure{
-					Gate:   analysischat.UnverifiedCitation,
-					Detail: fmt.Sprintf("citation %d quote does not appear in the cited source line range", index),
+				if unnumberedLocator == "" || !strings.Contains(NormalizeCitationText(quote), unnumberedLocator) {
+					return &analysisChatEvidenceFailure{
+						Gate:   analysischat.UnverifiedCitation,
+						Detail: fmt.Sprintf("citation %d quote does not appear in the cited source line range", index),
+					}
 				}
+				locator = unnumberedLocator
 			}
 			clamped, kept := clampAnalysisChatQuote(quote)
 			if clamped != quote && !strings.Contains(NormalizeCitationText(clamped), locator) {
@@ -742,7 +754,44 @@ func validateAnalysisChatCitationEvidence(
 			Detail: fmt.Sprintf("citation %d line range was not returned by the cited source read", index),
 		}
 	}
+	if unnumberedLocator != "" {
+		if _, matches := attributeAnalysisChatQuote(recorded, citation.Quote); matches == 0 {
+			citation.Quote, locator = unnumbered, unnumberedLocator
+		}
+	}
 	return attributeAnalysisChatCitation(citation, recorded, index, locator, tooLong, kind)
+}
+
+// stripReadLineNumbers removes the read_repo_file line-number prefixes from a
+// quote copied out of numbered output. It applies only when every quoted line
+// carries the next consecutive number and, for a ranged citation, every number
+// lies inside [start, end]. Callers try the literal quote first, so source
+// text that merely looks numbered still matches as written.
+func stripReadLineNumbers(quote string, start, end int) (string, bool) {
+	lines := strings.Split(quote, "\n")
+	first := strings.TrimLeft(lines[0], " \t")
+	digits := len(first) - len(strings.TrimLeft(first, "0123456789"))
+	number, err := strconv.Atoi(first[:digits])
+	if err != nil || number <= 0 {
+		return "", false
+	}
+	if start > 0 && (number < start || number+len(lines)-1 > end) {
+		return "", false
+	}
+	for i, line := range lines {
+		line = strings.TrimLeft(line, " \t")
+		label := strconv.Itoa(number + i)
+		rest, ok := strings.CutPrefix(line, label+repotree.ReadLineSeparator)
+		if !ok {
+			// An empty source line loses the space after its number when trimmed.
+			if line != label+strings.TrimSpace(repotree.ReadLineSeparator) {
+				return "", false
+			}
+			rest = ""
+		}
+		lines[i] = rest
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 func attributeAnalysisChatCitation(
