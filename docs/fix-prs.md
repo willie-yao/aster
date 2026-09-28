@@ -38,7 +38,7 @@ When the agent returns a patch, quality concerns become warnings on the ready pr
 - failed or timed-out validators, also shown as the verification verdict;
 - analysis, evidence qualification, and eligibility concerns.
 
-These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review and the request reports `no_reviewable_patch` with the agent's explanation.
+These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-JUnit requests report `no_reviewable_patch` with the agent's explanation.
 
 ## Exact JUnit analysis handoff
 
