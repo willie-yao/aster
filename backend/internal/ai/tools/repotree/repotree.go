@@ -12,9 +12,10 @@
 //
 // Reads go through GitHub's REST API (one call per file), which is rate-limited
 // and higher-latency than GCS, so grep_repo is bounded: it fetches at most
-// maxGrepFiles files matching path_glob per call and reports truncation. The
-// full tree listing and each file body are memoized in tools.Cache so repeated
-// navigation over one repo/ref costs no extra calls.
+// maxGrepFiles files matching path_glob per call, searches at most
+// grepMaxScanBytes of each, and reports truncation. The full tree listing and
+// each file body are memoized in tools.Cache so repeated navigation over one
+// repo/ref costs no extra calls.
 package repotree
 
 import (
@@ -33,9 +34,10 @@ import (
 const Group = "repotree"
 
 const (
-	readMaxBytes         = 16384 // per read_repo_file call
-	grepMaxBytes         = 16384 // per matched file scanned by grep_repo
-	maxGrepFiles         = 40    // files fetched per grep_repo call
+	readMaxBytes         = 16384   // per read_repo_file call
+	grepMaxScanBytes     = 1 << 20 // per file searched by grep_repo; larger files are generated or vendored
+	grepMaxLineBytes     = 1000    // per context line returned by grep_repo
+	maxGrepFiles         = 40      // files fetched per grep_repo call
 	grepMaxCtx           = 5
 	grepMaxHits          = 100
 	grepEvidenceMaxHits  = 64
@@ -333,7 +335,7 @@ func (*grepTool) Schema() transport.ToolSchema {
 		Type: "function",
 		Function: transport.FunctionDecl{
 			Name:        "grep_repo",
-			Description: "Regex-search source files for matching lines. Narrow the search with path_glob (a path substring, or a *-glob like \"config/*.yaml\") so it stays cheap; each matched file is fetched over the API. Scans at most 40 files per call and reports truncation. Returns matches with file, line number, and context.",
+			Description: "Regex-search source files for matching lines. Narrow the search with path_glob (a path substring, or a *-glob like \"config/*.yaml\") so it stays cheap; each matched file is fetched over the API. Scans at most 40 files per call and the first 1 MiB of each file, and reports truncation. Returns matches with file, line number, and context.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -392,6 +394,7 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	var hits []hit
 	var observations []GrepMatchObservation
 	var telemetryRanges []tools.GrepRangeObservation
+	var partialFiles []string
 	scanned, attempted, readErrors, bytes, contentBytes := 0, 0, 0, 0, 0
 	truncatedFiles := false
 
@@ -409,19 +412,17 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			readErrors++
 			continue
 		}
-		canonicalContent := strings.ReplaceAll(content, "\r\n", "\n")
-		fullLines := strings.Split(canonicalContent, "\n")
 		body := content
-		bodyTruncated := len(body) > grepMaxBytes
-		if bodyTruncated {
-			body = body[:grepMaxBytes]
+		partial := len(body) > grepMaxScanBytes
+		if partial {
+			body = body[:grepMaxScanBytes]
+			partialFiles = append(partialFiles, p)
 		}
 		bytes += len(body)
 		body = strings.ReplaceAll(body, "\r\n", "\n")
 		lines := strings.Split(body, "\n")
-		if bodyTruncated && !strings.HasSuffix(body, "\n") {
-			lines = lines[:len(lines)-1]
-		} else if strings.HasSuffix(body, "\n") {
+		// Drop the empty element after a final newline, or the line cut by the scan cap.
+		if partial || strings.HasSuffix(body, "\n") {
 			lines = lines[:len(lines)-1]
 		}
 		for i, line := range lines {
@@ -436,18 +437,24 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 			if hi > len(lines) {
 				hi = len(lines)
 			}
-			context := lines[lo:hi]
+			context := make([]string, 0, hi-lo)
+			clipped := false
+			for _, text := range lines[lo:hi] {
+				if len(text) > grepMaxLineBytes {
+					text = text[:grepMaxLineBytes] + "...<truncated>"
+					clipped = true
+				}
+				context = append(context, text)
+			}
 			hits = append(hits, hit{Path: p, Line: i + 1, Context: context})
 			telemetryRanges = append(telemetryRanges, tools.GrepRangeObservation{
 				SelectorID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi,
 			})
-			if hi <= len(fullLines) {
-				fullMatch := strings.Join(fullLines[lo:hi], "\n")
-				if strings.TrimSpace(fullMatch) != "" && len(fullMatch) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
-					observations = append(observations, GrepMatchObservation{SourceID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi})
-				}
+			match := strings.Join(context, "\n")
+			if !clipped && strings.TrimSpace(match) != "" && len(match) <= grepEvidenceMaxBytes && len(observations) < grepEvidenceMaxHits {
+				observations = append(observations, GrepMatchObservation{SourceID: selected.ID, Path: p, LineStart: lo + 1, LineEnd: hi})
 			}
-			contentBytes += len(strings.Join(context, "\n"))
+			contentBytes += len(match)
 			if len(hits) >= maxMatches {
 				break
 			}
@@ -472,11 +479,16 @@ func (*grepTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 		payload["truncated"] = true
 		payload["truncated_reason"] = "max_files"
 	}
+	if len(partialFiles) > 0 {
+		payload["scan_truncated"] = true
+		payload["partially_scanned_files"] = partialFiles
+		payload["scan_hint"] = fmt.Sprintf("Searched only the first %d bytes of each file in partially_scanned_files, so a zero or low match count does not prove the pattern is absent from the rest of those files. Use read_repo_file with a larger offset to inspect the rest.", grepMaxScanBytes)
+	}
 	observation.Call.MatchCount = len(hits)
 	observation.Call.FilesAttempted = attempted
 	observation.Call.FilesScanned = scanned
 	observation.Call.FileReadErrors = readErrors
-	observation.Call.FileScanTruncated = truncatedFiles
+	observation.Call.FileScanTruncated = truncatedFiles || len(partialFiles) > 0
 	observation.Call.ResultTruncated = truncatedFiles || len(hits) >= maxMatches
 	observation.Call.Outcome = tools.GrepOutcomeZeroMatches
 	if len(hits) > 0 {
