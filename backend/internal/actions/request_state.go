@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -125,7 +126,7 @@ func normalizeRequestReason(request *actionRequest) bool {
 	return true
 }
 
-func (s *Service) setRequestWarning(ctx context.Context, warnings ...string) error {
+func (s *Service) setRequestWarnings(ctx context.Context, warnings ...ActionWarning) error {
 	id := actionRequestID(ctx)
 	if id == "" || len(warnings) == 0 {
 		return nil
@@ -136,41 +137,51 @@ func (s *Service) setRequestWarning(ctx context.Context, warnings ...string) err
 	if request == nil || request.Status != RequestPending {
 		return nil
 	}
-	next := boundedWarningSummary(append([]string{request.Warning}, warnings...)...)
-	if next == request.Warning {
+	next := boundedWarnings(append(slices.Clone(request.Warnings), warnings...)...)
+	if slices.Equal(next, request.Warnings) {
 		return nil
 	}
-	previous, previousUpdatedAt := request.Warning, request.UpdatedAt
-	request.Warning = next
+	previous, previousUpdatedAt := request.Warnings, request.UpdatedAt
+	request.Warnings = next
 	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.saveRequestsLocked(); err != nil {
-		request.Warning, request.UpdatedAt = previous, previousUpdatedAt
+		request.Warnings, request.UpdatedAt = previous, previousUpdatedAt
 		return err
 	}
 	return nil
 }
 
-func boundedWarningSummary(warnings ...string) string {
+// boundedWarnings normalizes whitespace, drops empty and repeated messages, and
+// caps the combined message size.
+func boundedWarnings(warnings ...ActionWarning) []ActionWarning {
 	const maxWarningBytes = 2048
 	seen := map[string]bool{}
-	parts := make([]string, 0, len(warnings))
+	bounded := make([]ActionWarning, 0, len(warnings))
+	remaining := maxWarningBytes
 	for _, warning := range warnings {
-		warning = strings.Join(strings.Fields(warning), " ")
-		if warning == "" || seen[warning] {
+		warning.Message = strings.Join(strings.Fields(warning.Message), " ")
+		if warning.Message == "" || seen[warning.Message] {
 			continue
 		}
-		seen[warning] = true
-		parts = append(parts, warning)
+		seen[warning.Message] = true
+		if len(warning.Message) > remaining {
+			limit := remaining
+			for limit > 0 && warning.Message[limit]&0xc0 == 0x80 {
+				limit--
+			}
+			if message := strings.TrimSpace(warning.Message[:limit]); message != "" {
+				warning.Message = message
+				bounded = append(bounded, warning)
+			}
+			break
+		}
+		remaining -= len(warning.Message)
+		bounded = append(bounded, warning)
 	}
-	summary := strings.Join(parts, " ")
-	if len(summary) <= maxWarningBytes {
-		return summary
+	if len(bounded) == 0 {
+		return nil
 	}
-	limit := maxWarningBytes
-	for limit > 0 && limit < len(summary) && summary[limit]&0xc0 == 0x80 {
-		limit--
-	}
-	return strings.TrimSpace(summary[:limit])
+	return bounded
 }
 
 func (s *Service) setRequestStage(ctx context.Context, stage string) error {
@@ -268,7 +279,7 @@ func (s *Service) loadActionRequests() {
 			request.Status = RequestFailed
 			request.ReasonCode = previewValidationReasonCode(err)
 			request.Error = ReasonMessage(request.ReasonCode)
-			request.Warning = ""
+			request.Warnings = nil
 			request.Preview = nil
 			request.AnalysisFix = nil
 			request.Issue = nil
@@ -294,7 +305,7 @@ func (s *Service) loadActionRequests() {
 				if request.BaseIssue != nil {
 					entry := &previewEntry{kind: "issue", spec: *request.BaseIssue}
 					if preview, err := validatedPreviewEntry(entry); err == nil {
-						request.Warning = draftRefinementWarning
+						request.Warnings = plainWarnings(draftRefinementWarning)
 						request.Preview = &preview
 					} else {
 						request.Error = "saved fallback draft did not pass current safety validation"
@@ -408,7 +419,7 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		return PreviewResult{
 			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
 			VerifyStatus: string(entry.fix.Preview.Verify.Status), VerifySummary: entry.fix.Preview.Verify.Summary, VerifyOutput: entry.fix.Preview.Verify.Output,
-			Warning: boundedWarningSummary(entry.fix.Warnings...),
+			Warnings: boundedWarnings(plainWarnings(entry.fix.Warnings...)...),
 		}, nil
 	default:
 		return PreviewResult{}, fmt.Errorf("preview kind %q is unsupported", entry.kind)
@@ -470,9 +481,9 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true
 		}
-		if request.Error != "" || request.Warning != "" || request.Failure != nil || request.Preview != nil || request.Instruction != "" || request.AnalysisFix != nil || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
+		if request.Error != "" || len(request.Warnings) > 0 || request.Failure != nil || request.Preview != nil || request.Instruction != "" || request.AnalysisFix != nil || request.Issue != nil || request.BaseIssue != nil || request.BaseTargetRepo != "" || request.BasePatternHash != "" || request.Runtime != nil || request.Cleanup != nil || request.Fix != nil || request.EmailError != "" {
 			request.Error = ""
-			request.Warning = ""
+			request.Warnings = nil
 			request.Failure = nil
 			request.Preview = nil
 			request.Instruction = ""

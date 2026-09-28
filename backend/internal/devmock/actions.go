@@ -158,9 +158,9 @@ func (a *Actions) CreateRequest(failureID, kind, login, _, instruction, supersed
 // instruction records the maintainer's refinement on the draft the request will
 // produce, so a refined request differs from the one it replaced.
 func (a *Actions) instruction(request *mockRequest, instruction string) {
-	request.view.Warning = ""
+	request.view.Warnings = nil
 	if strings.TrimSpace(instruction) != "" {
-		request.view.Warning = "Draft refined by a maintainer instruction."
+		request.view.Warnings = []actions.ActionWarning{{Message: "Draft refined by a maintainer instruction."}}
 	}
 }
 
@@ -291,7 +291,7 @@ func (a *Actions) viewLocked(request *mockRequest, now time.Time) actions.Action
 // instructionFrom recovers whether the request carried a refinement, which is
 // all the mock draft needs to differ.
 func instructionFrom(view actions.ActionRequestView) string {
-	if view.Warning == "" {
+	if len(view.Warnings) == 0 {
 		return ""
 	}
 	return "Refined by a maintainer instruction."

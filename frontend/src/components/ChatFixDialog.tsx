@@ -18,8 +18,8 @@ import {
   ArrowBackOutlined,
   BuildOutlined,
   CheckCircleOutlined,
-  FactCheckOutlined,
 } from "@mui/icons-material";
+import type { Theme } from "@mui/material/styles";
 import {
   cancelAnalysisChatFixRequest,
   chatFixInstructionBytes,
@@ -31,16 +31,25 @@ import {
   type ChatFixRequest,
   type ChatFixPreview,
 } from "../lib/chatFix";
-import { chatFixRequestPresentation } from "../lib/chatFixPresentation";
+import { chatFixFindingCaveats, chatFixRequestPresentation, mergeActionWarnings } from "../lib/chatFixPresentation";
 import { actionRequestIsPollable } from "../lib/actionRequests";
 import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixRequest } from "../lib/chatFixRequestStorage";
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
-import { ActionDraftPreview } from "./ActionDraftPreview";
+import { ActionDraftPreview, WarningLines } from "./ActionDraftPreview";
 import { DialogHeader } from "./ActionDialog";
-import { dialogGutter, dialogPaperSx } from "../theme/overview";
+import { dialogGutter, dialogPaperSx, dialogRegionLabelSx, overviewTypography } from "../theme/overview";
 import { RichText } from "./RichText";
 import { alertRole } from "../theme";
+
+const regionBlockSx = {
+  borderRadius: 1,
+  border: "1px solid",
+  borderColor: "divider",
+  bgcolor: (theme: Theme) => (theme.vars ?? theme).palette.surface.containerLow,
+  px: 1.5,
+  py: 1.1,
+} as const;
 
 function EvidenceList({
   citations,
@@ -48,7 +57,7 @@ function EvidenceList({
   citations: { path: string; line_start?: number; line_end?: number; quote?: string }[];
 }) {
   return (
-    <Stack spacing={0.8}>
+    <Stack spacing={1}>
       {citations.map((citation, index) => {
         const lines = citation.line_start
           ? citation.line_end && citation.line_end !== citation.line_start
@@ -56,12 +65,9 @@ function EvidenceList({
             : `line ${citation.line_start}`
           : "";
         return (
-          <Box
-            key={`${citation.path}-${citation.line_start ?? 0}-${index}`}
-            sx={{ borderLeft: "2px solid", borderColor: "success.main", pl: 1.1, py: 0.15 }}
-          >
+          <Box key={`${citation.path}-${citation.line_start ?? 0}-${index}`} sx={regionBlockSx}>
             <Stack direction="row" spacing={0.7} useFlexGap sx={{ alignItems: "baseline", flexWrap: "wrap" }}>
-              <Typography sx={{ fontFamily: "monospace", fontSize: "0.75rem", fontWeight: 700 }}>
+              <Typography sx={{ ...overviewTypography.data, fontWeight: 700, overflowWrap: "anywhere" }}>
                 {citation.path}
               </Typography>
               {lines && (
@@ -73,11 +79,10 @@ function EvidenceList({
             {citation.quote && (
               <Typography
                 component="blockquote"
-                variant="caption"
                 color="textSecondary"
-                sx={{ m: 0, mt: 0.3, fontFamily: "monospace", lineHeight: 1.5 }}
+                sx={{ ...overviewTypography.data, m: 0, mt: 0.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
               >
-                “{citation.quote}”
+                {citation.quote}
               </Typography>
             )}
           </Box>
@@ -87,22 +92,51 @@ function EvidenceList({
   );
 }
 
-function ContextSection({ title, icon, children }: {
+function ContextSection({ title, children }: {
   title: string;
-  icon: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Box>
-      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", mb: 0.9 }}>
-        {icon}
-        <Typography variant="label" sx={{ fontWeight: 750 }}>
-          {title}
-        </Typography>
-      </Stack>
+      <Typography variant="label" component="h3" sx={{ display: "block", fontWeight: 750, mb: 1 }}>
+        {title}
+      </Typography>
       {children}
     </Box>
   );
+}
+
+function FindingCaveats({ caveats }: { caveats: string[] }) {
+  if (caveats.length === 0) return null;
+  return (
+    <Alert severity="warning" variant="outlined" sx={{ mt: 1.5 }}>
+      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+        Treat this finding as a hypothesis
+      </Typography>
+      <WarningLines messages={caveats} />
+    </Alert>
+  );
+}
+
+function SentInstruction({ text }: { text: string }) {
+  return (
+    <Box>
+      <Typography sx={dialogRegionLabelSx}>Maintainer instruction</Typography>
+      <Typography variant="body2" sx={{ maxWidth: "68ch", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+        {text}
+      </Typography>
+    </Box>
+  );
+}
+
+function fixScopeSummary(causeScope: boolean, exactAnalysis: boolean): string {
+  if (causeScope) {
+    return "Sends this finding, its validated evidence, the cause's representative failed JUnit test, and your instruction to the coding agent, but not the rest of the conversation.";
+  }
+  if (exactAnalysis) {
+    return "Sends this finding, its validated evidence, the failed JUnit test's analysis, and your instruction to the coding agent, but not the rest of the conversation.";
+  }
+  return "Sends this finding, its validated evidence, the selected recurring pattern and its source hints, and your instruction to the coding agent, but not the rest of the conversation.";
 }
 
 export function ChatFixDialog({
@@ -153,6 +187,8 @@ export function ChatFixDialog({
   const instructionHelperText = requestPresentation?.canRegenerate && !isProviderCredentialRetry && !hasRevisedInstruction
     ? `Change the previous instruction to enable regeneration. ${chatFixInstructionBytes(instruction)}/4096 bytes`
     : `${chatFixInstructionBytes(instruction)}/4096 bytes`;
+  const generating = busy === "preview" || busy === "regenerate";
+  const hasWarnings = Boolean(request?.warnings?.length || preview?.warnings?.length);
 
   const firstPatternID = eligiblePatterns[0]?.id ?? "";
 
@@ -382,6 +418,9 @@ export function ChatFixDialog({
 
   if (!message) return null;
 
+  const caveats = chatFixFindingCaveats(message, request?.warnings);
+  const sentInstruction = instruction.trim();
+
   return (
     <Dialog
       open={open}
@@ -393,7 +432,7 @@ export function ChatFixDialog({
       <DialogHeader
         icon={<BuildOutlined sx={{ fontSize: 18 }} />}
         title="Use this finding in a fix proposal"
-        subtitle="Review the exact context before the coding agent sees it."
+        subtitle={fixScopeSummary(causeScope, exactAnalysis)}
       />
 
       <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
@@ -416,15 +455,8 @@ export function ChatFixDialog({
                 {requestPresentation.message}
               </Alert>
             )}
-            <Alert role="status" severity="info" variant="outlined">
-              {causeScope
-                ? "Only the representative failed JUnit target for this cause, this cause-scoped response, retained validated artifact evidence, immutable repository and generation-base identity, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."
-                : exactAnalysis
-                  ? "Only this exact failed JUnit analysis, this response, retained validated artifact evidence, immutable repository and generation-base identity, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."
-                  : "Only this response, retained validated evidence, the selected recurring pattern, available source hints, and your optional instruction are sent. The coding agent investigates the repository; the complete conversation is excluded."}
-            </Alert>
 
-            {!exactAnalysis && <ContextSection title="Recurring pattern" icon={<BuildOutlined sx={{ fontSize: 17, color: "warning.main" }} />}>
+            {!exactAnalysis && <ContextSection title="Recurring pattern">
               {eligiblePatterns.length > 1 && (
                 <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
                   <InputLabel id="chat-fix-pattern-label">Pattern</InputLabel>
@@ -441,107 +473,57 @@ export function ChatFixDialog({
                 </FormControl>
               )}
               {selectedPattern && (
-                <Box sx={{ borderRadius: 1, bgcolor: "action.selected", px: 1.5, py: 1.25 }}>
+                <Box sx={regionBlockSx}>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedPattern.subject}</Typography>
                   {selectedPattern.shared_root_cause && (
-                    <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55 }}>
+                    <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55, maxWidth: "68ch" }}>
                       <RichText text={selectedPattern.shared_root_cause} steps />
                     </Typography>
                   )}
                   {selectedPattern.suggested_fix && (
-                    <Typography variant="caption" color="primary" sx={{ display: "block", mt: 0.8, fontWeight: 700 }}>
-                      Direction: {selectedPattern.suggested_fix}
+                    <Typography variant="body2" sx={{ mt: 1, maxWidth: "68ch" }}>
+                      <Box component="span" sx={{ fontWeight: 700 }}>Direction: </Box>
+                      {selectedPattern.suggested_fix}
                     </Typography>
                   )}
                   {selectedPattern.relevant_files && selectedPattern.relevant_files.length > 0 && (
-                    <Box sx={{ mt: 1 }}>
-                      <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mb: 0.45 }}>
-                        Agent starting files
-                      </Typography>
-                      <Box
-                        sx={{
-                          borderRadius: 1,
-                          bgcolor: "background.paper",
-                          border: "1px solid",
-                          borderColor: "divider",
-                          px: 1,
-                          py: 0.65,
-                        }}
-                      >
-                        {selectedPattern.relevant_files.map((path) => (
-                          <Typography
-                            key={path}
-                            variant="caption"
-                            sx={{ display: "block", fontFamily: "monospace", overflowWrap: "anywhere" }}
-                          >
-                            {path}
-                          </Typography>
-                        ))}
-                      </Box>
+                    <Box sx={{ mt: 1.25 }}>
+                      <Typography sx={dialogRegionLabelSx}>Agent starting files</Typography>
+                      {selectedPattern.relevant_files.map((path) => (
+                        <Typography
+                          key={path}
+                          sx={{ ...overviewTypography.data, display: "block", overflowWrap: "anywhere" }}
+                        >
+                          {path}
+                        </Typography>
+                      ))}
                     </Box>
                   )}
                 </Box>
               )}
             </ContextSection>}
 
-            <ContextSection title="Selected chat finding" icon={<BuildOutlined sx={{ fontSize: 17, color: "primary.main" }} />}>
-              {message.unverified && (
-                <Alert severity="warning" variant="outlined" sx={{ mb: 1.2 }}>
-                  This finding is unverified. It is supplied as an investigation hypothesis, not as proven evidence.
-                </Alert>
-              )}
-              {!message.citations?.length && (
-                <Alert severity="info" variant="outlined" sx={{ mb: 1.2 }}>
-                  No validated artifact citations accompany this finding. The coding agent must investigate the available failure and repository context.
-                </Alert>
-              )}
-              {message.evidence_warnings?.length ? (
-                <Alert severity="warning" variant="outlined" sx={{ mb: 1.2 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                    Some evidence claims were not validated.
-                  </Typography>
-                  {message.evidence_warnings.map((warning) => (
-                    <Typography key={warning} variant="body2">{warning}</Typography>
-                  ))}
-                </Alert>
-              ) : null}
-              <Box sx={{ borderLeft: "1px solid", borderColor: "primary.main", pl: 1.5, py: 0.2 }}>
-                <Typography variant="body2" sx={{ lineHeight: 1.6 }}>
-                  <RichText text={message.content} steps />
-                </Typography>
-              </Box>
+            <ContextSection title="Selected chat finding">
+              <Typography variant="body2" sx={{ lineHeight: 1.6, maxWidth: "68ch" }}>
+                <RichText text={message.content} steps />
+              </Typography>
+              <FindingCaveats caveats={caveats} />
               {message.proposed_revision && (
-                <Box sx={{ mt: 1.2, borderRadius: 1, bgcolor: "action.selected", p: 1.25 }}>
-                  <Typography variant="caption" color="warning" sx={{ fontWeight: 750 }}>Proposed revision from this finding</Typography>
-                  <Typography variant="body2" sx={{ mt: 0.45 }}>{message.proposed_revision.root_cause}</Typography>
-                  <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45 }}>{message.proposed_revision.suggested_fix}</Typography>
+                <Box sx={{ mt: 2 }}>
+                  <Typography sx={dialogRegionLabelSx}>Proposed revision</Typography>
+                  <Typography variant="body2" sx={{ maxWidth: "68ch" }}>{message.proposed_revision.root_cause}</Typography>
+                  <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45, maxWidth: "68ch" }}>
+                    {message.proposed_revision.suggested_fix}
+                  </Typography>
                 </Box>
               )}
               {message.citations && message.citations.length > 0 && (
-                <Box sx={{ mt: 1.2 }}>
-                  <Typography variant="caption" color="textSecondary" sx={{ display: "block", fontWeight: 700, mb: 0.65 }}>
-                    Validated evidence
-                  </Typography>
+                <Box sx={{ mt: 2 }}>
+                  <Typography sx={dialogRegionLabelSx}>Validated evidence</Typography>
                   <EvidenceList citations={message.citations} />
                 </Box>
               )}
-              {request?.warning && !preview && (
-                <Alert severity="warning" variant="outlined" sx={{ mt: 1.2 }}>
-                  <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                    Investigation warning
-                  </Typography>
-                  <Typography variant="body2">{request.warning}</Typography>
-                </Alert>
-              )}
             </ContextSection>
-
-            {exactAnalysis && (
-              <ContextSection title="Immutable repository and generation base" icon={<FactCheckOutlined sx={{ fontSize: 17, color: "info.main" }} />}>
-                <Alert role="status" severity="info" variant="outlined">
-                  The server resolves the repository and tested branch from build metadata, pins the generation base, and rejects the preview if that identity changes. Source paths from the analysis are optional investigation hints.
-                </Alert>
-              </ContextSection>
-            )}
 
             {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
               <Alert severity={requestPresentation.severity} role="status" variant="outlined">
@@ -566,62 +548,41 @@ export function ChatFixDialog({
               </Box>
             )}
 
-            <TextField
-              label="Maintainer instruction (optional)"
-              placeholder="e.g. preserve backward compatibility and change only the controller retry branch"
-              fullWidth
-              multiline
-              minRows={2}
-              maxRows={5}
-              value={instruction}
-              onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
-              helperText={instructionHelperText}
-            />
-            {requestPresentation?.canRegenerate && (
+            {generating ? (
+              sentInstruction && <SentInstruction text={sentInstruction} />
+            ) : (
+              <TextField
+                label="Maintainer instruction (optional)"
+                placeholder="e.g. preserve backward compatibility and change only the controller retry branch"
+                fullWidth
+                multiline
+                minRows={2}
+                maxRows={5}
+                value={instruction}
+                onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
+                helperText={instructionHelperText}
+              />
+            )}
+            {requestPresentation?.canRegenerate && !generating && (
               <Button
                 variant="outlined"
                 onClick={() => void regeneratePreview()}
                 disabled={busy !== null || (!isProviderCredentialRetry && !hasRevisedInstruction)}
                 sx={{ alignSelf: "flex-start" }}
               >
-                {busy === "regenerate"
-                  ? isProviderCredentialRetry ? "Retrying" : "Regenerating"
-                  : isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
+                {isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
               </Button>
             )}
-          </Stack>
-        )}
-
-        {(busy === "preview" || busy === "regenerate") && (
-          <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", py: 4, justifyContent: "center" }}>
-            <CircularProgress size={20} />
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                {busy === "regenerate"
-                  ? "Regenerating the fix preview"
-                  : request?.stage === "drafting"
-                    ? "Generating the fix preview"
-                    : "Verifying the fix request"}
+            {exactAnalysis && (
+              <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
+                The repository and generation base are pinned from build metadata. The preview is rejected if either changes.
               </Typography>
-              <Typography variant="caption" color="textSecondary">
-                {exactAnalysis
-                  ? "Generation continues in the background. You can close this dialog and return later."
-                  : "The coding agent is using only the reviewed context."}
-              </Typography>
-            </Box>
+            )}
           </Stack>
         )}
 
         {preview && !url && (
           <Stack spacing={2.25}>
-            {request?.warning && (
-              <Alert severity="warning" variant="outlined">
-                <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                  Investigation warning
-                </Typography>
-                <Typography variant="body2">{request.warning}</Typography>
-              </Alert>
-            )}
             <Button
               size="small"
               color="inherit"
@@ -632,8 +593,9 @@ export function ChatFixDialog({
             >
               Back to context
             </Button>
-            <ActionDraftPreview preview={preview} />
-            {exactAnalysis && (
+            <ActionDraftPreview preview={{ ...preview, warnings: mergeActionWarnings(request?.warnings, preview.warnings) }} />
+            {exactAnalysis && generating && sentInstruction && <SentInstruction text={sentInstruction} />}
+            {exactAnalysis && !generating && (
               <Stack spacing={1.25}>
                 <TextField
                   label="Maintainer instruction"
@@ -652,7 +614,7 @@ export function ChatFixDialog({
                   disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
                   sx={{ alignSelf: "flex-start" }}
                 >
-                  {busy === "regenerate" ? "Regenerating" : "Regenerate with feedback"}
+                  Regenerate with feedback
                 </Button>
               </Stack>
             )}
@@ -660,14 +622,38 @@ export function ChatFixDialog({
         )}
       </DialogContent>
 
-      <DialogActions sx={{ px: dialogGutter, py: 2 }}>
+      <DialogActions sx={{ px: dialogGutter, py: 2, flexWrap: generating ? "wrap" : undefined, rowGap: 1.5 }}>
+        {generating && (
+          <Stack
+            role="status"
+            direction="row"
+            spacing={1.25}
+            sx={{ alignItems: "center", flex: "1 1 18rem", minWidth: 0, mr: "auto" }}
+          >
+            <CircularProgress size={18} sx={{ flexShrink: 0 }} />
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {busy === "regenerate"
+                  ? "Regenerating the fix preview"
+                  : request?.stage === "drafting"
+                    ? "Generating the fix preview"
+                    : "Verifying the fix request"}
+              </Typography>
+              <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
+                {exactAnalysis
+                  ? "Generation continues in the background. You can close this dialog and return later."
+                  : "The coding agent is using only the reviewed context."}
+              </Typography>
+            </Box>
+          </Stack>
+        )}
         <Button color="inherit" onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
           {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
         </Button>
         {!request && !preview && !url && (
           <Button
             variant="contained"
-            startIcon={busy === "preview" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
+            startIcon={<BuildOutlined />}
             onClick={() => void generatePreview()}
             disabled={busy !== null || (!exactAnalysis && !patternID)}
           >
@@ -694,7 +680,7 @@ export function ChatFixDialog({
           >
             {busy === "confirm"
               ? "Opening draft PR"
-              : request?.warning || preview.warning
+              : hasWarnings
                 ? "Open draft PR with warnings"
                 : "Open draft PR"}
           </Button>

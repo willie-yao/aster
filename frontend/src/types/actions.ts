@@ -81,12 +81,20 @@ export interface AnalysisFixFailure {
   changed_files?: string[];
 }
 
+/** Warnings a client can also derive from the chat answer it holds. */
+export type ActionWarningCode = "evidence_qualified" | "assistant_unverified" | "no_citations";
+
+export interface ActionWarning {
+  code?: ActionWarningCode;
+  message: string;
+}
+
 export interface ActionPreview {
   token?: string;
   kind: "issue" | "fix";
   title: string;
   body: string;
-  warning?: string;
+  warnings?: ActionWarning[];
   diff?: string;
   verify_status?: string;
   verify_summary?: string;
@@ -106,7 +114,7 @@ export interface ActionRequest {
   expires_at: string;
   error?: string;
   reason_code?: ActionReasonCode;
-  warning?: string;
+  warnings?: ActionWarning[];
   failure?: AnalysisFixFailure;
   result_url?: string;
   superseded_by?: string;

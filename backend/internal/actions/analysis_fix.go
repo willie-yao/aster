@@ -337,7 +337,7 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	warnings := analysisQualityWarnings(input)
 	if remediationpolicy.RelationshipTextWarning(findingText) != "" {
-		warnings = append(warnings, analysisWarningPolicy)
+		warnings = append(warnings, ActionWarning{Message: analysisWarningPolicy})
 	}
 	destination, err := s.cfg.ResolveFixDestination("", "")
 	if err != nil {
@@ -358,7 +358,7 @@ func (s *Service) PreviewAnalysisFix(
 		!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
-	if err := s.setRequestWarning(ctx, warnings...); err != nil {
+	if err := s.setRequestWarnings(ctx, warnings...); err != nil {
 		return PreviewResult{}, err
 	}
 
@@ -380,7 +380,7 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	if !acquired {
 		if existing != nil && existing.fix != nil {
-			if err := s.setRequestWarning(ctx, existing.fix.Warnings...); err != nil {
+			if err := s.setRequestWarnings(ctx, plainWarnings(existing.fix.Warnings...)...); err != nil {
 				return PreviewResult{}, err
 			}
 		}
@@ -406,7 +406,7 @@ func (s *Service) PreviewAnalysisFix(
 	if err != nil {
 		return PreviewResult{}, safeAnalysisFixPreviewError(err)
 	}
-	if err := s.setRequestWarning(ctx, gf.Warnings...); err != nil {
+	if err := s.setRequestWarnings(ctx, plainWarnings(gf.Warnings...)...); err != nil {
 		return PreviewResult{}, err
 	}
 	if err := s.validateFixFiles(destination, gf.Preview.Files); err != nil {
@@ -485,35 +485,36 @@ func analysisFixReplacementHash(input AnalysisFixInput) string {
 	return analysisFixHandoffHash(input)
 }
 
-func analysisQualityWarnings(input AnalysisFixInput) []string {
+func analysisQualityWarnings(input AnalysisFixInput) []ActionWarning {
 	analysis := input.TargetAnalysis
-	warnings := make([]string, 0, 6)
+	var messages []string
 	if !analysis.CritiquePassed {
-		warnings = append(warnings, analysisWarningCritique)
+		messages = append(messages, analysisWarningCritique)
 	}
 	if strings.TrimSpace(analysis.SuggestedFix) == "" {
-		warnings = append(warnings, analysisWarningSuggestedFix)
+		messages = append(messages, analysisWarningSuggestedFix)
 	}
 	if strings.TrimSpace(analysis.RootCause) == "" && strings.TrimSpace(input.AssistantAnswer) != "" {
-		warnings = append(warnings, analysisWarningRootCause)
+		messages = append(messages, analysisWarningRootCause)
 	}
 	if strings.EqualFold(strings.TrimSpace(analysis.Severity), "Transient-Ignore") {
-		warnings = append(warnings, analysisWarningTransient)
+		messages = append(messages, analysisWarningTransient)
 	}
 	if input.ProposedRevision != nil && (strings.TrimSpace(input.ProposedRevision.RootCause) == "" || strings.TrimSpace(input.ProposedRevision.SuggestedFix) == "") {
-		warnings = append(warnings, analysisWarningProse)
+		messages = append(messages, analysisWarningProse)
 	}
+	warnings := plainWarnings(messages...)
 	if len(input.EvidenceWarnings) > 0 {
-		warnings = append(warnings, analysisWarningEvidenceQualified)
+		warnings = append(warnings, ActionWarning{Code: WarningEvidenceQualified, Message: analysisWarningEvidenceQualified})
 	}
 	if input.AssistantUnverified {
-		warnings = append(warnings, analysisWarningAssistantUnverified)
+		warnings = append(warnings, ActionWarning{Code: WarningAssistantUnverified, Message: analysisWarningAssistantUnverified})
 	}
 	if len(input.ArtifactCitations) == 0 {
-		warnings = append(warnings, analysisWarningNoCitations)
+		warnings = append(warnings, ActionWarning{Code: WarningNoCitations, Message: analysisWarningNoCitations})
 	}
 	if len(input.SourceHints) == 0 {
-		warnings = append(warnings, analysisWarningNoSourceHints)
+		warnings = append(warnings, ActionWarning{Message: analysisWarningNoSourceHints})
 	}
 	return warnings
 }

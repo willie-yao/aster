@@ -115,10 +115,10 @@ test("fix preview warnings are visible without changing issue eligibility", asyn
     fs.readFile("src/pages/ActionRequestPage.tsx", "utf8"),
   ]);
 
-  assert.match(types, /body: string;\s*warning\?: string;\s*diff\?: string;/);
-  assert.match(preview, /\{preview\.warning && \([\s\S]*Investigation warning[\s\S]*\{preview\.warning\}/);
-  assert.match(actions, /request\?\.warning \|\| preview\?\.warning[\s\S]*Open draft PR with warnings/);
-  assert.match(requestPage, /request\.warning \|\| preview\?\.warning[\s\S]*Open draft PR with warnings/);
+  assert.match(types, /body: string;\s*warnings\?: ActionWarning\[\];\s*diff\?: string;/);
+  assert.match(preview, /\{preview\.warnings\?\.length \? \([\s\S]*Investigation warning[\s\S]*preview\.warnings\.map/);
+  assert.match(actions, /request\?\.warnings\?\.length \|\| preview\?\.warnings\?\.length[\s\S]*Open draft PR with warnings/);
+  assert.match(requestPage, /request\.warnings\?\.length \|\| preview\?\.warnings\?\.length[\s\S]*Open draft PR with warnings/);
   assert.match(actions, /const canStartIssue = issueDrafting && eligibility\?\.state === "actionable"/);
 });
 

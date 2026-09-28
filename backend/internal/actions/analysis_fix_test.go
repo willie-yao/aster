@@ -411,7 +411,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		}
 		generation := analysisFailureForGeneration(current, input, "main", analysisFixRevision)
 		generated <- generation
-		if err := service.setRequestWarning(ctx, analysisQualityWarnings(input)...); err != nil {
+		if err := service.setRequestWarnings(ctx, analysisQualityWarnings(input)...); err != nil {
 			return PreviewResult{}, err
 		}
 		fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
@@ -463,8 +463,8 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		analysisWarningCritique, analysisWarningTransient, analysisWarningAssistantUnverified,
 		analysisWarningNoCitations, analysisWarningNoSourceHints,
 	} {
-		if !strings.Contains(ready.Warning, warning) {
-			t.Fatalf("warning %q missing from %q", warning, ready.Warning)
+		if !strings.Contains(warningText(ready.Warnings), warning) {
+			t.Fatalf("warning %q missing from %q", warning, warningText(ready.Warnings))
 		}
 	}
 	select {
@@ -531,7 +531,7 @@ func TestAnalysisFixUsesCapturedAnalysisAfterReanalysis(t *testing.T) {
 		generated <- struct {
 			failure  fixpr.AnalysisFailure
 			warnings []string
-		}{analysisFailureForGeneration(subject, input, "main", analysisFixRevision), analysisQualityWarnings(input)}
+		}{analysisFailureForGeneration(subject, input, "main", analysisFixRevision), warningMessages(analysisQualityWarnings(input))}
 		return handoffTestPreview(t, service, input, owner, &calls)
 	}
 	request, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "token", "")
@@ -606,8 +606,23 @@ func TestAnalysisQualityWarningsPreserveWeakEvidenceSignals(t *testing.T) {
 		analysisWarningTransient, analysisWarningProse, analysisWarningEvidenceQualified,
 		analysisWarningAssistantUnverified, analysisWarningNoCitations, analysisWarningNoSourceHints,
 	} {
-		if !slices.Contains(warnings, warning) {
+		if !slices.Contains(warningMessages(warnings), warning) {
 			t.Fatalf("warnings=%v missing=%q", warnings, warning)
+		}
+	}
+	codes := map[string]WarningCode{}
+	for _, warning := range warnings {
+		codes[warning.Message] = warning.Code
+	}
+	for message, want := range map[string]WarningCode{
+		analysisWarningEvidenceQualified:   WarningEvidenceQualified,
+		analysisWarningAssistantUnverified: WarningAssistantUnverified,
+		analysisWarningNoCitations:         WarningNoCitations,
+		analysisWarningCritique:            "",
+		analysisWarningNoSourceHints:       "",
+	} {
+		if codes[message] != want {
+			t.Fatalf("code for %q = %q, want %q", message, codes[message], want)
 		}
 	}
 }

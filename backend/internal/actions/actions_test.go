@@ -1074,8 +1074,8 @@ func TestManualBuildFixPersistsQualityWarningsWhileIssueStaysStrict(t *testing.T
 	}
 	failed := waitRequest(t, service, created.ID, "alice", RequestFailed)
 	for _, want := range []string{"critique quality contract", "no suggested fix", "no source hints"} {
-		if !strings.Contains(failed.Warning, want) {
-			t.Fatalf("warning %q missing %q", failed.Warning, want)
+		if !strings.Contains(warningText(failed.Warnings), want) {
+			t.Fatalf("warning %q missing %q", warningText(failed.Warnings), want)
 		}
 	}
 	if _, err := service.CreateRequest(id, "create-issue", "alice", "token", "", ""); err == nil || !strings.Contains(err.Error(), "quality gates") {
@@ -2457,7 +2457,7 @@ func TestConversionPolicyTreatsOriginalAnalysisAsWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	view, err := service.GetRequest(created.ID, "alice")
-	if err != nil || !strings.Contains(view.Warning, "remediation-policy concern") || called {
+	if err != nil || !strings.Contains(warningText(view.Warnings), "remediation-policy concern") || called {
 		t.Fatalf("requests=%v verifier_called=%t", service.requests.Requests, called)
 	}
 }
@@ -2499,8 +2499,8 @@ func TestManualFixPreviewSurfacesPersistedWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(preview.Warning, "automatic Fix eligibility") || !strings.Contains(preview.Warning, "no source hints") {
-		t.Fatalf("preview warning = %q", preview.Warning)
+	if !strings.Contains(warningText(preview.Warnings), "automatic Fix eligibility") || !strings.Contains(warningText(preview.Warnings), "no source hints") {
+		t.Fatalf("preview warning = %q", warningText(preview.Warnings))
 	}
 }
 

@@ -46,7 +46,7 @@ export function DialogHeader({
           <Typography
             variant="caption"
             color="textSecondary"
-            sx={{ display: "block", mt: 0.25 }}
+            sx={{ display: "block", mt: 0.25, maxWidth: "74ch" }}
           >
             {subtitle}
           </Typography>

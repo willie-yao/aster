@@ -6,16 +6,7 @@ import { CheckCircleOutlined, ErrorOutlined } from "@mui/icons-material";
 import type { Theme } from "@mui/material/styles";
 import { soft, accentLabelSx, type SoftColor } from "../theme";
 import type { ActionPreview } from "../types/actions";
-
-const sectionLabelSx = {
-  display: "block",
-  textTransform: "uppercase",
-  fontSize: "0.6875rem",
-  fontWeight: 700,
-  letterSpacing: "0.06em",
-  color: "text.secondary",
-  mb: 0.75,
-} as const;
+import { dialogRegionLabelSx } from "../theme/overview";
 
 const previewBoxSx = {
   borderRadius: 1,
@@ -29,6 +20,18 @@ const previewBoxSx = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
 } as const;
+
+/** Warning messages inside an Alert: a sentence for one, a list for several. */
+export function WarningLines({ messages }: { messages: string[] }) {
+  if (messages.length === 1) return <Typography variant="body2">{messages[0]}</Typography>;
+  return (
+    <Box component="ul" sx={{ m: 0, pl: 2.25 }}>
+      {messages.map((message) => (
+        <Typography key={message} component="li" variant="body2">{message}</Typography>
+      ))}
+    </Box>
+  );
+}
 
 function stripDraftComments(value: string): string {
   return value.replace(/<!--[\s\S]*?-->/g, "").trim();
@@ -92,17 +95,17 @@ function VerifyBadge({
 export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
   return (
     <Stack spacing={2.5}>
-      {preview.warning && (
+      {preview.warnings?.length ? (
         <Alert severity="warning" variant="outlined">
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
             Investigation warning
           </Typography>
-          <Typography variant="body2">{preview.warning}</Typography>
+          <WarningLines messages={preview.warnings.map((warning) => warning.message)} />
         </Alert>
-      )}
+      ) : null}
 
       <Box>
-        <Typography sx={sectionLabelSx}>Title</Typography>
+        <Typography sx={dialogRegionLabelSx}>Title</Typography>
         <Box
           sx={{
             borderRadius: 1,
@@ -131,7 +134,7 @@ export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
           />
           {preview.verify_status === "failed" && preview.verify_output && (
             <Box>
-              <Typography sx={sectionLabelSx}>Verification output</Typography>
+              <Typography sx={dialogRegionLabelSx}>Verification output</Typography>
               <Box
                 component="pre"
                 sx={{
@@ -149,7 +152,7 @@ export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
       )}
 
       <Box>
-        <Typography sx={sectionLabelSx}>
+        <Typography sx={dialogRegionLabelSx}>
           {preview.kind === "fix" ? "Description" : "Body"}
         </Typography>
         <Box sx={{ ...previewBoxSx, maxHeight: 340, overflowY: "auto" }}>
@@ -159,7 +162,7 @@ export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
 
       {preview.diff && (
         <Box>
-          <Typography sx={sectionLabelSx}>Proposed diff</Typography>
+          <Typography sx={dialogRegionLabelSx}>Proposed diff</Typography>
           <Box
             component="pre"
             sx={{

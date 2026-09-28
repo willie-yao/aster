@@ -36,12 +36,37 @@ const (
 	RequestStageVerifying     = "verifying_remediation"
 	RequestStageDrafting      = "drafting"
 	requestKindAnalysisFix    = "analysis-fix"
-	actionRequestStateVersion = 7
+	actionRequestStateVersion = 8
 )
 
 const draftRefinementWarning = "The revised draft could not be generated or did not pass safety validation. The safe fallback draft is shown below, but this replacement request cannot be confirmed."
 
 var ErrRequestNotFound = errors.New("action request not found")
+
+// WarningCode identifies a warning by meaning rather than wording.
+type WarningCode string
+
+// Codes for warnings a client can also derive from the chat answer it holds,
+// so it can present each fact once.
+const (
+	WarningEvidenceQualified   WarningCode = "evidence_qualified"
+	WarningAssistantUnverified WarningCode = "assistant_unverified"
+	WarningNoCitations         WarningCode = "no_citations"
+)
+
+// ActionWarning is one reviewer-facing caveat on a request or preview.
+type ActionWarning struct {
+	Code    WarningCode `json:"code,omitempty"`
+	Message string      `json:"message"`
+}
+
+func plainWarnings(messages ...string) []ActionWarning {
+	warnings := make([]ActionWarning, 0, len(messages))
+	for _, message := range messages {
+		warnings = append(warnings, ActionWarning{Message: message})
+	}
+	return warnings
+}
 
 // RequestReadyNotifier sends a draft-ready notification after async generation.
 type RequestReadyNotifier func(context.Context, ActionRequestView) error
@@ -68,7 +93,7 @@ type ActionRequestView struct {
 	ExpiresAt    string                  `json:"expires_at"`
 	Error        string                  `json:"error,omitempty"`
 	ReasonCode   ReasonCode              `json:"reason_code,omitempty"`
-	Warning      string                  `json:"warning,omitempty"`
+	Warnings     []ActionWarning         `json:"warnings,omitempty"`
 	Failure      *AnalysisFixFailureView `json:"failure,omitempty"`
 	ResultURL    string                  `json:"result_url,omitempty"`
 	SupersededBy string                  `json:"superseded_by,omitempty"`
