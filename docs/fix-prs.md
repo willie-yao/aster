@@ -21,6 +21,25 @@ The engine requires a current, unambiguous supported subject and an accessible c
 
 A preview is a review artifact, not proof that the patch fixes the failure. Agent Sandbox validators, source verification, Prow CI, and human review are separate gates. The engine never approves or merges the pull request.
 
+## When the coding agent proposes a patch
+
+Every Fix entry point gives the coding agent the same rule:
+
+- Propose a patch when code in the repository made, or failed to guard, the request that hit the observed failure condition, even when the condition itself is external. A change that avoids the condition or fails fast with a clear message qualifies, and the agent cites that code path by file and line.
+- Treat the published suggested fix as one candidate. An operational remedy, such as publishing a missing image, does not rule out a repository guard.
+- Make no change when no repository code is causally involved, for example when the fix belongs in another repository. Do not skip or weaken the failing test to produce a patch.
+
+The agent ends with a short summary of its change, the causal code path, and its caveats. The draft's **Proposed change** uses that summary, never the published suggested fix. If the summary is missing or fails draft-text validation, it lists the changed files instead.
+
+## Warnings and rejections
+
+When the agent returns a patch, quality concerns become warnings on the ready preview and the maintainer decides whether to open the draft:
+
+- failed or timed-out validators, also shown as the verification verdict;
+- analysis, evidence qualification, and eligibility concerns.
+
+These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-JUnit requests report `no_reviewable_patch` with the agent's explanation.
+
 ## Exact JUnit analysis handoff
 
 Authenticated server deployments can turn one exact failed JUnit analysis into a fix proposal from the analysis chat. There is one conversation: ask questions, and any completed nonempty answer can start a proposal, including an uncited or unverified answer. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable repository and generation base when the proposal is requested.
@@ -127,7 +146,7 @@ The runtime supports direct provider access or an explicit tokenless gateway. Us
 
 The provider protocol and OpenCode compatibility details are in [AI providers](ai-providers.md#agent-sandbox-provider-compatibility). The executor selects OpenCode's Copilot SDK for Copilot endpoints, with the dedicated credential passed only through the fixed environment variable. It disables the title agent and background model catalog fetch. TLS, egress, RuntimeClass, and provider-neutral isolation requirements are in [Kubernetes platform setup](kubernetes-platform.md#secure-runtime-contract).
 
-After OpenCode returns, the executor rejects credential leakage in process output, structured results, patches, changed files, command output, and failure data. It then runs validators with a credential-free environment and the image's local Go toolchain. Complete, authentic failed or timed-out validator results can produce a warned exact-JUnit preview; missing executables, malformed results, and integrity failures block a preview.
+After OpenCode returns, the executor rejects credential leakage in process output, structured results, patches, changed files, command output, and failure data. It then runs validators with a credential-free environment and the image's local Go toolchain. Complete, authentic failed or timed-out validator results produce a warned preview; missing executables, malformed results, and integrity failures block a preview.
 
 When the model provider rejects a Fix request, the failed request names the failure category and shows a bounded, redacted operator diagnostic with the HTTP status, provider error code, configured Secret reference, endpoint host and path, model, and provider message. Authentication failures remain `provider_credential`; other non-transient 4xx rejections are `provider_request`. Coding-agent and runtime failures show a bounded reason. The server logs the operator diagnostic for failed requests.
 

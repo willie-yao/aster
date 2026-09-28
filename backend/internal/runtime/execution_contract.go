@@ -23,6 +23,8 @@ const (
 	maxExecutionSingleArgBytes         = 1 << 10
 	maxExecutionResourceMetadataBytes  = 4 << 10
 	maxExecutionCommandDurationGraceMs = 5_000
+	// MaxAgentSummaryBytes bounds the coding agent's final summary.
+	MaxAgentSummaryBytes = 4 << 10
 )
 
 // ExecutionCommand is one exact argv allowed by the execution policy.
@@ -135,6 +137,7 @@ type ExecutionResult struct {
 	CommandResults []CommandResult      `json:"command_results,omitempty"`
 	StdoutSummary  string               `json:"stdout_summary,omitempty"`
 	StderrSummary  string               `json:"stderr_summary,omitempty"`
+	AgentSummary   string               `json:"agent_summary,omitempty"`
 	TerminalState  TerminalState        `json:"terminal_state,omitempty"`
 	FailureCode    ExecutionFailureCode `json:"failure_code,omitempty"`
 	DurationMs     int64                `json:"duration_ms,omitempty"`
@@ -282,6 +285,9 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 	default:
 		return fmt.Errorf("terminal state %q is not supported", r.TerminalState)
 	}
+	if len(r.AgentSummary) > MaxAgentSummaryBytes {
+		return fmt.Errorf("agent summary exceeds %d bytes", MaxAgentSummaryBytes)
+	}
 	if r.DurationMs < 0 || r.DurationMs > request.TimeoutSeconds*1000+30_000 {
 		return fmt.Errorf("execution duration is outside the request bound")
 	}
@@ -377,24 +383,6 @@ func ValidateCommandResults(commands []ExecutionCommand, results []CommandResult
 		}
 		if err := validateCommandResultTiming(index, commands[index], result); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-// ValidateSuccessfulCommandResults verifies the complete ordered result set for
-// one successful external execution. Every configured command must appear once,
-// succeed within its timeout, and end with the exact staged diff check.
-func ValidateSuccessfulCommandResults(commands []ExecutionCommand, results []CommandResult) error {
-	if err := ValidateCommandResults(commands, results); err != nil {
-		return err
-	}
-	for index, result := range results {
-		if result.TimedOut {
-			return fmt.Errorf("command result %d timed out", index)
-		}
-		if result.ExitCode != 0 {
-			return fmt.Errorf("command result %d failed with exit code %d", index, result.ExitCode)
 		}
 	}
 	return nil

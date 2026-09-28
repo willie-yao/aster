@@ -3,6 +3,7 @@ package pr
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -128,7 +129,7 @@ func TestAgentRuntimeSpecOmitsProviderPolicyForAgentOwnedEndpoint(t *testing.T) 
 func TestGenerateWithAgent_NoChangeIsNotFixable(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{Files: map[string]string{}}}
 	_, err := generateWithAgent(context.Background(), agentGenParams(&AgentConfig{Runtime: fa}), systemicPattern("etcd"))
-	if err == nil || !strings.Contains(err.Error(), "no code change") {
+	if err == nil || !strings.Contains(err.Error(), "no repository change") {
 		t.Errorf("expected a not-auto-fixable error, got %v", err)
 	}
 }
@@ -161,25 +162,22 @@ func TestGenerateWithAgent_ValidationFailureIsOneShotAndNotActionable(t *testing
 	}
 }
 
-func TestGenerateWithAgentRejectsCompletedFailedCommandResults(t *testing.T) {
+func TestGenerateWithAgentWarnsOnCompletedFailedCommandResults(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	results := sandboxCommandResults()
 	results[0].ExitCode = 1
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: "ref", Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff", CommandResults: results,
 	}}
-	reviewer := &fakeCompleter{}
 	gp := agentGenParams(&AgentConfig{
 		Runtime: fa, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands},
 	})
-	gp.critique = reviewer
-	gp.critiqueRetries = 3
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
-	if err == nil || !strings.Contains(err.Error(), "failed with exit code") {
-		t.Fatalf("fix=%v error=%v", fix, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if fix != nil || fa.calls != 1 || reviewer.lastSystem != "" || reviewer.lastUser != "" {
-		t.Fatalf("fix=%v runtime calls=%d critique=%q/%q", fix, fa.calls, reviewer.lastSystem, reviewer.lastUser)
+	if fa.calls != 1 || fix.executionVerification.verifyResult().Status != VerifyFailed || !slices.Contains(fix.warnings, patchVerifyWarning) {
+		t.Fatalf("calls=%d verify=%+v warnings=%v", fa.calls, fix.executionVerification.verifyResult(), fix.warnings)
 	}
 }
 
@@ -223,7 +221,7 @@ func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
 	}
 }
 
-func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
+func TestGenerateWithAgent_CritiqueConcernsWarnAfterRetries(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"a.yaml": "still wrong\n"}, Diff: "diff",
 	}}
@@ -232,9 +230,12 @@ func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
 	gp.critique = rev
 	gp.critiqueRetries = 1
 
-	_, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
-	if err == nil || !strings.Contains(err.Error(), "rejected by review") {
-		t.Errorf("expected a review rejection, got %v", err)
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa.calls != 2 || fix.files["a.yaml"] != "still wrong\n" || !slices.Contains(fix.warnings, patchCritiqueWarning("wrong value")) {
+		t.Fatalf("calls=%d fix=%+v", fa.calls, fix)
 	}
 	// The reviewer's objection must be fed back into the retry instruction.
 	if !strings.Contains(fa.spec.Instruction, "wrong value") {
@@ -242,7 +243,7 @@ func TestGenerateWithAgent_CritiqueRejectsThenExhausts(t *testing.T) {
 	}
 }
 
-func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
+func TestGenerateWithAgent_CritiqueErrorWarns(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
 	}}
@@ -251,8 +252,12 @@ func TestGenerateWithAgent_CritiqueErrorFailsClosed(t *testing.T) {
 	gp.critique = rev
 	gp.critiqueRetries = 1
 
-	if _, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd")); err == nil || !strings.Contains(err.Error(), "review failed") {
-		t.Errorf("a review error should drop the fix (fail closed), got %v", err)
+	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fa.calls != 1 || !slices.Contains(fix.warnings, patchCritiqueUnavailableWarning) {
+		t.Fatalf("calls=%d warnings=%v", fa.calls, fix.warnings)
 	}
 }
 
@@ -269,27 +274,98 @@ func TestGenerateBuildWithAgentPassesRuntimeIdentity(t *testing.T) {
 	}
 }
 
-func TestGenerateBuildWithAgentRejectsCompletedFailedCommandResults(t *testing.T) {
+func TestGenerateBuildWithAgentWarnsOnTimedOutCommandResults(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	results := sandboxCommandResults()
 	results[0].TimedOut = true
 	results[0].ExitCode = -1
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
 		BaseSHA: "ref", Files: map[string]string{"a": "b"}, Diff: "diff", CommandResults: results,
+		AgentSummary: "Guard the retry in `a` so it fails fast.",
 	}}
-	reviewer := &fakeCompleter{}
+	reviewer := &fakeCompleter{critique: `{"issues": ["the guard message is vague"]}`}
 	gp := agentGenParams(&AgentConfig{
 		Runtime: fa, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands},
 	})
 	gp.critique = reviewer
-	gp.critiqueRetries = 3
+	gp.critiqueRetries = 0
 	fix, err := generateBuildWithAgent(context.Background(), gp, BuildFailure{
 		RootCause: "failed", SuggestedFix: "fix it", SourceFiles: []string{"a"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("fix=%v error=%v", fix, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if fix != nil || fa.calls != 1 || reviewer.lastSystem != "" || reviewer.lastUser != "" {
-		t.Fatalf("fix=%v runtime calls=%d critique=%q/%q", fix, fa.calls, reviewer.lastSystem, reviewer.lastUser)
+	if fa.calls != 1 || reviewer.lastUser != "" || !slices.Contains(fix.warnings, patchVerifyWarning) {
+		t.Fatalf("calls=%d critique=%q warnings=%v", fa.calls, reviewer.lastUser, fix.warnings)
+	}
+	if fix.rationale != "Guard the retry in `a` so it fails fast." {
+		t.Fatalf("rationale = %q", fix.rationale)
+	}
+}
+
+func TestFixInstructionsShareRepositoryChangeGuidance(t *testing.T) {
+	generationContext := validGenerationContext()
+	instructions := map[string]string{
+		"pattern":  agentInstruction(systemicPattern("etcd"), &generationContext, "", "", 3, false),
+		"build":    buildFailureInstruction(BuildFailure{JobID: "job", BuildID: "1", RootCause: "cause"}, "", "", 3, false),
+		"analysis": analysisFailureInstruction(validAnalysisFailure(), "", "", 3, false),
+	}
+	for name, instruction := range instructions {
+		for _, want := range []string{
+			repositoryChangeGuidance,
+			changeSummaryInstruction,
+			"made, or failed to guard, the request or operation that hit the observed failure condition",
+			"fails fast with a clear message, is a valid fix. Cite that code path by file and line.",
+			"The published suggested fix is one candidate, not the default. An operational remedy does not rule out a repository guard.",
+			"prefer a minimal patch with its caveats stated in your summary over making no change",
+			"Make no change when no code in this repository is causally involved",
+			"do not skip or weaken the failing test, just to produce a patch",
+			"Do not delete or rename files.",
+		} {
+			if !strings.Contains(instruction, want) {
+				t.Errorf("%s instruction missing %q:\n%s", name, want, instruction)
+			}
+		}
+	}
+}
+
+func TestFixPreviewsDescribeGeneratedChange(t *testing.T) {
+	const summary = "Fail fast when the selected disk type is unavailable (`templates/cluster.yaml:3`)."
+	pattern := systemicPattern("etcd")
+	pattern.SuggestedFix = "Ask the platform team to enable Premium_LRS."
+	agent := goodAgent()
+	agent.res.AgentSummary = summary
+	manager := newManager(t, &fakePR{}, agent, Options{})
+
+	patternFix, err := manager.GeneratePreview(t.Context(), pattern, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildFix, err := manager.GenerateBuildPreview(t.Context(), BuildFailure{
+		ID: "build-id", JobID: "job", JobName: "job", BuildID: "1", RootCause: "cause", SuggestedFix: pattern.SuggestedFix,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, fix := range map[string]*GeneratedFix{"pattern": patternFix, "build": buildFix} {
+		if fix.Preview.Rationale != summary || !strings.Contains(fix.Description, "**Proposed change:** "+summary) {
+			t.Errorf("%s rationale=%q description=%q", name, fix.Preview.Rationale, fix.Description)
+		}
+		if strings.Contains(fix.Description, pattern.SuggestedFix) {
+			t.Errorf("%s description used the published suggested fix: %s", name, fix.Description)
+		}
+	}
+}
+
+func TestPatternPreviewCarriesCritiqueConcernsToPreviewAndBody(t *testing.T) {
+	agent := goodAgent()
+	manager := newManager(t, &fakePR{}, agent, Options{Critique: &fakeCompleter{critique: `{"issues":["the guard ignores zonal SKUs"]}`}, CritiqueRetries: 1})
+	fix, err := manager.GeneratePreview(t.Context(), systemicPattern("etcd"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning := patchCritiqueWarning("the guard ignores zonal SKUs")
+	if agent.calls != 2 || !slices.Contains(fix.Warnings, warning) || !strings.Contains(fix.Body, warning) {
+		t.Fatalf("calls=%d warnings=%v body=%q", agent.calls, fix.Warnings, fix.Body)
 	}
 }

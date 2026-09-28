@@ -194,6 +194,7 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 		stdoutSummary = openCodeFailureSummary(stdout)
 	} else {
 		stdoutSummary = openCodeSummary(stdout)
+		result.AgentSummary = truncateHead(openCodeFinalText(stdout), engineruntime.MaxAgentSummaryBytes)
 	}
 	result.StdoutSummary = appendSummary(result.StdoutSummary, stdoutSummary)
 	result.StderrSummary = appendSummary(result.StderrSummary, stderr)
@@ -334,7 +335,7 @@ func Execute(parent context.Context, request engineruntime.ExecutionRequest, opt
 }
 
 func fitFailureSummaries(limit int64, result *engineruntime.ExecutionResult) {
-	for _, summary := range []*string{&result.StdoutSummary, &result.StderrSummary} {
+	for _, summary := range []*string{&result.StdoutSummary, &result.StderrSummary, &result.AgentSummary} {
 		payload := *result
 		payload.Resources = engineruntime.ResourceMetadata{}
 		encoded, err := json.Marshal(payload)
@@ -379,7 +380,7 @@ func compactFailureWithCommandResults(
 }
 
 func validateCredentialFreeResult(credential modelprovider.CredentialGuard, result engineruntime.ExecutionResult) error {
-	if err := credential.CheckStrings(result.Diff, result.StdoutSummary, result.StderrSummary, result.FailureReason); err != nil {
+	if err := credential.CheckStrings(result.Diff, result.StdoutSummary, result.StderrSummary, result.AgentSummary, result.FailureReason); err != nil {
 		return err
 	}
 	if result.ProviderError != nil {
@@ -791,7 +792,15 @@ func setGitMetadataWritable(root string, writable bool) error {
 }
 
 func openCodeSummary(output string) string {
-	var summary string
+	if summary := openCodeFinalText(output); summary != "" {
+		return summary
+	}
+	return tail(output, maxCapturedStream)
+}
+
+// openCodeFinalText returns the agent's last text message, or empty when it wrote none.
+func openCodeFinalText(output string) string {
+	var text string
 	for line := range strings.SplitSeq(output, "\n") {
 		var event struct {
 			Type string `json:"type"`
@@ -800,13 +809,10 @@ func openCodeSummary(output string) string {
 			} `json:"part"`
 		}
 		if json.Unmarshal([]byte(line), &event) == nil && event.Type == "text" && strings.TrimSpace(event.Part.Text) != "" {
-			summary = strings.TrimSpace(event.Part.Text)
+			text = strings.TrimSpace(event.Part.Text)
 		}
 	}
-	if summary == "" {
-		return tail(output, maxCapturedStream)
-	}
-	return summary
+	return text
 }
 
 func stateForContext(ctx context.Context) engineruntime.TerminalState {
@@ -837,6 +843,18 @@ func commandOutputLimit(request engineruntime.ExecutionRequest) int {
 
 func appendSummary(current, next string) string {
 	return tail(strings.TrimSpace(current+"\n"+next), maxCapturedStream)
+}
+
+func truncateHead(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 func tail(value string, limit int) string {

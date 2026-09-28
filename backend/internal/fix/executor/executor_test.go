@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	engineruntime "github.com/willie-yao/aster/backend/internal/runtime"
@@ -73,6 +74,9 @@ func TestExecuteProducesCredentialFreeStagedPatch(t *testing.T) {
 	}
 	if !strings.Contains(result.Diff, "Hello Agent Sandbox!") || !strings.Contains(result.StdoutSummary, "fixture edit complete") {
 		t.Fatalf("diff=%q stdout=%q", result.Diff, result.StdoutSummary)
+	}
+	if result.AgentSummary != "fixture edit complete" {
+		t.Fatalf("agent summary = %q", result.AgentSummary)
 	}
 }
 
@@ -875,6 +879,17 @@ func TestOpenCodeSummaryUsesFinalText(t *testing.T) {
 	}
 }
 
+func TestOpenCodeFinalTextOmitsRawOutputAndIsBounded(t *testing.T) {
+	if text := openCodeFinalText(`{"type":"step_finish"}` + "\nplain log line\n"); text != "" {
+		t.Fatalf("final text without a text event = %q", text)
+	}
+	long := strings.Repeat("é", engineruntime.MaxAgentSummaryBytes)
+	bounded := truncateHead(long, engineruntime.MaxAgentSummaryBytes)
+	if len(bounded) > engineruntime.MaxAgentSummaryBytes || !utf8.ValidString(bounded) {
+		t.Fatalf("bounded summary length=%d valid=%v", len(bounded), utf8.ValidString(bounded))
+	}
+}
+
 func TestExecuteClassifiesReviewScopeWithoutPatchContent(t *testing.T) {
 	repository, sha := fixtureRepository(t)
 	request := fixtureRequest(repository, sha)
@@ -993,5 +1008,8 @@ func TestValidateCredentialFreeResultChecksProviderError(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+	if err := validateCredentialFreeResult(credential, engineruntime.ExecutionResult{AgentSummary: credentialValue}); !errors.Is(err, modelprovider.ErrCredentialExposure) {
+		t.Fatalf("agent summary error = %v", err)
 	}
 }
