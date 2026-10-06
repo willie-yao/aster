@@ -7,6 +7,7 @@ import { MemoryStorage } from "./helpers/memoryStorage.js";
 import {
   archiveAnalysisChatSession,
   analysisChatHistoryQuery,
+  analysisChatScopeLabel,
   listAnalysisChatSessions,
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
@@ -824,7 +825,7 @@ test("history reuses the transcript and remains separate from the current chat",
   const history = readFileSync(resolve("src/pages/InvestigationHistoryPage.tsx"), "utf8");
   assert.match(chat, /export function AnalysisChatTranscript/);
   assert.match(chat, /<AnalysisChatHistory jobID=/);
-  assert.match(history, /<AnalysisChatTranscript session=\{session\}/);
+  assert.match(history, /<AnalysisChatTranscript session=\{session\} historical/);
   assert.match(history, /auth\.status !== "authenticated"/);
   assert.match(history, /!features\.analysis_chat/);
   assert.doesNotMatch(history, /streamAnalysisChatMessage|createAnalysisChatSession/);
@@ -837,4 +838,15 @@ test("earlier conversations start collapsed and load only when opened", () => {
   assert.match(history, /aria-expanded=\{open\}/);
   assert.match(history, /<Collapse in=\{open\} timeout="auto" unmountOnExit>/);
   assert.match(history, /maxHeight: \{ xs: "28vh", sm: "min\(32vh, 280px\)" \}/);
+});
+
+test("history scopes distinguish whole patterns, causes, tests, and build failures", () => {
+  assert.equal(analysisChatScopeLabel(firstCause), "Cause");
+  assert.equal(analysisChatScopeLabel({
+    scope: "pattern", job_id: "job", pattern_id: "pattern", pattern_hash: "hash",
+  }), "Whole pattern");
+  assert.equal(analysisChatScopeLabel(analysis), "Test");
+  assert.equal(analysisChatScopeLabel({
+    job_id: "job", build_id: "123", test_name: "Build failure", source: "build",
+  }), "Build failure");
 });

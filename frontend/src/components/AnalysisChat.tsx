@@ -223,6 +223,7 @@ function UserMessage({ content, actor }: { content: string; actor?: string }) {
         borderInlineStartColor: "var(--mui-palette-primary-main)",
         px: 1.5,
         py: 1.1,
+        overflowWrap: "anywhere",
       }}
     >
       {actor && (
@@ -277,6 +278,7 @@ function AssistantMessage({
   fixEligible,
   sourceUnavailable,
   onUseForFix,
+  historical = false,
 }: {
   message: AnalysisChatMessage;
   fileCtx: FileToUrlContext;
@@ -284,6 +286,7 @@ function AssistantMessage({
   fixEligible: boolean;
   sourceUnavailable: boolean;
   onUseForFix: () => void;
+  historical?: boolean;
 }) {
   const assessment = message.assessment
     ? assessmentConfig[message.assessment]
@@ -305,7 +308,8 @@ function AssistantMessage({
       <Stack
         direction="row"
         spacing={1}
-        sx={{ alignItems: "center", px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}
+        useFlexGap
+        sx={{ alignItems: "center", flexWrap: "wrap", px: 1.5, py: 1, borderBottom: "1px solid", borderColor: "divider" }}
       >
         <AutoAwesome sx={{ color: "primary.main", fontSize: 17 }} />
         <Typography variant="label" sx={{ fontWeight: 700, color: "text.primary" }}>
@@ -328,10 +332,12 @@ function AssistantMessage({
           })}
         />
       </Stack>
-      <Stack spacing={1.5} sx={{ p: 1.5 }}>
+      <Stack spacing={1.5} sx={{ p: 1.5, overflowWrap: "anywhere", minWidth: 0 }}>
         {message.prepared && (
           <Typography variant="caption" color="textSecondary">
-            Generated during the scheduled analysis run. Review or challenge it before opening a Fix proposal.
+            {historical
+              ? "Prepared for this conversation's original evidence snapshot."
+              : "Generated during the scheduled analysis run. Review or challenge it before opening a Fix proposal."}
           </Typography>
         )}
         {unverified && (
@@ -596,20 +602,26 @@ function ThinkingState({
 }
 
 export function AnalysisChatTranscript({
-  session, fileCtx = {}, chatFixEnabled = false, fixEligible = false, onUseForFix,
+  session, fileCtx = {}, chatFixEnabled = false, fixEligible = false, onUseForFix, historical = false,
 }: {
   session: AnalysisChatSession;
   fileCtx?: FileToUrlContext;
   chatFixEnabled?: boolean;
   fixEligible?: boolean;
   onUseForFix?: (message: AnalysisChatMessage) => void;
+  historical?: boolean;
 }) {
-  return analysisChatHistory(session).map((entry) => {
+  const entries = analysisChatHistory(session);
+  if (historical && entries.length === 0) {
+    return <Typography variant="body2" color="textSecondary">No messages were saved for this conversation.</Typography>;
+  }
+  return entries.map((entry) => {
     if (entry.kind === "attempt") return <AttemptSummary key={entry.key} attempt={entry.attempt} />;
     const message = entry.message;
     if (message.role === "user") return <UserMessage key={entry.key} content={message.content} actor={message.actor} />;
     return <AssistantMessage key={entry.key} message={message} fileCtx={fileCtx}
-      chatFixEnabled={chatFixEnabled} fixEligible={fixEligible && Boolean(message.request_id && message.content.trim())}
+      historical={historical}
+      chatFixEnabled={chatFixEnabled && !historical} fixEligible={fixEligible && Boolean(message.request_id && message.content.trim())}
       sourceUnavailable={session.analysis.scope === "test" && !session.source_repository}
       onUseForFix={() => onUseForFix?.(message)} />;
   });
@@ -1398,8 +1410,10 @@ export function AnalysisChat({
         <Stack
           direction="row"
           spacing={0.25}
+          useFlexGap
           sx={{
             alignItems: "center",
+            flexWrap: "wrap",
             px: detailAppearance ? 1.5 : 1,
             py: 0.5,
             borderTop: detailAppearance ? "1px solid" : 0,
@@ -1424,7 +1438,7 @@ export function AnalysisChat({
             sx={{
               m: 0,
               minWidth: 0,
-              flex: 1,
+              flex: "1 1 140px",
               display: "flex",
               ...(detailAppearance ? overviewTypography.categoryHeading : {}),
             }}
@@ -1448,6 +1462,7 @@ export function AnalysisChat({
                 font: "inherit",
                 color: "inherit",
                 "&.Mui-disabled": { opacity: 0.5 },
+                "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
               }}
             >
               <Box
@@ -1484,6 +1499,7 @@ export function AnalysisChat({
                 aria-label={`${marker.label}. ${marker.detail}`}
                 sx={(theme) => ({
                   flexShrink: 0,
+                  order: { xs: 1, sm: 0 },
                   maxWidth: 210,
                   height: 24,
                   fontWeight: 650,
@@ -1662,6 +1678,7 @@ export function AnalysisChat({
             <Box
               aria-busy={composerLocked || restoring}
               sx={{
+                flexShrink: 0,
                 px: { xs: 1.25, sm: 1.5 },
                 pb: 1.5,
                 // Field and Send read as one control, so the border lives on
@@ -1844,8 +1861,6 @@ export function AnalysisChat({
         maxWidth="xs"
         slotProps={{ paper: { sx: dialogPaperSx } }}
       >
-        {/* Primary band like every other action dialog, so only the confirm
-            button carries the destructive colour. */}
         <DialogHeader
           icon={<RestartAltOutlined sx={{ fontSize: 18 }} />}
           accent="primary"
@@ -1853,23 +1868,33 @@ export function AnalysisChat({
         />
         <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           <Typography variant="body2" color="textSecondary">
-            This archives the shared conversation for every operator. Saved findings remain in history until their retention deadline. The new conversation starts without the previous discussion, and the published analysis is unchanged.
+            {session?.history_expires_at
+              ? "The previous conversation is saved, not deleted. It becomes read-only for every operator and stays in history until its retention deadline."
+              : "This conversation is not saved in history. Starting over archives it for every operator without adding it to history."}
+          </Typography>
+          {session?.messages.some((message) => message.prepared) && (
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>
+              Its prepared finding is also dismissed for every operator. Later conversations start without it unless a newer finding is prepared.
+            </Typography>
+          )}
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>
+            The new conversation starts without the previous discussion. The published analysis is unchanged.
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ px: dialogGutter, py: 2 }}>
+        <DialogActions sx={{ px: dialogGutter, py: 2, flexWrap: "wrap", gap: 1 }}>
           <Button sx={touchTargetSx} color="inherit" onClick={() => setResetOpen(false)} disabled={resetting}>
             Keep conversation
           </Button>
           <Button
             sx={touchTargetSx}
             variant="contained"
-            color="warning"
+            color="primary"
             disableElevation
             startIcon={resetting ? <CircularProgress size={16} color="inherit" /> : undefined}
             onClick={() => void startNewConversation()}
             disabled={resetting || restoring || busy || Boolean(session?.active)}
           >
-            {resetting ? "Archiving" : "Archive and start new"}
+            {resetting ? "Archiving" : session?.history_expires_at ? "Save and start new" : "Archive and start new"}
           </Button>
         </DialogActions>
       </Dialog>

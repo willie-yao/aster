@@ -14,9 +14,9 @@ import { AnalysisChatTranscript } from "../components/AnalysisChat";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { analysisChatHistoryQuery, getAnalysisChatSession, isAnalysisChatOAuthExpired } from "../lib/analysisChat";
+import { analysisChatHistoryQuery, analysisChatScopeLabel, getAnalysisChatSession, isAnalysisChatOAuthExpired } from "../lib/analysisChat";
 import type { AnalysisChatSession } from "../types/analysisChat";
-import { overviewTypography } from "../theme/overview";
+import { filterFieldSx, overviewTypography, touchTargetSx } from "../theme/overview";
 
 function HistoryFrame({ children }: { children: ReactNode }) {
   const { features } = useCapabilities();
@@ -24,9 +24,8 @@ function HistoryFrame({ children }: { children: ReactNode }) {
   return (
     <Stack spacing={2.5} sx={{ maxWidth: 1040, mx: "auto" }}>
       <Box>
-        <Typography sx={overviewTypography.eyebrow}>Operator workspace</Typography>
         <Typography component="h1" sx={overviewTypography.pageHeadline}>Investigation history</Typography>
-        <Typography color="textSecondary" sx={{ mt: 0.75, ...overviewTypography.primaryBody }}>
+        <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: "75ch", ...overviewTypography.primaryBody }}>
           Saved conversations and their original evidence. New analysis does not replace earlier findings.
         </Typography>
       </Box>
@@ -44,14 +43,15 @@ function HistoryFilters({ jobID, scope, onApply }: { jobID: string; scope: strin
   return (
     <Stack component="form" direction={{ xs: "column", sm: "row" }} spacing={1.5}
       onSubmit={(event) => { event.preventDefault(); onApply(job, kind); }}>
-      <TextField size="small" label="Job ID" value={job} onChange={(event) => setJob(event.target.value)} sx={{ flex: 1 }} />
-      <TextField select size="small" label="Scope" value={kind} onChange={(event) => setKind(event.target.value)} sx={{ minWidth: 170 }}>
+      <TextField size="small" label="Job ID" helperText="Exact job ID, or leave blank for all jobs" value={job} onChange={(event) => setJob(event.target.value)} sx={{ ...filterFieldSx, flex: 1 }} />
+      <TextField select size="small" label="Conversation scope" value={kind} onChange={(event) => setKind(event.target.value)} sx={{ ...filterFieldSx, minWidth: 200 }}>
         <MenuItem value="">All scopes</MenuItem>
         <MenuItem value="test">Test or build failure</MenuItem>
         <MenuItem value="pattern">Whole pattern</MenuItem>
         <MenuItem value="cause">Cause</MenuItem>
       </TextField>
-      <Button type="submit" variant="outlined" sx={{ minHeight: 44 }}>Apply filters</Button>
+      <Button type="submit" variant="outlined" sx={{ minHeight: 44, alignSelf: { xs: "stretch", sm: "flex-start" } }}>Apply filters</Button>
+      {(jobID || scope) && <Button onClick={() => onApply("", "")} sx={{ minHeight: 44, alignSelf: { xs: "stretch", sm: "flex-start" } }}>Clear filters</Button>}
     </Stack>
   );
 }
@@ -76,7 +76,8 @@ export function InvestigationSessionPage() {
   const { sessionID = "" } = useParams();
   const { status, login, mode, signIn } = useAuth();
   const { features } = useCapabilities();
-  const key = `${login ?? ""}:${sessionID}`;
+  const [retry, setRetry] = useState(0);
+  const key = `${login ?? ""}:${sessionID}:${retry}`;
   const [loaded, setLoaded] = useState<{ key: string; session?: AnalysisChatSession; error?: string }>();
   useEffect(() => {
     if (!features.analysis_chat || status !== "authenticated") return;
@@ -93,26 +94,41 @@ export function InvestigationSessionPage() {
   }, [mode, signIn, status, features.analysis_chat, key, sessionID]);
   const session = loaded?.key === key ? loaded.session : undefined;
   const error = loaded?.key === key ? loaded.error : undefined;
+  const metadata = session ? [
+    ["Scope", analysisChatScopeLabel(session.analysis)],
+    ["Job", session.analysis.job_id],
+    ["Started", new Date(session.created_at).toLocaleString()],
+    ...(session.created_by ? [["Started by", session.created_by]] : []),
+    ...(session.build_ids?.length ? [["Evidence builds", session.build_ids.join(", ")]] : []),
+    ...(session.comparison_build_id ? [["Comparison build", session.comparison_build_id]] : []),
+    ...(session.source_repository ? [["Pinned source", `${session.source_repository.owner}/${session.source_repository.name}@${session.source_repository.revision}`]] : []),
+    ...(session.history_expires_at ? [["Retained until", new Date(session.history_expires_at).toLocaleString()]] : []),
+  ] : [];
   return (
     <HistoryFrame>
-      <Link component={RouterLink} to="/investigations">All saved conversations</Link>
+      <Link component={RouterLink} to="/investigations" sx={{ ...touchTargetSx, display: "inline-flex", alignItems: "center", alignSelf: "flex-start" }}>All saved conversations</Link>
       {!session && !error && <CircularProgress size={24} aria-label="Loading saved conversation" />}
-      {error && <Alert severity="error">{error}</Alert>}
+      {error && <Alert severity="error" action={<Button color="inherit" onClick={() => setRetry((value) => value + 1)} sx={touchTargetSx}>Retry</Button>}>{error}</Alert>}
       {session && (
         <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-          <DetailSectionBand title="Saved conversation" metadata={session.archived ? "Archived" : "Original evidence snapshot"} />
+          <DetailSectionBand title="Saved conversation" metadata={session.archived ? "Archived · Read-only" : "Read-only view"} />
           <Stack spacing={2} sx={{ p: { xs: 1.5, sm: 2.5 } }}>
             <Box>
+              <Typography variant="caption" color="textSecondary">Original {analysisChatScopeLabel(session.analysis).toLowerCase()}</Typography>
               <Typography component="h2" sx={{ ...overviewTypography.majorHeading, overflowWrap: "anywhere" }}>{session.title || session.analysis.test_name || "Investigation"}</Typography>
-              <Typography color="textSecondary" sx={{ mt: 1, overflowWrap: "anywhere", ...overviewTypography.data }}>
-                {session.analysis.job_id} · {session.analysis.scope ?? "test"} · {new Date(session.created_at).toLocaleString()} · {session.created_by}
-              </Typography>
-              {session.build_ids?.length ? <Typography variant="body2" sx={{ mt: 0.5, overflowWrap: "anywhere" }}>Builds: {session.build_ids.join(", ")}</Typography> : null}
-              {session.comparison_build_id && <Typography variant="body2">Comparison build: {session.comparison_build_id}</Typography>}
-              {session.history_expires_at && <Typography variant="caption" color="textSecondary">Retained until {new Date(session.history_expires_at).toLocaleString()}</Typography>}
             </Box>
-            <Alert severity="info">This is the original conversation, not a conclusion about newer runs. Viewing history does not extend its retention.</Alert>
-            <AnalysisChatTranscript session={session} />
+            <Alert severity="info">This read-only view preserves the original conversation and evidence, not a conclusion about newer runs. Viewing history does not extend its retention.</Alert>
+            <Box component="dl" sx={{ m: 0 }}>
+              {metadata.map(([label, value]) => (
+                <Box key={label} sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "140px minmax(0, 1fr)" }, gap: { xs: 0.25, sm: 2 }, py: 0.75, borderBottom: "1px solid", borderColor: "divider" }}>
+                  <Typography component="dt" color="textSecondary" sx={overviewTypography.description}>{label}</Typography>
+                  <Typography component="dd" sx={{ m: 0, overflowWrap: "anywhere", ...overviewTypography.data }}>{value}</Typography>
+                </Box>
+              ))}
+            </Box>
+            <Stack spacing={1.5} sx={{ maxWidth: "75ch", width: "100%" }}>
+              <AnalysisChatTranscript session={session} historical />
+            </Stack>
           </Stack>
         </Box>
       )}

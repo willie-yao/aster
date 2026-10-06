@@ -10,7 +10,7 @@ import MonitorHeart from "@mui/icons-material/MonitorHeartOutlined";
 import Paid from "@mui/icons-material/PaidOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import type { ReactNode } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useLocation } from "react-router-dom";
 import { AsterMark } from "./AsterMark";
 import type { NavDestination } from "../lib/navigation";
 
@@ -84,6 +84,7 @@ export function NavRail({
 }) {
   const signal = destinations.filter((d) => d.scope === "signal");
   const operator = destinations.filter((d) => d.scope === "operator");
+  const { pathname } = useLocation();
 
   return (
     <Box
@@ -161,7 +162,7 @@ export function NavRail({
             component={RouterLink}
             to={d.to}
             title={d.title}
-            aria-current={d.active ? "page" : undefined}
+            aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
             sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
           >
             {d.active && <ActiveBar />}
@@ -179,7 +180,7 @@ export function NavRail({
                 component={RouterLink}
                 to={d.to}
                 title={d.title}
-                aria-current={d.active ? "page" : undefined}
+                aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
                 sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
               >
                 {d.active && <ActiveBar />}
@@ -234,6 +235,7 @@ function ActiveBar() {
  * is the most the capability flags can produce.
  */
 export function NavBottomBar({ destinations }: { destinations: NavDestination[] }) {
+  const { pathname } = useLocation();
   return (
     <Box
       component="nav"
@@ -258,7 +260,7 @@ export function NavBottomBar({ destinations }: { destinations: NavDestination[] 
           component={RouterLink}
           to={d.to}
           title={d.title}
-          aria-current={d.active ? "page" : undefined}
+          aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
           sx={{ ...itemSx(d.active), flex: 1, minWidth: 0, height: BOTTOM_BAR_HEIGHT }}
         >
           {d.active && (

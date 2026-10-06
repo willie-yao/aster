@@ -355,12 +355,11 @@ Aster was not built as an Impeccable project. The interface came first, and this
 
 That makes it normative going forward. New work is held to these rules, and the bundled detector reads this file to judge changed files. Existing code is being brought up to them incrementally rather than in one pass.
 
-Three rules are not yet satisfied everywhere. Each is a tracked follow-up, listed here so the document is not mistaken for a description of what already ships.
+Two rules are not yet satisfied everywhere. Each is a tracked follow-up, listed here so the document is not mistaken for a description of what already ships.
 
 | Rule | Current state |
 | --- | --- |
 | Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` |
-| `aria-current="page"` on exact match only | `NavRail` marks the active section `page` on nested routes |
 | The Tint Roles Rule | `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
 
 The operator surfaces have not been audited. They are documented here from the implementation, but the accessibility, responsive, and performance pass that covered the public views has not yet run against them. Reaching them locally needs `make dev-actions`, which serves the built SPA with `AUTH_MODE=dev` and authenticates every request as an admin.
