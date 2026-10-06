@@ -11,6 +11,12 @@ const API_BASE = import.meta.env?.BASE_URL ?? "/";
 const maxQuestionBytes = 4096;
 const utf8Encoder = new TextEncoder();
 
+export function analysisChatScopeLabel(ref: AnalysisChatReference): string {
+  if (ref.scope === "cause") return "Cause";
+  if (ref.scope === "pattern") return "Whole pattern";
+  return ref.source === "build" ? "Build failure" : "Test";
+}
+
 export const analysisChatActiveTurnLimitMessage = "analysis chat active turn limit reached";
 export const analysisChatIdempotencyConflictMessage = "analysis chat idempotency key conflict";
 export const analysisChatRateLimitMessage = "analysis chat rate limit reached";
