@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.2
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.11.0
     with:
       ai-api: ${{ vars.AI_API }}
       ai-model: ${{ vars.AI_MODEL }}
@@ -89,11 +89,11 @@ Doctor validates the workflow mappings but cannot read the values stored in GitH
 The workflow ref controls both the reusable workflow and the engine checkout. Pin a currently published version exactly:
 
 ```yaml
-# Current prerelease, pinned exactly.
-uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.2
+# Current release, pinned exactly.
+uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.11.0
 ```
 
-After a stable release is published, pin its exact `vMAJOR.MINOR.PATCH` tag. Commit SHAs are appropriate for engine development. Do not use `@main`, `@latest`, or a moving major alias as a production version.
+Pin an exact `vMAJOR.MINOR.PATCH` release tag. Commit SHAs are appropriate for engine development. Do not use `@main`, `@latest`, or a moving major alias as a production version.
 
 The reusable workflow fails closed when GitHub does not provide its resolved repository, ref, or commit SHA. After checkout it verifies that the engine HEAD matches that commit. Every published site includes `data/provenance.json` with the caller commit, reusable-workflow commit, and engine commit. TestGrid consumers also include the effective test-infra revision when `manifest.json` reports one.
 
@@ -176,7 +176,7 @@ Enable `notifications.email` in `project.yaml`, then pass the SMTP password when
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.10.0-rc.2
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.11.0
     secrets:
       AI_TOKEN: ${{ secrets.AI_TOKEN }}
       EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
