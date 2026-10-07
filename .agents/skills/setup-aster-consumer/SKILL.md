@@ -35,11 +35,11 @@ Every Pages module-origin, tag, commit, and availability check must use this exa
 The default published pair is:
 
 ```text
-<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.2
-<engine-ref> = v0.10.0-rc.2
+<aster> = go run github.com/willie-yao/aster/backend/cmd/aster@v0.11.0
+<engine-ref> = v0.11.0
 ```
 
-This published prerelease pair is the default for Pages setup and supports the Kubernetes storage flags required by this skill. For Kubernetes, verify that the selected CLI's `onboard -h` output advertises both storage flags. Stop before planning when that surface is absent.
+This published release pair is the default for Pages setup and supports the Kubernetes storage flags required by this skill. For Kubernetes, verify that the selected CLI's `onboard -h` output advertises both storage flags. Stop before planning when that surface is absent.
 
 For an explicitly requested exact release tag or full commit SHA, use that exact ref in the module command and as `<engine-ref>`. Do not use `main`, `latest`, a branch name, or a moving major alias for a standard Pages output.
 
@@ -65,7 +65,7 @@ Record the full `git rev-parse HEAD` as `<selected-commit>`, worktree state, and
 Outside an Aster checkout, use the default published command:
 
 ```bash
-go run github.com/willie-yao/aster/backend/cmd/aster@v0.10.0-rc.2 onboard ...
+go run github.com/willie-yao/aster/backend/cmd/aster@v0.11.0 onboard ...
 ```
 
 Use one form consistently as `<aster>` for discovery, planning, application, and doctor. When the request asks for the current or latest engine, fetch the canonical Aster URL, compare `HEAD` with its current `main`, and record both SHAs. If the checkout is stale, dirty, fork-only, or its primary branch must remain untouched, create a detached engine worktree at the reviewed official `main` commit under the task workspace and use it for every command. Do not silently use a stale or fork-only local engine merely because it is the current working directory. For Pages, use that full reviewed official commit SHA as both the module source and `<engine-ref>`, never the mutable name `main`. Preserve an explicitly requested exact ref or commit.
