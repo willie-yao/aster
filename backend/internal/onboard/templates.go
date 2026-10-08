@@ -213,9 +213,7 @@ only when those features are enabled.
 
 ## Review the consumer bundle
 
-Review project.yaml, prompts/system.md, optional skills, and deploy/values.yaml.
-Replace storage and Secret-name placeholders. Keep credentials out of files and
-Helm arguments.
+Review project.yaml, prompts/system.md, optional skills, and deploy/values.yaml. Replace storage and Secret-name placeholders. Keep credentials out of files and Helm arguments. For a manual prompt starter, print its URL under Versioned references below; coding-agent skills are optional.
 {{if .AIEnabled}}AI is enabled. Set ai.existingSecret to the reviewed existing provider Secret
 name and verify the non-secret key name.
 {{else}}AI is disabled. No provider Secret is required. Keep ai.existingSecret as a
@@ -375,6 +373,7 @@ documentation:
 
 ` + "```bash" + `
 for path in \
+  docs/writing-prompts.md#start-with-a-small-prompt \
   docs/kubernetes.md \
   docs/kubernetes-platform.md \
   docs/kubernetes-reference.md \
@@ -387,12 +386,14 @@ done
 var systemPromptTmpl = template.Must(template.New("system.md").Parse(
 	`# {{.Name}} AI prompt addendum
 
-This file is concatenated between the engine's universal Prow base prompt and
-its JSON response schema. It is a source-only baseline and has not been validated
-against historical failures. Replace the TODOs with a grounded diagnostic runbook,
-then run $author-aster-diagnostics to test and improve it against a representative
-historical corpus. Use only project documentation, job configuration, source, and
-observed CI artifacts. Leave an item unresolved instead of adding plausible guidance.
+This file adds project knowledge to the engine's universal Prow guidance.
+Start with Architecture, Artifact layout, and Triage order using known project
+facts. Other sections may remain explicitly unresolved. Remove TODO comments
+after adding facts or recording unknowns.
+
+See [Writing a project prompt](https://github.com/willie-yao/aster/blob/main/docs/writing-prompts.md#start-with-a-small-prompt).
+This source-only baseline has not been validated against historical failures.
+Diagnostic-authoring skills are optional. Do not add plausible but unverified guidance.
 
 The analyzer can read supplied Prow artifacts. If Kubernetes artifact tools are
 enabled, they navigate Kubernetes-shaped logs and resource dumps already in the
@@ -461,9 +462,7 @@ confirmed your discovery config finds jobs. Remaining steps need a human:
 
 ## 1. Review the generated files (required)
 
-- Review the ` + "`prompts/system.md`" + ` source-only baseline. Replace any TODOs and
-  confirm its project-specific claims. It has not been validated against historical
-  failures. Run ` + "`$author-aster-diagnostics`" + ` after setup to validate and improve it.
+- Fill ` + "`prompts/system.md`" + ` with known project facts and record unknowns. Use the [manual starter](https://github.com/willie-yao/aster/blob/main/docs/writing-prompts.md#start-with-a-small-prompt); coding-agent skills are optional.
 - ` + "`project.yaml`" + ` ` + "`categories`" + ` were inferred from job names; reorder,
   rename, or trim them.
 
@@ -472,7 +471,9 @@ confirmed your discovery config finds jobs. Remaining steps need a human:
 Dedicated repo: copy these into the repo root (` + "`project_dir: \".\"`" + `).
 Existing repo: put them in a subdir and set ` + "`project_dir`" + ` in the workflows.
 
-## 3. GitHub configuration (the agent can't do this for you)
+## 3. GitHub configuration
+
+Use [AI provider configuration](https://github.com/willie-yao/aster/blob/main/docs/ai-providers.md) to choose the API, endpoint, and model. Keep credentials in repository Secrets.
 
 ` + "```bash" + `
 # Enable Pages with the GitHub Actions build source:
@@ -496,10 +497,9 @@ gh secret set AI_TOKEN --repo {{.DashboardOwner}}/{{.DashboardName}}
 
 ## 4. First deploy
 
-Push to ` + "`main`" + ` (or run the **Deploy Dashboard** workflow manually). The
-workflows pin the engine at ` + "`@{{.EngineRef}}`" + `; see
-https://github.com/willie-yao/aster/blob/main/docs/releasing.md
-to pin an exact release instead.
+Push to ` + "`main`" + ` (or run the **Deploy Dashboard** workflow manually). The workflow uses engine ref ` + "`@{{.EngineRef}}`" + `. Keep an exact release tag or full commit SHA for reproducible deployment; see [Releasing](https://github.com/willie-yao/aster/blob/main/docs/releasing.md).
+
+See [First-run scope](https://github.com/willie-yao/aster/blob/main/docs/onboarding-a-new-project.md#first-run-scope) before the initial AI pass.
 `))
 
 // checklistData is the input the checklist template needs.

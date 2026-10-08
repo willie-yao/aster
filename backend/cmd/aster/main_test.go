@@ -123,6 +123,15 @@ func TestAsterRejectsRemovedNoPromptAlias(t *testing.T) {
 	}
 }
 
+func TestOnboardEngineRefDefaultsToRelease(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAsterCommandHelper$")
+	cmd.Env = append(os.Environ(), "ASTER_COMMAND_TEST=onboard-release-help")
+	output, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), `(default "v0.11.0")`) {
+		t.Fatalf("err=%v output=%q", err, output)
+	}
+}
+
 func TestSignalRootContextCancelsThenRestoresDefault(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAsterCommandHelper$")
 	cmd.Env = append(os.Environ(), "ASTER_COMMAND_TEST=signals")
@@ -209,6 +218,10 @@ func TestAsterCommandHelper(t *testing.T) {
 	case "removed-no-prompt":
 		flag.CommandLine = flag.NewFlagSet("aster", flag.ExitOnError)
 		os.Args = []string{"aster", "onboard", "-no-prompt"}
+		main()
+	case "onboard-release-help":
+		version = "v0.11.0"
+		os.Args = []string{"aster", "onboard", "-h"}
 		main()
 	case "signals":
 		ctx, stop := signalRootContext()

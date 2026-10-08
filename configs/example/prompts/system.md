@@ -1,30 +1,39 @@
 # Example project AI prompt addendum
 
-This file is concatenated between the engine's universal Prow base prompt and the engine's JSON response schema at fetcher startup. The model only sees this file as the "Project-specific knowledge" section of its system prompt; the universal preamble (artifact layout, build-log.txt, triage order) and the output schema are not your concern.
-
-Replace everything below with content specific to your project. See `docs/writing-prompts.md` for guidance on which sections tend to produce the best results.
-
----
-
-You are debugging E2E test failures for **Example Project**.
+Replace this example's unresolved architecture and artifact details with known project facts. The engine supplies universal Prow guidance and the response format. See `docs/writing-prompts.md` for the manual starter.
 
 ## Architecture
-Describe the components, their relationships, and how a healthy run flows. Keep it short and concrete (5-15 bullets). The model uses this to interpret log lines and resource YAMLs.
 
-## Common Failure Patterns
-List 5-15 failure modes the model is likely to encounter, with the signal that distinguishes each. Group by component if helpful.
+Unresolved. Do not assume component relationships that the project has not documented.
 
-## Transient Errors (set `is_transient=true`)
-List patterns that should be skipped rather than flagged as bugs:
-- API throttling / 429
-- Resource quota exhaustion
-- DNS resolution failures
-- Image pull backoff that resolves on retry
+## Diagnostic lifecycle
 
-## Repos to Reference in `relevant_files`
-List the GitHub repos whose paths the model should cite in its `relevant_files` field, e.g.:
-- kubernetes-sigs/your-project
-- kubernetes-sigs/your-dependency
+Unresolved. Use timestamped build evidence to identify the phase that failed.
 
-## Project-specific Triage Order
-If your project has artifact files beyond the universal layout (e.g., `artifacts/clusters/{name}/machines/{vm}/kubelet.log`), describe the order the model should consult them.
+## Test and job flavors
+
+Unresolved. Identify the actual job flavor before applying flavor-specific guidance.
+
+## Artifact layout
+
+Project-specific paths are unresolved. Use files actually listed in the build's artifact tree.
+
+## Common failure patterns
+
+No project-specific patterns are established. Do not treat a plausible cause as a known recurring failure.
+
+## Transient classification
+
+No project-supported transient rules are established. Do not classify a failure as transient from a generic error signature alone.
+
+## Triage order
+
+Start with the failing test and build metadata. Inspect the earliest relevant error and separate it from later cleanup or timeout noise. Compare a passing build when available.
+
+## Relevant source repositories
+
+Unresolved. Cite only repositories and paths established by source or artifact evidence.
+
+## Unresolved details
+
+The tested components, project-specific artifact paths, job flavors, and recurring failure patterns need maintainer input.

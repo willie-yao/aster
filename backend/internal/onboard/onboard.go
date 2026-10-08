@@ -153,15 +153,15 @@ func validateOptions(opts *Options) error {
 	if opts.ReplaceConsumerOwned && opts.OpenPR {
 		return fmt.Errorf("--replace-consumer-owned applies only to reviewed local updates")
 	}
-	if opts.EngineRef == "" {
-		opts.EngineRef = "main"
-	}
 	switch opts.Mode {
 	case "":
 		opts.Mode = modePages
 	case modePages, modeK8s:
 	default:
 		return fmt.Errorf("--mode must be %q or %q, got %q", modePages, modeK8s, opts.Mode)
+	}
+	if opts.Mode == modePages && strings.TrimSpace(opts.EngineRef) == "" {
+		return fmt.Errorf("--engine-ref is required for a development Pages build; pass an exact release tag or full commit SHA")
 	}
 	opts.K8sStorageClass = strings.TrimSpace(opts.K8sStorageClass)
 	opts.K8sExistingClaim = strings.TrimSpace(opts.K8sExistingClaim)

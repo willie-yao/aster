@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestRunDevelopmentPagesRequiresEngineRefBeforeSweep(t *testing.T) {
+	deps, _, writer, _ := wizardDependencies("")
+	opts := testOpts()
+	opts.EngineRef = ""
+	err := run(t.Context(), opts, deps)
+	if err == nil || !strings.Contains(err.Error(), "engine-ref is required") {
+		t.Fatalf("run = %v", err)
+	}
+	if deps.sweeper.(*fakeSweeper).calls != 0 || writer.writes != 0 {
+		t.Fatal("missing engine ref reached discovery or wrote files")
+	}
+}
+
 func TestRunRejectsInvalidInputsBeforeConstructingPrompter(t *testing.T) {
 	for _, tc := range []struct {
 		name string

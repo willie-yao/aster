@@ -102,7 +102,15 @@ Before deployment, verify:
 4. Generated checklist items and placeholders have been resolved.
 5. No credential appears in a committed file.
 
-Use [Project configuration](project-configuration.md) for exact fields and [Writing the project prompt](writing-prompts.md) for prompt ownership.
+Use [Project configuration](project-configuration.md) for exact fields. Fill the prompt using the [manual starter](writing-prompts.md#start-with-a-small-prompt); a coding agent is optional.
+
+## First-run scope
+
+The first AI pass has no cached analyses, so runtime and cost depend on the number of jobs, their failing builds, and your provider. Later passes reuse accepted analyses. The review shows the discovered job count; a TestGrid dashboard can include jobs from several repositories.
+
+Pages fetches eight builds per job by default. For a smaller initial evaluation, optionally add `builds: 2` under `jobs.deploy.with`, then increase it after checking the results. Build depth limits inspected history, not model requests or spending, so there is no fixed cost or completion time.
+
+Keep the wizard's discovery choice unless you need a narrower dashboard. [Exact-job bucket discovery](onboarding-reference.md#non-interactive-automation) is an advanced option and cannot be combined with TestGrid.
 
 ## Choose Pages or Kubernetes
 

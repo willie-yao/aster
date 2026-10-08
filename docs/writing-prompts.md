@@ -20,7 +20,27 @@ engine agentic tool guidance
 - [`ResponseFormatFooter`](../backend/internal/ai/responseformat.go) owns the structured response contract. Do not redeclare the output schema.
 - Agentic tool documentation is engine-owned. Do not describe tool names, budgets, or provider protocol in the consumer prompt.
 
-Onboarding `handoff` mode writes a TODO prompt plus a portable prompt-authoring skill without calling a model. `todo-template` writes only the TODO prompt. Both paths are credential-free. The result is a source-based draft that requires human review and later validation against historical failures.
+Onboarding `handoff` mode writes a TODO prompt plus a portable prompt-authoring skill without calling a model. `todo-template` writes only the TODO prompt. Both paths are credential-free and need project facts before deployment.
+
+## Start with a small prompt
+
+You do not need a coding agent or a catalogue of historical failures to start. Fill Architecture, Artifact layout, and Triage order with what you know, using this outline:
+
+```markdown
+## Architecture
+The tests exercise <component>, which depends on <dependency>.
+
+## Artifact layout
+<path observed in a real build>: <what the artifact records>.
+
+## Triage order
+Start with the failing test and build metadata. Read the artifact for the failed
+component, then look for the earliest error that explains the failure.
+```
+
+Replace the angle-bracket placeholders with verified facts. Keep the other scaffold headings, but replace their TODO comments with known facts or "Unresolved" rather than guessing. Record missing details under Unresolved details. The engine already supplies universal Prow guidance, so project-specific artifact paths and component relationships are the useful additions.
+
+Remove resolved authoring comments and rerun `aster onboard doctor`. Doctor checks for unfinished generated comments, not whether the resulting diagnoses are correct. Expand the prompt when observed failures reveal missing project knowledge.
 
 ## Required runbook headings
 
@@ -72,7 +92,7 @@ List only repositories that artifact or source evidence can use for grounded `re
 
 ### Unresolved details
 
-Record important paths, flavors, dependencies, or failure boundaries that the available sources do not establish. Keep explicit maintainer TODOs instead of filling gaps with generic assumptions.
+Record important paths, flavors, dependencies, or failure boundaries that the available sources do not establish. Mark them unresolved instead of filling gaps with generic assumptions.
 
 ## Artifact-first guidance
 
@@ -87,7 +107,7 @@ The analyzer can read the supplied Prow artifact tree and, when configured, read
 
 ## Review and iteration
 
-Review the initial draft for unsupported architecture claims, stale paths, missing job flavors, and unclosed placeholders. Then run `$author-aster-diagnostics` against a representative historical corpus. That skill may improve the prompt and propose inactive evidence recipes, but it must not activate recipes or tune only to one favorable case.
+Review the initial draft for unsupported architecture claims, stale paths, and unclosed placeholders. Optionally use `$author-aster-diagnostics` against representative historical failures to improve the prompt and propose inactive evidence recipes. Skill installation is in [agent-assisted onboarding](onboarding-a-new-project.md#coding-agent-assisted-onboarding); it is not required for manual setup.
 
 Editing `prompts/system.md` affects new analyses. Existing reusable cache entries keep the `prompt_hash` provenance that produced them. Set `AI_CACHE_GENERATION` to a new non-empty value when a prompt rewrite requires an intentional full rebaseline. Returning to a previous generation reuses its unexpired entries. Use destructive cache clearing only for emergency recovery.
 

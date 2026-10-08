@@ -97,6 +97,64 @@ func TestDoctor_ValidPagesScaffold(t *testing.T) {
 	}
 }
 
+func TestDoctor_PromptAuthoringComments(t *testing.T) {
+	generated, err := render(systemPromptTmpl, buildScaffoldData(testOpts(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		status DoctorStatus
+	}{
+		{name: "generated template", prompt: generated, status: DoctorWarn},
+		{name: "known facts and unknowns", prompt: "## Architecture\nA tests B.\n## Unresolved details\nArtifact paths are unresolved.\n", status: DoctorPass},
+		{name: "ordinary TODO", prompt: "A build log contains the string TODO.\n", status: DoctorPass},
+		{name: "quoted TODO comment", prompt: "> <!-- TODO: an observed log message -->\n", status: DoctorPass},
+		{name: "indented authoring comment", prompt: "# Project\n  <!-- TODO: architecture -->\n", status: DoctorWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := runDoctor(t.Context(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files: doctorFiles(map[string]string{
+					"/consumer/prompts/system.md":            tc.prompt,
+					"/consumer/.github/workflows/deploy.yml": doctorPagesWorkflow,
+				}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "periodic-project"}}},
+			})
+			if report.HasFailures() || !hasDoctorCheck(report, "prompts/system.md", tc.status) {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+		})
+	}
+}
+
+func TestDoctor_PagesEngineRef(t *testing.T) {
+	for _, tc := range []struct {
+		ref  string
+		warn bool
+	}{
+		{ref: "v0.11.0"},
+		{ref: "v0.11.0-rc.1"},
+		{ref: strings.Repeat("a", 40)},
+		{ref: "main", warn: true},
+		{ref: "latest", warn: true},
+		{ref: "v0", warn: true},
+		{ref: "v0.11.1-0.20261008153000-abcdef123456", warn: true},
+	} {
+		t.Run(tc.ref, func(t *testing.T) {
+			report := runDoctor(t.Context(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
+				files: doctorFiles(map[string]string{
+					"/consumer/.github/workflows/deploy.yml": strings.Replace(doctorPagesWorkflow, "@main", "@"+tc.ref, 1),
+				}),
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "periodic-project"}}},
+			})
+			if report.HasFailures() || hasDoctorCheck(report, "Pages engine ref", DoctorWarn) != tc.warn {
+				t.Fatalf("checks = %+v", report.Checks)
+			}
+		})
+	}
+}
+
 func TestDoctor_PagesMissingProviderMappings(t *testing.T) {
 	sweeper := &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job", JobType: models.JobTypePeriodic}}}
 	report := runDoctor(context.Background(), DoctorOptions{ProjectDir: "/consumer"}, doctorDependencies{
