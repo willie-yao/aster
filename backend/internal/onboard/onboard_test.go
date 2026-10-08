@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,36 @@ import (
 	"github.com/willie-yao/aster/backend/internal/project"
 	"gopkg.in/yaml.v3"
 )
+
+func TestDefaultEngineRef(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		version       string
+		modulePath    string
+		moduleVersion string
+		want          string
+	}{
+		{name: "release binary", version: "v0.11.0", want: "v0.11.0"},
+		{name: "prerelease binary", version: "v0.11.0-rc.1", want: "v0.11.0-rc.1"},
+		{name: "versioned module", version: "dev", modulePath: "github.com/willie-yao/aster/backend", moduleVersion: "v0.11.0", want: "v0.11.0"},
+		{name: "binary takes precedence", version: "v0.11.0", modulePath: "github.com/willie-yao/aster/backend", moduleVersion: "v0.10.0", want: "v0.11.0"},
+		{name: "development binary", version: "dev"},
+		{name: "development module", modulePath: "github.com/willie-yao/aster/backend", moduleVersion: "(devel)"},
+		{name: "pseudo-version", modulePath: "github.com/willie-yao/aster/backend", moduleVersion: "v0.11.1-0.20261008153000-abcdef123456"},
+		{name: "other module", modulePath: "example.test/other", moduleVersion: "v0.11.0"},
+		{name: "moving major", version: "v0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var info *debug.BuildInfo
+			if tc.modulePath != "" {
+				info = &debug.BuildInfo{Main: debug.Module{Path: tc.modulePath, Version: tc.moduleVersion}}
+			}
+			if got := defaultEngineRef(tc.version, info); got != tc.want {
+				t.Fatalf("defaultEngineRef = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestInferCategories_GroupsAndOrders(t *testing.T) {
 	jobs := []string{
@@ -263,6 +294,7 @@ func TestValidateOptions(t *testing.T) {
 		{"no selector", func(o *Options) { o.TestGrid = "" }, "exactly one"},
 		{"missing dashboard repo", func(o *Options) { o.DashboardRepo = "" }, "dashboard-repo"},
 		{"missing source repo", func(o *Options) { o.SourceRepo = "" }, "source-repo"},
+		{"missing Pages engine ref", func(o *Options) { o.EngineRef = "" }, "engine-ref is required"},
 		{"bad dashboard repo", func(o *Options) { o.DashboardRepo = "noslash" }, "owner/name"},
 		{"trailing slash repo", func(o *Options) { o.DashboardRepo = "owner/" }, "owner/name"},
 		{"three-part repo", func(o *Options) { o.SourceRepo = "a/b/c" }, "owner/name"},
@@ -325,6 +357,7 @@ func TestValidateOptions_KubernetesStorage(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			opts := testOpts()
 			opts.Mode = modeK8s
+			opts.EngineRef = ""
 			opts.NonInteractive = true
 			opts.K8sStorageClass = test.storageClass
 			opts.K8sExistingClaim = test.existingClaim

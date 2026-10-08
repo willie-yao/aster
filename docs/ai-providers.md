@@ -2,6 +2,19 @@
 
 Aster supports OpenAI-compatible Chat Completions and Responses over HTTPS. The selected endpoint and model must implement function calling. There is no default provider and no tools-free fallback.
 
+Chat Completions and Responses are API schemas, not provider choices. Providers differ in credentials, model availability, and supported behavior. Choose either schema with a function-calling model and enough context for the analysis; a text-only OpenAI-compatible endpoint is not sufficient.
+
+For direct CLI commands, a provider-neutral configuration is:
+
+```bash
+export AI_API=chat_completions
+export AI_ENDPOINT="https://<provider-host>/v1/chat/completions"
+export AI_MODEL="<model-id>"
+printf 'AI token: '; read -rs AI_TOKEN; export AI_TOKEN; printf '\n'
+```
+
+Use your provider's full operation URL and exact model identifier. For Responses, set `AI_API=responses` and use its `/responses` operation URL. For [Pages](github-pages.md#repository-configuration), store the coordinates in repository variables and the token in a Secret. The [Kubernetes configuration](#kubernetes) uses Helm values and an existing Secret. Setup and doctor do not contact the provider; the first AI fetch checks the configured endpoint.
+
 ## Configure provider coordinates and project behavior
 
 API, endpoint, model, and cache generation are deployment-owned. Direct commands read `AI_API`, `AI_ENDPOINT`, `AI_MODEL`, `AI_CACHE_GENERATION`, and `AI_TOKEN`. `AI_API` defaults to `chat_completions`; endpoint and model are required when AI is enabled. Do not put `api`, `endpoint`, `model`, or `cache_generation` under `ai` in `project.yaml`; strict decoding rejects them.
@@ -31,7 +44,7 @@ jobs:
   deploy:
     uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.11.0
     with:
-      project-dir: .
+      project_dir: .
       ai-api: ${{ vars.AI_API }}
       ai-endpoint: ${{ vars.AI_ENDPOINT }}
       ai-model: ${{ vars.AI_MODEL }}

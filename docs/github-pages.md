@@ -119,6 +119,8 @@ Set `project_dir: dashboard` in the deploy workflow. A repository can publish on
 
 ## First deploy
 
+Review [First-run scope](onboarding-a-new-project.md#first-run-scope) before starting the initial AI pass.
+
 ```bash
 gh workflow run deploy.yml --repo my-org/my-dashboard
 gh run watch --repo my-org/my-dashboard --exit-status

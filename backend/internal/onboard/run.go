@@ -240,7 +240,7 @@ func applyPlan(ctx context.Context, plan *Plan, githubToken string, deps depende
 		return err
 	}
 	fmt.Fprintf(deps.out, "Scaffold written to %s/\n", plan.Destination.OutDir)
-	fmt.Fprintf(deps.out, "Next: review project.yaml and the source-only prompts/system.md baseline, follow %s, then run $author-aster-diagnostics.\n", scaffoldGuide(plan.Deployment.Mode))
+	fmt.Fprintf(deps.out, "Next: review project.yaml, fill in known project facts in prompts/system.md, and follow %s. Diagnostic-authoring skills are optional.\n", scaffoldGuide(plan.Deployment.Mode))
 	return nil
 }
 

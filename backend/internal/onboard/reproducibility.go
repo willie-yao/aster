@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -17,6 +18,37 @@ const (
 	sourceRevisionResolved   = "resolved"
 	sourceRevisionUnresolved = "unresolved"
 )
+
+var (
+	releaseEngineRefPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$`)
+	pseudoEngineRefPattern  = regexp.MustCompile(`[-.][0-9]{14}-[0-9a-f]{12}$`)
+	commitEngineRefPattern  = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+)
+
+// DefaultEngineRef returns the CLI's release tag, or empty for a development build.
+func DefaultEngineRef(version string) string {
+	info, _ := debug.ReadBuildInfo()
+	return defaultEngineRef(version, info)
+}
+
+func defaultEngineRef(version string, info *debug.BuildInfo) string {
+	if isReleaseEngineRef(version) {
+		return version
+	}
+	if info != nil && info.Main.Path == "github.com/willie-yao/aster/backend" &&
+		info.Main.Replace == nil && isReleaseEngineRef(info.Main.Version) {
+		return info.Main.Version
+	}
+	return ""
+}
+
+func isReleaseEngineRef(ref string) bool {
+	return releaseEngineRefPattern.MatchString(ref) && !pseudoEngineRefPattern.MatchString(ref)
+}
+
+func isPinnedEngineRef(ref string) bool {
+	return isReleaseEngineRef(ref) || commitEngineRefPattern.MatchString(ref)
+}
 
 type githubSourceRevisionResolver struct{}
 

@@ -255,7 +255,7 @@ func runOnboard(ctx context.Context, args []string) {
 	fs.StringVar(&opts.Name, "name", "", "project display name (default: derived from repository metadata)")
 	fs.StringVar(&opts.ShortName, "short-name", "", "short display name (optional)")
 	fs.BoolVar(&includePresubmits, "include-presubmits", false, "include presubmit jobs in the sweep")
-	fs.StringVar(&opts.EngineRef, "engine-ref", "main", "Aster ref the generated workflows pin")
+	fs.StringVar(&opts.EngineRef, "engine-ref", onboard.DefaultEngineRef(version), "Pages engine ref (defaults to this CLI's release; required for development builds)")
 	fs.StringVar(&opts.OutDir, "out", "", "dashboard consumer directory for the scaffold")
 	fs.BoolVar(&enableAI, "ai", true, "enable deployed AI failure analysis")
 	fs.StringVar(&opts.PromptMode, "prompt-mode", "", "prompt authoring mode: handoff or todo-template")

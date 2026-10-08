@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,6 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
+
+var promptPlaceholderPattern = regexp.MustCompile(`(?m)^\s*<!--\s*TODO:`)
 
 // DoctorOptions selects an existing consumer scaffold to validate.
 type DoctorOptions struct {
@@ -115,6 +118,8 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 		add("prompts/system.md", DoctorFail, fmt.Sprintf("cannot read %s: %v", promptPath, err), "Fix prompt file permissions or the read error, then rerun doctor.")
 	case strings.TrimSpace(string(prompt)) == "":
 		add("prompts/system.md", DoctorFail, "the required project prompt is empty", "Add project-specific prompt content and rerun doctor.")
+	case promptPlaceholderPattern.Match(prompt):
+		add("prompts/system.md", DoctorWarn, "unfinished prompt authoring comments remain", "Add known project facts or mark details unresolved, then remove the TODO comments. See docs/writing-prompts.md. Doctor does not assess diagnosis quality.")
 	default:
 		add("prompts/system.md", DoctorPass, "required project prompt is present", "")
 	}
@@ -310,6 +315,10 @@ func checkPages(report *DoctorReport, workflowPath, projectDir string, workflowY
 	if !reusableDeployReference(deploy.Uses) {
 		add("Pages workflow", DoctorFail, "jobs.deploy.uses does not target the dashboard reusable-deploy workflow", "Restore the generated uses target for aster/.github/workflows/reusable-deploy.yml.")
 		return
+	}
+	_, ref, _ := strings.Cut(strings.TrimSpace(deploy.Uses), "@")
+	if !isPinnedEngineRef(ref) {
+		add("Pages engine ref", DoctorWarn, "workflow ref "+ref+" is not an exact release tag or full commit SHA", "Pin jobs.deploy.uses to an exact release tag or full 40-character commit SHA.")
 	}
 	// The reusable workflow passes the Actions GITHUB_TOKEN to the fetch step
 	// unconditionally, so a deploy job that reaches it reads GitHub

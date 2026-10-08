@@ -14,6 +14,19 @@ Aster is an evidence-first failure analysis and guarded-remediation engine for [
 
 Aster is for maintainers and platform teams that already operate Prow jobs, or publish compatible job artifacts, and want a shared failure-analysis dashboard. It supports a public, read-only GitHub Pages deployment and a Kubernetes deployment with persistent data, authentication, chat, and guarded actions.
 
+See the [public CAPZ dashboard](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01.azurefd.net/) for a working Kubernetes deployment:
+
+[![Aster showing a CAPZ test failure, its analysis, and artifact evidence](docs/assets/aster-dashboard-preview.png)](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01.azurefd.net/)
+
+## Before you start
+
+- Have Go installed and a Git checkout of the repository whose jobs you want to monitor. Go can download the required toolchain automatically.
+- Choose an existing GitHub repository you control for the dashboard configuration. It holds the generated files, not a copy of Aster's code.
+- Your jobs need Prow-compatible artifacts. The wizard discovers Kubernetes test-infra jobs automatically; other Prow installations can use [bucket discovery](docs/onboarding-reference.md#non-interactive-automation).
+- Have a Chat Completions or Responses endpoint and model that support function calling. Follow [AI provider configuration](docs/ai-providers.md) for the API, endpoint, model, and credential.
+
+Pages needs public artifacts and an AI endpoint reachable from its Actions runner. Kubernetes needs a cluster with [shared ReadWriteMany storage](docs/kubernetes.md#prerequisites). You can configure GitHub through its UI or `gh`; `gh` is not required for the wizard.
+
 ## Quickstart
 
 From a checkout of the repository whose jobs you want to monitor, run the guided wizard at an exact released version:

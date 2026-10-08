@@ -4,6 +4,8 @@ This page documents advanced discovery, plan and apply automation, update behavi
 
 Examples use the current release exactly. An installed `aster` binary from the same release can replace `go run`. Pages scaffolds also require an exact `-engine-ref`; Kubernetes image and chart versions are selected by deployment values and release commands.
 
+When building the current CLI, release-tagged binaries and versioned Go modules default the Pages ref to their own release. Development builds without release metadata require an explicit `-engine-ref`. Explicit overrides remain supported; doctor warns on refs it cannot recognize as an exact release tag or full commit SHA. Keep the explicit pins in the published examples.
+
 ## Discovery
 
 ### Accepted repository forms
@@ -183,7 +185,7 @@ Onboarding does not guess:
 
 ## Validate an existing consumer
 
-Run the read-only `onboard doctor` command from the [onboarding quickstart](onboarding-a-new-project.md#validate-with-onboard-doctor). Doctor checks strict project parsing, a non-empty prompt, Pages or Kubernetes coordinates, and a real nonzero Prow discovery sweep. Warnings identify values that cannot be resolved offline. It does not call the provider or inspect a Kubernetes cluster.
+Run the read-only `onboard doctor` command from the [onboarding quickstart](onboarding-a-new-project.md#validate-with-onboard-doctor). Doctor checks strict project parsing, a non-empty prompt, Pages or Kubernetes coordinates, and a real nonzero Prow discovery sweep. It also warns about unfinished generated prompt comments and unrecognized Pages pins. Warnings do not block setup or certify analysis quality. It does not call the provider or inspect a Kubernetes cluster.
 
 ## Command surface
 
