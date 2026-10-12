@@ -14,6 +14,7 @@ See [the release guide](docs/releasing.md#versioning) for the release process an
 
 Each release has its own notes file, named for its tag. See [the release guide](docs/releasing.md#release-notes) for how those notes are assembled.
 
+- [v0.12.0-rc.1](changelog/v0.12.0-rc.1.md) - 2026-10-12
 - [v0.11.0](changelog/v0.11.0.md) - 2026-10-07
 - [v0.11.0-rc.1](changelog/v0.11.0-rc.1.md) - 2026-10-06
 - [v0.10.0](changelog/v0.10.0.md)
