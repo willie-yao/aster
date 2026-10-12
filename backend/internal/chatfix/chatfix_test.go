@@ -273,6 +273,24 @@ func TestCreateAnalysisFixRequestCarriesUnverifiedUncitedFinding(t *testing.T) {
 	}
 }
 
+func TestExactAnalysisFixInputKeepsTestedBranchForDefaultComparison(t *testing.T) {
+	source := sourceinvestigation.Repository{
+		Owner: "example", Name: "repo", Revision: strings.Repeat("1", 40),
+	}
+	candidate := analysischat.FixCandidate{
+		Analysis:                 analysischat.AnalysisRef{Scope: analysischat.ScopeCause},
+		FixTarget:                analysischat.AnalysisRef{Scope: analysischat.ScopeTest, JobID: "job", BuildID: "123"},
+		SourceRepositorySnapshot: source,
+		SourceBranch:             "release-1.2", SourceBranchKnown: true,
+		AssistantAnswer: "The default branch main has identical cause logic.",
+	}
+	input := exactAnalysisFixInput(candidate, "")
+	if input.SourceRepository != source || input.SourceBranch != "release-1.2" ||
+		input.Origin.FixTarget != candidate.FixTarget || input.Identity.BuildID != "123" {
+		t.Fatalf("fix target changed by comparison context: %+v", input)
+	}
+}
+
 func TestCreateAnalysisFixRequestReturnsAdmissionFailure(t *testing.T) {
 	admissionErr := errors.New("action request admission failed")
 	chat := &fakeChatStore{candidate: analysischat.FixCandidate{

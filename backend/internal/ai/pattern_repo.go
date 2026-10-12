@@ -47,6 +47,40 @@ func (r *githubRepoReader) SourceIdentity() (string, string, string) {
 	defer r.mu.Unlock()
 	return r.owner, r.repo, r.ref
 }
+
+func (r *githubRepoReader) defaultBranch(ctx context.Context) (string, error) {
+	u := fmt.Sprintf("%s/repos/%s/%s", githubAPIBase, r.owner, r.repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	if r.token != "" {
+		req.Header.Set("Authorization", "Bearer "+r.token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "aster")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("resolving %s/%s default branch: %s", r.owner, r.repo, resp.Status)
+	}
+	var out struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return "", fmt.Errorf("decoding %s/%s default branch: %w", r.owner, r.repo, err)
+	}
+	branch := strings.TrimSpace(out.DefaultBranch)
+	if branch == "" {
+		return "", fmt.Errorf("resolving %s/%s default branch: response omitted default_branch", r.owner, r.repo)
+	}
+	return branch, nil
+}
+
 func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

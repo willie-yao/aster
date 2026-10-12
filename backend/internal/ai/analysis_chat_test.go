@@ -2911,34 +2911,114 @@ func TestAnalysisChatPromptStatesTheQuoteRules(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatCauseSourcesResolveHistoricalAndCurrent(t *testing.T) {
+func TestAnalysisChatCauseSourcesResolveHistoricalCurrentAndDefault(t *testing.T) {
 	const historical = "0123456789abcdef0123456789abcdef01234567"
 	const current = "89abcdef0123456789abcdef0123456789abcdef"
+	const comparison = "abcdef0123456789abcdef0123456789abcdef01"
 	for _, testCase := range []struct {
 		name            string
 		resolved        string
 		status          int
+		defaultBranch   string
+		defaultRevision string
+		metadataBody    string
+		metadataStatus  int
+		defaultStatus   int
+		wantCalls       int
 		wantSources     int
 		wantCurrentID   bool
+		wantDefaultID   bool
 		wantUnavailable bool
 	}{
-		{name: "distinct revisions", resolved: current, status: http.StatusOK, wantSources: 2, wantCurrentID: true},
-		{name: "equal revisions", resolved: historical, status: http.StatusOK, wantSources: 1},
-		{name: "current unavailable", status: http.StatusNotFound, wantSources: 1, wantUnavailable: true},
+		{
+			name: "distinct revisions", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: comparison, wantCalls: 3,
+			wantSources: 3, wantCurrentID: true, wantDefaultID: true,
+		},
+		{
+			name: "equal historical and current", resolved: historical, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: comparison, wantCalls: 3,
+			wantSources: 2, wantDefaultID: true,
+		},
+		{
+			name: "current unavailable", status: http.StatusNotFound,
+			defaultBranch: "trunk", defaultRevision: comparison, wantCalls: 3,
+			wantSources: 2, wantDefaultID: true, wantUnavailable: true,
+		},
+		{
+			name: "tested branch is default", resolved: current, status: http.StatusOK,
+			defaultBranch: "release-1.2", wantCalls: 2, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default equals historical", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: historical, wantCalls: 3, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default equals current", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: current, wantCalls: 3, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default metadata unavailable", resolved: current, status: http.StatusOK,
+			metadataStatus: http.StatusNotFound, wantCalls: 2, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default metadata malformed", resolved: current, status: http.StatusOK,
+			metadataBody: `{`, wantCalls: 2, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default branch missing", resolved: current, status: http.StatusOK,
+			metadataBody: `{}`, wantCalls: 2, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default tip unavailable", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultStatus: http.StatusNotFound,
+			wantCalls: 3, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default tip invalid", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: "not-a-sha", wantCalls: 3, wantSources: 2, wantCurrentID: true,
+		},
+		{
+			name: "default tip not 40 characters", resolved: current, status: http.StatusOK,
+			defaultBranch: "trunk", defaultRevision: strings.Repeat("a", 64),
+			wantCalls: 3, wantSources: 2, wantCurrentID: true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			calls := 0
 			github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if r.URL.Path != "/repos/kubernetes-sigs/cluster-api-provider-azure/commits/release-1.2" {
+				if r.Header.Get("Authorization") != "Bearer read-token" {
+					t.Errorf("source lookup authorization = %q", r.Header.Get("Authorization"))
+				}
+				const repoPath = "/repos/kubernetes-sigs/cluster-api-provider-azure"
+				switch r.URL.Path {
+				case repoPath + "/commits/release-1.2":
+					if testCase.status != http.StatusOK {
+						http.Error(w, "unavailable", testCase.status)
+						return
+					}
+					_, _ = w.Write([]byte(`{"sha":"` + testCase.resolved + `"}`))
+				case repoPath:
+					if testCase.metadataStatus != 0 {
+						http.Error(w, "unavailable", testCase.metadataStatus)
+						return
+					}
+					body := testCase.metadataBody
+					if body == "" {
+						body = `{"default_branch":"` + testCase.defaultBranch + `"}`
+					}
+					_, _ = w.Write([]byte(body))
+				case repoPath + "/commits/trunk":
+					if testCase.defaultStatus != 0 {
+						http.Error(w, "unavailable", testCase.defaultStatus)
+						return
+					}
+					_, _ = w.Write([]byte(`{"sha":"` + testCase.defaultRevision + `"}`))
+				default:
+					t.Errorf("unexpected source lookup %s", r.URL.Path)
 					http.NotFound(w, r)
-					return
 				}
-				if testCase.status != http.StatusOK {
-					http.Error(w, "unavailable", testCase.status)
-					return
-				}
-				_, _ = w.Write([]byte(`{"sha":"` + testCase.resolved + `"}`))
 			}))
 			defer github.Close()
 			oldAPI := githubAPIBase
@@ -2950,6 +3030,7 @@ func TestAnalysisChatCauseSourcesResolveHistoricalAndCurrent(t *testing.T) {
 			agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
 				MaxIters: 2, Timeout: time.Second,
 				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+				GitHubReadToken: "read-token",
 			})
 			turn := causeAnalysisChatTurn()
 			turn.Build.RepoRefs = map[string]string{
@@ -2959,8 +3040,8 @@ func TestAnalysisChatCauseSourcesResolveHistoricalAndCurrent(t *testing.T) {
 			if _, err := agent.Reply(t.Context(), turn); err != nil {
 				t.Fatal(err)
 			}
-			if calls != 1 {
-				t.Fatalf("branch-tip lookups = %d, want 1", calls)
+			if calls != testCase.wantCalls {
+				t.Fatalf("source lookups = %d, want %d", calls, testCase.wantCalls)
 			}
 			request := string(server.requests[0])
 			for _, want := range []string{"selected failed build 123", "release-1.2", historical, "comparison-build artifacts", "current source investigation"} {
@@ -2973,6 +3054,27 @@ func TestAnalysisChatCauseSourcesResolveHistoricalAndCurrent(t *testing.T) {
 			}
 			if testCase.wantCurrentID && !strings.Contains(request, current) {
 				t.Fatalf("request missing current revision: %s", request)
+			}
+			if got := strings.Count(request, "source_id `default`: "); (got == 1) != testCase.wantDefaultID {
+				t.Fatalf("default catalog entries = %d, wantDefault=%t", got, testCase.wantDefaultID)
+			}
+			sourceCount := 0
+			for _, id := range []string{tools.PrimarySourceID, analysisChatCurrentSourceID, analysisChatDefaultSourceID} {
+				sourceCount += strings.Count(request, "source_id `"+id+"`: ")
+			}
+			if sourceCount != testCase.wantSources {
+				t.Fatalf("catalog sources = %d, want %d", sourceCount, testCase.wantSources)
+			}
+			if testCase.wantDefaultID {
+				for _, want := range []string{
+					comparison, "default branch `trunk`", "comparison-only",
+					"never as the effective current remediation source or a Fix target",
+					"Its citations cannot qualify a remediation recommendation or proposed revision",
+				} {
+					if !strings.Contains(request, want) {
+						t.Fatalf("request missing %q: %s", want, request)
+					}
+				}
 			}
 			if got := strings.Contains(request, "current immutable revision could not be resolved"); got != testCase.wantUnavailable {
 				t.Fatalf("unavailable guidance present=%t want=%t: %s", got, testCase.wantUnavailable, request)
@@ -3055,18 +3157,22 @@ func TestAnalysisChatPreparedCauseUsesHistoricalSourceWithoutCurrentLookup(t *te
 			t.Fatalf("prepared request missing %q: %s", want, request)
 		}
 	}
-	if strings.Contains(request, "source_id `current`:") {
-		t.Fatalf("prepared cause received a current source entry: %s", request)
+	for _, id := range []string{analysisChatCurrentSourceID, analysisChatDefaultSourceID} {
+		if strings.Contains(request, "source_id `"+id+"`:") {
+			t.Fatalf("prepared cause received a %s source entry: %s", id, request)
+		}
 	}
 }
 
 func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
 	primaryRevision := strings.Repeat("1", 40)
 	currentRevision := strings.Repeat("2", 40)
+	defaultRevision := strings.Repeat("3", 40)
 	reader := &countingSourceReader{}
 	catalog := testSourceCatalog(t, tools.PrimarySourceID,
 		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "Example", Name: "Project", Revision: primaryRevision, Reader: reader},
 		tools.RepoSource{ID: analysisChatCurrentSourceID, Owner: "Example", Name: "Project", Revision: currentRevision, Reader: reader},
+		tools.RepoSource{ID: analysisChatDefaultSourceID, Owner: "Example", Name: "Project", Revision: defaultRevision, Reader: reader},
 	)
 	context := &analysisChatSourceCitationContext{
 		Catalog: catalog, CurrentSourceID: analysisChatCurrentSourceID,
@@ -3076,6 +3182,9 @@ func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
 			},
 			{SourceID: analysisChatCurrentSourceID, Path: "pkg/same.go"}: {
 				Segments: []string{"current implementation"}, Lines: map[int]string{20: "current implementation"},
+			},
+			{SourceID: analysisChatDefaultSourceID, Path: "pkg/same.go"}: {
+				Segments: []string{"default implementation"}, Lines: map[int]string{30: "default implementation"},
 			},
 		},
 	}
@@ -3087,6 +3196,7 @@ func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
 	}{
 		{name: "primary", revision: strings.ToUpper(primaryRevision), line: 10, quote: "historical implementation"},
 		{name: "current", revision: strings.ToUpper(currentRevision), line: 20, quote: "current implementation"},
+		{name: "default", revision: strings.ToUpper(defaultRevision), line: 30, quote: "default implementation"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			citation := analysischat.Citation{
@@ -3102,9 +3212,9 @@ func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
 		})
 	}
 
-	third := analysischat.Citation{Repository: "example/project", Revision: strings.Repeat("3", 40), Path: "pkg/same.go", Quote: "historical implementation"}
-	if failure := validateAnalysisChatCitation(&third, nil, context, 1); failure == nil || failure.Gate != analysischat.UnverifiedReference {
-		t.Fatalf("third-revision failure = %+v", failure)
+	unknown := analysischat.Citation{Repository: "example/project", Revision: strings.Repeat("4", 40), Path: "pkg/same.go", Quote: "historical implementation"}
+	if failure := validateAnalysisChatCitation(&unknown, nil, context, 1); failure == nil || failure.Gate != analysischat.UnverifiedReference {
+		t.Fatalf("unknown-revision failure = %+v", failure)
 	}
 	crossSource := analysischat.Citation{
 		Repository: "example/project", Revision: currentRevision, Path: "pkg/same.go",
@@ -3121,14 +3231,17 @@ func TestAnalysisChatSourceCitationsAreIsolatedByCatalogSource(t *testing.T) {
 func TestAnalysisChatProposedRevisionRequiresCurrentSourceCitation(t *testing.T) {
 	primaryRevision := strings.Repeat("1", 40)
 	currentRevision := strings.Repeat("2", 40)
+	defaultRevision := strings.Repeat("3", 40)
 	reader := &countingSourceReader{}
 	catalog := testSourceCatalog(t, tools.PrimarySourceID,
 		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: primaryRevision, Reader: reader},
 		tools.RepoSource{ID: analysisChatCurrentSourceID, Owner: "example", Name: "project", Revision: currentRevision, Reader: reader},
+		tools.RepoSource{ID: analysisChatDefaultSourceID, Owner: "example", Name: "project", Revision: defaultRevision, Reader: reader},
 	)
 	sourceEvidence := map[analysisChatSourceEvidenceKey]*analysisChatEvidence{
 		{SourceID: tools.PrimarySourceID, Path: "pkg/fix.go"}:       {Segments: []string{"historical code"}, Lines: map[int]string{}},
 		{SourceID: analysisChatCurrentSourceID, Path: "pkg/fix.go"}: {Segments: []string{"current code"}, Lines: map[int]string{}},
+		{SourceID: analysisChatDefaultSourceID, Path: "pkg/fix.go"}: {Segments: []string{"default code"}, Lines: map[int]string{}},
 	}
 	equalCatalog := testSourceCatalog(t, tools.PrimarySourceID,
 		tools.RepoSource{ID: tools.PrimarySourceID, Owner: "example", Name: "project", Revision: primaryRevision, Reader: reader},
@@ -3159,6 +3272,16 @@ func TestAnalysisChatProposedRevisionRequiresCurrentSourceCitation(t *testing.T)
 			name: "historical citation", wantWarning: "did not cite", wantEvidenceCount: 1,
 			citation: `{"repository":"example/project","revision":"` + primaryRevision + `","path":"pkg/fix.go","quote":"historical code"}`,
 			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence, CurrentSourceID: analysisChatCurrentSourceID},
+		},
+		{
+			name: "comparison citation", wantWarning: "did not cite", wantEvidenceCount: 1,
+			citation: `{"repository":"example/project","revision":"` + defaultRevision + `","path":"pkg/fix.go","quote":"default code"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence, CurrentSourceID: analysisChatCurrentSourceID},
+		},
+		{
+			name: "comparison with current unavailable", wantWarning: "was unavailable", wantEvidenceCount: 1,
+			citation: `{"repository":"example/project","revision":"` + defaultRevision + `","path":"pkg/fix.go","quote":"default code"}`,
+			context:  &analysisChatSourceCitationContext{Catalog: catalog, Evidence: sourceEvidence},
 		},
 		{
 			name: "artifact only", wantWarning: "did not cite", wantEvidenceCount: 1,
@@ -3262,12 +3385,177 @@ func TestAnalysisChatCauseSourceResolutionPropagatesCancellation(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatCauseSourceResolutionDoesNotCacheBranchTipsAcrossTurns(t *testing.T) {
-	const current = "89abcdef0123456789abcdef0123456789abcdef"
+func TestAnalysisChatDefaultSourceResolutionPropagatesCancellation(t *testing.T) {
+	for _, stage := range []string{"metadata", "tip"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				const repoPath = "/repos/kubernetes-sigs/cluster-api-provider-azure"
+				if stage == "metadata" && r.URL.Path == repoPath ||
+					stage == "tip" && r.URL.Path == repoPath+"/commits/trunk" {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+				if r.URL.Path == repoPath {
+					_, _ = w.Write([]byte(`{"default_branch":"trunk"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"sha":"` + strings.Repeat("2", 40) + `"}`))
+			}))
+			defer github.Close()
+			oldAPI := githubAPIBase
+			githubAPIBase = github.URL
+			defer func() { githubAPIBase = oldAPI }()
+
+			agent := &AnalysisChatAgent{opts: AnalysisChatOptions{
+				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+			}}
+			turn := causeAnalysisChatTurn()
+			turn.Build.RepoRefs = map[string]string{
+				"kubernetes-sigs/cluster-api-provider-azure": "release-1.2:" + strings.Repeat("1", 40),
+			}
+			if _, _, err := agent.resolveCauseSources(ctx, turn); !errors.Is(err, context.Canceled) {
+				t.Fatalf("resolveCauseSources error = %v", err)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatDefaultSourceRequiresCauseAndKnownTestedBranch(t *testing.T) {
 	calls := 0
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
-		_, _ = w.Write([]byte(`{"sha":"` + current + `"}`))
+		http.Error(w, "unexpected lookup", http.StatusInternalServerError)
+	}))
+	defer github.Close()
+	oldAPI := githubAPIBase
+	githubAPIBase = github.URL
+	defer func() { githubAPIBase = oldAPI }()
+
+	agent := &AnalysisChatAgent{opts: AnalysisChatOptions{
+		SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+	}}
+	for _, scope := range []string{analysischat.ScopeTest, analysischat.ScopePattern, analysischat.ScopeCause} {
+		t.Run(scope, func(t *testing.T) {
+			turn := causeAnalysisChatTurn()
+			turn.Scope = scope
+			ref := strings.Repeat("1", 40)
+			if scope != analysischat.ScopeCause {
+				ref = "release-1.2:" + ref
+			}
+			turn.Build.RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": ref}
+			catalog, state, err := agent.resolveCauseSources(t.Context(), turn)
+			if err != nil || state.DefaultRevision != "" {
+				t.Fatalf("state=%+v err=%v", state, err)
+			}
+			if scope == analysischat.ScopeCause && (catalog == nil || len(catalog.Sources()) != 1) {
+				t.Fatalf("branchless cause catalog = %+v", catalog)
+			}
+			if scope != analysischat.ScopeCause && catalog != nil {
+				t.Fatalf("non-cause catalog = %+v", catalog)
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("ineligible turns performed %d lookups", calls)
+	}
+}
+
+func TestAnalysisChatDefaultCitationCannotQualifyCurrentRemediation(t *testing.T) {
+	shrinkCallDelay(t)
+	historical := strings.Repeat("1", 40)
+	comparison := strings.Repeat("3", 40)
+	for _, current := range []string{strings.Repeat("2", 40), historical, ""} {
+		t.Run("current="+current, func(t *testing.T) {
+			github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				const repoPath = "/repos/kubernetes-sigs/cluster-api-provider-azure"
+				switch r.URL.Path {
+				case repoPath:
+					_, _ = w.Write([]byte(`{"default_branch":"trunk"}`))
+				case repoPath + "/commits/release-1.2":
+					if current == "" {
+						http.NotFound(w, r)
+						return
+					}
+					_, _ = w.Write([]byte(`{"sha":"` + current + `"}`))
+				case repoPath + "/commits/trunk":
+					_, _ = w.Write([]byte(`{"sha":"` + comparison + `"}`))
+				default:
+					t.Errorf("unexpected lookup %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer github.Close()
+			raw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				want := "/kubernetes-sigs/cluster-api-provider-azure/" + comparison + "/hack/ensure-azcli.sh"
+				if r.URL.Path != want {
+					t.Errorf("default read path = %q, want %q", r.URL.Path, want)
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = w.Write([]byte("AZ_REPO=$(lsb_release -cs)\n"))
+			}))
+			defer raw.Close()
+			oldAPI, oldRaw := githubAPIBase, rawContentBase
+			githubAPIBase, rawContentBase = github.URL, raw.URL
+			defer func() { githubAPIBase, rawContentBase = oldAPI, oldRaw }()
+
+			server := newScriptedChatServer(t)
+			server.push(200, chatRespToolCall("default-1", "read_repo_file", map[string]any{
+				"source_id": analysisChatDefaultSourceID, "path": "hack/ensure-azcli.sh", "offset": 0, "length": 1024,
+			}))
+			server.push(200, chatRespFinal(`{
+				"answer":"The default branch still derives the apt suite from the runner.",
+				"citations":[{"repository":"kubernetes-sigs/cluster-api-provider-azure","revision":"`+comparison+`","path":"hack/ensure-azcli.sh","line_start":1,"line_end":1,"quote":"AZ_REPO=$(lsb_release -cs)"}],
+				"assessment":"challenges",
+				"proposed_revision":{"root_cause":"The runner suite is unsupported.","suggested_fix":"Update suite selection."}
+			}`))
+			agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
+				MaxIters: 3, Timeout: time.Second,
+				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
+			})
+			turn := causeAnalysisChatTurn()
+			turn.Build.RepoRefs = map[string]string{
+				"kubernetes-sigs/cluster-api-provider-azure": "release-1.2:" + historical,
+			}
+			turn.EvidenceBuilds[0].Build = turn.Build
+			reply, err := agent.Reply(t.Context(), turn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.Unverified || len(reply.Citations) != 1 || reply.Citations[0].Revision != comparison ||
+				reply.ProposedRevision != nil || len(reply.EvidenceWarnings) != 1 {
+				t.Fatalf("comparison-only reply = %+v", reply)
+			}
+			if !strings.Contains(reply.EvidenceWarnings[0], "current tested-branch source revision") {
+				t.Fatalf("remediation warning = %q", reply.EvidenceWarnings[0])
+			}
+		})
+	}
+}
+
+func TestAnalysisChatCauseSourceResolutionDoesNotCacheBranchTipsAcrossTurns(t *testing.T) {
+	const current = "89abcdef0123456789abcdef0123456789abcdef"
+	comparisonRevisions := []string{strings.Repeat("3", 40), strings.Repeat("4", 40)}
+	calls := 0
+	defaultCalls := 0
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		const repoPath = "/repos/kubernetes-sigs/cluster-api-provider-azure"
+		switch r.URL.Path {
+		case repoPath:
+			_, _ = w.Write([]byte(`{"default_branch":"trunk"}`))
+		case repoPath + "/commits/main":
+			_, _ = w.Write([]byte(`{"sha":"` + current + `"}`))
+		case repoPath + "/commits/trunk":
+			_, _ = w.Write([]byte(`{"sha":"` + comparisonRevisions[defaultCalls] + `"}`))
+			defaultCalls++
+		default:
+			t.Errorf("unexpected lookup %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
 	}))
 	defer github.Close()
 	oldAPI := githubAPIBase
@@ -3281,13 +3569,13 @@ func TestAnalysisChatCauseSourceResolutionDoesNotCacheBranchTipsAcrossTurns(t *t
 	turn.Build.RepoRefs = map[string]string{
 		"kubernetes-sigs/cluster-api-provider-azure": "main:0123456789abcdef0123456789abcdef01234567",
 	}
-	for range 2 {
+	for i := range 2 {
 		_, state, err := agent.resolveCauseSources(t.Context(), turn)
-		if err != nil || state.CurrentRevision != current {
+		if err != nil || state.CurrentRevision != current || state.DefaultRevision != comparisonRevisions[i] {
 			t.Fatalf("state=%+v err=%v", state, err)
 		}
 	}
-	if calls != 2 {
-		t.Fatalf("branch-tip lookups = %d, want one per turn", calls)
+	if calls != 6 || defaultCalls != 2 {
+		t.Fatalf("source lookups = %d, default tips = %d, want 6 and 2", calls, defaultCalls)
 	}
 }
