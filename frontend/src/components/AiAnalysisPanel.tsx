@@ -35,6 +35,7 @@ export function AiAnalysisPanel({
   buildWebURL,
   traceRef,
   chatRef,
+  chatFixable = true,
   fixPatterns = [],
   appearance = "default",
   severityInHeader = false,
@@ -46,6 +47,7 @@ export function AiAnalysisPanel({
   buildWebURL?: string;
   traceRef?: AnalysisTraceReference;
   chatRef?: AnalysisChatReference;
+  chatFixable?: boolean;
   fixPatterns?: PatternAnalysis[];
   appearance?: "default" | "detail";
   // Set when the surrounding header already states the severity, so the panel
@@ -189,6 +191,7 @@ export function AiAnalysisPanel({
 
   const chat = chatRef ? (
     <AnalysisChat
+      fixable={chatFixable}
       key={[
         chatRef.job_id,
         chatRef.build_id,

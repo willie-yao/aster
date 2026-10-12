@@ -307,16 +307,27 @@ func selectCauseFixTarget(jobID string, group models.PatternCausalGroup, runs []
 			return nil
 		}
 		testCase := representativeCauseFailure(run.TestCases)
-		if testCase == nil || testCase.Source == models.TestCaseSourceBuild || strings.TrimSpace(testCase.JUnitFile) == "" {
+		if testCase == nil {
+			return nil
+		}
+		if testCase.Source != models.TestCaseSourceBuild && strings.TrimSpace(testCase.JUnitFile) == "" {
+			return nil
+		}
+		if testCase.Source == models.TestCaseSourceBuild && strings.TrimSpace(testCase.JUnitFile) != "" {
 			return nil
 		}
 		for i := range run.TestCases {
-			if run.TestCases[i].Name == testCase.Name {
-				if &run.TestCases[i] != testCase {
-					return nil
+			if testCase.Source == models.TestCaseSourceBuild {
+				if run.TestCases[i].Source != models.TestCaseSourceBuild {
+					continue
 				}
-				break
+			} else if run.TestCases[i].Name != testCase.Name {
+				continue
 			}
+			if &run.TestCases[i] != testCase {
+				return nil
+			}
+			break
 		}
 		return &resolvedFixTarget{
 			ref: AnalysisRef{

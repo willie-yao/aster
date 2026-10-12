@@ -157,13 +157,13 @@ test("a cause with no fix target names the dependency instead of a dead end", ()
   assert.match(html, /unverified/);
   assert.match(html, /does not open\s+pull requests in a dependency/);
   assert.match(html, /project-side mitigation/);
-  assert.doesNotMatch(html, /No representative failed JUnit analysis/);
+  assert.doesNotMatch(html, /No representative failed test or build analysis/);
 });
 
 test("a cause with no upstream owner keeps the existing generic message", () => {
   const html = render(createElement(CausalGroupFixRouting, { jobID: "job", target: null, externalCause: null }));
 
-  assert.match(html, /No representative failed JUnit analysis for this cause is reachable/);
+  assert.match(html, /No representative failed test or build analysis for this cause is reachable/);
   assert.doesNotMatch(html, /dependency/);
 });
 
@@ -180,11 +180,22 @@ test("the pattern panel names the dependency instead of reporting unavailability
 
   const generic = render(createElement(PatternFixGuidance, { jobID: "job", buildID: "208060" }));
   assert.match(generic, /Fix proposal unavailable/);
-  assert.match(generic, /No representative failed JUnit analysis for its causes is reachable/);
+  assert.match(generic, /No representative failed test or build analysis for its causes is reachable/);
   assert.doesNotMatch(generic, /dependency/);
 });
 
 const fixTarget: CausalGroupFixTarget = { buildID: "208060", testName: "fails" };
+
+test("a build-level cause opens the build failure page instead of a test route", () => {
+  const html = render(createElement(CausalGroupFixRouting, {
+    jobID: "job",
+    target: { buildID: "208060", testName: "Prow job execution", source: "build" },
+  }));
+  assert.match(html, /href="\/job\/job\/build\/208060\/failure"/);
+  assert.match(html, /aria-label="Prow job execution in build 208060, open representative failure"/);
+  assert.doesNotMatch(html, /\/test\//);
+  assert.doesNotMatch(html, /No representative failed/);
+});
 
 test("a cause owned by a dependency reports it even when a Fix route exists", () => {
   // Ownership used to be suppressed whenever a Fix button rendered, which made
@@ -259,14 +270,14 @@ test("a cause without a fix target names which dead end it hit", () => {
   const unreachable = render(
     createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: true }),
   );
-  assert.match(unreachable, /No representative failed JUnit analysis/);
+  assert.match(unreachable, /No representative failed test or build analysis/);
   assert.doesNotMatch(unreachable, /left the analysis window/);
 
   const expired = render(
     createElement(CausalGroupFixRouting, { jobID: "job", target: null, evidencePresent: false }),
   );
   assert.match(expired, /have left the analysis window/);
-  assert.doesNotMatch(expired, /No representative failed JUnit analysis/);
+  assert.doesNotMatch(expired, /No representative failed test or build analysis/);
 
   // An upstream cause still reports ownership rather than either dead end.
   const upstream = render(

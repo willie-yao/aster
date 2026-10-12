@@ -81,8 +81,10 @@ func ValidateAdmittedFixOrigin(dataDir string, origin FixOrigin) error {
 	targetRef := origin.FixTarget
 	targetRef.AnalysisGeneratedAt = ""
 	targetRef, err = normalizeAnalysisRef(targetRef)
-	if err != nil || targetRef.Scope != ScopeTest || targetRef.JobID != ref.JobID || targetRef.JUnitFile == "" ||
-		targetRef.Source == models.TestCaseSourceBuild {
+	if err != nil || targetRef.Scope != ScopeTest || targetRef.JobID != ref.JobID {
+		return ErrAnalysisChanged
+	}
+	if targetRef.Source != models.TestCaseSourceBuild && targetRef.JUnitFile == "" {
 		return ErrAnalysisChanged
 	}
 	if ref.Scope == ScopeTest {

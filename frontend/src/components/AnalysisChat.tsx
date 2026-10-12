@@ -632,6 +632,7 @@ export function AnalysisChat({
   fileCtx,
   fixPatterns = [],
   fixTarget,
+  fixable = true,
   appearance = "default",
   preparedFinding = false,
   onPreparedResolved,
@@ -640,6 +641,7 @@ export function AnalysisChat({
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
   fixTarget?: CausalGroupFixTarget;
+  fixable?: boolean;
   appearance?: "default" | "detail";
   // A prepared finding is waiting for this cause. Resolved read-only by the
   // caller, because the only path that opens one creates a shared session.
@@ -1040,9 +1042,10 @@ export function AnalysisChat({
   // live, because that button is what resumes it.
   const sendBlocked = busy || restoring || Boolean(session?.active) || (pendingTurn?.question ?? question).trim() === "";
   const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
-  const exactJUnitAnalysis = !multiBuildScope && analysisRef.source !== "build" && Boolean(analysisRef.junit_file);
+  const exactFailureAnalysis = !multiBuildScope &&
+    (analysisRef.source === "build" || Boolean(analysisRef.junit_file));
   const causeFixEnabled = causeScope && Boolean(fixTarget);
-  const exactFixEnabled = Boolean(features.junit_chat_fix) && (exactJUnitAnalysis || causeFixEnabled);
+  const exactFixEnabled = fixable && Boolean(features.junit_chat_fix) && (exactFailureAnalysis || causeFixEnabled);
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();

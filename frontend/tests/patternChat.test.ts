@@ -66,7 +66,7 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   const source = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
   assert.match(source, /const causeScope = analysisRef\.scope === "cause"/);
   assert.match(source, /const multiBuildScope = patternScope \|\| causeScope/);
-  assert.match(source, /exactJUnitAnalysis = !multiBuildScope/);
+  assert.match(source, /exactFailureAnalysis = !multiBuildScope/);
   assert.match(source, /fixEligible=\{exactFixEnabled \|\| \(patternScope && Boolean\(features\.chat_fix\) && Boolean\(fixPatterns\.length\)\)/);
   assert.match(source, /chatTitle = causeScope \? "Investigate cause"/);
   assert.match(source, /Has this cause been resolved in the latest completed run/);

@@ -1,11 +1,13 @@
 import type { AnalysisCauseLocation, BuildResult, PatternAnalysis, PatternCausalGroup, TestCase } from "../types/dashboard";
 import { executedResultTests } from "./jobDetail.js";
+import { buildFailure } from "./buildFailures.js";
 
 export const failedTestGridID = "cross-run-test-grid";
 
 export interface CausalGroupFixTarget {
   buildID: string;
   testName: string;
+  source?: "build";
 }
 
 export function patternFixGuidanceBuildID(
@@ -53,11 +55,15 @@ export function causalGroupFixTarget(
     const occurrences = run.test_cases;
     const representative = representativeAnalyzedFailure(occurrences);
     if (!representative || !fixInvestigationEligible(representative)) continue;
-    // The test detail page resolves a name to the first matching case in the
-    // build, so a shadowed representative is unreachable. Only offer a target
-    // the destination will actually open.
-    if (occurrences.find((occurrence) => occurrence.name === representative.name) !== representative) continue;
-    return { buildID: run.build_id, testName: representative.name };
+    const destinationFailure = representative.source === "build"
+      ? buildFailure(occurrences)
+      : occurrences.find((occurrence) => occurrence.name === representative.name);
+    if (destinationFailure !== representative) continue;
+    return {
+      buildID: run.build_id,
+      testName: representative.name,
+      ...(representative.source === "build" ? { source: "build" as const } : {}),
+    };
   }
   return null;
 }
@@ -97,13 +103,12 @@ function analysisHasUsableDiagnosis(
   return analysis.disposition === "citations_verified" || analysis.disposition === "preliminary";
 }
 
-// fixInvestigationEligible keeps the exact-JUnit structural boundary. Analysis
+// fixInvestigationEligible keeps the exact-failure structural boundary. Analysis
 // quality and source hints are context for the coding agent, not admission
 // requirements for a maintainer-requested investigation.
 function fixInvestigationEligible(testCase: TestCase): boolean {
   return testCase.status === "failed" &&
-    testCase.source !== "build" &&
-    Boolean(testCase.junit_file);
+    (testCase.source === "build" ? !testCase.junit_file : Boolean(testCase.junit_file));
 }
 
 // externalCause returns a cause location only when it names a dependency. A

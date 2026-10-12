@@ -167,6 +167,7 @@ export function BuildFailurePanel({
           fileCtx={fileCtx}
           buildWebURL={run.web_url}
           chatRef={chatRef}
+          chatFixable={failure.status === "failed" && !run.passed}
           appearance="detail"
           severityInHeader={Boolean(headerSeverity)}
         />

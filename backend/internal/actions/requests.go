@@ -332,7 +332,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	return view, nil
 }
 
-// CreateAnalysisFixRequest persists one exact JUnit chat-to-fix preview request
+// CreateAnalysisFixRequest persists one exact failure chat-to-fix preview request
 // and starts generation independently of the initiating HTTP request.
 func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFixInput, owner, userToken, instruction string, replacesRequestIDs ...string) (ActionRequestView, error) {
 	owner = normalizeActionOwner(owner)
@@ -413,7 +413,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 			replaced.Failure == nil || replaced.Failure.Category != AnalysisFixFailureNoReviewablePatch ||
 			replaced.ReplacementHash != replacementHash {
 			s.rmu.Unlock()
-			return ActionRequestView{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "replacement request does not match a recoverable exact JUnit preview")
+			return ActionRequestView{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, "replacement request does not match a recoverable exact analysis preview")
 		}
 		if instruction == "" || instruction == strings.TrimSpace(replaced.Instruction) {
 			s.rmu.Unlock()

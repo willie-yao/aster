@@ -93,9 +93,9 @@ export async function cancelAnalysisChatFixRequest(id: string): Promise<ChatFixR
 }
 
 function validateChatFixRequest(request: ActionRequest): ChatFixRequest {
-  if ((request as { kind: string }).kind !== "analysis-fix") throw new Error("The saved request is not an exact JUnit fix preview.");
+  if ((request as { kind: string }).kind !== "analysis-fix") throw new Error("The saved request is not an exact analysis fix preview.");
   if (request.preview && (!request.preview.token || request.preview.kind !== "fix")) {
-    throw new Error("The saved exact JUnit fix preview is incomplete.");
+    throw new Error("The saved exact analysis fix preview is incomplete.");
   }
   return request as unknown as ChatFixRequest;
 }

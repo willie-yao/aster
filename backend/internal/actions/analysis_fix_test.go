@@ -53,6 +53,90 @@ func exactJUnitDetail() models.JobDetail {
 	}}}
 }
 
+func exactBuildDetail() models.JobDetail {
+	detail := exactJUnitDetail()
+	detail.Runs[0].RepoRefs = map[string]string{
+		"kubernetes-sigs/cluster-api-provider-azure": "release-1.24:" + analysisFixRevision,
+	}
+	failure := &detail.Runs[0].TestCases[0]
+	failure.Name, failure.SuiteName, failure.ClassName = "Prow job execution", "Prow", "job"
+	failure.Source, failure.JUnitFile = models.TestCaseSourceBuild, ""
+	failure.FailureMessage, failure.FailureBody = "exit 127", "hack/ensure-azcli.sh: az: command not found"
+	failure.AIAnalysis.Disposition = models.AnalysisDispositionCitationsVerified
+	return detail
+}
+
+func exactBuildIdentity() AnalysisIdentity {
+	identity := exactIdentity()
+	identity.TestName, identity.SuiteName, identity.ClassName = "Prow job execution", "Prow", "job"
+	identity.Source, identity.JUnitFile = models.TestCaseSourceBuild, ""
+	return identity
+}
+
+func exactBuildRequestInput() AnalysisFixInput {
+	input := exactAnalysisRequestInput()
+	failure := exactBuildDetail().Runs[0].TestCases[0]
+	input.Identity = exactBuildIdentity()
+	input.Origin = testFixOrigin(input.Identity, failure.AIAnalysis)
+	input.AnalysisContentHash = models.TestAnalysisContentHash(failure)
+	input.SourceBranch = "release-1.24"
+	input.AssistantAnswer = "Guard the az CLI installation before invoking it."
+	return input
+}
+
+func TestResolveAnalysisActionSubjectSupportsExactBuildIdentity(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactBuildDetail()
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	subject, err := service.ResolveAnalysisActionSubject(exactBuildIdentity())
+	if err != nil || subject == nil {
+		t.Fatalf("subject=%+v err=%v", subject, err)
+	}
+	if subject.Failure.Source != models.TestCaseSourceBuild || subject.Identity.JUnitFile != "" ||
+		subject.AnalysisContentHash != models.TestAnalysisContentHash(detail.Runs[0].TestCases[0]) ||
+		subject.SourceRepository.Revision != analysisFixRevision {
+		t.Fatalf("subject=%+v", subject)
+	}
+	for _, change := range []string{"passed", "run passed", "missing", "no analysis", "stale", "ambiguous"} {
+		t.Run(change, func(t *testing.T) {
+			detail := exactBuildDetail()
+			switch change {
+			case "passed":
+				detail.Runs[0].TestCases[0].Status = "passed"
+			case "run passed":
+				detail.Runs[0].Passed = true
+			case "missing":
+				detail.Runs[0].TestCases = nil
+			case "no analysis":
+				detail.Runs[0].TestCases[0].AIAnalysis = nil
+			case "stale":
+				detail.Runs[0].TestCases[0].AIAnalysis.GeneratedAt = "new"
+			case "ambiguous":
+				detail.Runs[0].TestCases = append(detail.Runs[0].TestCases, detail.Runs[0].TestCases[0])
+			}
+			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+			if _, err := service.ResolveAnalysisActionSubject(exactBuildIdentity()); err == nil {
+				t.Fatal("invalid build target accepted")
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisIdentityRejectsMixedFailureSources(t *testing.T) {
+	buildWithJUnit := exactBuildIdentity()
+	buildWithJUnit.JUnitFile = "junit.xml"
+	junitWithoutFile := exactIdentity()
+	junitWithoutFile.JUnitFile = ""
+	unknownSource := exactIdentity()
+	unknownSource.Source = "unknown"
+	for _, identity := range []AnalysisIdentity{buildWithJUnit, junitWithoutFile, unknownSource} {
+		if err := validateAnalysisIdentity(identity); err == nil {
+			t.Fatalf("invalid identity accepted: %+v", identity)
+		}
+	}
+}
+
 func exactAnalysisConfig() *project.Config {
 	return &project.Config{
 		Name: "capz",

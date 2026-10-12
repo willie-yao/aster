@@ -35,6 +35,121 @@ func analysisRequestTestService(t *testing.T) (*Service, models.PatternAnalysis)
 	return service, models.PatternAnalysis{}
 }
 
+func TestBuildAnalysisHandoffRechecksFailureAndPreservesPinnedBranch(t *testing.T) {
+	for _, change := range []string{
+		"unchanged", "failure message", "failure body", "status", "run passed",
+		"removed", "source", "JUnit file", "suite", "duplicate", "branch", "base", "destination",
+	} {
+		t.Run(change, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := exactBuildDetail()
+			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+			service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+			service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+				base: ghpr.Base{Branch: "release-1.24", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+			}
+			input, err := service.prepareAnalysisFix(t.Context(), exactBuildRequestInput(), "alice", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			subject, err := service.resolveAnalysisFixTarget(input, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generation := analysisFailureForGeneration(subject, input, input.SourceBranch, input.GenerationBaseRevision)
+			if generation.Source != models.TestCaseSourceBuild || generation.SourceBranch != "release-1.24" ||
+				generation.FailureBody != detail.Runs[0].TestCases[0].FailureBody {
+				t.Fatalf("generation = %+v", generation)
+			}
+			failure := &detail.Runs[0].TestCases[0]
+			switch change {
+			case "failure message":
+				failure.FailureMessage = "exit 1"
+			case "failure body":
+				failure.FailureBody = "different build log"
+			case "status":
+				failure.Status = "passed"
+			case "run passed":
+				detail.Runs[0].Passed = true
+			case "removed":
+				detail.Runs[0].TestCases = nil
+			case "source":
+				failure.Source = ""
+			case "JUnit file":
+				failure.JUnitFile = "junit.xml"
+			case "suite":
+				failure.SuiteName = "other"
+			case "duplicate":
+				detail.Runs[0].TestCases = append(detail.Runs[0].TestCases, *failure)
+			case "branch":
+				detail.Runs[0].RepoRefs["kubernetes-sigs/cluster-api-provider-azure"] = "main:" + analysisFixRevision
+			case "base":
+				service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+					base: ghpr.Base{Branch: "release-1.24", HeadSHA: capzGenerationBaseRevision}, contains: true,
+				}
+			case "destination":
+				service.cfg.AI.FixPRs.Repo.Name = "other"
+			}
+			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+			_, generationErr := service.resolveAnalysisFixTarget(input, true)
+			confirmationErr := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: &input})
+			if change == "unchanged" {
+				if generationErr != nil || confirmationErr != nil {
+					t.Fatalf("generation=%v confirmation=%v", generationErr, confirmationErr)
+				}
+			} else {
+				if change != "base" && change != "destination" && generationErr == nil {
+					t.Fatal("changed build failure accepted for generation")
+				}
+				if !errors.Is(confirmationErr, ErrPreviewTargetChanged) {
+					t.Fatalf("changed build preview validation = %v", confirmationErr)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildAnalysisFixRequestPersistsAndDeduplicates(t *testing.T) {
+	dir := t.TempDir()
+	detail := exactBuildDetail()
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "release-1.24", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+	}
+	var calls atomic.Int32
+	installHandoffTestGenerator(t, service, &calls)
+	input := exactBuildRequestInput()
+	request, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, request.ID, "alice", RequestReady)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, dir, AIConfig{})
+	reloaded.sourceRevisionClient = service.sourceRevisionClient
+	installHandoffTestGenerator(t, reloaded, &calls)
+	retry, err := reloaded.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil || retry.ID != request.ID || calls.Load() != 1 {
+		t.Fatalf("retry=%+v err=%v calls=%d", retry, err, calls.Load())
+	}
+	handoff := reloaded.requests.Requests[request.ID].AnalysisFix
+	if handoff == nil || handoff.Identity.Source != models.TestCaseSourceBuild || handoff.Identity.JUnitFile != "" ||
+		handoff.SourceBranch != "release-1.24" {
+		t.Fatalf("persisted handoff=%+v", handoff)
+	}
+	if err := reloaded.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: handoff}); err != nil {
+		t.Fatal(err)
+	}
+	detail.Runs[0].TestCases[0].FailureBody = "different build failure"
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	if _, err := reloaded.Confirm(t.Context(), ready.Preview.Token, "alice", "token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("changed build confirmation=%v", err)
+	}
+}
+
 type handoffChatRunner struct{}
 
 func (handoffChatRunner) Reply(context.Context, analysischat.Turn) (analysischat.Reply, error) {
