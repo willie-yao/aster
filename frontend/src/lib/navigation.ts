@@ -19,6 +19,7 @@ export interface NavDestinationInput {
   pullRequestsEnabled: boolean;
   analysisHealthEnabled: boolean;
   aiUsageEnabled: boolean;
+  analysisChatEnabled: boolean;
   /**
    * Whether the viewer is signed in as an operator. Operator pages render only
    * a sign-in wall without it, so the deployment flag alone is not enough to
@@ -32,6 +33,7 @@ export function navDestinations({
   pullRequestsEnabled,
   analysisHealthEnabled,
   aiUsageEnabled,
+  analysisChatEnabled,
   operatorAccess,
 }: NavDestinationInput): NavDestination[] {
   const flakyActive = pathname === "/flaky" || pathname.startsWith("/flaky/");
@@ -88,6 +90,16 @@ export function navDestinations({
       title: "AI Usage",
       scope: "operator",
       active: usageActive,
+    });
+  }
+  if (analysisChatEnabled && operatorAccess) {
+    destinations.push({
+      id: "investigations",
+      to: "/investigations",
+      label: "History",
+      title: "Investigation history",
+      scope: "operator",
+      active: historyActive,
     });
   }
   return destinations;

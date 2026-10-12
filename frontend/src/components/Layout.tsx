@@ -43,6 +43,7 @@ export function Layout() {
     pullRequestsEnabled: manifest.pull_requests?.enabled ?? false,
     analysisHealthEnabled: features.analysis_health ?? false,
     aiUsageEnabled: features.ai_usage ?? false,
+    analysisChatEnabled: features.analysis_chat ?? false,
     operatorAccess: auth.status === "authenticated",
   });
   const homeLabel = `${manifest.branding.title} home`;
@@ -70,12 +71,11 @@ export function Layout() {
           {isDark ? <LightMode fontSize="small" /> : <DarkMode fontSize="small" />}
         </IconButton>
       )}
-      {features.analysis_chat && auth.status === "authenticated" && (
+      {features.analysis_chat && auth.status === "authenticated" && !railHostsControls && (
         <IconButton component={RouterLink} to="/investigations" aria-label="Investigation history" title="Investigation history"
           aria-current={location.pathname === "/investigations" ? "page" : location.pathname.startsWith("/investigations/") ? "true" : undefined}
-          sx={{ width: 44, height: 44, flexDirection: "column", gap: 0.25, p: 0.5, color: location.pathname.startsWith("/investigations") ? "primary.main" : "text.secondary" }}>
+          sx={{ width: 44, height: 44, color: location.pathname.startsWith("/investigations") ? "primary.main" : "text.secondary" }}>
           <HistoryOutlined fontSize="small" />
-          <Typography component="span" sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2 }}>History</Typography>
         </IconButton>
       )}
       <ProfileMenu compact={railHostsControls} />
@@ -238,7 +238,9 @@ export function Layout() {
       </Container>
       </Box>
 
-      {!railHostsControls && <NavBottomBar destinations={destinations} />}
+      {!railHostsControls && (
+        <NavBottomBar destinations={destinations.filter((destination) => destination.id !== "investigations")} />
+      )}
     </Box>
     </FetchStatusContext.Provider>
   );

@@ -38,7 +38,10 @@ test("primary navigation swaps between a rail and a bottom bar without a gap", (
   // Exactly one primary nav is mounted at any width: the rail from md up, the
   // bottom bar below it. Mounting decides it, so neither is in the DOM twice.
   assert.match(layout, /\{railHostsControls && \(\s*<NavRail/);
-  assert.match(layout, /\{!railHostsControls && <NavBottomBar/);
+  assert.match(
+    layout,
+    /\{!railHostsControls && \(\s*<NavBottomBar destinations=\{destinations\.filter\(\(destination\) => destination\.id !== "investigations"\)\} \/>/,
+  );
   // The fixed bottom bar must not cover the end of the page.
   assert.match(layout, /BOTTOM_BAR_HEIGHT\}px \+ env\(safe-area-inset-bottom\)/);
   assert.match(rail, /pb: "env\(safe-area-inset-bottom\)"/);
