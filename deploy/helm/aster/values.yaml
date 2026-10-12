@@ -89,6 +89,7 @@ agentSandbox:
     # Execution bounds (max_turns, max_files, timeout, output_limit_bytes, and
     # allowed_commands) come from the consumer's project.yaml under
     # ai.fix_prs.agent_runtime, so they are configured exactly once.
+    # Pod deadlines add 2m startup and 15s result grace; cleanup allows 90s.
     pollInterval: 250ms
     resources:
       requests:

@@ -208,6 +208,34 @@ func TestExecutionResultBoundsFailedCommandCleanupGrace(t *testing.T) {
 	}
 }
 
+func TestValidatePartialCommandResults(t *testing.T) {
+	commands := []ExecutionCommand{
+		{Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 10},
+		{Argv: []string{"git", "diff", "--cached", "--check"}, TimeoutSeconds: 30},
+	}
+	for _, tc := range []struct {
+		name    string
+		results []CommandResult
+		wantErr bool
+	}{
+		{name: "not started"},
+		{name: "valid prefix", results: []CommandResult{{Argv: commands[0].Argv, ExitCode: -1, TimedOut: true, DurationMs: 10_000}}},
+		{name: "out of order", results: []CommandResult{{Argv: commands[1].Argv}}, wantErr: true},
+		{name: "negative duration", results: []CommandResult{{Argv: commands[0].Argv, DurationMs: -1}}, wantErr: true},
+		{name: "successful overrun", results: []CommandResult{{Argv: commands[0].Argv, DurationMs: 10_001}}, wantErr: true},
+		{name: "too many results", results: make([]CommandResult, 3), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidatePartialCommandResults(commands, tc.results); (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v wantErr=%v", err, tc.wantErr)
+			}
+			if err := ValidateCommandResults(commands, tc.results); err == nil {
+				t.Fatal("partial results were accepted as complete verification")
+			}
+		})
+	}
+}
+
 func TestExecutionResultAllowsBoundedAdapterResourceMetadata(t *testing.T) {
 	request := executionRequest()
 	request.OutputLimitBytes = 4096

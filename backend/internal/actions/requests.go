@@ -17,7 +17,7 @@ const (
 	actionRequestTTL             = 24 * time.Hour
 	maxActiveRequests            = 50
 	maxPendingPerOwner           = 3
-	defaultRuntimeCleanupTimeout = 30 * time.Second
+	defaultRuntimeCleanupTimeout = 90 * time.Second
 )
 
 // Action request states.

@@ -537,8 +537,8 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 			err:    errors.New("agent Sandbox execution failed"),
 		},
 		{
-			name: "timeout", maxFiles: 2, want: AnalysisFailureTimedOut,
-			result: runtime.ExecutionResult{TerminalState: runtime.TerminalTimedOut},
+			name: "timeout", maxFiles: 2, want: AnalysisFailureTimedOut, wantSummary: true,
+			result: runtime.ExecutionResult{TerminalState: runtime.TerminalTimedOut, FailureReason: "coding agent deadline exceeded"},
 			err:    context.DeadlineExceeded,
 		},
 		{
@@ -575,6 +575,53 @@ func TestAnalysisGenerationFailureClassifiesScopeAndHardOutcomes(t *testing.T) {
 				}
 			} else if diagnostic.OperatorSummary != "" {
 				t.Fatalf("diagnostic exposed agent summary: %q", diagnostic.OperatorSummary)
+			}
+		})
+	}
+}
+
+func TestAnalysisGenerationTimeoutRetainsSafePartialDiagnostic(t *testing.T) {
+	commands := sandboxVerificationCommands()
+	for _, tc := range []struct {
+		name string
+		edit func(*runtime.CommandResult)
+		want int
+	}{
+		{name: "valid prefix", want: 1, edit: func(*runtime.CommandResult) {}},
+		{name: "wrong argv", edit: func(result *runtime.CommandResult) { result.Argv = []string{"unexpected"} }},
+		{name: "negative duration", edit: func(result *runtime.CommandResult) { result.DurationMs = -1 }},
+		{name: "excessive duration", edit: func(result *runtime.CommandResult) { result.DurationMs = 31_000_000 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results := sandboxCommandResults()[:1]
+			results[0].ExitCode = -1
+			results[0].TimedOut = true
+			results[0].Stdout, results[0].Stderr = "private stdout", "private stderr"
+			tc.edit(&results[0])
+			agent := &fakeAgentRuntime{
+				res: runtime.ExecutionResult{
+					TerminalState: runtime.TerminalTimedOut, CommandResults: results,
+					FailureReason: "coding agent deadline exceeded",
+					StdoutSummary: "investigated pinned source",
+					StderrSummary: "partial progress https://private.example/path token=fixture-secret",
+				},
+				err: errors.Join(context.DeadlineExceeded, runtime.ErrCleanupPending),
+			}
+			config := &AgentConfig{Runtime: agent, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands}}
+			_, err := generateAnalysisWithAgent(t.Context(), genParams{owner: "up", repo: "stream", maxFiles: 2, agent: config}, validAnalysisFailure())
+			diagnostic, ok := AnalysisFailureDiagnosticOf(err)
+			if !ok || diagnostic.Category != AnalysisFailureTimedOut || diagnostic.TerminalState != runtime.TerminalTimedOut ||
+				len(diagnostic.CommandResults) != tc.want {
+				t.Fatalf("diagnostic=%+v err=%v", diagnostic, err)
+			}
+			want := "coding agent deadline exceeded partial progress [redacted-url] token=[redacted] investigated pinned source"
+			if diagnostic.OperatorSummary != want {
+				t.Fatalf("summary = %q, want %q", diagnostic.OperatorSummary, want)
+			}
+			for _, result := range diagnostic.CommandResults {
+				if result.Stdout != "" || result.Stderr != "" {
+					t.Fatalf("retained raw command output: %+v", result)
+				}
 			}
 		})
 	}
