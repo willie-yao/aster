@@ -4,7 +4,7 @@
 
 Aster can investigate a published failure or selected chat finding, attempt a minimal repository patch, and present a draft pull request for explicit human confirmation. Transient severity, low confidence, incomplete remediation, and missing citations or source links do not prevent a maintainer from requesting an attempt. It is the highest-risk optional feature because it writes source code.
 
-Causal-group parents do not produce one combined fix across unrelated causes. A cause-scoped chat can start a proposal tied to that cause's representative exact JUnit failure, or the maintainer can open the linked failure. Recovery and resolution status remain visible but do not prevent another investigation while the failed target is still available. Resolving a failure is a separate maintainer acknowledgement, offered per cause so acknowledging one cause leaves the others active.
+Causal-group parents do not produce one combined fix across unrelated causes. A cause-scoped chat can start a proposal tied to that cause's representative failed JUnit test or build-level failure, or the maintainer can open the linked failure. Recovery and resolution status remain visible but do not prevent another investigation while the failed target is still available. Resolving a failure is a separate maintainer acknowledgement, offered per cause so acknowledging one cause leaves the others active.
 
 ## Supported workflow
 
@@ -38,15 +38,15 @@ When the agent returns a patch, quality concerns become warnings on the ready pr
 - failed or timed-out validators, also shown as the verification verdict;
 - analysis, evidence qualification, and eligibility concerns.
 
-These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-JUnit requests report `no_reviewable_patch` with the agent's explanation.
+These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
 
-## Exact JUnit analysis handoff
+## Exact failure analysis handoff
 
-Authenticated server deployments can turn one exact failed JUnit analysis into a fix proposal from the analysis chat. There is one conversation: ask questions, and any completed nonempty answer can start a proposal, including an uncited or unverified answer. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable repository and generation base when the proposal is requested.
+Authenticated server deployments can turn one exact failed JUnit test or build-level analysis into a fix proposal from the analysis chat. Build-level targets use the job, build, `source: build`, failure name, optional suite/class, and analysis timestamp, without a JUnit file. There is one conversation: ask questions, and any completed nonempty answer can start a proposal, including an uncited or unverified answer. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable repository and generation base when the proposal is requested.
 
 After a completed response, **Use this finding in a fix proposal** admits a separate persistent asynchronous preview request. It requires:
 
-- the exact failed JUnit case and its published analysis remain available and unchanged;
+- the exact failed test or build-level failure and its published analysis remain available and unchanged, and the run has not passed;
 - the selected conversation request completed with a nonempty answer;
 - build metadata resolves the exact repository and full tested commit, using `clone-records.json` to identify each repository's commit in multi-repository builds;
 - the configured Fix destination matches the analyzed repository;
@@ -57,9 +57,9 @@ The coding agent receives the available failure details, selected answer, retain
 
 The generation base is resolved for the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. If Aster cannot determine the exact source commit this build tested, it says a Fix proposal cannot be pinned (`source_revision_unknown`). A failure whose commit has diverged from its branch head, or whose build reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged` or `source_branch_unknown`). These reasons are returned in `X-Analysis-Chat-Reason` and recorded in the server log. Repository-access and generation-base errors remain failures, not analysis warnings.
 
-At admission, the action captures an immutable bounded snapshot of the selected answer, its qualifications, originating test or cause, exact JUnit target, published analysis and source hints, retained citations, repository, tested branch, and generation base. A selected answer may reuse citations validated by earlier turns, but later turns do not alter the snapshot. Only retained validated citations are carried as verified artifact evidence. The action generates from that captured context and rechecks current cause membership and content, exact failed JUnit evidence, and source/base identity before accepting a generated result and before confirmation. Regenerating the analysis text alone does not revoke an admitted Fix; changed JUnit evidence or cause content requires a new preview.
+At admission, the action captures an immutable bounded snapshot of the selected answer, its qualifications, originating test or cause, exact failure target, published analysis and source hints, retained citations, repository, tested branch, and generation base. A selected answer may reuse citations validated by earlier turns, but later turns do not alter the snapshot. Only retained validated citations are carried as verified artifact evidence. The action generates from that captured context and rechecks current cause membership and content, exact failed test or build evidence, and source/base identity before accepting a generated result and before confirmation. Regenerating the analysis text alone does not revoke an admitted Fix; changed failure evidence or cause content requires a new preview.
 
-Deleting or expiring chat does not revoke an admitted Fix or a Fix request that has already captured its selected answer. Deleting chat before capture prevents a new admission. Use explicit action cancellation to cancel a pending or ready Fix. Existing owner-bound requests can be retrieved without chat; repeated admission reconnects to an existing request instead of silently repinning it. Previously saved ready exact-JUnit handoffs using version 4 require regeneration. Unknown write outcomes retain reconciliation-only recovery and cannot use an incomplete handoff for another write.
+Deleting or expiring chat does not revoke an admitted Fix or a Fix request that has already captured its selected answer. Deleting chat before capture prevents a new admission. Use explicit action cancellation to cancel a pending or ready Fix. Existing owner-bound requests can be retrieved without chat; repeated admission reconnects to an existing request instead of silently repinning it. Handoffs must use the current version. Unknown write outcomes retain reconciliation-only recovery and cannot use an incomplete handoff for another write.
 
 Closing the browser or losing the HTTP connection does not cancel an admitted Sandbox. Reopening the dialog restores the initiating operator's request, and repeating the same admission input reconnects instead of creating another Sandbox.
 
@@ -69,7 +69,7 @@ The ready preview shows the exact source revision, changed files, canonical diff
 
 If the reviewer changes the instruction or asks for regeneration, the server creates a replacement request and cancels or supersedes the older active draft. The replacement receives a new identity and must be reviewed from the beginning. The old preview cannot be confirmed after it is superseded.
 
-Confirmation is a separate authenticated POST bound to the owner and exact preview. It rechecks the pattern or admitted JUnit evidence identity, the action-owned selected finding when applicable, pinned source/base, destination policy, canonical patch, ordered executor results, warning state, and GitHub deduplication marker. Exact-JUnit confirmation also rechecks the tested branch head. Any bound identity or patch drift fails closed. The dashboard does not rerun target commands during confirmation and never silently regenerates content.
+Confirmation is a separate authenticated POST bound to the owner and exact preview. It rechecks the pattern or admitted failure evidence identity, the action-owned selected finding when applicable, pinned source/base, destination policy, canonical patch, ordered executor results, warning state, and GitHub deduplication marker. Exact-analysis confirmation also rechecks the tested branch head. Any bound identity or patch drift fails closed. The dashboard does not rerun target commands during confirmation and never silently regenerates content.
 
 ## Command execution and credential boundary
 
@@ -88,7 +88,7 @@ The executor mounts only bounded workspace and temporary volumes. Its workload S
 - `true`, the default: create or reuse a fork owned by the contributor identity, push the branch there, and open a cross-fork draft PR.
 - `false`: push a branch directly to a repository the credential may write and open a same-repository draft PR.
 
-The PR targets the branch the change was generated against: the failure's own branch for an exact JUnit analysis (so a `release-1.25` failure opens a `release-1.25` pull request), and the source repository's default branch otherwise. A branch is never pushed to a repository the configured credential cannot write.
+The PR targets the branch the change was generated against: the failure's own branch for an exact-analysis chat finding (so a `release-1.25` failure opens a `release-1.25` pull request), and the source repository's default branch otherwise. A branch is never pushed to a repository the configured credential cannot write.
 
 ## Identity, CLA, and the token
 

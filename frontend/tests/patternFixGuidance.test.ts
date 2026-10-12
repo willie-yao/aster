@@ -102,7 +102,13 @@ test("a failed analyzed test needs no published source link", () => {
   );
 });
 
-test("build-sourced and JUnit-less failures never become fix targets", () => {
+test("build-sourced failures route without JUnit, but malformed identities do not", () => {
+  assert.deepEqual(
+    causalGroupFixTarget(firstGroup, [
+      { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], source: "build", junit_file: undefined }] },
+    ]),
+    { buildID: "208060", testName: "fails", source: "build" },
+  );
   assert.equal(
     causalGroupFixTarget(firstGroup, [
       { ...groundedRun, test_cases: [{ ...groundedRun.test_cases[0], source: "build" }] },
@@ -251,7 +257,8 @@ test("fix routing sits with each cause and stays behind the chat capabilities", 
   assert.match(nextStep, /<CausalGroupFixNotice[\s\S]*target=\{routable\.target\}/);
   assert.match(banner, /<CausalGroupFixButton[\s\S]*target=\{causalFixTargets\[index\]\}/);
   assert.match(routing, /testRunPath\(jobID, target\.testName, target\.buildID\)/);
-  assert.match(routing, /No representative failed JUnit analysis for this cause is reachable/);
+  assert.match(routing, /buildFailurePath\(jobID, target\.buildID\)/);
+  assert.match(routing, /No representative failed test or build analysis for this cause is reachable/);
 });
 
 test("fix routing keeps action styling and a focus-accessible full label", () => {
@@ -300,7 +307,7 @@ test("the pattern-level panel is a fallback for causes with no reachable test", 
   assert.ok(banner.indexOf("<PatternFixGuidance") < banner.indexOf("<AnalysisChat"));
   assert.equal(banner.match(/<PatternFixGuidance/g)?.length, 1);
   assert.match(guidance, /Fix proposal unavailable/);
-  assert.match(guidance, /No representative failed JUnit analysis for its causes is reachable/);
+  assert.match(guidance, /No representative failed test or build analysis for its causes is reachable/);
   assert.match(guidance, /View failed tests/);
   assert.match(guidance, /jobRunPath\(jobID, buildID\)/);
   assert.match(guidance, /to=\{destination\}/);
@@ -309,6 +316,26 @@ test("the pattern-level panel is a fallback for causes with no reachable test", 
   assert.match(guidance, /toggle\.click\(\)/);
   assert.match(guidance, /scrollIntoView\(\{ block: "start" \}\)/);
   assert.doesNotMatch(guidance, /useAuth|authStatus|authenticated/);
+});
+
+test("build representatives use the build page's first build failure, not a same-name JUnit case", () => {
+  const build = { ...groundedRun.test_cases[0], source: "build" as const, junit_file: undefined };
+  const passed = { ...groundedRun.test_cases[0], status: "passed" as const, ai_analysis: undefined };
+  assert.deepEqual(
+    causalGroupFixTarget(firstGroup, [{ ...groundedRun, test_cases: [passed, build] }]),
+    { buildID: "208060", testName: "fails", source: "build" },
+  );
+  assert.equal(causalGroupFixTarget(firstGroup, [{
+    ...groundedRun,
+    test_cases: [{ ...build, name: "earlier", ai_analysis: undefined }, build],
+  }]), null);
+  assert.equal(causalGroupFixTarget(firstGroup, [{ ...groundedRun, passed: true, test_cases: [build] }]), null);
+  assert.equal(causalGroupFixTarget(firstGroup, [{
+    ...groundedRun, test_cases: [{ ...build, status: "passed" }],
+  }]), null);
+  assert.equal(causalGroupFixTarget(firstGroup, [{
+    ...groundedRun, test_cases: [{ ...build, ai_analysis: undefined }],
+  }]), null);
 });
 
 test("causal build links keep exact IDs and expose clear accessible names", () => {

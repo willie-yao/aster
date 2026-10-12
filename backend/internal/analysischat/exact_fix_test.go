@@ -29,7 +29,7 @@ func exactFixServiceRunner(t *testing.T, reply Reply, runnerErr error) (*Service
 	return exactFixServiceRunnerWithTest(t, reply, runnerErr, analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z"))
 }
 
-// exactFixServiceWithTest builds the exact-JUnit fixture around one caller-supplied
+// exactFixServiceWithTest builds the exact-failure fixture around one caller-supplied
 // analyzed test, so a case can vary the published analysis it starts from.
 func exactFixServiceWithTest(t *testing.T, reply Reply, analyzed models.TestCase) (*Service, SessionView, string) {
 	t.Helper()
@@ -52,8 +52,9 @@ func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, a
 		t.Fatal(err)
 	}
 	session, err := service.Create(AnalysisRef{
-		JobID: "periodic-demo", BuildID: "123", TestName: "TestCluster", JUnitFile: "junit.xml",
-		AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
+		JobID: "periodic-demo", BuildID: "123", TestName: analyzed.Name, Source: analyzed.Source,
+		SuiteName: analyzed.SuiteName, ClassName: analyzed.ClassName, JUnitFile: analyzed.JUnitFile,
+		AnalysisGeneratedAt: analyzed.AIAnalysis.GeneratedAt,
 	}, "Alice", testRequestID(t))
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +70,127 @@ func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, a
 	return service, session, requestID, runner
 }
 
+func TestServiceAnalysisFixCandidateSupportsBuildFailure(t *testing.T) {
+	failure := analyzedTest("Prow job execution", "", "2026-08-13T01:00:00Z")
+	failure.Source, failure.SuiteName, failure.ClassName = models.TestCaseSourceBuild, "Prow", "job"
+	service, session, requestID := exactFixServiceWithTest(t, Reply{
+		Answer: "Guard the az CLI installation before invoking it.", Assessment: "explains",
+	}, failure)
+	candidate, err := service.AnalysisFixCandidate(session.ID, "alice", requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.FixTarget != session.Analysis || candidate.FixTarget.Source != models.TestCaseSourceBuild ||
+		candidate.FixTarget.JUnitFile != "" || candidate.SourceRepositorySnapshot.Revision != exactFixSourceRevision {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	origin := FixOrigin{Analysis: candidate.Analysis, FixTarget: candidate.FixTarget, Original: candidate.Original}
+	if err := ValidateFixOrigin(service.dataDir, origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAdmittedFixOrigin(service.dataDir, origin); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []string{"passed", "run passed", "removed", "analysis changed", "source changed", "duplicate"} {
+		t.Run(change, func(t *testing.T) {
+			detail := testDetail(cloneTestCase(failure))
+			detail.Runs[0].RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
+			switch change {
+			case "passed":
+				detail.Runs[0].TestCases[0].Status = "passed"
+			case "run passed":
+				detail.Runs[0].Passed = true
+			case "removed":
+				detail.Runs[0].TestCases = nil
+			case "analysis changed":
+				detail.Runs[0].TestCases[0].AIAnalysis.GeneratedAt = "new"
+			case "source changed":
+				detail.Runs[0].TestCases[0].Source = ""
+			case "duplicate":
+				detail.Runs[0].TestCases = append(detail.Runs[0].TestCases, detail.Runs[0].TestCases[0])
+			}
+			writeJobDetail(t, service.dataDir, detail)
+			if _, err := service.AnalysisFixCandidate(session.ID, "alice", requestID); err == nil {
+				t.Fatal("changed build target remained eligible")
+			}
+			if err := ValidateFixOrigin(service.dataDir, origin); err == nil {
+				t.Fatal("changed build origin remained eligible")
+			}
+			if change != "analysis changed" {
+				if err := ValidateAdmittedFixOrigin(service.dataDir, origin); err == nil {
+					t.Fatal("changed admitted build target remained eligible")
+				}
+			}
+		})
+	}
+}
+
+func TestServiceCauseAnalysisFixCandidateSupportsBuildFailure(t *testing.T) {
+	dir, detail, origin := admittedCauseFixture(t)
+	for i := range detail.Runs {
+		run := &detail.Runs[i]
+		run.RepoRefs = map[string]string{"example/repo": "release-1.24:" + exactFixSourceRevision}
+		failure := &run.TestCases[0]
+		failure.Name, failure.Source, failure.JUnitFile = "Prow job execution", models.TestCaseSourceBuild, ""
+	}
+	writeJobDetail(t, dir, detail)
+	service, err := NewService(t.Context(), dir, &fakeRunner{reply: Reply{
+		Answer: "Guard the az CLI installation.", Assessment: "explains",
+	}}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := service.Create(origin.Analysis, "alice", testRequestID(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID := testRequestID(t)
+	if _, err := service.Send(t.Context(), session.ID, "alice", requestID, "What should change?"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := service.AnalysisFixCandidate(session.ID, "alice", requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.FixTarget.BuildID != "2" || candidate.FixTarget.Source != models.TestCaseSourceBuild ||
+		candidate.FixTarget.JUnitFile != "" || candidate.SourceBranch != "release-1.24" {
+		t.Fatalf("candidate = %+v", candidate)
+	}
+	buildOrigin := FixOrigin{Analysis: candidate.Analysis, FixTarget: candidate.FixTarget, Original: candidate.Original}
+	if err := ValidateFixOrigin(dir, buildOrigin); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAdmittedFixOrigin(dir, buildOrigin); err != nil {
+		t.Fatal(err)
+	}
+	detail.PatternAnalyses[0].CausalGroups[0].Remediation.SuggestedFix = "Different remedy"
+	writeJobDetail(t, dir, detail)
+	if err := ValidateAdmittedFixOrigin(dir, buildOrigin); err == nil {
+		t.Fatal("changed cause retained admitted build origin")
+	}
+}
+
+func TestSelectCauseFixTargetMatchesBuildPageSelection(t *testing.T) {
+	failure := analyzedTest("Prow job execution", "", "now")
+	failure.Source = models.TestCaseSourceBuild
+	run := testDetail(failure).Runs[0]
+	group := models.PatternCausalGroup{Builds: []string{run.BuildID}}
+	shadow := failure
+	shadow.Name, shadow.AIAnalysis = "earlier build failure", nil
+	run.TestCases = []models.TestCase{shadow, failure}
+	if target := selectCauseFixTarget("job", group, []models.BuildResult{run}); target != nil {
+		t.Fatalf("shadowed build representative = %+v", target)
+	}
+	shadow.Name, shadow.Source, shadow.JUnitFile = failure.Name, "", "junit.xml"
+	run.TestCases = []models.TestCase{shadow, failure}
+	if target := selectCauseFixTarget("job", group, []models.BuildResult{run}); target == nil ||
+		target.ref.Source != models.TestCaseSourceBuild {
+		t.Fatalf("reachable build representative = %+v", target)
+	}
+}
 func TestServiceAnalysisFixCandidateSharesExactAnalysisAndEvidence(t *testing.T) {
 	service, session, requestID := exactFixService(t, Reply{
 		Answer: "The artifact shows the terminal branch never records Ready.", Assessment: "supports",

@@ -644,7 +644,7 @@ test("an upstream-owned cause reports ownership in the body and still routes fro
   assert.match(html, /aria-label="Highly available cluster in build 100, open representative failure"/);
   // Ownership is a diagnosis, not a missing route, so the generic dead end must
   // not appear alongside it.
-  assert.doesNotMatch(html, /No representative failed JUnit analysis/);
+  assert.doesNotMatch(html, /No representative failed test or build analysis/);
 });
 
 // A cause with no route at all still explains why, from the body, while the bar
@@ -673,7 +673,7 @@ test("a cause with no route keeps its dead-end explanation and still resolves", 
     })()],
   );
 
-  assert.match(html, /No representative failed JUnit analysis/);
+  assert.match(html, /No representative failed test or build analysis/);
   assert.doesNotMatch(html, /aria-label="[^"]*, open representative failure/);
   assert.match(html, /Resolve failure/);
 });

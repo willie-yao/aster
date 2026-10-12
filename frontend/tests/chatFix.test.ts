@@ -16,10 +16,10 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
-test("exact JUnit chat fix requires only a completed answer on a structural target", () => {
+test("exact failure chat fix requires only a completed answer on a structural target", () => {
   const chat = source("src/components/AnalysisChat.tsx");
   assert.match(chat, /features\.junit_chat_fix/);
-  assert.match(chat, /analysisRef\.source !== "build"/);
+  assert.match(chat, /analysisRef\.source === "build" \|\| Boolean\(analysisRef\.junit_file\)/);
   assert.match(chat, /analysisRef\.junit_file/);
   assert.match(chat, /fixEligible=\{fixEligible && Boolean\(message\.request_id && message\.content\.trim\(\)\)/);
   assert.match(chat, /fixEligible=\{exactFixEnabled \|\|/);
@@ -58,9 +58,17 @@ test("cause chat fixes use a representative failure and replace the global patte
   assert.match(chat, /causeScope=\{causeScope\}/);
   assert.match(nextStep, /fixTarget=\{routable\?\.target \?\? undefined\}/);
   assert.match(banner, /causalGroups\.length === 0 && chatAvailability === "ready"/);
-  assert.match(dialog, /the cause's representative failed JUnit test/);
+  assert.match(dialog, /the cause's representative failed test or build/);
 });
 
+test("build chat keeps passing targets out of the exact-analysis fix path", () => {
+  const panel = source("src/components/BuildFailurePanel.tsx");
+  const analysis = source("src/components/AiAnalysisPanel.tsx");
+  const chat = source("src/components/AnalysisChat.tsx");
+  assert.match(panel, /chatFixable=\{failure\.status === "failed" && !run\.passed\}/);
+  assert.match(analysis, /fixable=\{chatFixable\}/);
+  assert.match(chat, /const exactFixEnabled = fixable && Boolean\(features\.junit_chat_fix\)/);
+});
 
 test("prepared cause findings are labeled and remain immediately fix-eligible", () => {
   const chat = source("src/components/AnalysisChat.tsx");

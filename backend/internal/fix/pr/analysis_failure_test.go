@@ -45,7 +45,7 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	if agent.spec.Repo.Ref != exactAnalysisRevision || agent.spec.ExpectedBaseSHA != exactAnalysisRevision || agent.spec.Repo.Token != "" {
 		t.Fatalf("runtime spec = %+v", agent.spec)
 	}
-	for _, want := range []string{"exact failed JUnit", "TestCluster", "ArtifactCitations", "SourceHints", "cluster failed", "expected Ready", "preserve compatibility", "Do not delete or rename files."} {
+	for _, want := range []string{"exact failed test or CI build", "TestCluster", "ArtifactCitations", "SourceHints", "cluster failed", "expected Ready", "preserve compatibility", "Do not delete or rename files."} {
 		if !strings.Contains(agent.spec.Instruction, want) {
 			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
 		}
@@ -56,6 +56,34 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 	snapshot := fix.Snapshot()
 	if !snapshot.RequireBaseCurrent || snapshot.Base.HeadSHA != exactAnalysisRevision || !strings.HasPrefix(snapshot.Key, "fix-analysis::") {
 		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestGenerateAnalysisPreviewCarriesBuildFailureToAgent(t *testing.T) {
+	failure := validAnalysisFailure()
+	failure.Source, failure.TestName = "build", "Prow job execution"
+	failure.SourceBranch = "release-1.24"
+	failure.FailureMessage, failure.FailureBody = "exit 127", "hack/ensure-azcli.sh: az: command not found"
+	failure.ArtifactCitations = []Evidence{{Path: "build-log.txt", Quote: failure.FailureBody}}
+	pr := &fakePR{base: ghpr.Base{Branch: failure.SourceBranch, HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "Guard az CLI installation.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"Source":"build"`, "before a failed JUnit case was reported", "exit 127",
+		"hack/ensure-azcli.sh", "release-1.24", "Guard az CLI installation.",
+	} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	if strings.Contains(fix.Description, "Analyzed JUnit test") ||
+		!strings.Contains(fix.Description, "Prow job execution") ||
+		!fix.Snapshot().RequireBaseCurrent || fix.Snapshot().Base.Branch != "release-1.24" || len(pr.opened) != 0 {
+		t.Fatalf("fix=%+v writes=%v", fix, pr.opened)
 	}
 }
 

@@ -54,7 +54,7 @@ func (s *Service) PreviewChatFix(
 		return actions.PreviewResult{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
 	if patternID == "" && patternHash == "" {
-		return actions.PreviewResult{}, fmt.Errorf("%w: exact JUnit fix previews use asynchronous requests", analysischat.ErrInvalidRequest)
+		return actions.PreviewResult{}, fmt.Errorf("%w: exact analysis fix previews use asynchronous requests", analysischat.ErrInvalidRequest)
 	}
 	if patternID == "" || patternHash == "" {
 		return actions.PreviewResult{}, fmt.Errorf("%w: legacy pattern fix requires pattern_id and pattern_hash", analysischat.ErrInvalidRequest)
@@ -89,7 +89,7 @@ func (s *Service) PreviewChatFix(
 	)
 }
 
-// CreateAnalysisFixRequest admits one exact JUnit chat finding for durable
+// CreateAnalysisFixRequest admits one exact failure chat finding for durable
 // background preview generation.
 func (s *Service) CreateAnalysisFixRequest(
 	ctx context.Context, sessionID, owner, requestID, userToken, instruction string, replacesRequestIDs ...string,
@@ -99,7 +99,7 @@ func (s *Service) CreateAnalysisFixRequest(
 		return actions.ActionRequestView{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
 	if s.requests == nil {
-		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact JUnit fix previews are unavailable", analysischat.ErrInvalidRequest)
+		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact analysis fix previews are unavailable", analysischat.ErrInvalidRequest)
 	}
 	if request, found, err := s.requests.FindAnalysisFixRequest(sessionID, requestID, owner, instruction); err != nil || found {
 		return request, err

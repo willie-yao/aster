@@ -372,6 +372,43 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 	}
 }
 
+func TestCreateAnalysisFixRequestCarriesBuildTargetWithoutJUnit(t *testing.T) {
+	for _, scope := range []string{analysischat.ScopeTest, analysischat.ScopeCause} {
+		t.Run(scope, func(t *testing.T) {
+			target := analysischat.AnalysisRef{
+				Scope: analysischat.ScopeTest, JobID: "job", BuildID: "123", TestName: "Prow job execution",
+				Source: models.TestCaseSourceBuild, SuiteName: "Prow", ClassName: "job", AnalysisGeneratedAt: "now",
+			}
+			origin := target
+			if scope == analysischat.ScopeCause {
+				origin = analysischat.AnalysisRef{
+					Scope: scope, JobID: "job", PatternID: "pattern", PatternHash: "pattern-hash",
+					CausalGroupID: "cause", CausalGroupHash: "cause-hash",
+				}
+			}
+			chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+				SessionID: "session", RequestID: "request", ResponseHash: "response-hash",
+				Analysis: origin, FixTarget: target, AnalysisContentHash: "analysis-hash",
+				AssistantAnswer: "Guard az CLI installation.", SourceBranch: "release-1.24",
+			}}
+			fixes := &fakeFixPreviewer{}
+			_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+				t.Context(), "session", "alice", "request", "token", "",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := fixes.analysisInput
+			if input.Identity.Source != models.TestCaseSourceBuild || input.Identity.JUnitFile != "" ||
+				input.Identity.TestName != target.TestName || input.Identity.SuiteName != target.SuiteName ||
+				input.Identity.ClassName != target.ClassName || input.Identity.AnalysisGeneratedAt != target.AnalysisGeneratedAt ||
+				input.Origin.Analysis != origin || input.Origin.FixTarget != target || input.SourceBranch != "release-1.24" {
+				t.Fatalf("input = %+v", input)
+			}
+		})
+	}
+}
+
 func TestCreateAnalysisFixRequestReconnectsWithoutChat(t *testing.T) {
 	chat := &fakeChatStore{candidateErr: analysischat.ErrSessionNotFound}
 	fixes := &fakeFixPreviewer{existingRequest: &actions.ActionRequestView{ID: "admitted", Owner: "alice", Status: actions.RequestReady}}

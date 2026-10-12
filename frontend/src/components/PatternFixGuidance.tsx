@@ -84,7 +84,7 @@ export function PatternFixGuidance({
           ) : (
             <Typography color="textSecondary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
               This result is grouped by cause, so it cannot produce one shared issue or Fix PR.
-              No representative failed JUnit analysis for its causes is reachable in the current builds.
+              No representative failed test or build analysis for its causes is reachable in the current builds.
             </Typography>
           )}
           <Button
@@ -100,7 +100,7 @@ export function PatternFixGuidance({
             {chatAvailable && (externalCause
               ? "The pattern chat below helps compare causes across builds and confirm the upstream diagnosis against the evidence. "
               : "The pattern chat below helps compare causes across builds. ")}
-            {!externalCause && "A fix investigation becomes available from an individual cause when its representative failed JUnit analysis is reachable."}
+            {!externalCause && "A fix investigation becomes available from an individual cause when its representative failed test or build analysis is reachable."}
           </Typography>
         </Box>
       </Stack>

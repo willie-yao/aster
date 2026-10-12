@@ -131,10 +131,10 @@ function SentInstruction({ text }: { text: string }) {
 
 function fixScopeSummary(causeScope: boolean, exactAnalysis: boolean): string {
   if (causeScope) {
-    return "Sends this finding, its validated evidence, the cause's representative failed JUnit test, and your instruction to the coding agent, but not the rest of the conversation.";
+    return "Sends this finding, its validated evidence, the cause's representative failed test or build, and your instruction to the coding agent, but not the rest of the conversation.";
   }
   if (exactAnalysis) {
-    return "Sends this finding, its validated evidence, the failed JUnit test's analysis, and your instruction to the coding agent, but not the rest of the conversation.";
+    return "Sends this finding, its validated evidence, the failed test or build analysis, and your instruction to the coding agent, but not the rest of the conversation.";
   }
   return "Sends this finding, its validated evidence, the selected recurring pattern and its source hints, and your instruction to the coding agent, but not the rest of the conversation.";
 }

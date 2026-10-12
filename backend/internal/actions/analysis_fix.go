@@ -31,7 +31,7 @@ const (
 	analysisFixHandoffVersion   = 5
 )
 
-// AnalysisIdentity identifies one exact published JUnit analysis.
+// AnalysisIdentity identifies one exact published failure analysis.
 type AnalysisIdentity struct {
 	Project             string `json:"project"`
 	JobID               string `json:"job_id"`
@@ -40,11 +40,11 @@ type AnalysisIdentity struct {
 	Source              string `json:"source,omitempty"`
 	SuiteName           string `json:"suite_name,omitempty"`
 	ClassName           string `json:"class_name,omitempty"`
-	JUnitFile           string `json:"junit_file"`
+	JUnitFile           string `json:"junit_file,omitempty"`
 	AnalysisGeneratedAt string `json:"analysis_generated_at"`
 }
 
-// AnalysisActionSubject is one current failed JUnit analysis.
+// AnalysisActionSubject is one current failed test or build analysis.
 type AnalysisActionSubject struct {
 	ID                  string
 	ContentHash         string
@@ -121,7 +121,7 @@ const (
 	analysisWarningNoSourceHints       = "The published analysis has no source hints; the coding agent must investigate the repository."
 )
 
-// ResolveAnalysisActionSubject resolves and validates one current failed JUnit analysis.
+// ResolveAnalysisActionSubject resolves one current failed test or build analysis.
 func (s *Service) ResolveAnalysisActionSubject(identity AnalysisIdentity) (*AnalysisActionSubject, error) {
 	return s.resolveAnalysisActionSubject(identity, true)
 }
@@ -169,18 +169,18 @@ func (s *Service) resolveAnalysisActionSubject(identity AnalysisIdentity, requir
 	}
 	match := matches[0]
 	analysis := match.testCase.AIAnalysis
-	if match.run.Passed || match.testCase.Status != "failed" || match.testCase.Source == models.TestCaseSourceBuild || match.testCase.JUnitFile == "" ||
+	if match.run.Passed || match.testCase.Status != "failed" ||
 		requireAnalysis && (analysis == nil || analysis.GeneratedAt != identity.AnalysisGeneratedAt) {
-		return nil, fmt.Errorf("JUnit analysis is not a current failed-test action target")
+		return nil, fmt.Errorf("analysis is not a current failed-test or build action target")
 	}
 	analysisRepo := s.cfg.EffectiveAnalysisSourceRepo()
 	source, ok := ai.ResolveBuildSource(match.run, analysisRepo.Owner, analysisRepo.Name)
 	if !ok {
-		return nil, fmt.Errorf("%w: JUnit analysis build source repository revision could not be resolved", ErrPreviewRejected)
+		return nil, fmt.Errorf("%w: analysis build source repository revision could not be resolved", ErrPreviewRejected)
 	}
 	repository := sourceinvestigation.Repository{Owner: source.Owner, Name: source.Name, Revision: source.Revision}
 	if err := sourceinvestigation.ValidateRepository(repository); err != nil {
-		return nil, fmt.Errorf("%w: JUnit analysis immutable source identity is unavailable", ErrPreviewRejected)
+		return nil, fmt.Errorf("%w: analysis immutable source identity is unavailable", ErrPreviewRejected)
 	}
 	var sourceHints []string
 	if analysis != nil {
@@ -216,7 +216,7 @@ func (s *Service) PreflightAnalysisFixSource(
 		if code, ok := ReasonCodeFrom(err); ok {
 			return "", withReason(code, ErrPreviewRejected, err.Error())
 		}
-		return "", fmt.Errorf("%w: exact JUnit Fix repository/base preflight: %w", ErrPreviewRejected, err)
+		return "", fmt.Errorf("%w: exact analysis Fix repository/base preflight: %w", ErrPreviewRejected, err)
 	}
 	return compatibility.GenerationBaseRevision, nil
 }
@@ -310,7 +310,7 @@ func (s *Service) PreviewAnalysisFix(
 
 	eff := s.cfg.EffectiveFixPRs()
 	if !eff.Enabled || eff.AgentRuntime == nil || eff.AgentRuntime.Type != "agent-sandbox" {
-		return PreviewResult{}, fmt.Errorf("%w: exact JUnit fix preview requires the Agent Sandbox Fix runtime", ErrPreviewRejected)
+		return PreviewResult{}, fmt.Errorf("%w: exact analysis fix preview requires the Agent Sandbox Fix runtime", ErrPreviewRejected)
 	}
 	if eff.Repo == nil || eff.Repo.Owner == "" || eff.Repo.Name == "" {
 		return PreviewResult{}, fmt.Errorf("no source repo resolved (set ai.fix_prs.repo or branding.source_repo)")
@@ -352,7 +352,7 @@ func (s *Service) PreviewAnalysisFix(
 		if code, ok := ReasonCodeFrom(err); ok {
 			return PreviewResult{}, withReason(code, ErrPreviewRejected, err.Error())
 		}
-		return PreviewResult{}, fmt.Errorf("%w: checking exact JUnit Fix repository/base: %w", ErrPreviewRejected, err)
+		return PreviewResult{}, fmt.Errorf("%w: checking exact analysis Fix repository/base: %w", ErrPreviewRejected, err)
 	}
 	if !strings.EqualFold(input.FailureRevision, repository.Revision) ||
 		!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) {
@@ -444,8 +444,9 @@ func analysisFailureForGeneration(
 ) fixpr.AnalysisFailure {
 	return fixpr.AnalysisFailure{
 		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
-		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, AnalysisGeneratedAt: input.TargetAnalysis.GeneratedAt,
-		AnalysisHash: subject.ContentHash, RootCause: input.TargetAnalysis.RootCause, SuggestedFix: input.TargetAnalysis.SuggestedFix,
+		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, Source: subject.Identity.Source,
+		AnalysisGeneratedAt: input.TargetAnalysis.GeneratedAt,
+		AnalysisHash:        subject.ContentHash, RootCause: input.TargetAnalysis.RootCause, SuggestedFix: input.TargetAnalysis.SuggestedFix,
 		FailureMessage:  boundedAnalysisFailureText(subject.Failure.FailureMessage),
 		FailureBody:     boundedAnalysisFailureText(subject.Failure.FailureBody),
 		AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
@@ -534,8 +535,20 @@ func normalizeAnalysisIdentity(identity AnalysisIdentity) AnalysisIdentity {
 
 func validateAnalysisIdentity(identity AnalysisIdentity) error {
 	if identity.Project == "" || identity.JobID == "" || identity.BuildID == "" || identity.TestName == "" ||
-		identity.Source == models.TestCaseSourceBuild || identity.JUnitFile == "" || identity.AnalysisGeneratedAt == "" {
-		return fmt.Errorf("%w: exact JUnit analysis identity is incomplete", ErrNotFound)
+		identity.AnalysisGeneratedAt == "" {
+		return fmt.Errorf("%w: exact analysis identity is incomplete", ErrNotFound)
+	}
+	switch identity.Source {
+	case models.TestCaseSourceBuild:
+		if identity.JUnitFile != "" {
+			return fmt.Errorf("%w: build analysis identity must not include junit_file", ErrNotFound)
+		}
+	case "":
+		if identity.JUnitFile == "" {
+			return fmt.Errorf("%w: JUnit analysis identity requires junit_file", ErrNotFound)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported analysis source", ErrNotFound)
 	}
 	return nil
 }
