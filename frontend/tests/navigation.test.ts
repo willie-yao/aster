@@ -8,6 +8,7 @@ const base = {
   pullRequestsEnabled: true,
   analysisHealthEnabled: true,
   aiUsageEnabled: true,
+  analysisChatEnabled: false,
   operatorAccess: true,
 };
 
@@ -62,10 +63,13 @@ test("pull requests follow the manifest, not the capability flags", () => {
   );
 });
 
-test("the bottom bar never has to render more than five destinations", () => {
+test("the mobile navigation leaves room for five destinations", () => {
   // The bar gives each destination an equal share of a phone-width viewport,
-  // which stops being legible past five.
-  assert.ok(navDestinations(base).length <= 5);
+  // which stops being legible past five. History stays in the top bar on mobile.
+  const destinations = navDestinations({ ...base, analysisChatEnabled: true });
+  assert.equal(destinations.some((destination) => destination.id === "investigations"), true);
+  const mobileDestinations = destinations.filter((destination) => destination.id !== "investigations");
+  assert.equal(mobileDestinations.length, 5);
 });
 
 test("exactly one destination is active per route", () => {
@@ -114,8 +118,27 @@ test("a revoked section is dropped without falsely activating another", () => {
 });
 
 
-test("history has its own operator control rather than selecting Overview", () => {
+test("disabled history does not select Overview", () => {
   for (const pathname of ["/investigations", "/investigations/session-1"]) {
     assert.equal(navDestinations({ ...base, pathname }).some((item) => item.active), false);
+  }
+});
+
+test("investigation history is an operator destination when analysis chat is enabled", () => {
+  const history = navDestinations({ ...base, analysisChatEnabled: true });
+  assert.equal(history.find((item) => item.id === "investigations")?.scope, "operator");
+
+  const anonymous = navDestinations({
+    ...base,
+    analysisChatEnabled: true,
+    operatorAccess: false,
+  });
+  assert.equal(anonymous.some((item) => item.id === "investigations"), false);
+
+  for (const pathname of ["/investigations", "/investigations/session-1"]) {
+    assert.equal(
+      navDestinations({ ...base, analysisChatEnabled: true, pathname }).find((item) => item.active)?.id,
+      "investigations",
+    );
   }
 });

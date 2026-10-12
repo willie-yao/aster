@@ -8,6 +8,7 @@ import TrendingDown from "@mui/icons-material/TrendingDownOutlined";
 import AltRoute from "@mui/icons-material/AltRouteOutlined";
 import MonitorHeart from "@mui/icons-material/MonitorHeartOutlined";
 import Paid from "@mui/icons-material/PaidOutlined";
+import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import type { ReactNode } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
@@ -26,6 +27,7 @@ const ICONS: Record<string, SvgIconComponent> = {
   "pull-requests": AltRoute,
   "analysis-health": MonitorHeart,
   "ai-usage": Paid,
+  investigations: HistoryOutlined,
 };
 
 function NavIcon({ id }: { id: string }) {
