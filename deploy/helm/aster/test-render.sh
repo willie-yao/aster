@@ -418,6 +418,12 @@ sed 's@api.githubcopilot.com@notgithubcopilot.com@g' "$tmp/copilot-wrong-effort.
 helm template test "$chart" -n dashboard-test -f "$tmp/non-copilot-host.yaml" > "$tmp/non-copilot-host-render.yaml"
 
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'variables.pod.activeDeadlineSeconds == 735' "$tmp/agent-sandbox-render.yaml"
+grep -Fq 'variables.pod.terminationGracePeriodSeconds == 5' "$tmp/agent-sandbox-render.yaml"
+sed 's/timeout: 10m/timeout: 30m/' "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-max-timeout-values.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-max-timeout-values.yaml" \
+  -s templates/agent-sandbox-fix-runtime-admission.yaml > "$tmp/agent-sandbox-max-timeout.yaml"
+grep -Fq 'variables.pod.activeDeadlineSeconds == 1935' "$tmp/agent-sandbox-max-timeout.yaml"
 grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"

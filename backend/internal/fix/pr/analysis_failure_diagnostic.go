@@ -85,9 +85,20 @@ func newAnalysisGenerationError(category AnalysisFailureCategory, agent *AgentCo
 		}
 	case AnalysisFailureRuntimeInfrastructure:
 		diagnostic.OperatorSummary = boundedOperatorComponent(result.FailureReason, providerOperatorSummaryBytes)
+	case AnalysisFailureTimedOut:
+		diagnostic.OperatorSummary = boundedOperatorComponent(
+			strings.Join([]string{result.FailureReason, result.StderrSummary, result.StdoutSummary}, "\n"),
+			providerOperatorSummaryBytes,
+		)
 	}
-	if agent != nil && agent.RequireCommandResults && runtime.ValidateCommandResults(agent.CommandPolicy.Commands, result.CommandResults) == nil {
-		diagnostic.CommandResults = cloneCommandResults(result.CommandResults)
+	if agent != nil && agent.RequireCommandResults {
+		validate := runtime.ValidateCommandResults
+		if category == AnalysisFailureTimedOut {
+			validate = runtime.ValidatePartialCommandResults
+		}
+		if validate(agent.CommandPolicy.Commands, result.CommandResults) == nil {
+			diagnostic.CommandResults = cloneCommandResults(result.CommandResults)
+		}
 	}
 	return &analysisGenerationError{diagnostic: diagnostic, cause: cause}
 }

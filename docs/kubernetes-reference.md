@@ -225,6 +225,8 @@ The project owns generation limits and exact validators under `ai.fix_prs.agent_
 
 When this runtime is enabled, Helm requires `ai.fix_prs.agent_runtime.timeout` in whole minutes from `1m` through `30m`. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts accept positive whole seconds or minutes within the execution timeout.
 
+The timeout bounds executor work, not image pull or VM startup. Admission pins the Pod deadline to that timeout plus a 2-minute startup allowance and 15-second result grace. Cleanup confirmation allows 90 seconds for Pod and VM termination; see [Fix generation deadlines](fix-prs.md#required-project-configuration) for the server and Sandbox shutdown bounds.
+
 The Sandbox receives public pinned source and returns a patch plus ordered command results. It receives no GitHub credential or dashboard PVC. The dashboard uses the immutable `remote-fixer` image only to reapply and verify the patch at the pinned revision; it never runs target validation commands.
 
 Required platform properties:

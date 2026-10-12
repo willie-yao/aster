@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -940,10 +941,135 @@ func TestAgentSandboxCleanupDetectsOrphanedPod(t *testing.T) {
 	}
 }
 
-func TestAgentSandboxRunTimeoutIncludesResultGrace(t *testing.T) {
-	spec := agentsandbox.Spec{Purpose: "fix", Timeout: time.Minute}
-	if got := agentSandboxRunTimeout(spec); got != time.Minute+agentSandboxResultGrace+5*time.Second {
-		t.Fatalf("run timeout = %v", got)
+func TestAgentSandboxDeadlineOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{name: "minimum", timeout: time.Minute},
+		{name: "default", timeout: 10 * time.Minute},
+		{name: "maximum", timeout: 30 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := newAgentSandboxRuntimeForTest(nil, testAgentSandboxOptions())
+			now := time.Date(2026, 10, 12, 17, 47, 51, 0, time.UTC)
+			runtime.now = func() time.Time { return now }
+			spec := agentsandbox.Spec{Purpose: "fix", Timeout: tc.timeout}
+			object := runtime.sandboxObjectForSpec("fix-deadline", spec, []byte("contract"), "deadline")
+			sandbox := object["spec"].(map[string]any)
+			pod := sandbox["podTemplate"].(map[string]any)["spec"].(map[string]any)
+			podBudget := time.Duration(pod["activeDeadlineSeconds"].(int64)) * time.Second
+			wantPodBudget := tc.timeout + 2*time.Minute + 15*time.Second
+			if podBudget != wantPodBudget {
+				t.Fatalf("Pod deadline = %v, want %v", podBudget, wantPodBudget)
+			}
+			executorFinished := now.Add(50*time.Second + tc.timeout)
+			if !now.Add(podBudget).After(executorFinished.Add(agentSandboxResultGrace)) {
+				t.Fatal("Pod deadline can interrupt executor result finalization after startup")
+			}
+			runBudget := agentSandboxRunTimeout(spec)
+			if runBudget != podBudget+5*time.Second {
+				t.Fatalf("run deadline = %v, Pod deadline = %v", runBudget, podBudget)
+			}
+			shutdown, err := time.Parse(time.RFC3339, sandbox["shutdownTime"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !shutdown.Equal(now.Add(runBudget + 90*time.Second)) {
+				t.Fatalf("shutdownTime = %v, run deadline = %v", shutdown, now.Add(runBudget))
+			}
+			terminationGrace := time.Duration(pod["terminationGracePeriodSeconds"].(int64)) * time.Second
+			if defaultSandboxCleanupTimeout <= 50*time.Second+terminationGrace {
+				t.Fatalf("cleanup budget %v does not cover VM termination and Pod grace", defaultSandboxCleanupTimeout)
+			}
+		})
+	}
+}
+
+type delayedAgentSandboxAPI struct {
+	fakeAgentSandboxAPI
+	finishedAt    time.Time
+	deletedAt     time.Time
+	runBudget     time.Duration
+	cleanupBudget time.Duration
+}
+
+func (f *delayedAgentSandboxAPI) Create(ctx context.Context, namespace string, object map[string]any) (sandboxState, error) {
+	deadline, _ := ctx.Deadline()
+	f.runBudget = time.Until(deadline)
+	return f.fakeAgentSandboxAPI.Create(ctx, namespace, object)
+}
+
+func (f *delayedAgentSandboxAPI) State(ctx context.Context, namespace, name string) (sandboxState, error) {
+	if err := ctx.Err(); err != nil {
+		return sandboxState{}, err
+	}
+	state, err := f.fakeAgentSandboxAPI.State(ctx, namespace, name)
+	if state.Exists && !time.Now().Before(f.finishedAt) {
+		state.Finished = true
+		state.FinishedReason = "PodFailed"
+	}
+	return state, err
+}
+
+func (f *delayedAgentSandboxAPI) Delete(ctx context.Context, namespace, name, uid string) error {
+	deadline, _ := ctx.Deadline()
+	f.cleanupBudget = time.Until(deadline)
+	f.deletedAt = time.Now().Add(50 * time.Second)
+	return f.fakeAgentSandboxAPI.Delete(ctx, namespace, name, uid)
+}
+
+func (f *delayedAgentSandboxAPI) PodExists(ctx context.Context, _, _ string) (bool, error) {
+	return time.Now().Before(f.deletedAt), ctx.Err()
+}
+
+func (f *delayedAgentSandboxAPI) ExecutionPods(ctx context.Context, _, _ string) ([]string, error) {
+	if time.Now().Before(f.deletedAt) {
+		return []string{"fix-request-1"}, ctx.Err()
+	}
+	return nil, ctx.Err()
+}
+
+func TestAgentSandboxTimeoutResultSurvivesStartupAndSlowCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		api := &delayedAgentSandboxAPI{
+			fakeAgentSandboxAPI: fakeAgentSandboxAPI{
+				state: sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1"},
+				logs:  agentSandboxResult(t, engineruntime.TerminalTimedOut, "coding agent deadline exceeded: partial progress"),
+			},
+			finishedAt: started.Add(50*time.Second + time.Minute + time.Second),
+		}
+		opts := testAgentSandboxOptions()
+		opts.PollEvery = time.Second
+		runtime := newAgentSandboxRuntimeForTest(api, opts)
+		result, err := runtime.Generate(t.Context(), agentSandboxSpec())
+		if err == nil || result.TerminalState != engineruntime.TerminalTimedOut ||
+			result.FailureReason != "coding agent deadline exceeded: partial progress" || result.StdoutSummary != "validation passed" {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+		if !result.Telemetry.ResultAvailable || !result.Telemetry.FinalizationValid ||
+			!result.Telemetry.CleanupCompleted || result.Telemetry.CleanupDurationMs != 50_000 {
+			t.Fatalf("telemetry = %+v", result.Telemetry)
+		}
+		if api.runBudget != agentSandboxRunTimeout(agentsandbox.Spec{Timeout: time.Minute}) ||
+			api.cleanupBudget != 90*time.Second {
+			t.Fatalf("run budget=%v cleanup budget=%v", api.runBudget, api.cleanupBudget)
+		}
+	})
+}
+
+func TestAgentSandboxTimeoutResultRetainsCleanupError(t *testing.T) {
+	api := &fakeAgentSandboxAPI{
+		state:     sandboxState{Exists: true, UID: "uid-1", PodName: "fix-request-1", Finished: true, FinishedReason: "PodFailed"},
+		logs:      agentSandboxResult(t, engineruntime.TerminalTimedOut, "coding agent deadline exceeded"),
+		deleteErr: engineruntime.ErrCleanupPending,
+	}
+	runtime := newAgentSandboxRuntimeForTest(api, testAgentSandboxOptions())
+	result, err := runtime.Generate(t.Context(), agentSandboxSpec())
+	if !errors.Is(err, engineruntime.ErrCleanupPending) || result.TerminalState != engineruntime.TerminalTimedOut ||
+		result.FailureReason != "coding agent deadline exceeded" {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

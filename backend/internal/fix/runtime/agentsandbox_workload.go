@@ -31,7 +31,7 @@ func (c appArmorCapability) String() string {
 }
 
 func (r *AgentSandboxRuntime) sandboxWorkloadPodSpec(spec agentsandbox.Spec) map[string]any {
-	activeDeadline := int64(spec.Timeout.Round(time.Second)/time.Second) + int64(agentSandboxResultGrace/time.Second)
+	activeDeadline := int64((spec.Timeout + agentSandboxStartupAllowance + agentSandboxResultGrace).Round(time.Second) / time.Second)
 	podSecurity := map[string]any{
 		"runAsNonRoot":   true,
 		"runAsUser":      int64(65532),

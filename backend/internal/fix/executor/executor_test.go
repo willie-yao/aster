@@ -414,10 +414,14 @@ func TestExecuteMapsAgentDeadline(t *testing.T) {
 	request.CommandPolicy.Commands[0].TimeoutSeconds = 1
 	result := Execute(context.Background(), request, Options{WorkspaceRoot: t.TempDir(), RunOpenCode: func(ctx context.Context, _ OpenCodeSpec) (string, string, error) {
 		<-ctx.Done()
-		return "", "", ctx.Err()
+		return `{"type":"text","part":{"text":"investigated pinned source"}}`, "partial provider progress", ctx.Err()
 	}})
-	if result.TerminalState != engineruntime.TerminalTimedOut || result.FailureReason == "" {
+	if result.TerminalState != engineruntime.TerminalTimedOut || result.FailureReason == "" ||
+		!strings.Contains(result.StdoutSummary, "investigated pinned source") || result.StderrSummary != "partial provider progress" {
 		t.Fatalf("result = %+v", result)
+	}
+	if err := result.Validate(request); err != nil {
+		t.Fatalf("timed-out result is not publishable: %v", err)
 	}
 }
 

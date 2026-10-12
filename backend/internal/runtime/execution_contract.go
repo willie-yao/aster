@@ -298,15 +298,8 @@ func (r ExecutionResult) Validate(request ExecutionRequest) error {
 		if err := ValidateCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
 			return err
 		}
-	} else {
-		for index, result := range r.CommandResults {
-			if !sameArgv(result.Argv, request.CommandPolicy.Commands[index].Argv) {
-				return fmt.Errorf("command result %d does not match the allowed argv", index)
-			}
-			if err := validateCommandResultTiming(index, request.CommandPolicy.Commands[index], result); err != nil {
-				return err
-			}
-		}
+	} else if err := ValidatePartialCommandResults(request.CommandPolicy.Commands, r.CommandResults); err != nil {
+		return err
 	}
 	changed := append([]string(nil), r.ChangedFiles...)
 	sort.Strings(changed)
@@ -370,6 +363,14 @@ func ValidateCommandResults(commands []ExecutionCommand, results []CommandResult
 	}
 	if len(results) != len(commands) {
 		return fmt.Errorf("execution must report every allowed command exactly once")
+	}
+	return ValidatePartialCommandResults(commands, results)
+}
+
+// ValidatePartialCommandResults verifies an ordered prefix of the allowed commands.
+func ValidatePartialCommandResults(commands []ExecutionCommand, results []CommandResult) error {
+	if len(results) > len(commands) {
+		return fmt.Errorf("command results exceed the request policy")
 	}
 	for index, result := range results {
 		if commands[index].TimeoutSeconds <= 0 || commands[index].TimeoutSeconds > int64((30*time.Minute)/time.Second) {

@@ -208,14 +208,18 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		if analysisRequest && input.analysisFix != nil {
 			_ = s.previewStore.revoke(input.owner, idempotentPreviewToken(input.owner, input.analysisFix.PreviewRequestHash))
 		}
+		failure := analysisFixFailureView(err)
 		reason := "draft runtime cleanup did not complete"
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || failure != nil && failure.Category == AnalysisFixFailureTimedOut {
 			reason = "draft generation timed out"
 		}
 		reasonCode := ReasonGenerationFailed
-		failure := analysisFixFailureView(err)
 		if ctx.Err() != nil {
-			failure = &AnalysisFixFailureView{Category: AnalysisFixFailureTimedOut, TerminalState: runtime.TerminalTimedOut}
+			if failure == nil {
+				failure = &AnalysisFixFailureView{}
+			}
+			failure.Category = AnalysisFixFailureTimedOut
+			failure.TerminalState = runtime.TerminalTimedOut
 		}
 		logGenerationFailure(id, reasonCode, failure, err)
 		_, transitionErr := s.transitionToCleanupWithFailure(id, RequestFailed, reason, reasonCode, failure)

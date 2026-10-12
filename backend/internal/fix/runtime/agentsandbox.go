@@ -44,7 +44,8 @@ const (
 	agentSandboxPodAnnotation             = "agents.x-k8s.io/pod-name"
 	agentSandboxContainerName             = "executor"
 	defaultSandboxPollEvery               = 250 * time.Millisecond
-	defaultSandboxCleanupTimeout          = 30 * time.Second
+	defaultSandboxCleanupTimeout          = 90 * time.Second
+	agentSandboxStartupAllowance          = 2 * time.Minute
 	agentSandboxResultGrace               = 15 * time.Second
 	defaultSandboxOutputLimit             = int64(512 << 10)
 	defaultSandboxCPURequest              = "100m"
@@ -55,7 +56,7 @@ const (
 )
 
 func agentSandboxRunTimeout(spec agentsandbox.Spec) time.Duration {
-	return spec.Timeout + agentSandboxResultGrace + 5*time.Second
+	return spec.Timeout + agentSandboxStartupAllowance + agentSandboxResultGrace + 5*time.Second
 }
 
 var (
@@ -744,7 +745,7 @@ func (r *AgentSandboxRuntime) waitTerminal(ctx context.Context, work enginerunti
 }
 
 func (r *AgentSandboxRuntime) sandboxObjectForSpec(name string, spec agentsandbox.Spec, contractHash []byte, executionID string) map[string]any {
-	shutdown := r.now().Add(spec.Timeout + agentSandboxResultGrace + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
+	shutdown := r.now().Add(agentSandboxRunTimeout(spec) + defaultSandboxCleanupTimeout).UTC().Format(time.RFC3339)
 	labels := map[string]any{
 		"app.kubernetes.io/managed-by": "prow-ai-dashboard",
 		"agents.x-k8s.io/created-by":   "prow-ai-dashboard",

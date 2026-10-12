@@ -11,7 +11,7 @@
 {{- $image := include "aster.agentSandboxExecutorImage" . -}}
 {{- $workloadSA := include "aster.agentSandboxWorkloadServiceAccountName" . -}}
 {{- $timeoutMinutes := trimSuffix "m" (include "aster.fixRuntimeTimeout" .) | int -}}
-{{- $timeoutSeconds := add (mul $timeoutMinutes 60) 15 -}}
+{{- $timeoutSeconds := add (mul $timeoutMinutes 60) 120 15 -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
