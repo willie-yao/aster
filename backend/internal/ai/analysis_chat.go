@@ -95,7 +95,10 @@ const (
 
 const analysisChatFinalizePrompt = `Stop calling tools. Return the final analysis-conversation JSON now using only evidence already gathered. Follow the Analysis conversation schema exactly. Output JSON only.`
 
-const analysisChatCurrentSourceID = "current"
+const (
+	analysisChatCurrentSourceID = "current"
+	analysisChatDefaultSourceID = "default"
+)
 
 const (
 	analysisChatEvidenceNoContent  = "artifact_no_content"
@@ -188,6 +191,8 @@ type analysisChatCauseSourceState struct {
 	HistoricalRevision string
 	Branch             string
 	CurrentRevision    string
+	DefaultBranch      string
+	DefaultRevision    string
 }
 
 // AnalysisChatOptions bounds one interactive model turn.
@@ -305,19 +310,59 @@ func (a *AnalysisChatAgent) resolveCauseSources(
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, state, err
 		}
-		catalog, catalogErr := historicalCatalog()
-		return catalog, state, catalogErr
+	} else {
+		_, _, currentRevision := currentReader.SourceIdentity()
+		state.CurrentRevision = currentRevision
+		if currentRevision != historical.Revision {
+			sources = append(sources, tools.RepoSource{
+				ID: analysisChatCurrentSourceID, Owner: historical.Owner, Name: historical.Name,
+				Revision: currentRevision, Reader: currentReader,
+			})
+		}
 	}
-	_, _, currentRevision := currentReader.SourceIdentity()
-	state.CurrentRevision = currentRevision
-	if currentRevision != historical.Revision {
-		sources = append(sources, tools.RepoSource{
-			ID: analysisChatCurrentSourceID, Owner: historical.Owner, Name: historical.Name,
-			Revision: currentRevision, Reader: currentReader,
+	defaultSource, defaultBranch, err := analysisChatDefaultSource(ctx, currentReader, branch)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, state, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, state, err
+		}
+		log.Printf("⚠ Analysis chat build %s: default-branch comparison source unavailable: %v", turn.Build.BuildID, err)
+	} else if defaultSource.Revision != "" {
+		duplicate := slices.ContainsFunc(sources, func(source tools.RepoSource) bool {
+			return source.Revision == defaultSource.Revision
 		})
+		if !duplicate {
+			sources = append(sources, defaultSource)
+			state.DefaultBranch = defaultBranch
+			state.DefaultRevision = defaultSource.Revision
+		}
 	}
 	catalog, err := tools.NewSourceCatalog(tools.PrimarySourceID, sources)
 	return catalog, state, err
+}
+
+func analysisChatDefaultSource(
+	ctx context.Context,
+	repo *githubRepoReader,
+	testedBranch string,
+) (tools.RepoSource, string, error) {
+	branch, err := repo.defaultBranch(ctx)
+	if err != nil || branch == testedBranch {
+		return tools.RepoSource{}, "", err
+	}
+	reader := NewGitHubRepoReader(repo.owner, repo.repo, branch, repo.token).(*githubRepoReader)
+	if err := reader.ResolveRef(ctx); err != nil {
+		return tools.RepoSource{}, "", err
+	}
+	owner, name, revision := reader.SourceIdentity()
+	if len(revision) != 40 {
+		return tools.RepoSource{}, "", fmt.Errorf("default branch %q did not resolve to a 40-character revision", branch)
+	}
+	return tools.RepoSource{
+		ID: analysisChatDefaultSourceID, Owner: owner, Name: name, Revision: revision, Reader: reader,
+	}, branch, nil
 }
 
 func analysisChatCauseSourceAddendum(turn analysischat.Turn, state analysisChatCauseSourceState) string {
@@ -345,6 +390,9 @@ func analysisChatCauseSourceAddendum(turn analysischat.Turn, state analysisChatC
 		b.WriteString("Tested branch `" + state.Branch + "` currently resolves to the same revision, so source_id `primary` is both the historical cause source and the effective current remediation source. ")
 	default:
 		b.WriteString("source_id `current` is the same project repository at current revision " + state.CurrentRevision + " of tested branch `" + state.Branch + "`; use it to evaluate remediation against current code. ")
+	}
+	if state.DefaultRevision != "" {
+		b.WriteString("source_id `default` is the same project repository at revision " + state.DefaultRevision + " of default branch `" + state.DefaultBranch + "`. It is comparison-only: use it to answer whether the cause logic differs on the default branch, never as the effective current remediation source or a Fix target. Its citations cannot qualify a remediation recommendation or proposed revision. ")
 	}
 	b.WriteString("The source catalog does not expand artifact scope: failed member-build and comparison-build artifacts remain under their listed builds/<build-id>/ paths. Any current remediation recommendation or proposed revision requires a valid citation from the effective current source. Changed, absent, or unavailable current code is inconclusive and requires current source investigation; it is never automatic evidence that the cause is fixed.")
 	return b.String()

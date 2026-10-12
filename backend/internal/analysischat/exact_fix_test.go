@@ -722,7 +722,7 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 		detail := causalPatternDetail(published, "1", "2")
 		for i := range detail.Runs {
 			run := &detail.Runs[i]
-			run.RepoRefs = map[string]string{"example/repo": "main:" + exactFixSourceRevision}
+			run.RepoRefs = map[string]string{"example/repo": "release-1.2:" + exactFixSourceRevision}
 			testCase := analyzedTest("TestCluster", "junit.xml", "2026-08-13T01:00:00Z")
 			testCase.AIAnalysis.FileLinks = map[string]string{
 				"pkg/controller.go": "https://github.com/example/repo/blob/" + exactFixSourceRevision + "/pkg/controller.go",
@@ -734,7 +734,13 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 	publish("2026-08-12T12:00:00Z")
 	runner := &fakeRunner{reply: Reply{
 		Answer: "Both builds show the same controller defect.", Assessment: "supports",
-		Citations: []Citation{{Path: "builds/2/build-log.txt", Quote: "same failure"}},
+		Citations: []Citation{
+			{Path: "builds/2/build-log.txt", Quote: "same failure"},
+			{
+				Repository: "example/repo", Revision: strings.Repeat("3", 40),
+				Path: "pkg/controller.go", LineStart: 1, LineEnd: 1, Quote: "default-branch implementation",
+			},
+		},
 	}}
 	service, err := NewService(t.Context(), dir, runner, Options{StateDir: filepath.Join(dir, ".chat")})
 	if err != nil {
@@ -764,7 +770,10 @@ func TestServiceCauseAnalysisFixCandidateSurvivesRepublishedPatternTimestamp(t *
 		t.Fatalf("Fix candidate after republished pattern error = %v (analysis changed = %v)",
 			err, errors.Is(err, ErrAnalysisChanged))
 	}
-	if candidate.FixTarget.BuildID != "2" || candidate.FixTarget.TestName != "TestCluster" {
+	if candidate.FixTarget.BuildID != "2" || candidate.FixTarget.TestName != "TestCluster" ||
+		candidate.SourceRepositorySnapshot.Revision != exactFixSourceRevision ||
+		!candidate.SourceBranchKnown || candidate.SourceBranch != "release-1.2" ||
+		len(candidate.ArtifactCitations) != 1 || candidate.ArtifactCitations[0].Repository != "" {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 }
