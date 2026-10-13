@@ -95,8 +95,8 @@ func TestApplyDiffRejectsLargeReconstructedFile(t *testing.T) {
 func TestApplyDiffRejectsNonMatchingAndDeletion(t *testing.T) {
 	repo := initRepo(t)
 	bad := "diff --git a/orig.txt b/orig.txt\n--- a/orig.txt\n+++ b/orig.txt\n@@ -1 +1 @@\n-not present\n+whatever\n"
-	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, bad); err == nil {
-		t.Fatal("non-matching patch was accepted")
+	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, bad); err == nil || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("non-matching patch error = %v", err)
 	}
 	deletion := "diff --git a/orig.txt b/orig.txt\ndeleted file mode 100644\n--- a/orig.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-base\n"
 	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, deletion); !errors.Is(err, ErrResultDeletion) {
@@ -105,6 +105,20 @@ func TestApplyDiffRejectsNonMatchingAndDeletion(t *testing.T) {
 	rename := "diff --git a/orig.txt b/renamed.txt\nsimilarity index 100%\nrename from orig.txt\nrename to renamed.txt\n"
 	if _, _, err := ApplyDiff(context.Background(), RepoRef{Ref: "main", CloneURL: repo}, rename); !errors.Is(err, ErrResultRename) {
 		t.Fatalf("rename error = %v", err)
+	}
+}
+
+func TestApplyDiffClassifiesUnavailableSource(t *testing.T) {
+	diff := "diff --git a/orig.txt b/orig.txt\n--- a/orig.txt\n+++ b/orig.txt\n@@ -1 +1 @@\n-base\n+patched\n"
+	if _, _, err := ApplyDiff(t.Context(), RepoRef{
+		Owner: "o", Name: "r", Ref: "main", CloneURL: filepath.Join(t.TempDir(), "missing"),
+	}, diff); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unavailable source error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := ApplyDiff(ctx, RepoRef{Ref: "main", CloneURL: initRepo(t)}, diff); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("cancelled source error = %v", err)
 	}
 }
 

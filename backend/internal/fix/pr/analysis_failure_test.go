@@ -273,6 +273,16 @@ func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *
 	if len(pr.opened) != 0 {
 		t.Fatalf("drifted confirmation wrote PR: %+v", pr.opened)
 	}
+	pr.resolveErr = errors.New("403 Forbidden: API rate limit exceeded")
+	if _, err := manager.OpenFromPreview(t.Context(), fix); !errors.Is(err, ErrPreviewSourceUnavailable) ||
+		!errors.Is(err, pr.resolveErr) || errors.Is(err, ErrPreviewBaseChanged) {
+		t.Fatalf("base check failure = %v", err)
+	}
+	pr.resolveErr = nil
+	pr.base = fix.Snapshot().Base
+	if _, err := manager.OpenFromPreview(t.Context(), fix); err != nil || len(pr.opened) != 1 {
+		t.Fatalf("retry after base check recovery = %v, writes=%d", err, len(pr.opened))
+	}
 }
 
 func TestAnalysisPreviewRequiresExplicitMatchingTargetBranch(t *testing.T) {

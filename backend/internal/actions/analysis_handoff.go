@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -182,7 +183,13 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 		return ErrPreviewTargetChanged
 	}
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, input.SourceRepository, input.SourceBranch, input.BranchTarget)
-	if err != nil || compatibility.TargetBranch != input.TargetBranch ||
+	if err != nil {
+		if errors.Is(err, errAnalysisSourceUnavailable) {
+			return err
+		}
+		return ErrPreviewTargetChanged
+	}
+	if compatibility.TargetBranch != input.TargetBranch ||
 		!strings.EqualFold(compatibility.GenerationBaseRevision, input.GenerationBaseRevision) {
 		return ErrPreviewTargetChanged
 	}

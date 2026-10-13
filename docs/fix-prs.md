@@ -99,12 +99,14 @@ Commits preserve existing file modes from the pinned base tree, including execut
 
 Previews and confirmations use the server-held `BOT_TOKEN`. It must be a PAT for the contributor identity that creates the Fix branch and pull request. It is not the GitHub Actions `GITHUB_TOKEN`.
 
-- Cross-fork public contribution commonly requires a classic PAT with `public_repo`; private repositories require the corresponding repository access. Fine-grained PATs generally work only for repositories owned by the token holder or organization that granted access.
+- In fork mode, a classic PAT needs `public_repo` (or `repo` for private repositories) and `workflow`. Fix branches start from the upstream base, which can include workflow changes the fork lacks, even when the fix edits no workflows. Fine-grained PATs generally work only for repositories owned by the token holder or organization that granted access.
 - Direct mode can use a narrowly scoped fine-grained PAT with Contents and Pull requests write permissions on the target repository.
 - `author_name` and `author_email` must identify the contributor whose CLA or DCO status will be evaluated by the target repository.
 - The engine adds a matching `Signed-off-by` trailer.
 
 Use the narrowest credential that supports the selected mode. Do not put `BOT_TOKEN`, the model provider credential, OAuth credentials, or a general operator PAT inside Agent Sandbox.
+
+Action source checks prefer `SOURCE_INVESTIGATION_GITHUB_TOKEN`, then `GITHUB_READ_TOKEN`, `BOT_TOKEN`, and `GITHUB_TOKEN`. A failed GitHub source check keeps the preview available for confirmation retry; a changed source base or failure evidence invalidates it.
 
 ## Required project configuration
 

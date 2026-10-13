@@ -181,3 +181,10 @@ func githubReadTokenFromEnv() string {
 	}
 	return ""
 }
+
+func actionSourceTokenFromEnv() string {
+	if token := os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"); token != "" {
+		return token
+	}
+	return githubReadTokenFromEnv()
+}

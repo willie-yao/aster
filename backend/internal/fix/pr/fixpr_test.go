@@ -47,6 +47,7 @@ type fakePR struct {
 	base            ghpr.Base
 	bases           []ghpr.Base
 	resolveCalls    int
+	resolveErr      error
 	resolveBranches []string
 }
 
@@ -72,6 +73,9 @@ func (f *fakePR) SearchAnyPR(ctx context.Context, owner, repo, token, marker str
 
 func (f *fakePR) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base, error) {
 	f.resolveBranches = append(f.resolveBranches, branch)
+	if f.resolveErr != nil {
+		return ghpr.Base{}, f.resolveErr
+	}
 	if len(f.bases) > 0 {
 		index := f.resolveCalls
 		if index >= len(f.bases) {

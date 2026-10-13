@@ -1187,8 +1187,12 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 			return "", ErrPreviewTargetChanged
 		}
 		if err := s.validateAnalysisPreview(ctx, owner, *entry.analysisBinding); err != nil {
-			_ = s.previewStore.discard(owner, token, attemptID)
-			return "", ErrPreviewTargetChanged
+			if errors.Is(err, ErrPreviewTargetChanged) {
+				_ = s.previewStore.discard(owner, token, attemptID)
+			} else if finishErr := s.finishConfirm(owner, token, attemptID, "", err); finishErr != nil {
+				return "", errors.Join(err, finishErr)
+			}
+			return "", err
 		}
 	} else if !reconcile && (entry.failureID != "" || entry.patternHash != "") {
 		if err := s.validateSubjectSnapshot(entry.failureID, entry.patternHash, entry.kind); err != nil {
@@ -1391,6 +1395,10 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 		if err != nil {
 			if errors.Is(err, fixpr.ErrPreviewBaseChanged) {
 				return "", ErrPreviewTargetChanged
+			}
+			if errors.Is(err, fixpr.ErrPreviewSourceUnavailable) {
+				return "", withReason(ReasonGenerationFailed,
+					errors.Join(errAnalysisSourceUnavailable, err), safeReason(err.Error()))
 			}
 			if errors.Is(err, fixpr.ErrWriteOutcomeUnknown) {
 				return "", fmt.Errorf("%w: opening fix: %s", ErrPreviewOutcomeUnknown, safeReason(err.Error()))

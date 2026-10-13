@@ -30,10 +30,7 @@ func ApplyDiff(ctx context.Context, repo RepoRef, diff string) (map[string]strin
 	defer os.RemoveAll(work)
 
 	if err := materialize(ctx, work, repo); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, "", fmt.Errorf("%w: clone timed out", ErrUnavailable)
-		}
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: materializing %s/%s at %s: %w", ErrUnavailable, repo.Owner, repo.Name, repo.Ref, err)
 	}
 
 	patch, err := os.CreateTemp("", "pad-fix-*.patch")

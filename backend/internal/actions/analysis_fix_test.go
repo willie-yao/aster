@@ -166,6 +166,7 @@ type fakeAnalysisSourceRevisionClient struct {
 	base           ghpr.Base
 	branchBases    map[string]ghpr.Base
 	resolveErr     error
+	resolveErrors  map[int]error
 	contains       bool
 	compareErr     error
 	compareCalls   int
@@ -176,6 +177,9 @@ func (f *fakeAnalysisSourceRevisionClient) ResolveBase(_ context.Context, _, _, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.branchRequests = append(f.branchRequests, branch)
+	if err := f.resolveErrors[len(f.branchRequests)]; err != nil {
+		return ghpr.Base{}, err
+	}
 	if f.resolveErr != nil {
 		return ghpr.Base{}, f.resolveErr
 	}
@@ -507,7 +511,7 @@ func TestPreflightAnalysisFixSourcePropagatesAccessAndAncestryErrors(t *testing.
 		service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 		service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{resolveErr: accessErr}
 		_, err := service.preflightAnalysisFixSource(t.Context(), repo, "main", FixBranchTested)
-		if !errors.Is(err, ErrPreviewRejected) || !errors.Is(err, accessErr) {
+		if errors.Is(err, ErrPreviewRejected) || !errors.Is(err, accessErr) || ReasonCodeOf(err) != ReasonGenerationFailed {
 			t.Fatalf("error = %v", err)
 		}
 	})

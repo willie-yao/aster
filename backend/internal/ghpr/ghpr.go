@@ -143,7 +143,7 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 	if req.Fork {
 		login, err := c.AuthedLogin(ctx)
 		if err != nil {
-			return "", fmt.Errorf("resolving fork identity: %w", err)
+			return "", fmt.Errorf("resolving fork identity for %s/%s: %w", req.Owner, req.Repo, err)
 		}
 		fo, fr, err := c.ensureFork(ctx, req.Owner, req.Repo, login)
 		if err != nil {
@@ -161,12 +161,12 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 		var err error
 		branch, headSHA, baseTree, err = c.baseRef(ctx, req.Owner, req.Repo, "")
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("resolving base in %s/%s: %w", req.Owner, req.Repo, err)
 		}
 	}
 	tree, err := c.createTree(ctx, pushOwner, pushRepo, baseTree, req.Files)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("creating tree in %s/%s: %w", pushOwner, pushRepo, err)
 	}
 	commit, err := c.createCommit(ctx, pushOwner, pushRepo, commitMessage(req), tree, headSHA, req)
 	if err != nil {
@@ -178,12 +178,12 @@ func (c *Client) OpenPR(ctx context.Context, req Request) (string, error) {
 	}
 	number, htmlURL, err := c.createPR(ctx, req.Owner, req.Repo, req.Title, req.Body, headPrefix+newBranch, branch, req.Draft)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("opening pull request in %s/%s: %w", req.Owner, req.Repo, err)
 	}
 	if len(req.Labels) > 0 {
 		// A labeling failure should not discard an opened PR.
 		if err := c.addLabels(ctx, req.Owner, req.Repo, number, req.Labels); err != nil {
-			return htmlURL, fmt.Errorf("PR %s opened but labeling failed: %w", htmlURL, err)
+			return htmlURL, fmt.Errorf("PR %s opened but labeling in %s/%s failed: %w", htmlURL, req.Owner, req.Repo, err)
 		}
 	}
 	return htmlURL, nil
@@ -255,7 +255,7 @@ func (c *Client) ensureFork(ctx context.Context, owner, repo, login string) (str
 	var fork forkRepository
 	if err := c.do(ctx, http.MethodPost, c.url(owner, repo, "forks"), map[string]any{}, &fork,
 		http.StatusAccepted, http.StatusOK, http.StatusCreated); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("creating fork of %s/%s: %w", owner, repo, err)
 	}
 	forkOwner, forkRepo := fork.Owner.Login, fork.Name
 	if forkOwner == "" {
@@ -453,11 +453,25 @@ func (c *Client) createCommit(ctx context.Context, owner, repo, message, tree, p
 		SHA string `json:"sha"`
 	}
 	err := c.post(ctx, c.url(owner, repo, "git/commits"), payload, &out)
+	if err != nil {
+		return "", commitWriteError("creating commit", owner, repo, err)
+	}
 	return out.SHA, err
 }
 
 func (c *Client) createRef(ctx context.Context, owner, repo, ref, sha string) error {
-	return c.post(ctx, c.url(owner, repo, "git/refs"), map[string]any{"ref": ref, "sha": sha}, nil)
+	if err := c.post(ctx, c.url(owner, repo, "git/refs"), map[string]any{"ref": ref, "sha": sha}, nil); err != nil {
+		return commitWriteError("creating branch "+ref, owner, repo, err)
+	}
+	return nil
+}
+
+func commitWriteError(operation, owner, repo string, err error) error {
+	hint := ""
+	if isResponseStatus(err, http.StatusNotFound) {
+		hint = " (check token access and the workflow scope if the base adds workflow changes)"
+	}
+	return fmt.Errorf("%s in %s/%s%s: %w", operation, owner, repo, hint, err)
 }
 
 func (c *Client) createPR(ctx context.Context, owner, repo, title, body, head, base string, draft bool) (int, string, error) {

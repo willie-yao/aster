@@ -2,6 +2,8 @@ package pr
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +79,43 @@ func TestAgentSandboxPreviewAndConfirmationUseExecutorResults(t *testing.T) {
 	}
 }
 
+func TestAgentSandboxConfirmationRetriesSourceMaterialization(t *testing.T) {
+	base := ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("a", 40), TreeSHA: strings.Repeat("b", 40)}
+	verification := &ExecutionVerification{
+		BaseSHA: base.HeadSHA, Commands: sandboxVerificationCommands(), Results: sandboxCommandResults(),
+	}
+	files := map[string]string{"fix.go": "package fix\n"}
+	diff := "canonical diff"
+	generated := &GeneratedFix{
+		Preview: Preview{Diff: diff, Files: files, Verify: verification.verifyResult()},
+		Title:   "fix: test", Body: "safe", key: "fix-analysis::test", base: base, requireBaseCurrent: true,
+		executionVerification: verification,
+	}
+	client := &fakePR{base: base}
+	calls := 0
+	cause := fmt.Errorf("%w: source fetch returned 503", runtime.ErrUnavailable)
+	manager := NewManager(client, t.TempDir()+"/state.json", Options{
+		SourceOwner: "o", SourceName: "r", PatchToken: "dashboard-read-token",
+		ReconstructPatch: func(_ context.Context, repo runtime.RepoRef, gotDiff string) (map[string]string, string, error) {
+			calls++
+			if repo.Ref != base.HeadSHA || repo.Token != "dashboard-read-token" || gotDiff != diff {
+				t.Fatal("reconstruction lost its pinned source or dashboard credential")
+			}
+			if calls == 1 {
+				return nil, "", cause
+			}
+			return files, diff, nil
+		},
+	})
+	if _, err := manager.OpenFromPreview(t.Context(), generated); !errors.Is(err, ErrPreviewSourceUnavailable) ||
+		!errors.Is(err, cause) || errors.Is(err, ErrPreviewBaseChanged) || len(client.opened) != 0 {
+		t.Fatalf("source failure=%v, writes=%d", err, len(client.opened))
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), generated); err != nil || calls != 2 || len(client.opened) != 1 {
+		t.Fatalf("same-preview retry=%v reconstructions=%d writes=%d", err, calls, len(client.opened))
+	}
+}
+
 func TestAgentSandboxCommandResultsFailClosedOnIntegrity(t *testing.T) {
 	commands := sandboxVerificationCommands()
 	valid := sandboxCommandResults()
@@ -139,7 +178,8 @@ func TestAgentSandboxConfirmationRejectsPersistedCommandOrPatchDrift(t *testing.
 				return map[string]string{"fix.go": "package changed\n"}, "canonical diff", nil
 			},
 		})
-		if _, err := manager.OpenFromPreview(t.Context(), RestoreGeneratedFix(generated.Snapshot())); err == nil || !strings.Contains(err.Error(), "patch content changed") {
+		if _, err := manager.OpenFromPreview(t.Context(), RestoreGeneratedFix(generated.Snapshot())); err == nil ||
+			!strings.Contains(err.Error(), "patch content changed") || errors.Is(err, ErrPreviewSourceUnavailable) {
 			t.Fatalf("error=%v", err)
 		}
 		if len(pr.opened) != 0 {

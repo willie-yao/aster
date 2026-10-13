@@ -144,7 +144,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
-		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: os.Getenv("SOURCE_INVESTIGATION_GITHUB_TOKEN"),
+		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
 		UsageRecorder: usageRecorder,
 	})
 	fixActions := fixActionsEnabled(cfg.EffectiveFixPRs())

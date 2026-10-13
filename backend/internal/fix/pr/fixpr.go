@@ -41,6 +41,9 @@ var ErrWriteOutcomeUnknown = errors.New("fix PR write outcome unknown")
 // ErrPreviewBaseChanged means the pinned source revision is no longer the target branch head.
 var ErrPreviewBaseChanged = errors.New("fix preview base changed")
 
+// ErrPreviewSourceUnavailable means a pre-write source check failed without proving drift.
+var ErrPreviewSourceUnavailable = errors.New("fix preview source check unavailable")
+
 // prClient is the subset of *ghpr.Client the manager needs.
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
@@ -503,6 +506,10 @@ func (m *Manager) validateExecutionPreview(ctx context.Context, gf *GeneratedFix
 		Owner: m.opts.SourceOwner, Name: m.opts.SourceName, Ref: gf.base.HeadSHA, Token: m.opts.PatchToken,
 	}, gf.Preview.Diff)
 	if err != nil {
+		if errors.Is(err, runtime.ErrUnavailable) {
+			return fmt.Errorf("%w: reconstructing Agent Sandbox preview in %s/%s: %w",
+				ErrPreviewSourceUnavailable, m.opts.SourceOwner, m.opts.SourceName, err)
+		}
 		return fmt.Errorf("reconstructing Agent Sandbox preview: %w", err)
 	}
 	if diff != gf.Preview.Diff || !sameFileContents(files, gf.Preview.Files) {
@@ -551,7 +558,8 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	if gf.requireBaseCurrent {
 		current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, gf.base.Branch)
 		if err != nil {
-			return "", fmt.Errorf("checking current fix base: %w", err)
+			return "", fmt.Errorf("%w: checking current fix base in %s/%s: %w",
+				ErrPreviewSourceUnavailable, m.opts.SourceOwner, m.opts.SourceName, err)
 		}
 		if current.Branch != gf.base.Branch || !strings.EqualFold(current.HeadSHA, gf.base.HeadSHA) || current.TreeSHA != gf.base.TreeSHA {
 			return "", ErrPreviewBaseChanged
