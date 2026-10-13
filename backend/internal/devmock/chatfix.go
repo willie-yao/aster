@@ -34,13 +34,21 @@ func (f *ChatFix) PreviewChatFix(
 // CreateAnalysisFixRequest starts an asynchronous fix draft from one chat answer.
 func (f *ChatFix) CreateAnalysisFixRequest(
 	_ context.Context,
-	sessionID, login, _, _, instruction string, replaces ...string,
+	sessionID, login, _, _ string, _ actions.FixBranchTarget, instruction string, replaces ...string,
 ) (actions.ActionRequestView, error) {
 	failureID, err := f.failureID(sessionID, login)
 	if err != nil {
 		return actions.ActionRequestView{}, err
 	}
 	return f.actions.createAnalysisFixRequest(failureID, login, instruction, replaces...)
+}
+
+// AnalysisFixBranches reports differing branches so the dialog shows its target choice.
+func (f *ChatFix) AnalysisFixBranches(_ context.Context, sessionID, login, _ string) (actions.AnalysisFixBranches, error) {
+	if _, err := f.failureID(sessionID, login); err != nil {
+		return actions.AnalysisFixBranches{}, err
+	}
+	return actions.AnalysisFixBranches{Tested: "release-1.0", Default: "main"}, nil
 }
 
 // failureID resolves the analysis a session is about into the failure id the

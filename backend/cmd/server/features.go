@@ -32,6 +32,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
+// The exact-analysis Fix routes are registered only when the bridge satisfies this interface.
+var _ server.ChatFixRequestRunner = (*chatfix.Service)(nil)
+
 func formatPricingRate(value string) string {
 	rate, ok := new(big.Rat).SetString(value)
 	if !ok {

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { MemoryStorage } from "./helpers/memoryStorage.js";
 
+import { analysisChatFixRequestBody, chatFixBranchChoice } from "../src/lib/chatFix.js";
 import { chatFixFindingCaveats, chatFixRequestPresentation, mergeActionWarnings } from "../src/lib/chatFixPresentation.js";
 import {
   chatFixRequestStorageKey,
@@ -87,7 +88,7 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /loadAnalysisChatFixRequest/);
   assert.match(dialog, /Generation continues in the background/);
   assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
-  assert.match(dialog, /repository and generation base are pinned from build metadata/);
+  assert.match(dialog, /repository and generation base are pinned when the request is admitted/);
   assert.match(dialog, /The preview is rejected if either changes/);
   assert.match(dialog, /chatFixFindingCaveats\(message, request\?\.warnings\)/);
   assert.match(dialog, /Generate fix preview/);
@@ -151,11 +152,16 @@ test("fix preview warnings merge by message", () => {
 test("exact JUnit fix request storage preserves the durable request identity and instruction", () => {
   const storage = new MemoryStorage();
   const key = chatFixRequestStorageKey("session", "chat-request");
-  storeChatFixRequest(storage, "session", "chat-request", { id: "request-1", instruction: "keep compatibility" });
+  storeChatFixRequest(storage, "session", "chat-request", {
+    id: "request-1",
+    instruction: "keep compatibility",
+    branch_target: "default",
+  });
   assert.equal(storage.values.has(key), true);
   assert.deepEqual(readStoredChatFixRequest(storage, "session", "chat-request"), {
     id: "request-1",
     instruction: "keep compatibility",
+    branch_target: "default",
   });
   clearStoredChatFixRequest(storage, "session", "chat-request");
   assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
@@ -166,6 +172,49 @@ test("exact JUnit fix request storage rejects malformed request identities", () 
   const key = chatFixRequestStorageKey("session", "chat-request");
   storage.values.set(key, JSON.stringify({ id: "bad request id", instruction: "x" }));
   assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
+  storage.values.set(key, JSON.stringify({ id: "request-1", instruction: "x", branch_target: "main" }));
+  assert.equal(readStoredChatFixRequest(storage, "session", "chat-request"), null);
+  storage.values.set(key, JSON.stringify({ id: "request-1", instruction: "x" }));
+  assert.equal(readStoredChatFixRequest(storage, "session", "chat-request")?.branch_target, "tested");
+});
+
+test("fix target branch choice appears only when the default branch differs", () => {
+  assert.equal(chatFixBranchChoice(null), null);
+  assert.equal(chatFixBranchChoice({ tested_branch: "release-1.24" }), null);
+  assert.equal(chatFixBranchChoice({ default_branch: "main" }), null);
+  assert.equal(chatFixBranchChoice({ tested_branch: "main", default_branch: "main" }), null);
+  assert.deepEqual(chatFixBranchChoice({ tested_branch: "release-1.24", default_branch: "main" }), {
+    tested: "release-1.24",
+    default: "main",
+  });
+});
+
+test("fix request body carries the branch choice, not a branch name", () => {
+  assert.deepEqual(analysisChatFixRequestBody("  keep compatibility ", "default", "failed-request"), {
+    branch_target: "default",
+    instruction: "keep compatibility",
+    replaces_request_id: "failed-request",
+  });
+  assert.deepEqual(analysisChatFixRequestBody(" ", "tested"), { branch_target: "tested" });
+  const api = source("src/lib/chatFix.ts");
+  assert.match(api, /JSON\.stringify\(analysisChatFixRequestBody\(instruction, branchTarget, replacesRequestID\)\)/);
+  assert.match(api, /fix\/branches/);
+});
+
+test("fix dialog offers the default branch only for exact analysis and keeps the admitted target", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  assert.match(dialog, /const branchChoice = exactAnalysis \? chatFixBranchChoice\(branches\) : null/);
+  assert.match(dialog, /\{branchChoice && \(\s*<ContextSection title="Target branch">/);
+  assert.match(dialog, /loadAnalysisChatFixBranches\(sessionID, message\.request_id, controller\.signal\)/);
+  assert.match(dialog, /disabled=\{busy !== null \|\| request !== null\}/);
+  assert.match(dialog, /setBranchTarget\(stored\.branch_target\)/);
+  assert.match(dialog, /suggests \/cherry-pick \{branchChoice\.tested\} after merge/);
+  const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
+  assert.match(regenerate, /instruction,\s*branchTarget,\s*feedbackReplacement \? request\.id : undefined/);
+  assert.match(regenerate, /branch_target: branchTarget/);
+  const generate = dialog.slice(dialog.indexOf("async function generatePreview"), dialog.indexOf("async function regeneratePreview"));
+  assert.match(generate, /instruction,\s*branchTarget,\s*undefined,/);
+  assert.match(generate, /branch_target: branchTarget/);
 });
 
 test("one chat serves questions and fix proposals with no separate mode", () => {

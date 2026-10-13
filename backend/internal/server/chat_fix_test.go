@@ -25,6 +25,7 @@ type fakeChatFixRunner struct {
 	userToken       string
 	instruction     string
 	replacesRequest string
+	branchTarget    actions.FixBranchTarget
 	err             error
 	requestCreated  bool
 	deadline        time.Time
@@ -48,7 +49,7 @@ func newBlockingHTTPChatFixRunner() *blockingHTTPChatFixRunner {
 }
 
 func (r *blockingHTTPChatFixRunner) CreateAnalysisFixRequest(
-	_ context.Context, _, owner, _, _, _ string, _ ...string,
+	_ context.Context, _, owner, _, _ string, _ actions.FixBranchTarget, _ string, _ ...string,
 ) (actions.ActionRequestView, error) {
 	r.mu.Lock()
 	if r.request.ID != "" {
@@ -130,11 +131,12 @@ func (f *fakeChatFixRunner) PreviewChatFix(
 }
 
 func (f *fakeChatFixRunner) CreateAnalysisFixRequest(
-	ctx context.Context, sessionID, owner, requestID, userToken, instruction string, replaces ...string,
+	ctx context.Context, sessionID, owner, requestID, userToken string, target actions.FixBranchTarget, instruction string,
+	replaces ...string,
 ) (actions.ActionRequestView, error) {
 	f.deadline, _ = ctx.Deadline()
 	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
-	f.userToken, f.instruction, f.requestCreated = userToken, instruction, true
+	f.userToken, f.instruction, f.requestCreated, f.branchTarget = userToken, instruction, true, target
 	if len(replaces) > 0 {
 		f.replacesRequest = replaces[0]
 	}
@@ -145,6 +147,17 @@ func (f *fakeChatFixRunner) CreateAnalysisFixRequest(
 		ID: "action-request", FailureID: "analysis", Kind: "analysis-fix", Owner: owner,
 		Status: actions.RequestPending, CreatedAt: "2026-08-14T00:00:00Z", UpdatedAt: "2026-08-14T00:00:00Z", ExpiresAt: "2026-08-14T01:00:00Z",
 	}, nil
+}
+
+func (f *fakeChatFixRunner) AnalysisFixBranches(
+	ctx context.Context, sessionID, owner, requestID string,
+) (actions.AnalysisFixBranches, error) {
+	f.deadline, _ = ctx.Deadline()
+	f.sessionID, f.owner, f.requestID = sessionID, owner, requestID
+	if f.err != nil {
+		return actions.AnalysisFixBranches{}, f.err
+	}
+	return actions.AnalysisFixBranches{Tested: "release-1.24", Default: "main"}, nil
 }
 
 func TestHandlerChatFixPreview(t *testing.T) {
@@ -260,8 +273,77 @@ func TestHandlerExactJUnitChatFixPreview(t *testing.T) {
 	if recorder.Code != http.StatusAccepted || !strings.Contains(recorder.Body.String(), `"id":"action-request"`) {
 		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.instruction != "keep the API stable" || runner.replacesRequest != "failed-request" {
+	if !runner.requestCreated || runner.patternID != "" || runner.patternHash != "" || runner.instruction != "keep the API stable" ||
+		runner.replacesRequest != "failed-request" || runner.branchTarget != actions.FixBranchTested {
 		t.Fatalf("runner = %+v", runner)
+	}
+}
+
+func TestHandlerExactChatFixRequestBranchTarget(t *testing.T) {
+	for _, testCase := range []struct {
+		body       string
+		wantStatus int
+		wantTarget actions.FixBranchTarget
+	}{
+		{body: `{"branch_target":"default"}`, wantStatus: http.StatusAccepted, wantTarget: actions.FixBranchDefault},
+		{body: `{"branch_target":"tested"}`, wantStatus: http.StatusAccepted, wantTarget: actions.FixBranchTested},
+		{body: `{"branch_target":"main"}`, wantStatus: http.StatusBadRequest},
+		{body: `{"branch_target":"Default"}`, wantStatus: http.StatusBadRequest},
+	} {
+		t.Run(testCase.body, func(t *testing.T) {
+			runner := &fakeChatFixRunner{}
+			handler, err := Handler(Options{
+				DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+				Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/analysis-chat/sessions/session/requests/request/fix/requests", strings.NewReader(testCase.body))
+			req.Header.Set("Authorization", "ok")
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != testCase.wantStatus || runner.requestCreated != (testCase.wantStatus == http.StatusAccepted) ||
+				runner.branchTarget != testCase.wantTarget {
+				t.Fatalf("status=%d runner=%+v", recorder.Code, runner)
+			}
+		})
+	}
+}
+
+func TestHandlerExactChatFixBranches(t *testing.T) {
+	runner := &fakeChatFixRunner{}
+	handler, err := Handler(Options{
+		DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+		Actions: &fakeRunner{}, AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/analysis-chat/sessions/session/requests/request/fix/branches"
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "ok")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != `{"tested_branch":"release-1.24","default_branch":"main"}` ||
+		runner.sessionID != "session" || runner.requestID != "request" || runner.deadline.IsZero() {
+		t.Fatalf("status=%d body=%s runner=%+v", recorder.Code, recorder.Body.String(), runner)
+	}
+
+	unauthenticated := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, path, nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
+	}
+
+	runner.err = analysischat.ErrSessionNotFound
+	missing := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "ok")
+	handler.ServeHTTP(missing, req)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing session status = %d", missing.Code)
 	}
 }
 

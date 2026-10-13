@@ -56,7 +56,7 @@ func TestBuildAnalysisHandoffRechecksFailureAndPreservesPinnedBranch(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			generation := analysisFailureForGeneration(subject, input, input.SourceBranch, input.GenerationBaseRevision)
+			generation := analysisFailureForGeneration(subject, input)
 			if generation.Source != models.TestCaseSourceBuild || generation.SourceBranch != "release-1.24" ||
 				generation.FailureBody != detail.Runs[0].TestCases[0].FailureBody {
 				t.Fatalf("generation = %+v", generation)
@@ -150,6 +150,165 @@ func TestBuildAnalysisFixRequestPersistsAndDeduplicates(t *testing.T) {
 	}
 }
 
+func defaultBranchRequestService(t *testing.T) (*Service, *fakeAnalysisSourceRevisionClient, models.JobDetail) {
+	t.Helper()
+	dir := t.TempDir()
+	detail := exactBuildDetail()
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision, TreeSHA: "tree"},
+		branchBases: map[string]ghpr.Base{
+			"release-1.24": {Branch: "release-1.24", HeadSHA: analysisFixRevision, TreeSHA: "tree"},
+		},
+	}
+	service.sourceRevisionClient = client
+	return service, client, detail
+}
+
+func TestDefaultBranchAnalysisFixRequestIsSeparateAndRechecksBase(t *testing.T) {
+	service, client, _ := defaultBranchRequestService(t)
+	var calls atomic.Int32
+	installHandoffTestGenerator(t, service, &calls)
+	testedInput := exactBuildRequestInput()
+	defaultInput := exactBuildRequestInput()
+	defaultInput.BranchTarget = FixBranchDefault
+
+	tested, err := service.CreateAnalysisFixRequest(t.Context(), testedInput, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDefault, err := service.CreateAnalysisFixRequest(t.Context(), defaultInput, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testedReady := waitRequest(t, service, tested.ID, "alice", RequestReady)
+	defaultReady := waitRequest(t, service, onDefault.ID, "alice", RequestReady)
+	if tested.ID == onDefault.ID || testedReady.Preview.Token == defaultReady.Preview.Token || calls.Load() != 2 {
+		t.Fatalf("tested=%+v default=%+v calls=%d", testedReady, defaultReady, calls.Load())
+	}
+	retry, err := service.CreateAnalysisFixRequest(t.Context(), defaultInput, "alice", "token", "")
+	if err != nil || retry.ID != onDefault.ID || calls.Load() != 2 {
+		t.Fatalf("retry=%+v err=%v calls=%d", retry, err, calls.Load())
+	}
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[FixBranchTarget]string{FixBranchTested: tested.ID, FixBranchDefault: onDefault.ID} {
+		view, found, err := service.FindAnalysisFixRequest(defaultInput.ChatSessionID, defaultInput.ChatRequestID, "alice", target, "")
+		if err != nil || !found || view.ID != want {
+			t.Fatalf("find %s = %+v found=%t err=%v", target, view, found, err)
+		}
+	}
+
+	handoff := service.requests.Requests[onDefault.ID].AnalysisFix
+	if handoff == nil || handoff.BranchTarget != FixBranchDefault || handoff.SourceBranch != "release-1.24" ||
+		handoff.TargetBranch != "main" || handoff.GenerationBaseRevision != capzGenerationBaseRevision ||
+		handoff.FailureRevision != analysisFixRevision || client.compareCalls != 0 {
+		t.Fatalf("handoff=%+v compares=%d", handoff, client.compareCalls)
+	}
+	testedHandoff := service.requests.Requests[tested.ID].AnalysisFix
+	if testedHandoff.TargetBranch != "release-1.24" || testedHandoff.GenerationBaseRevision != analysisFixRevision {
+		t.Fatalf("tested handoff=%+v", testedHandoff)
+	}
+	subject, err := service.resolveAnalysisFixTarget(*handoff, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation := analysisFailureForGeneration(subject, *handoff); generation.SourceBranch != "release-1.24" ||
+		generation.TargetBranch != "main" || generation.GenerationBaseRevision != capzGenerationBaseRevision {
+		t.Fatalf("generation = %+v", generation)
+	}
+
+	client.mu.Lock()
+	client.base.HeadSHA = capzReleaseBaseRevision
+	client.mu.Unlock()
+	if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: handoff}); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("moved default branch validation = %v", err)
+	}
+	if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: testedHandoff}); err != nil {
+		t.Fatalf("tested branch validation = %v", err)
+	}
+	if _, err := service.Confirm(t.Context(), defaultReady.Preview.Token, "alice", "token"); !errors.Is(err, ErrPreviewTargetChanged) {
+		t.Fatalf("moved default branch confirmation = %v", err)
+	}
+}
+
+func TestAnalysisFixHandoffRejectsInconsistentBranchTarget(t *testing.T) {
+	service, _, _ := defaultBranchRequestService(t)
+	input := exactBuildRequestInput()
+	input.BranchTarget = FixBranchDefault
+	prepared, err := service.prepareAnalysisFix(t.Context(), input, "alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAnalysisFixHandoff(prepared); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*AnalysisFixInput){
+		"tested target on another branch": func(i *AnalysisFixInput) { i.BranchTarget = FixBranchTested },
+		"default target on tested branch": func(i *AnalysisFixInput) { i.TargetBranch = i.SourceBranch },
+		"missing target branch":           func(i *AnalysisFixInput) { i.TargetBranch = "" },
+		"unknown target":                  func(i *AnalysisFixInput) { i.BranchTarget = "main" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := *cloneAnalysisFixInput(prepared)
+			mutate(&changed)
+			changed.PreviewRequestHash = AnalysisFixRequestHash(changed.ChatSessionID, changed.ChatRequestID, changed.BranchTarget, changed.Instruction)
+			changed.HandoffHash = analysisFixHandoffHash(changed)
+			if err := validateAnalysisFixHandoff(changed); err == nil {
+				t.Fatal("inconsistent branch target was accepted")
+			}
+		})
+	}
+}
+
+func TestAnalysisFixReplacementKeepsBranchTarget(t *testing.T) {
+	service, _, _ := defaultBranchRequestService(t)
+	service.ConfigureAsyncRequests(time.Minute, nil)
+	service.analysisRequestGenerator = func(context.Context, AnalysisFixInput, string, string, string) (PreviewResult, error) {
+		return PreviewResult{}, withReason(ReasonNoReviewablePatch, ErrPreviewRejected, ReasonMessage(ReasonNoReviewablePatch))
+	}
+	input := exactBuildRequestInput()
+	input.BranchTarget = FixBranchDefault
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, created.ID, "alice", RequestFailed)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	service.rmu.Lock()
+	service.requests.Requests[created.ID].Failure = &AnalysisFixFailureView{Category: AnalysisFixFailureNoReviewablePatch}
+	service.rmu.Unlock()
+
+	tested := input
+	tested.BranchTarget = FixBranchTested
+	if _, err := service.CreateAnalysisFixRequest(t.Context(), tested, "alice", "token", "feedback", created.ID); ReasonCodeOf(err) != ReasonNoReviewablePatch {
+		t.Fatalf("cross-target replacement err=%v", err)
+	}
+	replacement, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "feedback", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.rmu.Lock()
+	handoff := service.requests.Requests[replacement.ID].AnalysisFix
+	service.rmu.Unlock()
+	if handoff == nil || handoff.BranchTarget != FixBranchDefault || handoff.TargetBranch != "main" {
+		t.Fatalf("replacement handoff = %+v", handoff)
+	}
+	waitRequest(t, service, replacement.ID, "alice", RequestFailed)
+	testedRequest, err := service.CreateAnalysisFixRequest(t.Context(), tested, "alice", "token", "")
+	if err != nil {
+		t.Fatalf("tested-branch request blocked by default-branch failure: %v", err)
+	}
+	waitRequest(t, service, testedRequest.ID, "alice", RequestFailed)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type handoffChatRunner struct{}
 
 func (handoffChatRunner) Reply(context.Context, analysischat.Turn) (analysischat.Reply, error) {
@@ -212,7 +371,7 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		Subject: input.Identity.TestName, Rationale: input.AssistantAnswer,
 		Diff: "diff --git a/controller.go b/controller.go\n+return nil\n", Files: map[string]string{"controller.go": "package controllers\n"},
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped}, Title: "fix: investigate terminal state", Description: "Investigative patch.", Body: "Investigative patch.",
-		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.SourceBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
+		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.TargetBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
 	})
 	fix.SetWarnings(warningMessages(analysisQualityWarnings(input)))
 	entry := &previewEntry{
@@ -290,7 +449,7 @@ func TestActionOwnedHandoffSurvivesChatLifecycle(t *testing.T) {
 			}
 			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
 			reloaded.sourceRevisionClient = service.sourceRevisionClient
-			view, found, err := reloaded.FindAnalysisFixRequest(input.ChatSessionID, input.ChatRequestID, "alice", "")
+			view, found, err := reloaded.FindAnalysisFixRequest(input.ChatSessionID, input.ChatRequestID, "alice", FixBranchTested, "")
 			if err != nil || !found || view.ID != request.ID || view.Preview.Token != ready.Preview.Token || calls.Load() != 1 {
 				t.Fatalf("reconnect = %+v %t %v calls=%d", view, found, err, calls.Load())
 			}
@@ -538,7 +697,7 @@ func TestActionOwnedHandoffSurvivesReanalysis(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := analysisPreviewGenerationHash(original, input.HandoffHash, input.SourceRepository, input.SourceBranch, input.GenerationBaseRevision, input.TargetConfig)
+			before := analysisPreviewGenerationHash(original, input, input.TargetConfig)
 			failure := &detail.Runs[0].TestCases[0]
 			failure.AIAnalysis.GeneratedAt = "2026-08-14T01:00:00Z"
 			failure.AIAnalysis.RootCause = "A different preliminary diagnosis"
@@ -551,7 +710,7 @@ func TestActionOwnedHandoffSurvivesReanalysis(t *testing.T) {
 				t.Fatalf("admitted target after reanalysis: %v", err)
 			}
 			if !slices.Equal(after.SourceHints, input.SourceHints) || after.ContentHash != original.ContentHash ||
-				analysisPreviewGenerationHash(after, input.HandoffHash, input.SourceRepository, input.SourceBranch, input.GenerationBaseRevision, input.TargetConfig) != before {
+				analysisPreviewGenerationHash(after, input, input.TargetConfig) != before {
 				t.Fatal("regenerated analysis changed captured generation inputs")
 			}
 			if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: &input}); err != nil {
@@ -628,7 +787,7 @@ func TestAnalysisFixReanalysisDuringGenerationStaysReady(t *testing.T) {
 	writeJobDetail(t, service.dataDir, models.JobDataFilename(detail.JobID), detail)
 	close(release)
 	ready := waitRequest(t, service, request.ID, "alice", RequestReady)
-	if ready.Preview == nil || ready.Preview.Token != idempotentPreviewToken("alice", AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, "")) || calls.Load() != 1 {
+	if ready.Preview == nil || ready.Preview.Token != idempotentPreviewToken("alice", AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, FixBranchTested, "")) || calls.Load() != 1 {
 		t.Fatalf("reanalysis during generation: %+v calls=%d", ready, calls.Load())
 	}
 	if err := service.Wait(t.Context()); err != nil {

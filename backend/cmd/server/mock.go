@@ -23,6 +23,8 @@ const defaultMockProjectDir = "configs/example"
 // defaultMockLogin is the admin identity a mock sign-in establishes.
 const defaultMockLogin = "mock-admin"
 
+var _ server.ChatFixRequestRunner = (*devmock.ChatFix)(nil)
+
 // enableMockFeatures wires the in-memory stand-ins so every feature the
 // deployed dashboard advertises is reachable without AI credentials, GitHub
 // write access, or a Kubernetes cluster. The routes, auth middleware, CSRF

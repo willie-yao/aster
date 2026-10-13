@@ -333,7 +333,7 @@ func (c *Client) baseRef(ctx context.Context, owner, repo, branch string) (resol
 	}
 	// The branch can come from build metadata, so it is untrusted input in an
 	// API path.
-	if !validBranchName(branch) {
+	if !ValidBranchName(branch) {
 		return "", "", "", fmt.Errorf("branch name is not a valid git ref")
 	}
 	var ref struct {
@@ -355,10 +355,10 @@ func (c *Client) baseRef(ctx context.Context, owner, repo, branch string) (resol
 	return branch, ref.Object.SHA, commit.Tree.SHA, nil
 }
 
-// validBranchName applies the git ref rules that matter for a branch used as an
+// ValidBranchName applies the git ref rules that matter for a branch used as an
 // API path. Every component is checked: a "." component would be normalized
 // away by the server, resolving a different branch than the caller named.
-func validBranchName(branch string) bool {
+func ValidBranchName(branch string) bool {
 	if branch == "" || len(branch) > 255 || strings.HasPrefix(branch, "-") || strings.Contains(branch, "@{") {
 		return false
 	}

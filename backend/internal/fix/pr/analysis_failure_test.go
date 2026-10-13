@@ -25,7 +25,8 @@ func validAnalysisFailure() AnalysisFailure {
 		AssistantAnswer:  "The artifact shows the terminal branch never calls `markReady`.",
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		ArtifactCitations: []Evidence{{Path: "artifacts/junit_01.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
-		SourceRepository:  "up/stream", SourceBranch: "main", FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
+		SourceRepository:  "up/stream", SourceBranch: "main", TargetBranch: "main",
+		FailureRevision: exactAnalysisRevision, GenerationBaseRevision: exactAnalysisRevision,
 		SourceHints: []string{"controllers/cluster_controller.go"},
 	}
 }
@@ -62,7 +63,7 @@ func TestGenerateAnalysisPreviewUsesExactSourceAndCreatesNoWrite(t *testing.T) {
 func TestGenerateAnalysisPreviewCarriesBuildFailureToAgent(t *testing.T) {
 	failure := validAnalysisFailure()
 	failure.Source, failure.TestName = "build", "Prow job execution"
-	failure.SourceBranch = "release-1.24"
+	failure.SourceBranch, failure.TargetBranch = "release-1.24", "release-1.24"
 	failure.FailureMessage, failure.FailureBody = "exit 127", "hack/ensure-azcli.sh: az: command not found"
 	failure.ArtifactCitations = []Evidence{{Path: "build-log.txt", Quote: failure.FailureBody}}
 	pr := &fakePR{base: ghpr.Base{Branch: failure.SourceBranch, HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
@@ -274,15 +275,27 @@ func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *
 	}
 }
 
-func TestAnalysisPreviewRequiresExplicitMatchingSourceBranch(t *testing.T) {
-	failure := validAnalysisFailure()
-	failure.SourceBranch = ""
+func TestAnalysisPreviewRequiresExplicitMatchingTargetBranch(t *testing.T) {
 	manager := newManager(t, &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}, goodAgent(), Options{})
-	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); err == nil || !strings.Contains(err.Error(), "context is incomplete") {
-		t.Fatalf("missing branch error = %v", err)
+	for _, mutate := range []func(*AnalysisFailure){
+		func(f *AnalysisFailure) { f.SourceBranch = "" },
+		func(f *AnalysisFailure) { f.TargetBranch = "" },
+	} {
+		failure := validAnalysisFailure()
+		mutate(&failure)
+		if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); err == nil || !strings.Contains(err.Error(), "context is incomplete") {
+			t.Fatalf("missing branch error = %v", err)
+		}
 	}
 
-	failure.SourceBranch = "release-1.25"
+	failure := validAnalysisFailure()
+	failure.SourceBranch = "release 1.24\n/cherry-pick main"
+	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); err == nil || !strings.Contains(err.Error(), "valid branch names") {
+		t.Fatalf("invalid branch error = %v", err)
+	}
+
+	failure = validAnalysisFailure()
+	failure.TargetBranch = "release-1.25"
 	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); !errors.Is(err, ErrPreviewBaseChanged) {
 		t.Fatalf("mismatched resolved branch error = %v", err)
 	}
@@ -338,16 +351,25 @@ func TestAnalysisPreviewDedupIdentityIncludesSelectedChatAndRequest(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	changedTarget := validAnalysisFailure()
+	changedTarget.SourceBranch = "release"
+	fifth, err := manager.GenerateAnalysisPreview(t.Context(), changedTarget, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	changedBranch := validAnalysisFailure()
-	changedBranch.SourceBranch = "release"
+	changedBranch.SourceBranch, changedBranch.TargetBranch = "release", "release"
 	pr.base.Branch = "release"
 	fourth, err := manager.GenerateAnalysisPreview(t.Context(), changedBranch, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Snapshot().Key == second.Snapshot().Key || first.Snapshot().Key == third.Snapshot().Key ||
-		first.Snapshot().Key == fourth.Snapshot().Key {
-		t.Fatal("selected chat, preview, or branch identity did not change Fix PR dedup key")
+	keys := map[string]bool{}
+	for _, fix := range []*GeneratedFix{first, second, third, fourth, fifth} {
+		keys[fix.Snapshot().Key] = true
+	}
+	if len(keys) != 5 {
+		t.Fatal("selected chat, preview, tested branch, or target branch identity did not change Fix PR dedup key")
 	}
 }
 
@@ -663,7 +685,7 @@ func TestProviderRequestOperatorSummaryBoundsAndRedacts(t *testing.T) {
 func TestAnalysisPreviewPinsAndTargetsFailureBranch(t *testing.T) {
 	releaseHead := "8caa35df8680f64693a3f76ea3d35c2349ab4828"
 	failure := validAnalysisFailure()
-	failure.SourceBranch = "release-1.25"
+	failure.SourceBranch, failure.TargetBranch = "release-1.25", "release-1.25"
 	failure.GenerationBaseRevision = releaseHead
 	pr := &fakePR{base: ghpr.Base{Branch: "release-1.25", HeadSHA: releaseHead, TreeSHA: "releasetree"}}
 	agent := goodAgent()
@@ -687,6 +709,67 @@ func TestAnalysisPreviewPinsAndTargetsFailureBranch(t *testing.T) {
 		if branch != "release-1.25" {
 			t.Fatalf("resolved branches = %v, want only the failure branch", pr.resolveBranches)
 		}
+	}
+}
+
+func TestAnalysisPreviewTargetsDefaultBranchAndSuggestsBackport(t *testing.T) {
+	mainHead := "c83d69ab8c572a4c00816076222d65262ee690cc"
+	failure := validAnalysisFailure()
+	failure.SourceBranch, failure.TargetBranch = "release-1.24", "main"
+	failure.FailureRevision, failure.GenerationBaseRevision = "a866aca055bcaa205648e81d15c67668179fdfab", mainHead
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: mainHead, TreeSHA: "maintree"}}
+	agent := goodAgent()
+	manager := newManager(t, pr, agent, Options{})
+
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.spec.Repo.Ref != mainHead {
+		t.Fatalf("generation ref = %s, want the default branch head", agent.spec.Repo.Ref)
+	}
+	for _, want := range []string{
+		`observed on branch "release-1.24" at revision ` + failure.FailureRevision,
+		`patching branch "main" at generation base ` + mainHead,
+		"code may differ", `If the causal logic is not present on branch "main", make no change`,
+	} {
+		if !strings.Contains(agent.spec.Instruction, want) {
+			t.Fatalf("instruction missing %q: %s", want, agent.spec.Instruction)
+		}
+	}
+	for _, want := range []string{
+		"observed on `release-1.24` at `" + failure.FailureRevision + "`", "This change targets `main`",
+		"comment `/cherry-pick release-1.24` to backport it", "on branch `release-1.24`", "on branch `main`",
+	} {
+		if !strings.Contains(fix.Description, want) || !strings.Contains(fix.Body, want) {
+			t.Fatalf("description or body missing %q:\n%s\n%s", want, fix.Description, fix.Body)
+		}
+	}
+	for line := range strings.SplitSeq(fix.Body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "/cherry-pick") {
+			t.Fatalf("PR body contains a bare Prow command: %q", line)
+		}
+	}
+	if _, err := manager.OpenFromPreview(t.Context(), fix); err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.opened) != 1 || pr.opened[0].Base == nil || pr.opened[0].Base.Branch != "main" {
+		t.Fatalf("opened=%+v", pr.opened)
+	}
+	for _, branch := range pr.resolveBranches {
+		if branch != "main" {
+			t.Fatalf("resolved branches = %v, want only the target branch", pr.resolveBranches)
+		}
+	}
+
+	tested := validAnalysisFailure()
+	pr.base = ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}
+	fix, err = manager.GenerateAnalysisPreview(t.Context(), tested, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fix.Description, "cherry-pick") || strings.Contains(agent.spec.Instruction, "make no change") {
+		t.Fatalf("same-branch target suggested a backport: %s\n%s", fix.Description, agent.spec.Instruction)
 	}
 }
 

@@ -34,7 +34,28 @@ type ChatFixRunner interface {
 // ChatFixRequestRunner admits exact JUnit chat-to-fix previews for durable
 // asynchronous generation.
 type ChatFixRequestRunner interface {
-	CreateAnalysisFixRequest(context.Context, string, string, string, string, string, ...string) (actions.ActionRequestView, error)
+	CreateAnalysisFixRequest(
+		context.Context, string, string, string, string, actions.FixBranchTarget, string, ...string,
+	) (actions.ActionRequestView, error)
+	AnalysisFixBranches(context.Context, string, string, string) (actions.AnalysisFixBranches, error)
+}
+
+func analysisChatFixBranchesHandler(timeout time.Duration, run ChatFixRequestRunner) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := auth.IdentityFrom(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		branches, err := run.AnalysisFixBranches(ctx, r.PathValue("id"), identity.Login, r.PathValue("requestID"))
+		if err != nil {
+			writeChatFixRequestError(w, r.PathValue("id"), identity.Login, err)
+			return
+		}
+		writeAnalysisChatJSON(w, http.StatusOK, branches)
+	})
 }
 
 func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixRequestRunner) http.Handler {
@@ -47,6 +68,7 @@ func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixReque
 		var body struct {
 			Instruction       string `json:"instruction"`
 			ReplacesRequestID string `json:"replaces_request_id"`
+			BranchTarget      string `json:"branch_target"`
 		}
 		if err := decodeWriteBody(w, r, &body, maxChatFixBodyBytes, false); err != nil {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
@@ -54,7 +76,8 @@ func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixReque
 		}
 		body.Instruction = strings.TrimSpace(body.Instruction)
 		body.ReplacesRequestID = strings.TrimSpace(body.ReplacesRequestID)
-		if len(body.Instruction) > maxChatFixInputBytes || len(body.ReplacesRequestID) > maxChatFixRequestIDBytes {
+		target, err := actions.ParseFixBranchTarget(body.BranchTarget)
+		if err != nil || len(body.Instruction) > maxChatFixInputBytes || len(body.ReplacesRequestID) > maxChatFixRequestIDBytes {
 			http.Error(w, "invalid chat fix request", http.StatusBadRequest)
 			return
 		}
@@ -64,7 +87,7 @@ func createAnalysisChatFixRequestHandler(timeout time.Duration, run ChatFixReque
 		defer cancel()
 		view, err := run.CreateAnalysisFixRequest(
 			ctx,
-			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, body.Instruction, body.ReplacesRequestID,
+			r.PathValue("id"), identity.Login, r.PathValue("requestID"), identity.Token, target, body.Instruction, body.ReplacesRequestID,
 		)
 		if err != nil {
 			writeChatFixRequestError(w, r.PathValue("id"), identity.Login, err)

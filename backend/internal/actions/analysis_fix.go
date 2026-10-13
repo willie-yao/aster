@@ -28,8 +28,41 @@ const (
 	maxAnalysisSourceFiles      = 16
 	maxAnalysisFixCitations     = 16
 	maxAnalysisFailureTextBytes = 8 << 10
-	analysisFixHandoffVersion   = 5
+	analysisFixHandoffVersion   = 6
 )
+
+// FixBranchTarget selects the branch an exact-analysis Fix patches and targets.
+type FixBranchTarget string
+
+const (
+	// FixBranchTested generates against and targets the failure's tested branch.
+	FixBranchTested FixBranchTarget = "tested"
+	// FixBranchDefault generates against and targets the repository's default branch.
+	FixBranchDefault FixBranchTarget = "default"
+)
+
+// Valid reports whether t is a supported choice.
+func (t FixBranchTarget) Valid() bool {
+	return t == FixBranchTested || t == FixBranchDefault
+}
+
+// ParseFixBranchTarget reads a client choice. An omitted choice is the tested branch.
+func ParseFixBranchTarget(value string) (FixBranchTarget, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return FixBranchTested, nil
+	}
+	if target := FixBranchTarget(value); target.Valid() {
+		return target, nil
+	}
+	return "", fmt.Errorf("unsupported Fix branch target %q", value)
+}
+
+// AnalysisFixBranches names the branches an exact-analysis Fix can target.
+type AnalysisFixBranches struct {
+	Tested  string `json:"tested_branch,omitempty"`
+	Default string `json:"default_branch,omitempty"`
+}
 
 // AnalysisIdentity identifies one exact published failure analysis.
 type AnalysisIdentity struct {
@@ -86,6 +119,8 @@ type AnalysisFixInput struct {
 	FailureRevision           string
 	GenerationBaseRevision    string
 	SourceBranch              string
+	BranchTarget              FixBranchTarget
+	TargetBranch              string
 	AssistantAnswer           string
 	AssistantUnverified       bool
 	AssistantUnverifiedReason string
@@ -105,6 +140,7 @@ type analysisSourceRevisionClient interface {
 }
 
 type analysisSourceCompatibility struct {
+	TargetBranch           string
 	GenerationBaseRevision string
 }
 
@@ -207,29 +243,71 @@ func osReadFile(dataDir, jobID string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(dataDir, "jobs", models.JobDataFilename(jobID)))
 }
 
-// PreflightAnalysisFixSource binds a fix request to the current branch base.
-func (s *Service) PreflightAnalysisFixSource(
-	ctx context.Context, repo sourceinvestigation.Repository, targetBranch string,
-) (string, error) {
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, targetBranch)
+// preflightAnalysisFixSource binds a fix request to the current base of the selected branch.
+func (s *Service) preflightAnalysisFixSource(
+	ctx context.Context, repo sourceinvestigation.Repository, testedBranch string, target FixBranchTarget,
+) (analysisSourceCompatibility, error) {
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, testedBranch, target)
 	if err != nil {
 		if code, ok := ReasonCodeFrom(err); ok {
-			return "", withReason(code, ErrPreviewRejected, err.Error())
+			return analysisSourceCompatibility{}, withReason(code, ErrPreviewRejected, err.Error())
 		}
-		return "", fmt.Errorf("%w: exact analysis Fix repository/base preflight: %w", ErrPreviewRejected, err)
+		return analysisSourceCompatibility{}, fmt.Errorf("%w: exact analysis Fix repository/base preflight: %w", ErrPreviewRejected, err)
 	}
-	return compatibility.GenerationBaseRevision, nil
+	return compatibility, nil
+}
+
+// ResolveAnalysisFixBranches reports the tested branch and the Fix repository's
+// default branch. The default branch is omitted when the tested branch is unknown.
+func (s *Service) ResolveAnalysisFixBranches(
+	ctx context.Context, repo sourceinvestigation.Repository, testedBranch string,
+) (AnalysisFixBranches, error) {
+	if err := s.requireFixActions(); err != nil {
+		return AnalysisFixBranches{}, err
+	}
+	branches := AnalysisFixBranches{Tested: strings.TrimSpace(testedBranch)}
+	if branches.Tested == "" {
+		return branches, nil
+	}
+	if err := sourceinvestigation.ValidateRepository(repo); err != nil {
+		return AnalysisFixBranches{}, err
+	}
+	base, err := s.analysisRevisionClient().ResolveBase(ctx, repo.Owner, repo.Name, "")
+	if err != nil {
+		return AnalysisFixBranches{}, fmt.Errorf("resolving the default branch: %w", err)
+	}
+	branches.Default = base.Branch
+	return branches, nil
+}
+
+func (s *Service) analysisRevisionClient() analysisSourceRevisionClient {
+	if s.sourceRevisionClient != nil {
+		return s.sourceRevisionClient
+	}
+	return ghpr.NewClient(nil, s.ai.SourceToken)
 }
 
 func (s *Service) verifyAnalysisSourceCompatibility(
-	ctx context.Context, failureRepo sourceinvestigation.Repository, targetBranch string,
+	ctx context.Context, failureRepo sourceinvestigation.Repository, testedBranch string, target FixBranchTarget,
 ) (analysisSourceCompatibility, error) {
 	if err := sourceinvestigation.ValidateRepository(failureRepo); err != nil {
 		return analysisSourceCompatibility{}, err
 	}
-	targetBranch = strings.TrimSpace(targetBranch)
-	if targetBranch == "" {
+	testedBranch = strings.TrimSpace(testedBranch)
+	if testedBranch == "" {
 		return analysisSourceCompatibility{}, withReason(ReasonSourceBranchUnknown, ErrPreviewRejected, "")
+	}
+	branch := testedBranch
+	switch target {
+	case FixBranchTested:
+	case FixBranchDefault:
+		// The tested branch is not resolved here but is still named in the PR.
+		if !ghpr.ValidBranchName(testedBranch) {
+			return analysisSourceCompatibility{}, withReason(ReasonSourceBranchUnknown, ErrPreviewRejected, "")
+		}
+		branch = ""
+	default:
+		return analysisSourceCompatibility{}, fmt.Errorf("unsupported Fix branch target %q", target)
 	}
 	if s.cfg == nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("project configuration is unavailable")
@@ -247,22 +325,23 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if !ok {
 		return analysisSourceCompatibility{}, fmt.Errorf("failure revision is not an immutable full commit")
 	}
-	client := s.sourceRevisionClient
-	if client == nil {
-		client = ghpr.NewClient(nil, s.ai.SourceToken)
-	}
-	base, err := client.ResolveBase(ctx, failureRepo.Owner, failureRepo.Name, targetBranch)
+	client := s.analysisRevisionClient()
+	base, err := client.ResolveBase(ctx, failureRepo.Owner, failureRepo.Name, branch)
 	if err != nil {
 		return analysisSourceCompatibility{}, fmt.Errorf("resolving current generation base: %w", err)
 	}
-	if base.Branch != targetBranch {
+	switch {
+	case target == FixBranchTested && base.Branch != testedBranch:
 		return analysisSourceCompatibility{}, fmt.Errorf("resolved generation base branch does not match the failure branch")
+	case target == FixBranchDefault && (base.Branch == "" || base.Branch == testedBranch):
+		return analysisSourceCompatibility{}, fmt.Errorf("the default branch is the tested branch; target the tested branch instead")
 	}
 	generationBase, ok := buildsource.NormalizeRevision(base.HeadSHA)
 	if !ok {
 		return analysisSourceCompatibility{}, fmt.Errorf("generation base is not an immutable full commit")
 	}
-	if !strings.EqualFold(failureRevision, generationBase) {
+	// Another branch has its own history, so ancestry only applies to the tested branch.
+	if target == FixBranchTested && !strings.EqualFold(failureRevision, generationBase) {
 		contains, _, err := client.CompareCommits(ctx, failureRepo.Owner, failureRepo.Name, failureRevision, generationBase)
 		if err != nil {
 			return analysisSourceCompatibility{}, fmt.Errorf("checking failure revision ancestry: %w", err)
@@ -271,7 +350,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 			return analysisSourceCompatibility{}, withReason(ReasonSourceRevisionDiverged, ErrPreviewRejected, "")
 		}
 	}
-	return analysisSourceCompatibility{GenerationBaseRevision: generationBase}, nil
+	return analysisSourceCompatibility{TargetBranch: base.Branch, GenerationBaseRevision: generationBase}, nil
 }
 
 // PreviewAnalysisFix creates a confirmable preview for one exact selected chat answer.
@@ -346,15 +425,14 @@ func (s *Service) PreviewAnalysisFix(
 	if !strings.EqualFold(destination.Repo.Owner, repository.Owner) || !strings.EqualFold(destination.Repo.Name, repository.Name) {
 		return PreviewResult{}, fmt.Errorf("%w: failure source does not match the configured fix destination", ErrPreviewRejected)
 	}
-	targetBranch, _ := buildsource.Branch(subject.Build, repository.Owner, repository.Name)
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, targetBranch)
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, input.SourceBranch, input.BranchTarget)
 	if err != nil {
 		if code, ok := ReasonCodeFrom(err); ok {
 			return PreviewResult{}, withReason(code, ErrPreviewRejected, err.Error())
 		}
 		return PreviewResult{}, fmt.Errorf("%w: checking exact analysis Fix repository/base: %w", ErrPreviewRejected, err)
 	}
-	if !strings.EqualFold(input.FailureRevision, repository.Revision) ||
+	if !strings.EqualFold(input.FailureRevision, repository.Revision) || compatibility.TargetBranch != input.TargetBranch ||
 		!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
@@ -369,9 +447,7 @@ func (s *Service) PreviewAnalysisFix(
 	if targetConfig != input.TargetConfig {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
-	generationHash := analysisPreviewGenerationHash(
-		subject, input.HandoffHash, repository, targetBranch, compatibility.GenerationBaseRevision, targetConfig,
-	)
+	generationHash := analysisPreviewGenerationHash(subject, input, targetConfig)
 	token, existing, acquired, err := s.previewStore.reserveIdempotent(
 		owner, input.PreviewRequestHash, generationHash, s.analysisPreviewLease(),
 	)
@@ -401,7 +477,7 @@ func (s *Service) PreviewAnalysisFix(
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	failure := analysisFailureForGeneration(subject, input, targetBranch, compatibility.GenerationBaseRevision)
+	failure := analysisFailureForGeneration(subject, input)
 	gf, err := mgr.GenerateAnalysisPreview(ctx, failure, instruction)
 	if err != nil {
 		return PreviewResult{}, safeAnalysisFixPreviewError(err)
@@ -439,9 +515,7 @@ func (s *Service) analysisPreviewLease() time.Duration {
 	return s.requestTimeout + 30*time.Second
 }
 
-func analysisFailureForGeneration(
-	subject *AnalysisActionSubject, input AnalysisFixInput, targetBranch, generationBaseRevision string,
-) fixpr.AnalysisFailure {
+func analysisFailureForGeneration(subject *AnalysisActionSubject, input AnalysisFixInput) fixpr.AnalysisFailure {
 	return fixpr.AnalysisFailure{
 		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
 		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, Source: subject.Identity.Source,
@@ -455,27 +529,20 @@ func analysisFailureForGeneration(
 		ProposedRevision:  input.ProposedRevision,
 		ArtifactCitations: slices.Clone(input.ArtifactCitations), EvidenceWarnings: slices.Clone(input.EvidenceWarnings),
 		SourceRepository: subject.SourceRepository.Owner + "/" + subject.SourceRepository.Name,
-		SourceBranch:     targetBranch,
-		FailureRevision:  subject.SourceRepository.Revision, GenerationBaseRevision: generationBaseRevision,
+		SourceBranch:     input.SourceBranch, TargetBranch: input.TargetBranch,
+		FailureRevision: subject.SourceRepository.Revision, GenerationBaseRevision: input.GenerationBaseRevision,
 		SourceHints: slices.Clone(input.SourceHints),
 	}
 }
 
-func analysisPreviewGenerationHash(
-	subject *AnalysisActionSubject,
-	requestHash string,
-	repo sourceinvestigation.Repository,
-	sourceBranch string,
-	generationBaseRevision string,
-	targetConfig string,
-) string {
+func analysisPreviewGenerationHash(subject *AnalysisActionSubject, input AnalysisFixInput, targetConfig string) string {
 	payload, _ := json.Marshal(struct {
-		AnalysisID, AnalysisHash, AnalysisContentHash, RequestHash string
-		Repository                                                 sourceinvestigation.Repository
-		SourceBranch, GenerationBaseRevision, TargetConfig         string
+		AnalysisID, AnalysisHash, AnalysisContentHash, RequestHash       string
+		Repository                                                       sourceinvestigation.Repository
+		SourceBranch, TargetBranch, GenerationBaseRevision, TargetConfig string
 	}{
-		subject.ID, subject.ContentHash, subject.AnalysisContentHash, requestHash,
-		repo, sourceBranch, generationBaseRevision, targetConfig,
+		subject.ID, subject.ContentHash, subject.AnalysisContentHash, input.HandoffHash,
+		input.SourceRepository, input.SourceBranch, input.TargetBranch, input.GenerationBaseRevision, targetConfig,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
@@ -561,6 +628,7 @@ func validateAnalysisFixCandidateInput(input AnalysisFixInput) error {
 	if strings.TrimSpace(input.ChatSessionID) == "" || strings.TrimSpace(input.ChatRequestID) == "" ||
 		strings.TrimSpace(input.ChatResponseHash) == "" || strings.TrimSpace(input.PreviewRequestHash) == "" || strings.TrimSpace(input.AnalysisContentHash) == "" ||
 		strings.TrimSpace(input.AssistantAnswer) == "" || sourceinvestigation.ValidateRepository(input.SourceRepository) != nil ||
+		!input.BranchTarget.Valid() ||
 		len(input.ArtifactCitations) > maxAnalysisFixCitations || len(input.AssistantUnverifiedReason) > 512 || len(input.EvidenceWarnings) > 20 {
 		return fmt.Errorf("invalid exact analysis fix request")
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
 type chatStore interface {
@@ -25,9 +26,12 @@ type fixPreviewer interface {
 }
 
 type analysisFixRequester interface {
-	FindAnalysisFixRequest(string, string, string, string) (actions.ActionRequestView, bool, error)
+	FindAnalysisFixRequest(string, string, string, actions.FixBranchTarget, string) (actions.ActionRequestView, bool, error)
 	CreateAnalysisFixRequest(context.Context, actions.AnalysisFixInput, string, string, string, ...string) (actions.ActionRequestView, error)
+	ResolveAnalysisFixBranches(context.Context, sourceinvestigation.Repository, string) (actions.AnalysisFixBranches, error)
 }
+
+var _ analysisFixRequester = (*actions.Service)(nil)
 
 // Service validates shared chat context before fix generation.
 type Service struct {
@@ -92,16 +96,20 @@ func (s *Service) PreviewChatFix(
 // CreateAnalysisFixRequest admits one exact failure chat finding for durable
 // background preview generation.
 func (s *Service) CreateAnalysisFixRequest(
-	ctx context.Context, sessionID, owner, requestID, userToken, instruction string, replacesRequestIDs ...string,
+	ctx context.Context, sessionID, owner, requestID, userToken string, target actions.FixBranchTarget, instruction string,
+	replacesRequestIDs ...string,
 ) (actions.ActionRequestView, error) {
 	instruction = strings.TrimSpace(instruction)
 	if len(instruction) > 4096 {
 		return actions.ActionRequestView{}, fmt.Errorf("%w: instruction must not exceed 4096 bytes", analysischat.ErrInvalidRequest)
 	}
+	if !target.Valid() {
+		return actions.ActionRequestView{}, fmt.Errorf("%w: unsupported Fix branch target", analysischat.ErrInvalidRequest)
+	}
 	if s.requests == nil {
 		return actions.ActionRequestView{}, fmt.Errorf("%w: asynchronous exact analysis fix previews are unavailable", analysischat.ErrInvalidRequest)
 	}
-	if request, found, err := s.requests.FindAnalysisFixRequest(sessionID, requestID, owner, instruction); err != nil || found {
+	if request, found, err := s.requests.FindAnalysisFixRequest(sessionID, requestID, owner, target, instruction); err != nil || found {
 		return request, err
 	}
 	candidate, err := s.chat.AnalysisFixCandidate(sessionID, owner, requestID)
@@ -111,10 +119,24 @@ func (s *Service) CreateAnalysisFixRequest(
 	if err := s.chat.RetainForFix(sessionID, owner, requestID); err != nil {
 		return actions.ActionRequestView{}, err
 	}
-	return s.requests.CreateAnalysisFixRequest(ctx, exactAnalysisFixInput(candidate, instruction), owner, userToken, instruction, replacesRequestIDs...)
+	return s.requests.CreateAnalysisFixRequest(
+		ctx, exactAnalysisFixInput(candidate, target, instruction), owner, userToken, instruction, replacesRequestIDs...,
+	)
 }
 
-func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction string) actions.AnalysisFixInput {
+// AnalysisFixBranches reports the branches one exact failure chat finding can target.
+func (s *Service) AnalysisFixBranches(ctx context.Context, sessionID, owner, requestID string) (actions.AnalysisFixBranches, error) {
+	if s.requests == nil {
+		return actions.AnalysisFixBranches{}, fmt.Errorf("%w: asynchronous exact analysis fix previews are unavailable", analysischat.ErrInvalidRequest)
+	}
+	candidate, err := s.chat.AnalysisFixCandidate(sessionID, owner, requestID)
+	if err != nil {
+		return actions.AnalysisFixBranches{}, err
+	}
+	return s.requests.ResolveAnalysisFixBranches(ctx, candidate.SourceRepositorySnapshot, candidate.SourceBranch)
+}
+
+func exactAnalysisFixInput(candidate analysischat.FixCandidate, target actions.FixBranchTarget, instruction string) actions.AnalysisFixInput {
 	input := actions.AnalysisFixInput{
 		Origin: analysischat.FixOrigin{Analysis: candidate.Analysis, Original: candidate.Original, FixTarget: candidate.FixTarget},
 		Identity: actions.AnalysisIdentity{
@@ -123,10 +145,12 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 			JUnitFile: candidate.FixTarget.JUnitFile, AnalysisGeneratedAt: candidate.FixTarget.AnalysisGeneratedAt,
 		},
 		ChatSessionID: candidate.SessionID, ChatRequestID: candidate.RequestID, ChatResponseHash: candidate.ResponseHash,
-		PreviewRequestHash: exactPreviewRequestHash(candidate, instruction), AnalysisContentHash: candidate.AnalysisContentHash,
-		SourceRepository: candidate.SourceRepositorySnapshot,
-		SourceBranch:     candidate.SourceBranch,
-		AssistantAnswer:  candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		PreviewRequestHash:  actions.AnalysisFixRequestHash(candidate.SessionID, candidate.RequestID, target, instruction),
+		AnalysisContentHash: candidate.AnalysisContentHash,
+		SourceRepository:    candidate.SourceRepositorySnapshot,
+		SourceBranch:        candidate.SourceBranch,
+		BranchTarget:        target,
+		AssistantAnswer:     candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
 		AssistantUnverified:       candidate.AssistantUnverified,
 		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
 		EvidenceWarnings:          append([]string(nil), candidate.EvidenceWarnings...),
@@ -135,10 +159,6 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, instruction stri
 		input.ProposedRevision = &fixpr.RevisionContext{RootCause: candidate.ProposedRevision.RootCause, SuggestedFix: candidate.ProposedRevision.SuggestedFix}
 	}
 	return input
-}
-
-func exactPreviewRequestHash(candidate analysischat.FixCandidate, instruction string) string {
-	return actions.AnalysisFixRequestHash(candidate.SessionID, candidate.RequestID, instruction)
 }
 
 func artifactEvidence(citations []analysischat.Citation) []fixpr.Evidence {

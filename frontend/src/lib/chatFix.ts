@@ -1,7 +1,7 @@
 import type { ActionPreview, ActionRequest } from "../types/actions";
 import { actionErrorMessage, cancelActionRequest, loadLatestActionRequest } from "./actionRequests.js";
 
-const API_BASE = import.meta.env.BASE_URL;
+const API_BASE = import.meta.env?.BASE_URL ?? "/";
 const maxInstructionBytes = 4096;
 const utf8Encoder = new TextEncoder();
 
@@ -14,6 +14,32 @@ export interface ChatFixRequest extends Omit<ActionRequest, "kind" | "preview"> 
   preview?: ChatFixPreview;
 }
 
+export type ChatFixBranchTarget = "tested" | "default";
+
+export interface ChatFixBranches {
+  tested_branch?: string;
+  default_branch?: string;
+}
+
+/** Returns both branch names only when the tested branch differs from the default branch. */
+export function chatFixBranchChoice(branches: ChatFixBranches | null): { tested: string; default: string } | null {
+  const tested = branches?.tested_branch?.trim();
+  const defaultBranch = branches?.default_branch?.trim();
+  if (!tested || !defaultBranch || tested === defaultBranch) return null;
+  return { tested, default: defaultBranch };
+}
+
+export function analysisChatFixRequestBody(
+  instruction: string,
+  branchTarget: ChatFixBranchTarget,
+  replacesRequestID?: string,
+): Record<string, string> {
+  return {
+    branch_target: branchTarget,
+    ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
+    ...(replacesRequestID ? { replaces_request_id: replacesRequestID } : {}),
+  };
+}
 
 export function chatFixInstructionBytes(value: string): number {
   return utf8Encoder.encode(value).byteLength;
@@ -58,10 +84,24 @@ export async function previewChatFix(
   return response.json() as Promise<ChatFixPreview>;
 }
 
+export async function loadAnalysisChatFixBranches(
+  sessionID: string,
+  chatRequestID: string,
+  signal?: AbortSignal,
+): Promise<ChatFixBranches> {
+  const response = await fetch(
+    `${API_BASE}api/analysis-chat/sessions/${encodeURIComponent(sessionID)}/requests/${encodeURIComponent(chatRequestID)}/fix/branches`,
+    { credentials: "same-origin", cache: "no-store", signal },
+  );
+  if (!response.ok) throw new Error(await actionErrorMessage(response));
+  return response.json() as Promise<ChatFixBranches>;
+}
+
 export async function createAnalysisChatFixRequest(
   sessionID: string,
   chatRequestID: string,
   instruction: string,
+  branchTarget: ChatFixBranchTarget,
   replacesRequestID?: string,
   signal?: AbortSignal,
 ): Promise<ChatFixRequest> {
@@ -73,10 +113,7 @@ export async function createAnalysisChatFixRequest(
       cache: "no-store",
       signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
-        ...(replacesRequestID ? { replaces_request_id: replacesRequestID } : {}),
-      }),
+      body: JSON.stringify(analysisChatFixRequestBody(instruction, branchTarget, replacesRequestID)),
     },
   );
   if (!response.ok) throw new Error(await actionErrorMessage(response));

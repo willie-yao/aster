@@ -363,7 +363,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 	if len(replacesRequestIDs) == 1 {
 		replacesRequestID = strings.TrimSpace(replacesRequestIDs[0])
 	}
-	if existing, found, err := s.FindAnalysisFixRequest(input.ChatSessionID, input.ChatRequestID, owner, instruction); err != nil || found {
+	if existing, found, err := s.FindAnalysisFixRequest(input.ChatSessionID, input.ChatRequestID, owner, input.BranchTarget, instruction); err != nil || found {
 		return existing, err
 	}
 	input, err := s.prepareAnalysisFix(ctx, input, owner, instruction)
