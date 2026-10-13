@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,6 +145,13 @@ type analysisSourceCompatibility struct {
 	GenerationBaseRevision string
 }
 
+var errAnalysisSourceUnavailable = errors.New("GitHub source check unavailable; retry the action")
+
+func analysisSourceCheckError(operation string, repo sourceinvestigation.Repository, err error) error {
+	cause := fmt.Errorf("%w: %s in %s/%s: %w", errAnalysisSourceUnavailable, operation, repo.Owner, repo.Name, err)
+	return withReason(ReasonGenerationFailed, cause, cause.Error())
+}
+
 const (
 	analysisWarningCritique            = "The original analysis critique did not pass."
 	analysisWarningSuggestedFix        = "The original analysis has no suggested fix."
@@ -249,8 +257,8 @@ func (s *Service) preflightAnalysisFixSource(
 ) (analysisSourceCompatibility, error) {
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repo, testedBranch, target)
 	if err != nil {
-		if code, ok := ReasonCodeFrom(err); ok {
-			return analysisSourceCompatibility{}, withReason(code, ErrPreviewRejected, err.Error())
+		if _, ok := ReasonCodeFrom(err); ok {
+			return analysisSourceCompatibility{}, err
 		}
 		return analysisSourceCompatibility{}, fmt.Errorf("%w: exact analysis Fix repository/base preflight: %w", ErrPreviewRejected, err)
 	}
@@ -274,7 +282,7 @@ func (s *Service) ResolveAnalysisFixBranches(
 	}
 	base, err := s.analysisRevisionClient().ResolveBase(ctx, repo.Owner, repo.Name, "")
 	if err != nil {
-		return AnalysisFixBranches{}, fmt.Errorf("resolving the default branch: %w", err)
+		return AnalysisFixBranches{}, analysisSourceCheckError("resolving the default branch", repo, err)
 	}
 	branches.Default = base.Branch
 	return branches, nil
@@ -328,7 +336,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	client := s.analysisRevisionClient()
 	base, err := client.ResolveBase(ctx, failureRepo.Owner, failureRepo.Name, branch)
 	if err != nil {
-		return analysisSourceCompatibility{}, fmt.Errorf("resolving current generation base: %w", err)
+		return analysisSourceCompatibility{}, analysisSourceCheckError("resolving current generation base", failureRepo, err)
 	}
 	switch {
 	case target == FixBranchTested && base.Branch != testedBranch:
@@ -344,7 +352,7 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 	if target == FixBranchTested && !strings.EqualFold(failureRevision, generationBase) {
 		contains, _, err := client.CompareCommits(ctx, failureRepo.Owner, failureRepo.Name, failureRevision, generationBase)
 		if err != nil {
-			return analysisSourceCompatibility{}, fmt.Errorf("checking failure revision ancestry: %w", err)
+			return analysisSourceCompatibility{}, analysisSourceCheckError("checking failure revision ancestry", failureRepo, err)
 		}
 		if !contains {
 			return analysisSourceCompatibility{}, withReason(ReasonSourceRevisionDiverged, ErrPreviewRejected, "")
@@ -427,8 +435,8 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, input.SourceBranch, input.BranchTarget)
 	if err != nil {
-		if code, ok := ReasonCodeFrom(err); ok {
-			return PreviewResult{}, withReason(code, ErrPreviewRejected, err.Error())
+		if _, ok := ReasonCodeFrom(err); ok {
+			return PreviewResult{}, err
 		}
 		return PreviewResult{}, fmt.Errorf("%w: checking exact analysis Fix repository/base: %w", ErrPreviewRejected, err)
 	}

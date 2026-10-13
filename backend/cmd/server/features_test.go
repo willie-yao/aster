@@ -2,13 +2,90 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/server"
+	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
+
+type sourceReadTransport func(*http.Request) (*http.Response, error)
+
+func (f sourceReadTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestEnableActionsAuthenticatesSourceChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, read, bot, github, want string
+	}{
+		{name: "source override", source: "source-token", read: "read-token", bot: "bot-token", github: "github-token", want: "source-token"},
+		{name: "read preference", read: "read-token", bot: "bot-token", github: "github-token", want: "read-token"},
+		{name: "bot fallback", bot: "bot-token", github: "github-token", want: "bot-token"},
+		{name: "GitHub fallback", github: "github-token", want: "github-token"},
+		{name: "anonymous only without credentials"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SOURCE_INVESTIGATION_GITHUB_TOKEN", tc.source)
+			t.Setenv("GITHUB_READ_TOKEN", tc.read)
+			t.Setenv("BOT_TOKEN", tc.bot)
+			t.Setenv("GITHUB_TOKEN", tc.github)
+			t.Setenv("ACTION_TIMEOUT", "40m")
+			t.Setenv("AI_API", "")
+			t.Setenv("AI_ENDPOINT", "")
+			t.Setenv("AI_MODEL", "")
+			original := http.DefaultTransport
+			defer func() { http.DefaultTransport = original }()
+			var calls int
+			http.DefaultTransport = sourceReadTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				want := ""
+				if tc.want != "" {
+					want = "Bearer " + tc.want
+				}
+				if r.Header.Get("Authorization") != want {
+					t.Errorf("source request used the wrong credential")
+				}
+				var body string
+				switch r.URL.Path {
+				case "/repos/up/stream":
+					body = `{"default_branch":"main"}`
+				case "/repos/up/stream/git/ref/heads/main":
+					body = `{"object":{"sha":"` + strings.Repeat("a", 40) + `"}}`
+				case "/repos/up/stream/git/commits/" + strings.Repeat("a", 40):
+					body = `{"tree":{"sha":"tree"}}`
+				default:
+					return nil, fmt.Errorf("unexpected source request: %s", r.URL.Path)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+			})
+			cfg := &project.Config{AI: &project.AI{FixPRs: &project.FixPRs{
+				Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
+			}}}
+			ctx, cancel := context.WithCancel(t.Context())
+			service, err := enableActions(ctx, &server.Options{}, cfg, t.TempDir(), nil)
+			if err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+			defer func() {
+				cancel()
+				if err := service.Wait(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}()
+			repo := sourceinvestigation.Repository{Owner: "up", Name: "stream", Revision: strings.Repeat("a", 40)}
+			branches, err := service.ResolveAnalysisFixBranches(t.Context(), repo, "release-1.24")
+			if err != nil || branches.Default != "main" || calls != 3 {
+				t.Fatalf("branches=%+v requests=%d err=%v", branches, calls, err)
+			}
+		})
+	}
+}
 
 func TestEnableActionsConfiguresGenerationTimeouts(t *testing.T) {
 	for _, testCase := range []struct {

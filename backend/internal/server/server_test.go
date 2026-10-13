@@ -1485,8 +1485,41 @@ func TestWriteActionErrorLogsSanitizedInconclusiveCause(t *testing.T) {
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "source verification was inconclusive") {
 		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(logs.String(), "source verification inconclusive") || strings.Contains(logs.String(), "private.example") {
+	if !strings.Contains(logs.String(), "reason=source_verification_inconclusive") || strings.Contains(logs.String(), "private.example") {
 		t.Fatalf("operator log = %q", logs.String())
+	}
+}
+
+func TestWriteActionErrorLogsEveryConfirmFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "changed evidence", err: actions.ErrPreviewTargetChanged},
+		{name: "missing preview", err: actions.ErrPreviewNotFound},
+		{name: "missing request", err: actions.ErrRequestNotFound},
+		{name: "missing subject", err: actions.ErrNotFound},
+		{name: "pending", err: actions.ErrPreviewPending},
+		{name: "superseded", err: actions.ErrPreviewSuperseded},
+		{name: "unknown outcome", err: actions.ErrPreviewOutcomeUnknown},
+		{name: "rejected draft", err: actions.ErrPreviewRejected},
+		{name: "GitHub failure", err: errors.New("creating branch refs/heads/ai-fix-1 in forker/r: 404 Not Found; token=private-token https://private.example\nnext")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&logs)
+			defer log.SetOutput(previous)
+			writeActionError(httptest.NewRecorder(), "confirm", "alice", tc.err)
+			got := logs.String()
+			if !strings.Contains(got, "action failed for confirm (by alice, reason="+string(actions.ReasonCodeOf(tc.err))) ||
+				!strings.Contains(got, safeOperatorError(tc.err)) {
+				t.Fatalf("operator log = %q", got)
+			}
+			if strings.Contains(got, "private-token") || strings.Contains(got, "private.example") {
+				t.Fatalf("operator log leaked credentials: %q", got)
+			}
+		})
 	}
 }
 

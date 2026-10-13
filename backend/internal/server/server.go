@@ -582,11 +582,12 @@ func writeActionReason(w http.ResponseWriter, status int, code actions.ReasonCod
 	_ = json.NewEncoder(w).Encode(actionReasonResponse{Code: code, Message: actions.ReasonMessage(code)})
 }
 
-// writeActionError maps an action error to a status code without leaking the
-// token: an unknown failure or expired preview is 404, everything else is 422.
+// writeActionError logs a safe operator reason and returns a public error code.
 func writeActionError(w http.ResponseWriter, id, login string, err error) {
+	code := actions.ReasonCodeOf(err)
+	log.Printf("action failed for %s (by %s, reason=%s): %s", id, login, code, safeOperatorError(err))
 	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) || errors.Is(err, actions.ErrRequestNotFound) {
-		writeActionReason(w, http.StatusNotFound, actions.ReasonCodeOf(err))
+		writeActionReason(w, http.StatusNotFound, code)
 		return
 	}
 	if errors.Is(err, actions.ErrPreviewPending) {
@@ -601,13 +602,9 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "GitHub action outcome is unknown", http.StatusConflict)
 		return
 	}
-	code := actions.ReasonCodeOf(err)
 	switch code {
 	case actions.ReasonAlreadyPresent, actions.ReasonRecovered, actions.ReasonObserving, actions.ReasonVerifiedFixed,
 		actions.ReasonEvidenceUnavailable, actions.ReasonSourceVerificationInconclusive:
-		if code == actions.ReasonSourceVerificationInconclusive {
-			log.Printf("action source verification inconclusive for %s (by %s): %s", id, login, safeOperatorError(err))
-		}
 		writeActionReason(w, http.StatusConflict, code)
 		return
 	case actions.ReasonNonSystemic, actions.ReasonInvestigationRequired, actions.ReasonNoReviewablePatch,
@@ -615,7 +612,6 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		writeActionReason(w, http.StatusUnprocessableEntity, code)
 		return
 	default:
-		log.Printf("action failed for %s (by %s): %s", id, login, safeOperatorError(err))
 		writeActionReason(w, http.StatusUnprocessableEntity, actions.ReasonGenerationFailed)
 	}
 }

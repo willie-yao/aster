@@ -232,6 +232,115 @@ func TestDefaultBranchAnalysisFixRequestIsSeparateAndRechecksBase(t *testing.T) 
 	if _, err := service.Confirm(t.Context(), defaultReady.Preview.Token, "alice", "token"); !errors.Is(err, ErrPreviewTargetChanged) {
 		t.Fatalf("moved default branch confirmation = %v", err)
 	}
+	if _, err := service.previewStore.take("alice", defaultReady.Preview.Token); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("changed base preview was retained: %v", err)
+	}
+}
+
+func TestAnalysisConfirmSourceFailureKeepsRetryablePreview(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		innerCheck bool
+		ancestry   bool
+	}{
+		{name: "rate limit", err: errors.New("403 Forbidden: API rate limit exceeded")},
+		{name: "server error", err: errors.New("502 Bad Gateway")},
+		{name: "network error", err: errors.New("connection reset by peer")},
+		{name: "timeout", err: context.DeadlineExceeded},
+		{name: "inner check", err: errors.New("503 Service Unavailable"), innerCheck: true},
+		{name: "ancestry error", err: errors.New("403 Forbidden"), ancestry: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, client, _ := defaultBranchRequestService(t)
+			input := exactBuildRequestInput()
+			input.BranchTarget = FixBranchDefault
+			if tc.ancestry {
+				input.BranchTarget = FixBranchTested
+				client.branchBases["release-1.24"] = ghpr.Base{
+					Branch: "release-1.24", HeadSHA: capzReleaseBaseRevision, TreeSHA: "tree",
+				}
+				client.contains = true
+			}
+			handoff, err := service.prepareAnalysisFix(t.Context(), input, "alice", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			preview, err := handoffTestPreview(t, service, handoff, "alice", &calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.ancestry {
+				client.compareErr = tc.err
+			} else {
+				next := len(client.branchRequests) + 1
+				if tc.innerCheck {
+					next++
+				}
+				client.resolveErrors = map[int]error{next: tc.err}
+			}
+			url, err := service.Confirm(t.Context(), preview.Token, "alice", "write-token")
+			if url != "" || !errors.Is(err, tc.err) || !errors.Is(err, errAnalysisSourceUnavailable) ||
+				errors.Is(err, ErrPreviewTargetChanged) || ReasonCodeOf(err) != ReasonGenerationFailed {
+				t.Fatalf("confirmation=%q err=%v code=%q", url, err, ReasonCodeOf(err))
+			}
+			state, _, err := service.previewStore.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := state.Previews[tokenHash(preview.Token)]
+			if record == nil || record.Status != previewStatusReady || record.AttemptID != "" || record.LeaseExpires != "" {
+				t.Fatalf("preview after failed check = %+v", record)
+			}
+			client.resolveErrors, client.compareErr = nil, nil
+			restarted := NewService(service.cfg, service.dataDir, AIConfig{})
+			restarted.sourceRevisionClient = client
+			entry, url, attempt, reconcile, err := restarted.beginConfirm("alice", preview.Token, time.Minute)
+			if err != nil || url != "" || reconcile {
+				t.Fatalf("retry after restart=%q reconcile=%t err=%v", url, reconcile, err)
+			}
+			if err := restarted.validateAnalysisPreview(t.Context(), "alice", *entry.analysisBinding); err != nil {
+				t.Fatalf("recovered source check = %v", err)
+			}
+			if err := restarted.finishConfirm("alice", preview.Token, attempt, "https://github.com/up/stream/pull/1", nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAnalysisSourceFailuresRemainOperationalAtAdmissionAndGeneration(t *testing.T) {
+	service, client, _ := defaultBranchRequestService(t)
+	input := exactBuildRequestInput()
+	input.BranchTarget = FixBranchDefault
+	handoff, err := service.prepareAnalysisFix(t.Context(), input, "alice", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("403 Forbidden: API rate limit exceeded")
+	client.resolveErr = cause
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "admission", run: func() error {
+			_, err := service.prepareAnalysisFix(t.Context(), input, "alice", "")
+			return err
+		}},
+		{name: "generation", run: func() error {
+			_, err := service.PreviewAnalysisFix(t.Context(), handoff, "alice", "write-token", "")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if !errors.Is(err, cause) || errors.Is(err, ErrPreviewRejected) ||
+				errors.Is(err, ErrPreviewTargetChanged) || ReasonCodeOf(err) != ReasonGenerationFailed {
+				t.Fatalf("error=%v code=%q", err, ReasonCodeOf(err))
+			}
+		})
+	}
 }
 
 func TestAnalysisFixHandoffRejectsInconsistentBranchTarget(t *testing.T) {

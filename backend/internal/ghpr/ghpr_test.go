@@ -39,6 +39,8 @@ type fakeGitHub struct {
 	forkGETStatus int
 	existingFork  *forkRepository
 	treeOwnerRepo string // owner/repo path the tree was created under
+	postFailPath  string
+	postFailCode  int
 }
 
 func newFakeGitHub(t *testing.T, defaultBranch string) *fakeGitHub {
@@ -52,6 +54,10 @@ func newFakeGitHub(t *testing.T, defaultBranch string) *fakeGitHub {
 func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	p := r.URL.Path
+	if r.Method == http.MethodPost && f.postFailPath != "" && strings.HasSuffix(p, f.postFailPath) {
+		http.Error(w, http.StatusText(f.postFailCode), f.postFailCode)
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/user"):
 		writeJSON(w, 200, map[string]any{"login": "forker"})
@@ -208,6 +214,57 @@ func TestOpenPR_HappyPath(t *testing.T) {
 	}
 	if f.commitAuthor != nil {
 		t.Errorf("commit author should be unset by default, got %v", f.commitAuthor)
+	}
+}
+
+func TestOpenPRErrorsNameOperationAndRepository(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		fork bool
+	}{
+		{name: "direct"},
+		{name: "fork", fork: true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, path, operation string
+				status                int
+				hint                  bool
+			}{
+				{name: "tree", path: "/git/trees", operation: "creating tree", status: http.StatusForbidden},
+				{name: "commit", path: "/git/commits", operation: "creating commit", status: http.StatusNotFound, hint: true},
+				{name: "ref", path: "/git/refs", operation: "creating branch refs/heads/ai-fix-", status: http.StatusNotFound, hint: true},
+				{name: "ref forbidden", path: "/git/refs", operation: "creating branch refs/heads/ai-fix-", status: http.StatusForbidden},
+				{name: "pull request", path: "/pulls", operation: "opening pull request", status: http.StatusInternalServerError},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					f := newFakeGitHub(t, "main")
+					f.postFailPath, f.postFailCode = tc.path, tc.status
+					existing := forkMetadata("forker", "r", "main", "o/r")
+					f.existingFork = &existing
+					client := testClient(f)
+					client.token = "private-write-token"
+					_, err := client.OpenPR(t.Context(), Request{
+						Owner: "o", Repo: "r", Fork: mode.fork, Files: map[string]string{"controller.go": "fixed"},
+						BranchPrefix: "ai-fix", Title: "Fix",
+					})
+					repo := "o/r"
+					if mode.fork && tc.path != "/pulls" {
+						repo = "forker/r"
+					}
+					if err == nil || !strings.Contains(err.Error(), tc.operation) || !strings.Contains(err.Error(), " in "+repo) {
+						t.Fatalf("error=%v, want operation=%q repo=%q", err, tc.operation, repo)
+					}
+					if strings.Contains(err.Error(), "workflow scope") != tc.hint ||
+						strings.Contains(err.Error(), "private-write-token") {
+						t.Fatalf("incorrect hint or leaked token: %v", err)
+					}
+					if !isResponseStatus(err, tc.status) {
+						t.Fatalf("status error was not preserved: %v", err)
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -81,6 +81,8 @@ Core settings:
 | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL` | GitHub OAuth App coordinates. |
 | `AUTH_PROXY_HEADER` | Trusted identity header in proxy mode. |
 | `BOT_TOKEN` | Optional server-held GitHub write credential. It is not required for read-only chat. |
+| `GITHUB_READ_TOKEN` | GitHub source reads prefer this token, then `BOT_TOKEN`, then `GITHUB_TOKEN`. |
+| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | Overrides that read-token preference for action source checks and verification. |
 | `TRUSTED_ORIGINS` | Additional exact public origins accepted for state-changing requests. |
 
 Register the OAuth callback as the dashboard origin plus `/api/auth/callback`. `OAUTH_REDIRECT_URL` must match it exactly.
