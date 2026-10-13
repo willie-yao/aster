@@ -33,6 +33,7 @@ import "./recurrence.test.js";
 import "./theme.test.js";
 import "./detailFoundations.test.js";
 import "./jobDetail.test.js";
+import "./jobConfigMetadata.test.js";
 import "./testDetail.test.js";
 import "./detailReadability.test.js";
 import "./dashboardOverview.test.js";

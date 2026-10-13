@@ -18,6 +18,10 @@ export interface Source {
   include_presubmits?: boolean;
 }
 
+export interface Discovery {
+  source?: "testgrid" | "bucket";
+}
+
 export interface TestGrid {
   dashboard: string;
 }
@@ -76,6 +80,7 @@ export interface Manifest {
   name: string;
   short_name?: string;
   source: Source;
+  discovery?: Discovery;
   testgrid: TestGrid;
   storage: Storage;
   branding: Branding;

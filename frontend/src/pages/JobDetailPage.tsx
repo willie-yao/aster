@@ -15,7 +15,7 @@ import {
   WarningAmber,
 } from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
-import { useJobDetail } from "../hooks/useData";
+import { useDashboard, useJobDetail } from "../hooks/useData";
 import {
   formatDuration,
   formatPercent,
@@ -39,6 +39,7 @@ import { useManifest } from "../hooks/useManifest";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { RunMetadata } from "../components/RunMetadata";
+import { JobConfigMetadata } from "../components/JobConfigMetadata";
 import { ResultLedger } from "../components/ResultLedger";
 import { RuntimeTrend } from "../components/RuntimeTrend";
 import { overviewTypography } from "../theme/overview";
@@ -169,6 +170,7 @@ export function JobDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [gridOpen, setGridOpen] = useState(false);
   const { data, loading, error } = useJobDetail(jobID);
+  const { data: dashboard } = useDashboard();
   const fetchStatus = useSharedFetchStatus();
   const manifest = useManifest();
 
@@ -179,6 +181,7 @@ export function JobDetailPage() {
     [runs, data?.retained_runs],
   );
   const canonicalJobID = data?.job_id ?? jobID ?? "";
+  const jobSummary = dashboard?.jobs.find((job) => job.job_id === canonicalJobID);
   const shortenedName = shortJobName(
     data?.name ?? canonicalJobID,
     manifest.short_name_prefix ?? "",
@@ -519,6 +522,11 @@ export function JobDetailPage() {
             {lastRun ? `Last run ${timeAgo(lastRun.started)} · ` : ""}
             {data.job_type} job
           </Typography>
+          <JobConfigMetadata
+            job={data}
+            discovery={manifest.discovery}
+            branch={jobSummary?.branch}
+          />
         </Box>
         {currentStatusView && (
           <Box

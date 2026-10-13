@@ -103,6 +103,8 @@ discovery:
 
 When omitted, each fetch resolves the current test-infra `master` commit and uses that one snapshot consistently for the run. A configured pin never falls back to `master`. The effective revision is published as `discovery.resolved_test_infra_revision` in `manifest.json`; the Pages workflow also copies it to `provenance.json`. The field is invalid with bucket discovery.
 
+TestGrid job pages show a read-only link to their definition in `kubernetes/test-infra` at the published job's `config_revision`, or `master` when no revision is recorded. The header also shows the configured checkout branch when available in the dashboard. Jobs without a known config source or file omit this line.
+
 For another Prow installation, discover directly from its artifact bucket:
 
 ```yaml
