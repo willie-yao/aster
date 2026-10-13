@@ -673,7 +673,8 @@ type FixPRs struct {
 	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
 	// CritiqueRetries bounds how many times generation is re-prompted to resolve
 	// an LLM reviewer's objections; remaining objections become preview warnings.
-	// Defaults to 1; 0 disables the review. Excluded from manifest.json.
+	// Agent Sandbox uses 0: one review without regeneration when AI is available.
+	// Excluded from manifest.json.
 	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
 	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
 	// real workspace clone). A nil block uses opencode with defaults. Excluded
@@ -1520,7 +1521,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
-			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables the review)")
+			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables regeneration)")
 		}
 		if ar := f.AgentRuntime; ar != nil {
 			runtimeType := strings.TrimSpace(ar.Type)

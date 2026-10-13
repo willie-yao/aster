@@ -824,7 +824,7 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", Repo: &SourceRepo{Owner: "x"}}}
 	assertValidate(t, c, "fix_prs.repo requires both")
-	// Negative critique_retries is rejected (0 disables, not negatives).
+	// Negative critique_retries is rejected; 0 disables regeneration.
 	c = validConfig()
 	neg := -1
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", CritiqueRetries: &neg}}

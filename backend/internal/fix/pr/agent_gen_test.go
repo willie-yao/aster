@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/aiusage"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
@@ -295,8 +296,10 @@ func TestGenerateBuildWithAgentWarnsOnTimedOutCommandResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fa.calls != 1 || reviewer.lastUser != "" || !slices.Contains(fix.warnings, patchVerifyWarning) {
-		t.Fatalf("calls=%d critique=%q warnings=%v", fa.calls, reviewer.lastUser, fix.warnings)
+	if fa.calls != 1 || reviewer.calls != 1 ||
+		!slices.Contains(fix.warnings, patchVerifyWarning) ||
+		!slices.Contains(fix.warnings, patchCritiqueWarning("the guard message is vague")) {
+		t.Fatalf("calls=%d review calls=%d warnings=%v", fa.calls, reviewer.calls, fix.warnings)
 	}
 	if fix.rationale != "Guard the retry in `a` so it fails fast." {
 		t.Fatalf("rationale = %q", fix.rationale)
@@ -311,21 +314,99 @@ func TestFixInstructionsShareRepositoryChangeGuidance(t *testing.T) {
 		"analysis": analysisFailureInstruction(validAnalysisFailure(), "", "", 3, false),
 	}
 	for name, instruction := range instructions {
-		for _, want := range []string{
-			repositoryChangeGuidance,
-			changeSummaryInstruction,
-			"made, or failed to guard, the request or operation that hit the observed failure condition",
-			"fails fast with a clear message, is a valid fix. Cite that code path by file and line.",
-			"The published suggested fix is one candidate, not the default. An operational remedy does not rule out a repository guard.",
-			"prefer a minimal patch with its caveats stated in your summary over making no change",
-			"Make no change when no code in this repository is causally involved",
-			"do not skip or weaken the failing test, just to produce a patch",
-			"Do not delete or rename files.",
-		} {
-			if !strings.Contains(instruction, want) {
-				t.Errorf("%s instruction missing %q:\n%s", name, want, instruction)
+		t.Run(name, func(t *testing.T) {
+			for _, want := range []string{
+				repositoryChangeGuidance,
+				changeSummaryInstruction,
+				"that resolves the failure, verified against the repository",
+				"First look for a minimal change that makes the failed operation succeed",
+				"correcting a value, version, path, or repository choice this code made",
+				"Verify the causal code path against the repository and cite it by file and line",
+				"Well-documented external facts",
+				"which distribution releases a vendor publishes packages for",
+				"State them in the summary as assumptions with how to validate them",
+				"The published suggested fix is one candidate, not the default",
+				"If no resolving change is identifiable",
+				"a fail-fast guard is acceptable only when it gives a clearer, earlier error than today",
+				`Start the summary with "Guard only:" and say what still needs fixing`,
+				"Make no change when no code in this repository is causally involved",
+				"Do not edit unrelated code",
+				"do not skip or weaken the failing test, just to produce a patch",
+				"Do not delete or rename files.",
+			} {
+				if !strings.Contains(instruction, want) {
+					t.Errorf("instruction missing %q:\n%s", want, instruction)
+				}
 			}
-		}
+			for _, unwanted := range []string{
+				"is a valid fix",
+				"prefer a minimal patch with its caveats stated in your summary over making no change",
+				"change that repository evidence supports",
+				"change supported by repository evidence",
+			} {
+				if strings.Contains(instruction, unwanted) {
+					t.Errorf("instruction contains superseded guidance %q", unwanted)
+				}
+			}
+		})
+	}
+}
+
+func TestFixPreviewsCritiqueOnceWithoutRegeneration(t *testing.T) {
+	for _, path := range []string{"pattern", "build", "analysis"} {
+		t.Run(path, func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				response string
+				err      error
+				warning  string
+			}{
+				{name: "approved"},
+				{
+					name: "concerns", response: `{"issues":["the guard does not fix the missing package suite"]}`,
+					warning: patchCritiqueWarning("the guard does not fix the missing package suite"),
+				},
+				{name: "review error", err: errors.New("review endpoint down"), warning: patchCritiqueUnavailableWarning},
+				{name: "invalid review", response: "not JSON", warning: patchCritiqueUnavailableWarning},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					agent := goodAgent()
+					reviewer := &fakeCompleter{critique: tc.response, critiqueErr: tc.err}
+					pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+					manager := newManager(t, pr, agent, Options{Critique: reviewer})
+					manager.opts.CritiqueRetries = 0
+					var fix *GeneratedFix
+					var err error
+					switch path {
+					case "pattern":
+						fix, err = manager.GeneratePreview(t.Context(), systemicPattern("etcd"), "")
+					case "build":
+						fix, err = manager.GenerateBuildPreview(t.Context(), BuildFailure{
+							ID: "build", JobID: "job", JobName: "job", BuildID: "123", RootCause: "missing package suite",
+						}, "")
+					case "analysis":
+						fix, err = manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if agent.calls != 1 || reviewer.calls != 1 || len(pr.opened) != 0 {
+						t.Fatalf("generation=%d review=%d writes=%d", agent.calls, reviewer.calls, len(pr.opened))
+					}
+					if reviewer.lastSystem != critiqueSystemPrompt ||
+						!strings.Contains(reviewer.lastUser, "FILE AFTER CHANGE: templates/cluster.yaml") {
+						t.Fatalf("review did not receive the patch: system=%q user=%q", reviewer.lastSystem, reviewer.lastUser)
+					}
+					if tc.warning == "" {
+						if len(fix.Warnings) != 0 {
+							t.Fatalf("warnings = %v, want none", fix.Warnings)
+						}
+					} else if len(fix.Warnings) != 1 || fix.Warnings[0] != tc.warning {
+						t.Fatalf("warnings = %v, want [%s]", fix.Warnings, tc.warning)
+					}
+				})
+			}
+		})
 	}
 }
 

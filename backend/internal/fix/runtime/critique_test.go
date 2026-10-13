@@ -16,14 +16,27 @@ func TestCritiqueFailsClosedWithoutReviewer(t *testing.T) {
 	}
 	retries = 0
 	if got, n, err := Critique(nil, &retries); err != nil || got != nil || n != 0 {
-		t.Fatalf("disabled critique = %v, %d, %v", got, n, err)
+		t.Fatalf("unavailable critique = %v, %d, %v", got, n, err)
 	}
-	client := critiqueClient{}
-	if got, n, err := Critique(client, nil); err != nil || got != nil || n != 0 {
-		t.Fatalf("default nil config = %v, %d, %v", got, n, err)
-	}
-	retries = 2
-	if got, n, err := Critique(client, &retries); err != nil || got == nil || n != 2 {
-		t.Fatalf("configured critique = %v, %d, %v", got, n, err)
+}
+
+func TestCritiqueKeepsAvailableReviewer(t *testing.T) {
+	zero, two := 0, 2
+	for _, tc := range []struct {
+		name       string
+		configured *int
+		retries    int
+	}{
+		{name: "default"},
+		{name: "zero regenerations", configured: &zero},
+		{name: "two regenerations", configured: &two, retries: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := critiqueClient{}
+			got, n, err := Critique(client, tc.configured)
+			if err != nil || got != client || n != tc.retries {
+				t.Fatalf("critique = %v, %d, %v, want available reviewer with %d retries", got, n, err, tc.retries)
+			}
+		})
 	}
 }

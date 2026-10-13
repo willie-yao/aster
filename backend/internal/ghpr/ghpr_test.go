@@ -19,7 +19,13 @@ type fakeGitHub struct {
 	branchHeads   map[string]string
 	refRequests   []string
 	repoGETCount  int
+	baseTreeModes map[string]string
+	treeTruncated bool
+	treeGETStatus int
+	treeRequests  []string
 	createdTree   map[string]string
+	createdModes  map[string]string
+	createdBase   string
 	createdBranch string
 	commitAuthor  map[string]any
 	commitMessage string
@@ -85,18 +91,40 @@ func (f *fakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"object": map[string]any{"sha": "basesha"}})
 	case r.Method == http.MethodGet && strings.Contains(p, "/git/commits/"):
 		writeJSON(w, 200, map[string]any{"tree": map[string]any{"sha": "basetree"}})
+	case r.Method == http.MethodGet && strings.Contains(p, "/git/trees/"):
+		f.treeRequests = append(f.treeRequests, p+"?"+r.URL.RawQuery)
+		if f.treeGETStatus != 0 {
+			http.Error(w, http.StatusText(f.treeGETStatus), f.treeGETStatus)
+			return
+		}
+		entries := make([]map[string]string, 0, len(f.baseTreeModes))
+		for path, mode := range f.baseTreeModes {
+			kind := "blob"
+			switch mode {
+			case "040000":
+				kind = "tree"
+			case "160000":
+				kind = "commit"
+			}
+			entries = append(entries, map[string]string{"path": path, "mode": mode, "type": kind})
+		}
+		writeJSON(w, 200, map[string]any{"tree": entries, "truncated": f.treeTruncated})
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/git/trees"):
 		var in struct {
 			BaseTree string `json:"base_tree"`
 			Tree     []struct {
 				Path    string `json:"path"`
+				Mode    string `json:"mode"`
 				Content string `json:"content"`
 			} `json:"tree"`
 		}
 		_ = json.Unmarshal(body, &in)
 		f.createdTree = map[string]string{}
+		f.createdModes = map[string]string{}
+		f.createdBase = in.BaseTree
 		for _, e := range in.Tree {
 			f.createdTree[e.Path] = e.Content
+			f.createdModes[e.Path] = e.Mode
 		}
 		f.treeOwnerRepo = strings.TrimSuffix(strings.TrimPrefix(p, "/repos/"), "/git/trees")
 		writeJSON(w, 201, map[string]any{"sha": "newtree"})
@@ -180,6 +208,102 @@ func TestOpenPR_HappyPath(t *testing.T) {
 	}
 	if f.commitAuthor != nil {
 		t.Errorf("commit author should be unset by default, got %v", f.commitAuthor)
+	}
+}
+
+func TestOpenPRPreservesPinnedBaseFileModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fork bool
+	}{
+		{name: "direct"},
+		{name: "fork", fork: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGitHub(t, "main")
+			existing := forkMetadata("forker", "r", "main", "o/r")
+			f.existingFork = &existing
+			f.baseTreeModes = map[string]string{
+				"hack/ensure-azcli.sh": "100755",
+				"config.yaml":          "100644",
+				"current-config":       "120000",
+				"unchanged.sh":         "100755",
+			}
+			base := &Base{Branch: "release-1.25", HeadSHA: "pinned-head", TreeSHA: "pinned-tree"}
+			files := map[string]string{
+				"hack/ensure-azcli.sh": "#!/bin/sh\nexit 0\n",
+				"config.yaml":          "suite: bookworm\n",
+				"current-config":       "config.yaml",
+				"hack/new-script.sh":   "#!/bin/sh\nexit 0\n",
+			}
+			_, err := testClient(f).OpenPR(t.Context(), Request{
+				Owner: "o", Repo: "r", Files: files,
+				BranchPrefix: "fix", Title: "Fix", Fork: tc.fork, Base: base,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{
+				"hack/ensure-azcli.sh": "100755",
+				"config.yaml":          "100644",
+				"current-config":       "120000",
+				"hack/new-script.sh":   "100644",
+			} {
+				if got := f.createdModes[path]; got != want {
+					t.Errorf("%s mode = %q, want %q", path, got, want)
+				}
+				if f.createdTree[path] != files[path] {
+					t.Errorf("%s content = %q, want %q", path, f.createdTree[path], files[path])
+				}
+			}
+			if len(f.createdTree) != len(files) || f.createdBase != base.TreeSHA {
+				t.Errorf("created tree=%v base=%q", f.createdTree, f.createdBase)
+			}
+			if f.prBase != base.Branch || len(f.refRequests) != 0 || f.repoGETCount != 0 {
+				t.Errorf("base not pinned: branch=%q refs=%v repo reads=%d", f.prBase, f.refRequests, f.repoGETCount)
+			}
+			wantOwner := "o"
+			if tc.fork {
+				wantOwner = "forker"
+			}
+			wantLookup := "/repos/" + wantOwner + "/r/git/trees/pinned-tree?recursive=1"
+			if len(f.treeRequests) != 1 || f.treeRequests[0] != wantLookup {
+				t.Errorf("tree lookups = %v, want [%s]", f.treeRequests, wantLookup)
+			}
+		})
+	}
+}
+
+func TestOpenPRRejectsUnavailableFileModes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		truncated bool
+		mode      string
+		want      string
+	}{
+		{name: "lookup failed", status: http.StatusForbidden, want: "reading base tree basetree file modes"},
+		{name: "truncated tree", truncated: true, want: "cannot preserve file modes"},
+		{name: "directory", mode: "040000", want: "cannot update non-file path"},
+		{name: "submodule", mode: "160000", want: "cannot update non-file path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGitHub(t, "main")
+			f.treeGETStatus, f.treeTruncated = tc.status, tc.truncated
+			if tc.mode != "" {
+				f.baseTreeModes = map[string]string{"hack/ensure-azcli.sh": tc.mode}
+			}
+			_, err := testClient(f).OpenPR(t.Context(), Request{
+				Owner: "o", Repo: "r", Files: map[string]string{"hack/ensure-azcli.sh": "fixed"},
+				BranchPrefix: "fix", Title: "Fix",
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if f.createdTree != nil || f.createdBranch != "" || f.prHead != "" {
+				t.Fatalf("unexpected write: tree=%v branch=%q PR head=%q", f.createdTree, f.createdBranch, f.prHead)
+			}
+		})
 	}
 }
 

@@ -78,7 +78,8 @@ type Request struct {
 	Owner string
 	Repo  string
 	// Files maps repo-relative path to file content. Existing paths are
-	// overwritten in the new commit; others are carried over from the base.
+	// overwritten with their base modes preserved; new files use 100644.
+	// Other paths are carried over from the base.
 	Files map[string]string
 	// BranchPrefix names the throwaway head branch. A unix-time and random suffix
 	// are appended for uniqueness.
@@ -388,6 +389,30 @@ func escapeRefPath(branch string) string {
 
 // createTree builds a new tree from baseTree with the request's files added.
 func (c *Client) createTree(ctx context.Context, owner, repo, baseTree string, files map[string]string) (string, error) {
+	var base struct {
+		Truncated bool `json:"truncated"`
+		Tree      []struct {
+			Path string `json:"path"`
+			Mode string `json:"mode"`
+			Type string `json:"type"`
+		} `json:"tree"`
+	}
+	if err := c.get(ctx, c.url(owner, repo, "git/trees/"+url.PathEscape(baseTree))+"?recursive=1", &base); err != nil {
+		return "", fmt.Errorf("reading base tree %s file modes: %w", baseTree, err)
+	}
+	if base.Truncated {
+		return "", fmt.Errorf("base tree %s is truncated; cannot preserve file modes", baseTree)
+	}
+	modes := make(map[string]string, len(files))
+	for _, item := range base.Tree {
+		if _, changed := files[item.Path]; !changed {
+			continue
+		}
+		if item.Type != "blob" {
+			return "", fmt.Errorf("cannot update non-file path %q in base tree %s", item.Path, baseTree)
+		}
+		modes[item.Path] = item.Mode
+	}
 	type entry struct {
 		Path    string `json:"path"`
 		Mode    string `json:"mode"`
@@ -402,7 +427,11 @@ func (c *Client) createTree(ctx context.Context, owner, repo, baseTree string, f
 	sort.Strings(paths)
 	entries := make([]entry, 0, len(files))
 	for _, p := range paths {
-		entries = append(entries, entry{Path: p, Mode: "100644", Type: "blob", Content: files[p]})
+		mode := "100644"
+		if existing, ok := modes[p]; ok {
+			mode = existing
+		}
+		entries = append(entries, entry{Path: p, Mode: mode, Type: "blob", Content: files[p]})
 	}
 	var out struct {
 		SHA string `json:"sha"`

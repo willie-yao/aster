@@ -34,7 +34,7 @@ type proposedFix struct {
 
 // genParams holds the inputs for fix generation.
 type genParams struct {
-	// critique reviews the proposed change; nil (or critiqueRetries 0) skips it.
+	// critique reviews the proposed change; nil skips it.
 	critique Completer
 	owner    string
 	repo     string
@@ -53,9 +53,10 @@ type genParams struct {
 
 // repositoryChangeGuidance tells every Fix entry point when a patch is justified.
 const repositoryChangeGuidance = `Decide whether a repository change is justified:
-- A change is justified when code in this repository made, or failed to guard, the request or operation that hit the observed failure condition, even when the condition itself is external. Changing that code so it avoids the condition, or fails fast with a clear message, is a valid fix. Cite that code path by file and line.
-- The published suggested fix is one candidate, not the default. An operational remedy does not rule out a repository guard.
-- When such a code path exists, prefer a minimal patch with its caveats stated in your summary over making no change.
+- First look for a minimal change that makes the failed operation succeed, such as correcting a value, version, path, or repository choice this code made. Verify the causal code path against the repository and cite it by file and line.
+- Well-documented external facts, such as which distribution releases a vendor publishes packages for, may support the change. State them in the summary as assumptions with how to validate them.
+- The published suggested fix is one candidate, not the default.
+- If no resolving change is identifiable, a fail-fast guard is acceptable only when it gives a clearer, earlier error than today. Start the summary with "Guard only:" and say what still needs fixing.
 - Make no change when no code in this repository is causally involved, for example when the fix belongs in another repository or the cause is purely operational. Do not edit unrelated code, and do not skip or weaken the failing test, just to produce a patch.
 `
 
@@ -108,7 +109,7 @@ func runAgentFix(
 		if err != nil {
 			return nil, err
 		}
-		if gp.critique == nil || gp.critiqueRetries == 0 {
+		if gp.critique == nil {
 			return fix, nil
 		}
 		issues, err := review(fix.files, fix.diff)

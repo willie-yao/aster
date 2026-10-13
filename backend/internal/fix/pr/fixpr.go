@@ -67,11 +67,11 @@ type Options struct {
 	Labels []string
 	// DashboardURL is linked in the PR body for context.
 	DashboardURL string
-	// Critique reviews the proposed change before a PR is opened; nil (or
-	// CritiqueRetries 0) skips the review. May be the same Completer as
-	// generation or a separate provider.
+	// Critique reviews the proposed change before a PR is opened; nil skips it.
+	// Concerns and review errors become preview warnings.
 	Critique Completer
 	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections.
+	// Zero still reviews once without regenerating.
 	// Runtime validation failures return before critique and are not retried.
 	CritiqueRetries int
 	// PRFiller, when set, reformats the PR description to follow the repo's PR

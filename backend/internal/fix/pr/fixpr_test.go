@@ -21,9 +21,11 @@ type fakeCompleter struct {
 	critiqueErr error
 	lastSystem  string
 	lastUser    string
+	calls       int
 }
 
 func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string, error) {
+	f.calls++
 	f.lastSystem, f.lastUser = system, user
 	if f.critiqueErr != nil {
 		return "", f.critiqueErr
