@@ -308,7 +308,7 @@ func TestAnalysisSourceCompatibilityRequiresExplicitBranch(t *testing.T) {
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
 
-	_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "")
+	_, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "", FixBranchTested)
 	if code, ok := ReasonCodeFrom(err); !ok || code != ReasonSourceBranchUnknown {
 		t.Fatalf("err=%v code=%q ok=%t", err, code, ok)
 	}
@@ -328,7 +328,7 @@ func TestAnalysisSourceCompatibilityBindsCurrentBaseWithoutReadingHints(t *testi
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
 
-	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main")
+	compatibility, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "main", FixBranchTested)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestAnalysisSourceCompatibilityPreservesRepositoryBranchAndAncestryChecks(t
 				base: testCase.base, branchBases: map[string]ghpr.Base{"main": testCase.base},
 				contains: testCase.contains,
 			}
-			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), testCase.repository, "main")
+			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), testCase.repository, "main", FixBranchTested)
 			if err == nil {
 				t.Fatal("incompatible source was accepted")
 			}
@@ -402,13 +402,99 @@ func TestAnalysisSourceCompatibilityResolvesFailureBranchBase(t *testing.T) {
 		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
 	}
 
-	got, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "release-1.25")
+	got, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "release-1.25", FixBranchTested)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.GenerationBaseRevision != capzReleaseBaseRevision ||
 		!slices.Equal(client.branchRequests, []string{"release-1.25"}) {
 		t.Fatalf("compatibility=%+v branches=%v", got, client.branchRequests)
+	}
+}
+
+func TestAnalysisSourceCompatibilityDefaultBranchSkipsAncestry(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{
+		base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision},
+		branchBases: map[string]ghpr.Base{
+			"release-1.24": {Branch: "release-1.24", HeadSHA: capzReleaseBaseRevision},
+		},
+	}
+	service.sourceRevisionClient = client
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+
+	got, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "release-1.24", FixBranchDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := analysisSourceCompatibility{TargetBranch: "main", GenerationBaseRevision: capzGenerationBaseRevision}
+	if got != want || client.compareCalls != 0 || !slices.Equal(client.branchRequests, []string{""}) {
+		t.Fatalf("compatibility=%+v compares=%d branches=%v", got, client.compareCalls, client.branchRequests)
+	}
+	if _, err := service.verifyAnalysisSourceCompatibility(t.Context(), repo, "release-1.24", FixBranchTested); ReasonCodeOf(err) != ReasonSourceRevisionDiverged {
+		t.Fatalf("tested target err=%v code=%q", err, ReasonCodeOf(err))
+	}
+}
+
+func TestAnalysisSourceCompatibilityRejectsUnusableDefaultBranchTarget(t *testing.T) {
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+	for _, testCase := range []struct {
+		name         string
+		repository   sourceinvestigation.Repository
+		testedBranch string
+		target       FixBranchTarget
+		wantReason   ReasonCode
+		wantText     string
+		wantRequests int
+	}{
+		{name: "default is tested", repository: repo, testedBranch: "main", target: FixBranchDefault, wantText: "default branch is the tested branch", wantRequests: 1},
+		{name: "unknown tested branch", repository: repo, testedBranch: "", target: FixBranchDefault, wantReason: ReasonSourceBranchUnknown},
+		{name: "invalid tested branch", repository: repo, testedBranch: "release 1.24", target: FixBranchDefault, wantReason: ReasonSourceBranchUnknown},
+		{name: "unknown target", repository: repo, testedBranch: "release-1.24", target: "main", wantText: "unsupported Fix branch target"},
+		{
+			name: "wrong repository", testedBranch: "release-1.24", target: FixBranchDefault, wantText: "repositories do not match",
+			repository: sourceinvestigation.Repository{Owner: "kubernetes", Name: "kubernetes", Revision: capzFailureRevision},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+			client := &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision}}
+			service.sourceRevisionClient = client
+			_, err := service.verifyAnalysisSourceCompatibility(t.Context(), testCase.repository, testCase.testedBranch, testCase.target)
+			if err == nil {
+				t.Fatal("unusable default-branch target was accepted")
+			}
+			if testCase.wantReason != "" && ReasonCodeOf(err) != testCase.wantReason {
+				t.Fatalf("err=%v code=%q", err, ReasonCodeOf(err))
+			}
+			if testCase.wantText != "" && !strings.Contains(err.Error(), testCase.wantText) {
+				t.Fatalf("error = %v", err)
+			}
+			if len(client.branchRequests) != testCase.wantRequests || client.compareCalls != 0 {
+				t.Fatalf("branches=%v compares=%d", client.branchRequests, client.compareCalls)
+			}
+		})
+	}
+}
+
+func TestResolveAnalysisFixBranchesReportsDefaultBranch(t *testing.T) {
+	service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
+	client := &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision}}
+	service.sourceRevisionClient = client
+	repo := sourceinvestigation.Repository{
+		Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: capzFailureRevision,
+	}
+	got, err := service.ResolveAnalysisFixBranches(t.Context(), repo, "release-1.24")
+	if err != nil || got != (AnalysisFixBranches{Tested: "release-1.24", Default: "main"}) {
+		t.Fatalf("branches=%+v err=%v", got, err)
+	}
+	got, err = service.ResolveAnalysisFixBranches(t.Context(), repo, "")
+	if err != nil || got != (AnalysisFixBranches{}) || len(client.branchRequests) != 1 {
+		t.Fatalf("unknown tested branch: branches=%+v err=%v requests=%v", got, err, client.branchRequests)
 	}
 }
 
@@ -420,7 +506,7 @@ func TestPreflightAnalysisFixSourcePropagatesAccessAndAncestryErrors(t *testing.
 		accessErr := errors.New("repository access denied")
 		service := NewService(exactAnalysisConfig(), t.TempDir(), AIConfig{})
 		service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{resolveErr: accessErr}
-		_, err := service.PreflightAnalysisFixSource(t.Context(), repo, "main")
+		_, err := service.preflightAnalysisFixSource(t.Context(), repo, "main", FixBranchTested)
 		if !errors.Is(err, ErrPreviewRejected) || !errors.Is(err, accessErr) {
 			t.Fatalf("error = %v", err)
 		}
@@ -430,7 +516,7 @@ func TestPreflightAnalysisFixSourcePropagatesAccessAndAncestryErrors(t *testing.
 		service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{
 			base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision},
 		}
-		_, err := service.PreflightAnalysisFixSource(t.Context(), repo, "main")
+		_, err := service.preflightAnalysisFixSource(t.Context(), repo, "main", FixBranchTested)
 		if !errors.Is(err, ErrPreviewRejected) || ReasonCodeOf(err) != ReasonSourceRevisionDiverged {
 			t.Fatalf("error = %v code=%q", err, ReasonCodeOf(err))
 		}
@@ -493,7 +579,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		if err != nil {
 			return PreviewResult{}, err
 		}
-		generation := analysisFailureForGeneration(current, input, "main", analysisFixRevision)
+		generation := analysisFailureForGeneration(current, input)
 		generated <- generation
 		if err := service.setRequestWarnings(ctx, analysisQualityWarnings(input)...); err != nil {
 			return PreviewResult{}, err
@@ -532,7 +618,7 @@ func TestUnverifiedUncitedTransientAnalysisFixReachesGeneratorAndRestoresPreview
 		ChatResponseHash: "chat-hash", PreviewRequestHash: "preview-hash",
 		AnalysisContentHash: subject.AnalysisContentHash, SourceRepository: subject.SourceRepository,
 		FailureRevision: subject.SourceRepository.Revision, GenerationBaseRevision: analysisFixRevision,
-		SourceBranch: "main", AssistantAnswer: "Investigate whether reconciliation skips the terminal update.",
+		SourceBranch: "main", BranchTarget: FixBranchTested, AssistantAnswer: "Investigate whether reconciliation skips the terminal update.",
 		AssistantUnverified: true, AssistantUnverifiedReason: "artifact access ended before verification",
 	}
 	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "")
@@ -615,7 +701,7 @@ func TestAnalysisFixUsesCapturedAnalysisAfterReanalysis(t *testing.T) {
 		generated <- struct {
 			failure  fixpr.AnalysisFailure
 			warnings []string
-		}{analysisFailureForGeneration(subject, input, "main", analysisFixRevision), warningMessages(analysisQualityWarnings(input))}
+		}{analysisFailureForGeneration(subject, input), warningMessages(analysisQualityWarnings(input))}
 		return handoffTestPreview(t, service, input, owner, &calls)
 	}
 	request, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "token", "")
@@ -671,7 +757,7 @@ func TestValidateAnalysisFixInputAllowsInvestigativeHypotheses(t *testing.T) {
 		t.Fatal("partial handoff was accepted")
 	}
 	input.GenerationBaseRevision = analysisFixRevision
-	input.SourceBranch = "main"
+	input.SourceBranch, input.TargetBranch = "main", "main"
 	if err := validateAnalysisFixInput(input); err != nil {
 		t.Fatalf("complete source binding error = %v", err)
 	}

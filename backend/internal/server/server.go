@@ -288,6 +288,8 @@ func Handler(opts Options) (http.Handler, error) {
 		if requests, ok := opts.ChatFix.(ChatFixRequestRunner); ok {
 			mux.Handle("POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests",
 				auth.Middleware(opts.Auth, guard(createAnalysisChatFixRequestHandler(timeout, requests))))
+			mux.Handle("GET /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/branches",
+				auth.Middleware(opts.Auth, analysisChatFixBranchesHandler(timeout, requests)))
 		}
 	}
 

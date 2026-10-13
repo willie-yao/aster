@@ -1,6 +1,9 @@
+import type { ChatFixBranchTarget } from "./chatFix.js";
+
 export interface StoredChatFixRequest {
   id: string;
   instruction: string;
+  branch_target: ChatFixBranchTarget;
 }
 
 type ChatFixRequestStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -38,8 +41,10 @@ export function readStoredChatFixRequest(
     const raw = storage.getItem(chatFixRequestStorageKey(sessionID, chatRequestID));
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<StoredChatFixRequest>;
-    if (!storedRequestIDPattern.test(value.id ?? "") || typeof value.instruction !== "string") return null;
-    return { id: value.id!, instruction: limitInstruction(value.instruction) };
+    const branchTarget = value.branch_target ?? "tested";
+    if (!storedRequestIDPattern.test(value.id ?? "") || typeof value.instruction !== "string" ||
+      (branchTarget !== "tested" && branchTarget !== "default")) return null;
+    return { id: value.id!, instruction: limitInstruction(value.instruction), branch_target: branchTarget };
   } catch {
     return null;
   }
@@ -55,7 +60,11 @@ export function storeChatFixRequest(
   try {
     storage.setItem(
       chatFixRequestStorageKey(sessionID, chatRequestID),
-      JSON.stringify({ id: request.id, instruction: limitInstruction(request.instruction) }),
+      JSON.stringify({
+        id: request.id,
+        instruction: limitInstruction(request.instruction),
+        branch_target: request.branch_target,
+      }),
     );
   } catch {
     // The open dialog still retains the request identity when storage is unavailable.

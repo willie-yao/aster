@@ -3068,12 +3068,16 @@ func TestAnalysisChatCauseSourcesResolveHistoricalCurrentAndDefault(t *testing.T
 			if testCase.wantDefaultID {
 				for _, want := range []string{
 					comparison, "default branch `trunk`", "comparison-only",
-					"never as the effective current remediation source or a Fix target",
+					"never as the effective current remediation source.",
 					"Its citations cannot qualify a remediation recommendation or proposed revision",
+					"The maintainer chooses the Fix target branch in the Fix dialog",
 				} {
 					if !strings.Contains(request, want) {
 						t.Fatalf("request missing %q: %s", want, request)
 					}
+				}
+				if strings.Contains(request, "or a Fix target") {
+					t.Fatalf("request forbids the default branch as a Fix target: %s", request)
 				}
 			}
 			if got := strings.Contains(request, "current immutable revision could not be resolved"); got != testCase.wantUnavailable {

@@ -392,7 +392,7 @@ func analysisChatCauseSourceAddendum(turn analysischat.Turn, state analysisChatC
 		b.WriteString("source_id `current` is the same project repository at current revision " + state.CurrentRevision + " of tested branch `" + state.Branch + "`; use it to evaluate remediation against current code. ")
 	}
 	if state.DefaultRevision != "" {
-		b.WriteString("source_id `default` is the same project repository at revision " + state.DefaultRevision + " of default branch `" + state.DefaultBranch + "`. It is comparison-only: use it to answer whether the cause logic differs on the default branch, never as the effective current remediation source or a Fix target. Its citations cannot qualify a remediation recommendation or proposed revision. ")
+		b.WriteString("source_id `default` is the same project repository at revision " + state.DefaultRevision + " of default branch `" + state.DefaultBranch + "`. It is comparison-only: use it to answer whether the cause logic differs on the default branch, never as the effective current remediation source. Its citations cannot qualify a remediation recommendation or proposed revision. The maintainer chooses the Fix target branch in the Fix dialog. ")
 	}
 	b.WriteString("The source catalog does not expand artifact scope: failed member-build and comparison-build artifacts remain under their listed builds/<build-id>/ paths. Any current remediation recommendation or proposed revision requires a valid citation from the effective current source. Changed, absent, or unavailable current code is inconclusive and requires current source investigation; it is never automatic evidence that the cause is fixed.")
 	return b.String()

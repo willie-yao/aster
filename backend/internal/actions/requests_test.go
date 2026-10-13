@@ -110,9 +110,9 @@ func exactAnalysisRequestInput() AnalysisFixInput {
 	return AnalysisFixInput{
 		Identity: exactIdentity(), Origin: testFixOrigin(exactIdentity(), testCase.AIAnalysis),
 		ChatSessionID: "session", ChatRequestID: "chat-request", ChatResponseHash: strings.Repeat("a", 64),
-		PreviewRequestHash: AnalysisFixRequestHash("session", "chat-request", ""), AnalysisContentHash: models.TestAnalysisContentHash(testCase),
+		PreviewRequestHash: AnalysisFixRequestHash("session", "chat-request", FixBranchTested, ""), AnalysisContentHash: models.TestAnalysisContentHash(testCase),
 		SourceRepository: sourceinvestigation.Repository{Owner: "kubernetes-sigs", Name: "cluster-api-provider-azure", Revision: analysisFixRevision},
-		SourceBranch:     "main", AssistantAnswer: "The cited conflict is handled by `InstallCNIManifest`.",
+		SourceBranch:     "main", BranchTarget: FixBranchTested, AssistantAnswer: "The cited conflict is handled by `InstallCNIManifest`.",
 		ArtifactCitations: []fixpr.Evidence{{Path: "build-log.txt", LineStart: 10, LineEnd: 10, Quote: "Conflict"}},
 	}
 }
@@ -208,7 +208,7 @@ func TestAnalysisFixRequestSurvivesInitiatingRequestLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := persisted.Requests[created.ID]
-	if record == nil || record.AnalysisFix == nil || record.Instruction != "" || record.RequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, "keep compatibility") {
+	if record == nil || record.AnalysisFix == nil || record.Instruction != "" || record.RequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, FixBranchTested, "keep compatibility") {
 		t.Fatalf("persisted request = %+v", record)
 	}
 	if err := service.Wait(context.Background()); err != nil {

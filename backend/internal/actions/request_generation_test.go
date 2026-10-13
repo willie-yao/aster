@@ -83,7 +83,7 @@ func TestTimedOutExecutorDiagnosticReachesRequestAndLog(t *testing.T) {
 					if err != nil {
 						return PreviewResult{}, err
 					}
-					failure := analysisFailureForGeneration(subject, input, input.SourceBranch, input.GenerationBaseRevision)
+					failure := analysisFailureForGeneration(subject, input)
 					_, err = manager.GenerateAnalysisPreview(ctx, failure, instruction)
 					return PreviewResult{}, safeAnalysisFixPreviewError(err)
 				}

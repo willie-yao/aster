@@ -7,9 +7,12 @@ import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import FormControl from "@mui/material/FormControl";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import InputLabel from "@mui/material/InputLabel";
 import Link from "@mui/material/Link";
 import MenuItem from "@mui/material/MenuItem";
+import Radio from "@mui/material/Radio";
+import RadioGroup from "@mui/material/RadioGroup";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -22,12 +25,16 @@ import {
 import type { Theme } from "@mui/material/styles";
 import {
   cancelAnalysisChatFixRequest,
+  chatFixBranchChoice,
   chatFixInstructionBytes,
   confirmChatFix,
   createAnalysisChatFixRequest,
   limitChatFixInstruction,
+  loadAnalysisChatFixBranches,
   loadAnalysisChatFixRequest,
   previewChatFix,
+  type ChatFixBranches,
+  type ChatFixBranchTarget,
   type ChatFixRequest,
   type ChatFixPreview,
 } from "../lib/chatFix";
@@ -157,6 +164,8 @@ export function ChatFixDialog({
   onClose: () => void;
 }) {
   const [patternID, setPatternID] = useState("");
+  const [branches, setBranches] = useState<ChatFixBranches | null>(null);
+  const [branchTarget, setBranchTarget] = useState<ChatFixBranchTarget>("tested");
   const [instruction, setInstruction] = useState("");
   const [submittedInstruction, setSubmittedInstruction] = useState("");
   const [preview, setPreview] = useState<ChatFixPreview | null>(null);
@@ -178,6 +187,7 @@ export function ChatFixDialog({
     [patterns],
   );
   const selectedPattern = eligiblePatterns.find((pattern) => pattern.id === patternID) ?? null;
+  const branchChoice = exactAnalysis ? chatFixBranchChoice(branches) : null;
   const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
   const isProviderCredentialRetry = request?.status === "failed"
     && request.failure?.category === "provider_credential";
@@ -196,6 +206,8 @@ export function ChatFixDialog({
     if (!open) return;
     controllerRef.current?.abort();
     setPatternID(firstPatternID);
+    setBranches(null);
+    setBranchTarget("tested");
     setInstruction("");
     setSubmittedInstruction("");
     setPreview(null);
@@ -207,6 +219,20 @@ export function ChatFixDialog({
   }, [identity, firstPatternID, open]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!open || !exactAnalysis || !message?.request_id) return;
+    const requestIdentity = identity;
+    const controller = new AbortController();
+    loadAnalysisChatFixBranches(sessionID, message.request_id, controller.signal)
+      .then((value) => {
+        if (identityRef.current === requestIdentity) setBranches(value);
+      })
+      .catch(() => {
+        // Without both branches the dialog keeps the tested-branch target.
+      });
+    return () => controller.abort();
+  }, [exactAnalysis, identity, message?.request_id, open, sessionID]);
 
   const observeAnalysisFixRequest = useCallback(async (
     id: string,
@@ -243,6 +269,7 @@ export function ChatFixDialog({
     controllerRef.current = controller;
     setInstruction(stored.instruction);
     setSubmittedInstruction(stored.instruction);
+    setBranchTarget(stored.branch_target);
     setBusy("preview");
     setError(null);
     setObservationMessage(null);
@@ -284,11 +311,16 @@ export function ChatFixDialog({
           sessionID,
           message.request_id,
           instruction,
+          branchTarget,
           undefined,
           controller.signal,
         );
         if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return;
-        storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: request.id, instruction });
+        storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, {
+          id: request.id,
+          instruction,
+          branch_target: branchTarget,
+        });
         setSubmittedInstruction(instruction);
         setRequest(request);
         admitted = true;
@@ -359,6 +391,7 @@ export function ChatFixDialog({
         sessionID,
         message.request_id,
         instruction,
+        branchTarget,
         feedbackReplacement ? request.id : undefined,
         controller.signal,
       );
@@ -367,7 +400,11 @@ export function ChatFixDialog({
         clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
         setPreview(null);
       }
-      storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, { id: replacement.id, instruction });
+      storeChatFixRequest(window.sessionStorage, sessionID, message.request_id, {
+        id: replacement.id,
+        instruction,
+        branch_target: branchTarget,
+      });
       setSubmittedInstruction(instruction);
       setRequest(replacement);
       await observeAnalysisFixRequest(replacement.id, requestIdentity, controller, replacement);
@@ -525,6 +562,35 @@ export function ChatFixDialog({
               )}
             </ContextSection>
 
+            {branchChoice && (
+              <ContextSection title="Target branch">
+                <RadioGroup
+                  aria-label="Target branch"
+                  value={branchTarget}
+                  onChange={(event) => setBranchTarget(event.target.value as ChatFixBranchTarget)}
+                >
+                  <FormControlLabel
+                    value="tested"
+                    disabled={busy !== null || request !== null}
+                    control={<Radio size="small" />}
+                    label={`${branchChoice.tested} (tested branch)`}
+                  />
+                  <FormControlLabel
+                    value="default"
+                    disabled={busy !== null || request !== null}
+                    control={<Radio size="small" />}
+                    label={`${branchChoice.default} (default branch)`}
+                  />
+                </RadioGroup>
+                {branchTarget === "default" && (
+                  <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
+                    The coding agent patches the current head of {branchChoice.default}. The pull request names the
+                    failure on {branchChoice.tested} and suggests /cherry-pick {branchChoice.tested} after merge.
+                  </Typography>
+                )}
+              </ContextSection>
+            )}
+
             {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
               <Alert severity={requestPresentation.severity} role="status" variant="outlined">
                 <Typography variant="body2" sx={{ fontWeight: 750, mb: 0.4 }}>
@@ -575,7 +641,7 @@ export function ChatFixDialog({
             )}
             {exactAnalysis && (
               <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
-                The repository and generation base are pinned from build metadata. The preview is rejected if either changes.
+                The repository and generation base are pinned when the request is admitted. The preview is rejected if either changes.
               </Typography>
             )}
           </Stack>

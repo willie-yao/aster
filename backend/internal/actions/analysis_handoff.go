@@ -16,10 +16,10 @@ import (
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
-// AnalysisFixRequestHash identifies one explicit selection and instruction.
-func AnalysisFixRequestHash(sessionID, requestID, instruction string) string {
+// AnalysisFixRequestHash identifies one explicit selection, branch target, and instruction.
+func AnalysisFixRequestHash(sessionID, requestID string, target FixBranchTarget, instruction string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
-		strings.TrimSpace(sessionID), strings.TrimSpace(requestID), strings.TrimSpace(instruction),
+		strings.TrimSpace(sessionID), strings.TrimSpace(requestID), string(target), strings.TrimSpace(instruction),
 	}, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
@@ -90,9 +90,9 @@ func (s *Service) prepareAnalysisFix(ctx context.Context, input AnalysisFixInput
 	input = *cloneAnalysisFixInput(input)
 	input.Version, input.FailureContentHash, input.SourceHints, input.TargetAnalysis = 0, "", nil, analysisTargetSnapshot{}
 	input.Owner, input.Instruction = owner, instruction
-	input.PreviewRequestHash = AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, instruction)
+	input.PreviewRequestHash = AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, input.BranchTarget, instruction)
 	// Only actions select the generation base and destination contract.
-	input.FailureRevision, input.GenerationBaseRevision = "", ""
+	input.FailureRevision, input.GenerationBaseRevision, input.TargetBranch = "", "", ""
 	subject, err := s.resolveAnalysisFixTarget(input, false)
 	if err != nil {
 		return AnalysisFixInput{}, err
@@ -105,7 +105,7 @@ func (s *Service) prepareAnalysisFix(ctx context.Context, input AnalysisFixInput
 		Severity: analysis.Severity, SuggestedFix: textutil.Truncate(analysis.SuggestedFix, 16<<10-len("…")),
 		CritiquePassed: analysis.CritiquePassed,
 	}
-	base, err := s.PreflightAnalysisFixSource(ctx, subject.SourceRepository, input.SourceBranch)
+	compatibility, err := s.preflightAnalysisFixSource(ctx, subject.SourceRepository, input.SourceBranch, input.BranchTarget)
 	if err != nil {
 		return AnalysisFixInput{}, err
 	}
@@ -115,7 +115,8 @@ func (s *Service) prepareAnalysisFix(ctx context.Context, input AnalysisFixInput
 	}
 	input.Version = analysisFixHandoffVersion
 	input.FailureRevision = subject.SourceRepository.Revision
-	input.GenerationBaseRevision = base
+	input.TargetBranch = compatibility.TargetBranch
+	input.GenerationBaseRevision = compatibility.GenerationBaseRevision
 	input.TargetConfig = fixDestinationFingerprint(s.cfg.EffectiveFixPRs(), destination)
 	input.HandoffHash = analysisFixHandoffHash(input)
 	if err := validateAnalysisFixHandoff(input); err != nil {
@@ -132,7 +133,8 @@ func validateAnalysisFixHandoff(input AnalysisFixInput) error {
 	if input.Version != analysisFixHandoffVersion || input.Owner == "" || input.Owner != normalizeActionOwner(input.Owner) ||
 		input.HandoffHash == "" || input.HandoffHash != analysisFixHandoffHash(input) || input.TargetConfig == "" ||
 		input.GenerationBaseRevision == "" || input.FailureRevision == "" || input.SourceBranch == "" ||
-		input.PreviewRequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, input.Instruction) ||
+		!validAnalysisFixBranchTarget(input.BranchTarget, input.SourceBranch, input.TargetBranch) ||
+		input.PreviewRequestHash != AnalysisFixRequestHash(input.ChatSessionID, input.ChatRequestID, input.BranchTarget, input.Instruction) ||
 		input.FailureContentHash == "" || input.TargetAnalysis.GeneratedAt != input.Identity.AnalysisGeneratedAt ||
 		len(input.SourceHints) > maxAnalysisSourceFiles ||
 		len(input.Instruction) > 4096 || input.Origin.FixTarget != analysisFixTargetRef(input.Identity) {
@@ -144,6 +146,17 @@ func validateAnalysisFixHandoff(input AnalysisFixInput) error {
 		return ErrPreviewTargetChanged
 	}
 	return validateAnalysisFixInput(input)
+}
+
+func validAnalysisFixBranchTarget(target FixBranchTarget, sourceBranch, targetBranch string) bool {
+	switch target {
+	case FixBranchTested:
+		return targetBranch == sourceBranch
+	case FixBranchDefault:
+		return targetBranch != "" && targetBranch != sourceBranch
+	default:
+		return false
+	}
 }
 
 func validateAnalysisPreviewBinding(binding *AnalysisPreviewBinding) error {
@@ -168,8 +181,9 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 	if err != nil || input.TargetConfig != fixDestinationFingerprint(s.cfg.EffectiveFixPRs(), destination) {
 		return ErrPreviewTargetChanged
 	}
-	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, input.SourceRepository, input.SourceBranch)
-	if err != nil || !strings.EqualFold(compatibility.GenerationBaseRevision, input.GenerationBaseRevision) {
+	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, input.SourceRepository, input.SourceBranch, input.BranchTarget)
+	if err != nil || compatibility.TargetBranch != input.TargetBranch ||
+		!strings.EqualFold(compatibility.GenerationBaseRevision, input.GenerationBaseRevision) {
 		return ErrPreviewTargetChanged
 	}
 	return nil
@@ -184,12 +198,12 @@ func analysisFixContext(input AnalysisFixInput) fixpr.GenerationContext {
 }
 
 // FindAnalysisFixRequest reconnects an admitted request without reading chat.
-func (s *Service) FindAnalysisFixRequest(sessionID, requestID, owner, instruction string) (ActionRequestView, bool, error) {
+func (s *Service) FindAnalysisFixRequest(sessionID, requestID, owner string, target FixBranchTarget, instruction string) (ActionRequestView, bool, error) {
 	owner = normalizeActionOwner(owner)
-	if owner == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(requestID) == "" {
+	if owner == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(requestID) == "" || !target.Valid() {
 		return ActionRequestView{}, false, ErrRequestNotFound
 	}
-	hash := AnalysisFixRequestHash(sessionID, requestID, instruction)
+	hash := AnalysisFixRequestHash(sessionID, requestID, target, instruction)
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
 	if s.expireRequestsLocked(time.Now().UTC()) {
@@ -223,7 +237,7 @@ func validateAnalysisPreviewEntry(entry *previewEntry) error {
 	fix := entry.fix.Snapshot()
 	if entry.failureID != analysisActionID(input.Identity) || entry.patternHash != analysisActionHash(subject) ||
 		entry.targetRepo != input.SourceRepository.Owner+"/"+input.SourceRepository.Name || entry.targetConfig != input.TargetConfig ||
-		fix.Base.Branch != input.SourceBranch || !strings.EqualFold(fix.Base.HeadSHA, input.GenerationBaseRevision) || !fix.RequireBaseCurrent {
+		fix.Base.Branch != input.TargetBranch || !strings.EqualFold(fix.Base.HeadSHA, input.GenerationBaseRevision) || !fix.RequireBaseCurrent {
 		return ErrPreviewTargetChanged
 	}
 	return nil

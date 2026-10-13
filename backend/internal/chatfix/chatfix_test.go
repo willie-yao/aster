@@ -57,9 +57,13 @@ type fakeFixPreviewer struct {
 	requestCalled     bool
 	analysisInput     actions.AnalysisFixInput
 	requestErr        error
+	lookupTarget      actions.FixBranchTarget
+	branchesRepo      sourceinvestigation.Repository
+	branchesTested    string
 }
 
-func (f *fakeFixPreviewer) FindAnalysisFixRequest(_, _, _, _ string) (actions.ActionRequestView, bool, error) {
+func (f *fakeFixPreviewer) FindAnalysisFixRequest(_, _, _ string, target actions.FixBranchTarget, _ string) (actions.ActionRequestView, bool, error) {
+	f.lookupTarget = target
 	if f.existingRequest != nil {
 		return *f.existingRequest, true, f.lookupErr
 	}
@@ -82,6 +86,13 @@ func (f *fakeFixPreviewer) CreateAnalysisFixRequest(
 		return actions.ActionRequestView{}, f.requestErr
 	}
 	return actions.ActionRequestView{ID: "async-request", Kind: "analysis-fix", Owner: owner, Status: actions.RequestPending}, nil
+}
+
+func (f *fakeFixPreviewer) ResolveAnalysisFixBranches(
+	_ context.Context, repo sourceinvestigation.Repository, tested string,
+) (actions.AnalysisFixBranches, error) {
+	f.branchesRepo, f.branchesTested = repo, tested
+	return actions.AnalysisFixBranches{Tested: tested, Default: "main"}, nil
 }
 
 func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
@@ -229,7 +240,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		ProposedRevision:  &analysischat.Revision{RootCause: "terminal branch omits Ready", SuggestedFix: "record Ready"},
 	}}
 	fixes := &fakeFixPreviewer{}
-	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(context.Background(), "session", "Alice", "request", "write-token", "keep compatibility")
+	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(context.Background(), "session", "Alice", "request", "write-token", actions.FixBranchTested, "keep compatibility")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +273,7 @@ func TestCreateAnalysisFixRequestCarriesUnverifiedUncitedFinding(t *testing.T) {
 	}}
 	fixes := &fakeFixPreviewer{}
 	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-		t.Context(), "session", "Alice", "request", "token", "",
+		t.Context(), "session", "Alice", "request", "token", actions.FixBranchTested, "",
 	)
 	if err != nil || request.ID != "async-request" {
 		t.Fatalf("request=%+v err=%v", request, err)
@@ -284,7 +295,7 @@ func TestExactAnalysisFixInputKeepsTestedBranchForDefaultComparison(t *testing.T
 		SourceBranch:             "release-1.2", SourceBranchKnown: true,
 		AssistantAnswer: "The default branch main has identical cause logic.",
 	}
-	input := exactAnalysisFixInput(candidate, "")
+	input := exactAnalysisFixInput(candidate, actions.FixBranchTested, "")
 	if input.SourceRepository != source || input.SourceBranch != "release-1.2" ||
 		input.Origin.FixTarget != candidate.FixTarget || input.Identity.BuildID != "123" {
 		t.Fatalf("fix target changed by comparison context: %+v", input)
@@ -300,7 +311,7 @@ func TestCreateAnalysisFixRequestReturnsAdmissionFailure(t *testing.T) {
 	}}
 	fixes := &fakeFixPreviewer{requestErr: admissionErr}
 	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-		t.Context(), "session", "Alice", "request", "token", "",
+		t.Context(), "session", "Alice", "request", "token", actions.FixBranchTested, "",
 	)
 	if !errors.Is(err, admissionErr) || !fixes.requestCalled {
 		t.Fatalf("error=%v chat=%+v", err, chat)
@@ -317,12 +328,56 @@ func TestPreviewChatFixRejectsSynchronousExactJUnitGeneration(t *testing.T) {
 	}
 }
 
-func TestExactPreviewRequestHashChangesWithRegenerationFeedback(t *testing.T) {
+func TestExactPreviewRequestHashChangesWithFeedbackAndBranchTarget(t *testing.T) {
 	candidate := analysischat.FixCandidate{SessionID: "session", RequestID: "request", ResponseHash: "response"}
-	first := exactPreviewRequestHash(candidate, "keep compatibility")
-	second := exactPreviewRequestHash(candidate, "retry conflicts")
-	if first == second || first != exactPreviewRequestHash(candidate, " keep compatibility ") {
-		t.Fatalf("hashes first=%q second=%q", first, second)
+	hash := func(target actions.FixBranchTarget, instruction string) string {
+		return exactAnalysisFixInput(candidate, target, instruction).PreviewRequestHash
+	}
+	first := hash(actions.FixBranchTested, "keep compatibility")
+	second := hash(actions.FixBranchTested, "retry conflicts")
+	defaultBranch := hash(actions.FixBranchDefault, "keep compatibility")
+	if first == second || first == defaultBranch || first != hash(actions.FixBranchTested, " keep compatibility ") {
+		t.Fatalf("hashes first=%q second=%q default=%q", first, second, defaultBranch)
+	}
+}
+
+func TestCreateAnalysisFixRequestCarriesBranchTarget(t *testing.T) {
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+		SessionID: "session", RequestID: "request", ResponseHash: "response",
+		Analysis: analysischat.AnalysisRef{Scope: analysischat.ScopeTest}, FixTarget: analysischat.AnalysisRef{Scope: analysischat.ScopeTest},
+		SourceBranch: "release-1.24", SourceBranchKnown: true, AssistantAnswer: "The same logic is still on main.",
+	}}
+	fixes := &fakeFixPreviewer{}
+	if _, err := NewService(chat, fixes).CreateAnalysisFixRequest(
+		t.Context(), "session", "alice", "request", "token", actions.FixBranchDefault, "",
+	); err != nil {
+		t.Fatal(err)
+	}
+	input := fixes.analysisInput
+	if fixes.lookupTarget != actions.FixBranchDefault || input.BranchTarget != actions.FixBranchDefault ||
+		input.SourceBranch != "release-1.24" || input.TargetBranch != "" ||
+		input.PreviewRequestHash != actions.AnalysisFixRequestHash("session", "request", actions.FixBranchDefault, "") {
+		t.Fatalf("lookup=%q input=%+v", fixes.lookupTarget, input)
+	}
+
+	fixes = &fakeFixPreviewer{}
+	chat.sessionID = ""
+	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "session", "alice", "request", "token", "main", "")
+	if !errors.Is(err, analysischat.ErrInvalidRequest) || fixes.requestCalled || chat.sessionID != "" {
+		t.Fatalf("unknown target: err=%v requested=%t chat=%q", err, fixes.requestCalled, chat.sessionID)
+	}
+}
+
+func TestAnalysisFixBranchesUsesSelectedFindingSource(t *testing.T) {
+	source := sourceinvestigation.Repository{Owner: "example", Name: "repo", Revision: strings.Repeat("1", 40)}
+	chat := &fakeChatStore{candidate: analysischat.FixCandidate{
+		SourceRepositorySnapshot: source, SourceBranch: "release-1.24", SourceBranchKnown: true,
+	}}
+	fixes := &fakeFixPreviewer{}
+	branches, err := NewService(chat, fixes).AnalysisFixBranches(t.Context(), "session", "alice", "request")
+	if err != nil || branches != (actions.AnalysisFixBranches{Tested: "release-1.24", Default: "main"}) ||
+		fixes.branchesRepo != source || fixes.branchesTested != "release-1.24" || chat.requestID != "request" {
+		t.Fatalf("branches=%+v err=%v fixes=%+v", branches, err, fixes)
 	}
 }
 
@@ -330,7 +385,7 @@ func TestCreateAnalysisFixRequestRejectsIneligibleSource(t *testing.T) {
 	chat := &fakeChatStore{candidateErr: analysischat.ErrAnalysisChanged}
 	fixes := &fakeFixPreviewer{}
 	_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-		context.Background(), "session-1", "Alice", "request-1", "token", "make it retry",
+		context.Background(), "session-1", "Alice", "request-1", "token", actions.FixBranchTested, "make it retry",
 	)
 	if !errors.Is(err, analysischat.ErrAnalysisChanged) {
 		t.Fatalf("CreateAnalysisFixRequest error = %v", err)
@@ -358,7 +413,7 @@ func TestCreateAnalysisFixRequestUsesCauseRepresentativeFailure(t *testing.T) {
 	}}
 	fixes := &fakeFixPreviewer{}
 	request, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-		t.Context(), "session", "Alice", "request", "write-token", "keep compatibility",
+		t.Context(), "session", "Alice", "request", "write-token", actions.FixBranchTested, "keep compatibility",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +448,7 @@ func TestCreateAnalysisFixRequestCarriesBuildTargetWithoutJUnit(t *testing.T) {
 			}}
 			fixes := &fakeFixPreviewer{}
 			_, err := NewService(chat, fixes).CreateAnalysisFixRequest(
-				t.Context(), "session", "alice", "request", "token", "",
+				t.Context(), "session", "alice", "request", "token", actions.FixBranchTested, "",
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -412,7 +467,7 @@ func TestCreateAnalysisFixRequestCarriesBuildTargetWithoutJUnit(t *testing.T) {
 func TestCreateAnalysisFixRequestReconnectsWithoutChat(t *testing.T) {
 	chat := &fakeChatStore{candidateErr: analysischat.ErrSessionNotFound}
 	fixes := &fakeFixPreviewer{existingRequest: &actions.ActionRequestView{ID: "admitted", Owner: "alice", Status: actions.RequestReady}}
-	view, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "deleted", "Alice", "answer", "token", "")
+	view, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "deleted", "Alice", "answer", "token", actions.FixBranchTested, "")
 	if err != nil || view.ID != "admitted" || fixes.requestCalled || chat.sessionID != "" {
 		t.Fatalf("view=%+v err=%v chat=%+v", view, err, chat)
 	}
@@ -427,7 +482,7 @@ func TestCreateAnalysisFixRetainsSelectedFindingBeforeAdmission(t *testing.T) {
 			chat.retainErr = errors.New("history storage failed")
 		}
 		fixes := &fakeFixPreviewer{}
-		_, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "session", "alice", "finding", "token", "")
+		_, err := NewService(chat, fixes).CreateAnalysisFixRequest(t.Context(), "session", "alice", "finding", "token", actions.FixBranchTested, "")
 		if !chat.retained || (fail && (!errors.Is(err, chat.retainErr) || fixes.requestCalled)) || (!fail && !fixes.requestCalled) {
 			t.Fatalf("retention: chat=%+v called=%v err=%v", chat, fixes.requestCalled, err)
 		}

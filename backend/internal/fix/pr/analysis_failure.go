@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
 
@@ -39,6 +40,7 @@ type AnalysisFailure struct {
 	EvidenceWarnings          []string
 	SourceRepository          string
 	SourceBranch              string
+	TargetBranch              string
 	FailureRevision           string
 	GenerationBaseRevision    string
 	SourceHints               []string
@@ -53,11 +55,11 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	if !strings.EqualFold(failure.SourceRepository, wantRepo) {
 		return nil, fmt.Errorf("failure source repository does not match fix repository %s", wantRepo)
 	}
-	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.SourceBranch)
+	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.TargetBranch)
 	if err != nil {
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
-	if base.Branch != failure.SourceBranch || !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
+	if base.Branch != failure.TargetBranch || !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
 		return nil, fmt.Errorf("%w: generation base is no longer the current fix base", ErrPreviewBaseChanged)
 	}
 	fix, err := generateAnalysisWithAgent(ctx, genParams{
@@ -67,14 +69,16 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	if err != nil {
 		return nil, err
 	}
-	key := "fix-analysis::" + failure.ID + "::" + failure.AnalysisHash + "::" + failure.ChatResponseHash + "::" + failure.PreviewRequestHash + "::" + failure.FailureRevision + "::" + failure.SourceBranch + "::" + failure.GenerationBaseRevision
+	key := "fix-analysis::" + failure.ID + "::" + failure.AnalysisHash + "::" + failure.ChatResponseHash + "::" + failure.PreviewRequestHash + "::" + failure.FailureRevision + "::" + failure.SourceBranch + "::" + failure.TargetBranch + "::" + failure.GenerationBaseRevision
 	verified := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description := analysisFailureDescription(failure, fix)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
+	// The note is added after template filling so it always reaches the PR.
+	description = analysisBackportNote(failure) + description
 	body := analysisFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
-	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.SourceBranch)
+	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.TargetBranch)
 	if err != nil {
 		return nil, fmt.Errorf("rechecking current generation base: %w", err)
 	}
@@ -99,8 +103,11 @@ func validateAnalysisFailure(failure AnalysisFailure) error {
 		strings.TrimSpace(failure.BuildID) == "" || strings.TrimSpace(failure.TestName) == "" || strings.TrimSpace(failure.AnalysisGeneratedAt) == "" ||
 		strings.TrimSpace(failure.AnalysisHash) == "" || strings.TrimSpace(failure.ChatResponseHash) == "" || strings.TrimSpace(failure.PreviewRequestHash) == "" ||
 		strings.TrimSpace(failure.AssistantAnswer) == "" || strings.TrimSpace(failure.SourceRepository) == "" ||
-		strings.TrimSpace(failure.SourceBranch) == "" {
+		strings.TrimSpace(failure.SourceBranch) == "" || strings.TrimSpace(failure.TargetBranch) == "" {
 		return fmt.Errorf("exact analysis fix context is incomplete")
+	}
+	if !ghpr.ValidBranchName(failure.SourceBranch) || !ghpr.ValidBranchName(failure.TargetBranch) {
+		return fmt.Errorf("source and target branches must be valid branch names")
 	}
 	fullSHA := regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
 	if !fullSHA.MatchString(strings.TrimSpace(failure.FailureRevision)) || !fullSHA.MatchString(strings.TrimSpace(failure.GenerationBaseRevision)) {
@@ -202,22 +209,22 @@ func generateAnalysisWithAgent(ctx context.Context, gp genParams, failure Analys
 
 func analysisFailureInstruction(failure AnalysisFailure, maintainer, reviewFeedback string, maxFiles int, allowBash bool) string {
 	contextData, _ := json.Marshal(struct {
-		Project, JobID, BuildID, TestName, Source, AnalysisGeneratedAt, AnalysisHash string
-		RootCause, SuggestedFix, FailureMessage, FailureBody, AssistantAnswer        string
-		AssistantUnverified                                                          bool
-		AssistantUnverifiedReason                                                    string
-		ChatResponseHash, PreviewRequestHash                                         string
-		ProposedRevision                                                             *RevisionContext
-		ArtifactCitations                                                            []Evidence
-		EvidenceWarnings                                                             []string
-		SourceRepository, SourceBranch, FailureRevision, GenerationBaseRevision      string
-		SourceHints                                                                  []string
+		Project, JobID, BuildID, TestName, Source, AnalysisGeneratedAt, AnalysisHash          string
+		RootCause, SuggestedFix, FailureMessage, FailureBody, AssistantAnswer                 string
+		AssistantUnverified                                                                   bool
+		AssistantUnverifiedReason                                                             string
+		ChatResponseHash, PreviewRequestHash                                                  string
+		ProposedRevision                                                                      *RevisionContext
+		ArtifactCitations                                                                     []Evidence
+		EvidenceWarnings                                                                      []string
+		SourceRepository, SourceBranch, TargetBranch, FailureRevision, GenerationBaseRevision string
+		SourceHints                                                                           []string
 	}{
 		failure.Project, failure.JobID, failure.BuildID, failure.TestName, failure.Source, failure.AnalysisGeneratedAt, failure.AnalysisHash,
 		failure.RootCause, failure.SuggestedFix, failure.FailureMessage, failure.FailureBody, failure.AssistantAnswer,
 		failure.AssistantUnverified, failure.AssistantUnverifiedReason, failure.ChatResponseHash, failure.PreviewRequestHash,
 		failure.ProposedRevision, failure.ArtifactCitations, failure.EvidenceWarnings,
-		failure.SourceRepository, failure.SourceBranch, failure.FailureRevision, failure.GenerationBaseRevision,
+		failure.SourceRepository, failure.SourceBranch, failure.TargetBranch, failure.FailureRevision, failure.GenerationBaseRevision,
 		failure.SourceHints,
 	})
 	var b strings.Builder
@@ -233,7 +240,12 @@ func analysisFailureInstruction(failure AnalysisFailure, maintainer, reviewFeedb
 	if failure.AssistantUnverified {
 		b.WriteString("The selected assistant answer is explicitly unverified. Treat it only as an investigation hypothesis.\n")
 	}
-	b.WriteString("Failure artifacts and the published diagnosis came from the historical failure revision. The generation base is the current full commit on the explicit tested branch. Re-evaluate the historical remediation against current source and do not assume it still applies. Make any supported change directly against the generation base. If candidate code is absent there, investigate before deciding whether another location is causally relevant.\n")
+	if failure.TargetBranch == failure.SourceBranch {
+		b.WriteString("Failure artifacts and the published diagnosis came from the historical failure revision. The generation base is the current full commit on the explicit tested branch. Re-evaluate the historical remediation against current source and do not assume it still applies. Make any supported change directly against the generation base. If candidate code is absent there, investigate before deciding whether another location is causally relevant.\n")
+	} else {
+		fmt.Fprintf(&b, "The failure was observed on branch %q at revision %s. You are patching branch %q at generation base %s, a different branch whose code may differ. Failure artifacts and the published diagnosis came from the historical failure revision. Re-evaluate the historical remediation against the generation base and do not assume it still applies. Make any supported change directly against the generation base. If the causal logic is not present on branch %q, make no change and explain why.\n",
+			failure.SourceBranch, failure.FailureRevision, failure.TargetBranch, failure.GenerationBaseRevision, failure.TargetBranch)
+	}
 	b.WriteString(repositoryChangeGuidance)
 	b.WriteString("Do not delete or rename files.\n")
 	if maxFiles > 0 {
@@ -280,7 +292,17 @@ func analysisFailureDescription(failure AnalysisFailure, fix *proposedFix) strin
 	case len(failure.EvidenceWarnings) > 0:
 		evidenceQualification = "\n**Evidence qualification:** The selected chat answer has evidence warnings; warned claims remain hypotheses.\n"
 	}
-	return fmt.Sprintf("**Proposed change:** %s\n\n**Analyzed failure:** `%s` in build `%s` of `%s`\n**Published root cause:** %s\n**Selected chat finding:** %s%s\n**Failure source:** `%s@%s`\n**Generation base:** `%s@%s`\n\n**Before merging, a human must:**\n- Verify the change against the exact failed test or build.\n- Confirm the repository change is preferable to an external platform action.", oneLine(fix.rationale), failure.TestName, failure.BuildID, failure.JobName, oneLine(failure.RootCause), oneLine(failure.AssistantAnswer), evidenceQualification, failure.SourceRepository, failure.FailureRevision, failure.SourceRepository, failure.GenerationBaseRevision)
+	return fmt.Sprintf("**Proposed change:** %s\n\n**Analyzed failure:** `%s` in build `%s` of `%s`\n**Published root cause:** %s\n**Selected chat finding:** %s%s\n**Failure source:** `%s@%s` on branch `%s`\n**Generation base:** `%s@%s` on branch `%s`\n\n**Before merging, a human must:**\n- Verify the change against the exact failed test or build.\n- Confirm the repository change is preferable to an external platform action.", oneLine(fix.rationale), failure.TestName, failure.BuildID, failure.JobName, oneLine(failure.RootCause), oneLine(failure.AssistantAnswer), evidenceQualification, failure.SourceRepository, failure.FailureRevision, failure.SourceBranch, failure.SourceRepository, failure.GenerationBaseRevision, failure.TargetBranch)
+}
+
+// analysisBackportNote suggests a cherry-pick when the PR targets another branch.
+// The command stays mid-line so Prow does not treat the PR body as a request.
+func analysisBackportNote(failure AnalysisFailure) string {
+	if failure.TargetBranch == failure.SourceBranch {
+		return ""
+	}
+	return fmt.Sprintf("> [!NOTE]\n> The failure was observed on `%s` at `%s`. This change targets `%s`. After it merges, comment `/cherry-pick %s` to backport it.\n\n",
+		failure.SourceBranch, failure.FailureRevision, failure.TargetBranch, failure.SourceBranch)
 }
 
 func analysisFailurePRBody(failure AnalysisFailure, fix *proposedFix, verified VerifyResult, key, dashboardURL, description string) string {

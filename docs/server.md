@@ -33,7 +33,8 @@ The server reads data written by the authoritative in-process fetcher or worker.
 | `GET /api/failures/{id}/eligibility` | Run deterministic action eligibility and pinned-source preflight without generating a draft. |
 | `POST /api/failures/{id}/create-issue/preview` | Preview an issue without filing it. |
 | `POST /api/failures/{id}/propose-fix/preview` | Preview a Fix PR without opening it. Registered only when Fix is enabled. |
-| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit a test- or cause-scoped chat finding, anchored to one exact failed JUnit test or build-level failure, for asynchronous Fix preview generation. |
+| `GET /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/branches` | Report the tested branch and the repository's default branch for an exact-analysis Fix. |
+| `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/requests` | Admit a test- or cause-scoped chat finding, anchored to one exact failed JUnit test or build-level failure, for asynchronous Fix preview generation. `branch_target` is `tested` (the default) or `default`. |
 | `POST /api/analysis-chat/sessions/{id}/requests/{requestID}/fix/preview` | Synchronous pattern chat-to-fix preview for direct API clients. |
 | `POST /api/failures/{id}/{action}/requests` | Create a persistent asynchronous issue or Fix draft request. |
 | `GET /api/action-requests/{id}` | Read the owner's pending, ready, failed, cancelled, or confirmed request. |
