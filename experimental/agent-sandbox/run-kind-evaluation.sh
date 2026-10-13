@@ -298,7 +298,7 @@ agentSandbox:
     pollInterval: 200ms
     resources:
       requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
-      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
+      limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 256Mi}
   rbac:
     create: true
     fixClientServiceAccountName: ""

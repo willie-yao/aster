@@ -368,9 +368,6 @@ agentSandbox:
         tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
     pollInterval: 250ms
-    resources:
-      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
-      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
   rbac:
     create: true
     fixClientServiceAccountName: ""
@@ -385,6 +382,14 @@ server:
 VALUES
 
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-render.yaml"
+
+grep -A1 -F 'name: AGENT_SANDBOX_MEMORY_LIMIT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "1Gi"'
+grep -A1 -F 'name: AGENT_SANDBOX_MEMORY_REQUEST' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "128Mi"'
+grep -Fq "variables.container.resources.limits['memory'] == \\\"1Gi\\\"" "$tmp/agent-sandbox-render.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  --set agentSandbox.fixRuntime.resources.limits.memory=512Mi > "$tmp/agent-sandbox-memory-override.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_MEMORY_LIMIT' "$tmp/agent-sandbox-memory-override.yaml" | grep -Fq 'value: "512Mi"'
+grep -Fq "variables.container.resources.limits['memory'] == \\\"512Mi\\\"" "$tmp/agent-sandbox-memory-override.yaml"
 
 sed -e 's@chat_completions@responses@g' -e 's@/chat/completions@/responses@g' \
   -e 's@fixture-model@gpt-6-sol@g' -e 's@reasoning_effort: high@reasoning_effort: ""@g' \

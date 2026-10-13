@@ -289,9 +289,6 @@ agentSandbox:
         tokenKey: AI_TOKEN
       publicCAPrivateDNS: false
     pollInterval: 250ms
-    resources:
-      requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi}
-      limits: {cpu: "1", memory: 512Mi, ephemeral-storage: 256Mi}
   rbac:
     create: true
     fixClientServiceAccountName: ""
