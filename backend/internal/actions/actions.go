@@ -770,7 +770,11 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 	aiClient := s.aiClient()
 	ar := eff.AgentRuntime
 
-	critique, critiqueRetries, err := fixruntime.Critique(aiClient, eff.CritiqueRetries)
+	var reviewer fixpr.Completer
+	if aiClient != nil {
+		reviewer = aiClient
+	}
+	critique, critiqueRetries, err := fixruntime.Critique(reviewer, eff.CritiqueRetries)
 	if err != nil {
 		return nil, err
 	}

@@ -16,7 +16,7 @@ The engine requires a current, unambiguous supported subject and an accessible c
 4. Stage the patch and run the configured exact validators inside the executor.
 5. Return the patch and ordered command results to the dashboard.
 6. Reconstruct the canonical patch independently and reject unexpected files, paths, identities, commands, or results.
-7. Show the exact draft, diff, warnings, validation results, and target.
+7. Run one warning-only Fix critique when the dashboard AI client is available, then show the exact draft, diff, warnings, validation results, and target.
 8. Open the draft pull request only after explicit confirmation of that preview.
 
 A preview is a review artifact, not proof that the patch fixes the failure. Agent Sandbox validators, source verification, Prow CI, and human review are separate gates. The engine never approves or merges the pull request.
@@ -25,9 +25,11 @@ A preview is a review artifact, not proof that the patch fixes the failure. Agen
 
 Every Fix entry point gives the coding agent the same rule:
 
-- Propose a patch when code in the repository made, or failed to guard, the request that hit the observed failure condition, even when the condition itself is external. A change that avoids the condition or fails fast with a clear message qualifies, and the agent cites that code path by file and line.
-- Treat the published suggested fix as one candidate. An operational remedy, such as publishing a missing image, does not rule out a repository guard.
-- Make no change when no repository code is causally involved, for example when the fix belongs in another repository. Do not skip or weaken the failing test to produce a patch.
+- First look for a minimal change that makes the failed operation succeed, such as correcting a value, version, path, or repository choice this code made. Verify the causal code path against the repository and cite it by file and line.
+- Well-documented external facts, such as which distribution releases a vendor publishes packages for, may support the change. State them in the summary as assumptions with how to validate them.
+- Treat the published suggested fix as one candidate, not the default.
+- If no resolving change is identifiable, a fail-fast guard is acceptable only when it gives a clearer, earlier error than today. Start the summary with `Guard only:` and say what still needs fixing.
+- Make no change when no repository code is causally involved, for example when the fix belongs in another repository or the cause is purely operational. Do not edit unrelated code or skip or weaken the failing test to produce a patch.
 
 The agent ends with a short summary of its change, the causal code path, and its caveats. The draft's **Proposed change** uses that summary, never the published suggested fix. If the summary is missing or fails draft-text validation, it lists the changed files instead.
 
@@ -36,6 +38,7 @@ The agent ends with a short summary of its change, the causal code path, and its
 When the agent returns a patch, quality concerns become warnings on the ready preview and the maintainer decides whether to open the draft:
 
 - failed or timed-out validators, also shown as the verification verdict;
+- concrete concerns from the Fix critique, or a warning that critique was unavailable;
 - analysis, evidence qualification, and eligibility concerns.
 
 These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
@@ -90,6 +93,8 @@ The executor mounts only bounded workspace and temporary volumes. Its workload S
 
 The PR targets the branch the change was generated against: the failure's own branch for an exact-analysis chat finding (so a `release-1.25` failure opens a `release-1.25` pull request), and the source repository's default branch otherwise. A branch is never pushed to a repository the configured credential cannot write.
 
+Commits preserve existing file modes from the pinned base tree, including executable scripts. New files use mode `100644`.
+
 ## Identity, CLA, and the token
 
 Previews and confirmations use the server-held `BOT_TOKEN`. It must be a PAT for the contributor identity that creates the Fix branch and pull request. It is not the GitHub Actions `GITHUB_TOKEN`.
@@ -121,7 +126,7 @@ ai:
 
 Agent Sandbox is the only Fix runtime. The example uses provider-default reasoning effort: pinned OpenCode 1.18.2 ignores explicit effort for GPT-6 on Copilot Responses, so Aster rejects it. Copilot's GPT-5 and later models use Responses except `gpt-5-mini`, which uses Chat Completions. Other Copilot models, including Claude, use Chat Completions; the pinned provider removes the `gpt-5-chat-latest` alias. Non-Copilot endpoints continue to use OpenCode's generic OpenAI-compatible or OpenAI transport.
 
-The runtime defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no model critique retry. `max_turns` reserves one step per validator, then bounds the coding agent's model steps with one additional wrap-up step. The executor stops runs that exceed the step allowance; the elapsed timeout still applies. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
+The runtime defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no regeneration. `critique_retries: 0` still runs one warning-only Fix review when the dashboard AI client is available; review concerns or errors never trigger another Agent Sandbox run. `max_turns` reserves one step per validator, then bounds the coding agent's model steps with one additional wrap-up step. The executor stops runs that exceed the step allowance; the elapsed timeout still applies. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
 
 For Agent Sandbox, the configured timeout bounds executor work from process startup and remains capped at 30 minutes. The Pod deadline adds a fixed 2-minute startup allowance and 15 seconds for result finalization. The server run deadline adds another 5 seconds for result retrieval. Cleanup confirmation has a separate 90-second budget, and Sandbox `shutdownTime` covers the run and cleanup budgets. Startup that exceeds the allowance can still prevent a result. Timed-out results retain a bounded, redacted operator summary and any valid partial command results.
 
@@ -163,7 +168,6 @@ Hidden GitHub markers and private state deduplicate the same job and root-cause 
 ## Known limitations
 
 - A draft preview is not a correctness proof and never bypasses repository CI or human review. Aster does not follow a merged pull request through Prow and never certifies that it fixed the original failure. Later dashboard runs are fresh observations, not proof attributed to a particular pull request.
-- Edited files are committed as regular files, so a reviewer must notice an unintended executable-bit change.
 - Local state plus GitHub search deduplication is not atomic across overlapping requests. Serialize concurrent writers.
 - A newly created fork may not be immediately ready for the first push. A later explicit retry can succeed after GitHub finishes populating it.
 - The generic executor supports only tools present in its immutable image.

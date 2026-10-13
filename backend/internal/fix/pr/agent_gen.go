@@ -85,7 +85,7 @@ Does this change have concrete defects (not style)? Answer with one line of JSON
 // agentInstruction composes an investigative fix task for the coding agent.
 func agentInstruction(p models.PatternAnalysis, generationContext *GenerationContext, maintainer, reviewFeedback string, maxFiles int, allowBash bool) string {
 	var b strings.Builder
-	b.WriteString("Investigate this published CI failure in the repository at the pinned base. If repository evidence supports a fix, make the MINIMAL code change. The published analysis is a hypothesis, not a verified implementation scope.\n\n")
+	b.WriteString("Investigate this published CI failure in the repository at the pinned base and make the minimal change that resolves the failure, verified against the repository. The published analysis is a hypothesis, not a verified implementation scope.\n\n")
 	if s := strings.TrimSpace(p.SharedRootCause); s != "" {
 		b.WriteString("Published root-cause hypothesis:\n" + s + "\n\n")
 	} else if s := strings.TrimSpace(p.Summary); s != "" {
@@ -115,7 +115,7 @@ func agentInstruction(p models.PatternAnalysis, generationContext *GenerationCon
 	}
 	b.WriteString("Rules:\n")
 	b.WriteString("- Investigate the repository before deciding whether the published hypothesis is correct.\n")
-	b.WriteString("- Make the smallest change supported by repository evidence. Prefer configuration, template, or manifest files when appropriate.\n")
+	b.WriteString("- Make the smallest change verified against the repository. Prefer configuration, template, or manifest files when appropriate.\n")
 	b.WriteString("- Do not reformat or touch unrelated code.\n")
 	b.WriteString("- Do not delete or rename files.\n")
 	if maxFiles > 0 {

@@ -318,7 +318,7 @@ The focused feature guides own their credential, admission, timeout, and securit
 | `model_provider.auth.type` | `bearer` or `none` for direct mode; `none` for gateway mode. |
 | `model_provider.public_ca_private_dns` | Fix-only acknowledgement for an explicit gateway using a privately resolved public FQDN. |
 
-Each validator is an `argv` list plus a timeout. Shell command strings, generic dispatchers, coding-agent re-entry, and shell interpretation are rejected. The final validator is always the exact staged-diff check. Generation is one-shot; validator failure cannot trigger model repair, and `critique_retries` must be zero.
+Each validator is an `argv` list plus a timeout. Shell command strings, generic dispatchers, coding-agent re-entry, and shell interpretation are rejected. The final validator is always the exact staged-diff check. Generation is one-shot; validator failure cannot trigger model repair, and `critique_retries` must be zero. Zero disables regeneration, not review: an available dashboard AI client critiques each patch once, with concerns and review errors shown as preview warnings.
 
 Secret names, image digests, namespace, ServiceAccounts, resources, networking, CA trust, and RuntimeClass are Helm-owned deployment settings. See:
 
