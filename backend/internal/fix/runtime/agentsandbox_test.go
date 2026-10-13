@@ -226,6 +226,31 @@ func TestAgentSandboxProductionConstructorPinsRuntimeDefaultAppArmor(t *testing.
 	assertAppArmorMode(t, runtime.workloadPodSpec(mustJSON(t, request), request), true)
 }
 
+func TestNormalizeAgentSandboxOptionsResources(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		memoryLimit string
+		wantLimit   string
+	}{
+		{name: "defaults", wantLimit: "1Gi"},
+		{name: "explicit memory limit", memoryLimit: "512Mi", wantLimit: "512Mi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := normalizeAgentSandboxOptions(AgentSandboxOptions{
+				Resources: AgentSandboxResources{MemoryLimit: tc.memoryLimit},
+			})
+			want := AgentSandboxResources{
+				CPURequest: "100m", CPULimit: "1",
+				MemoryRequest: "128Mi", MemoryLimit: tc.wantLimit, EphemeralStorage: "256Mi",
+			}
+			if opts.Resources != want {
+				t.Fatalf("resources = %+v, want %+v", opts.Resources, want)
+			}
+		})
+	}
+}
+
 func TestAgentSandboxProductionRejectsAppArmorUnavailableCapability(t *testing.T) {
 	opts := testAgentSandboxOptions()
 	opts.testOnly = false
@@ -326,7 +351,7 @@ func TestAgentSandboxRuntimeIdentityIncludesWorkloadConfiguration(t *testing.T) 
 		func(opts *AgentSandboxOptions) { opts.Namespace = "other-exec" },
 		func(opts *AgentSandboxOptions) { opts.ServiceAccountName = "other-workload" },
 		func(opts *AgentSandboxOptions) { opts.RuntimeClassName = "other-runtime" },
-		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "1Gi" },
+		func(opts *AgentSandboxOptions) { opts.Resources.MemoryLimit = "2Gi" },
 		func(opts *AgentSandboxOptions) {
 			opts.ModelProvider.ReasoningEffort = modelprovider.ReasoningEffortHigh
 		},

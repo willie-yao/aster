@@ -223,6 +223,8 @@ The shared volume contains public dashboard data and private operational state. 
 
 The project owns generation limits and exact validators under `ai.fix_prs.agent_runtime`. Helm owns the runtime namespace, immutable images, ServiceAccounts, network policy, provider Secret reference, CA trust, and platform resources. Those two configurations must agree. The schema rejects stale duplicate execution bounds under `agentSandbox.fixRuntime`.
 
+Each Fix Sandbox defaults to a `1Gi` memory limit and a `128Mi` memory request. Override these with `agentSandbox.fixRuntime.resources.limits.memory` and `agentSandbox.fixRuntime.resources.requests.memory`.
+
 When this runtime is enabled, Helm requires `ai.fix_prs.agent_runtime.timeout` in whole minutes from `1m` through `30m`. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts accept positive whole seconds or minutes within the execution timeout.
 
 The timeout bounds executor work, not image pull or VM startup. Admission pins the Pod deadline to that timeout plus a 2-minute startup allowance and 15-second result grace. Cleanup confirmation allows 90 seconds for Pod and VM termination; see [Fix generation deadlines](fix-prs.md#required-project-configuration) for the server and Sandbox shutdown bounds.

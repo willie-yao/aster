@@ -51,7 +51,7 @@ const (
 	defaultSandboxCPURequest              = "100m"
 	defaultSandboxCPULimit                = "1"
 	defaultSandboxMemoryRequest           = "128Mi"
-	defaultSandboxMemoryLimit             = "512Mi"
+	defaultSandboxMemoryLimit             = "1Gi"
 	defaultSandboxDiskLimit               = "256Mi"
 )
 
