@@ -43,6 +43,7 @@ import { JobConfigMetadata } from "../components/JobConfigMetadata";
 import { ResultLedger } from "../components/ResultLedger";
 import { RuntimeTrend } from "../components/RuntimeTrend";
 import { overviewTypography } from "../theme/overview";
+import { stickyRailSx } from "../theme/helpers";
 import {
   currentJobStatus,
   executedResultTests,
@@ -147,15 +148,14 @@ export function JobDetailPrimaryLayout({
         {buildFailureAnalysis}
       </Stack>
       <Box
-        sx={{
+        sx={(theme) => ({
           display: "flex",
           flexDirection: "column",
           gap: 2,
           minWidth: 0,
-          position: { lg: "sticky" },
-          top: { lg: 80 },
           alignSelf: "start",
-        }}
+          ...stickyRailSx(theme),
+        })}
       >
         {runHistory}
         {runtimeTrend}

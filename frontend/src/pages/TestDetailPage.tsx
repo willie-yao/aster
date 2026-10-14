@@ -46,6 +46,7 @@ import { RunMetadata } from "../components/RunMetadata";
 import { RuntimeTrend } from "../components/RuntimeTrend";
 import { AnalysisBriefing } from "../components/AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
+import { stickyRailSx } from "../theme/helpers";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
 import { summarizeRuntime, testRuntimePoints } from "../lib/runtimeTrend";
 
@@ -969,12 +970,11 @@ export function TestDetailPage() {
 
         <Stack
           spacing={2}
-          sx={{
+          sx={(theme) => ({
             minWidth: 0,
-            position: { lg: "sticky" },
-            top: { lg: 80 },
             alignSelf: "start",
-          }}
+            ...stickyRailSx(theme),
+          })}
         >
           {runHistory}
           <RuntimeTrend
