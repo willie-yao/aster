@@ -30,7 +30,8 @@ const (
 func exactJUnitDetail() models.JobDetail {
 	return models.JobDetail{JobType: models.JobTypePeriodic, Name: "periodic-capz", JobID: "periodic-capz", Runs: []models.BuildResult{{
 		BuildInfo: models.BuildInfo{
-			BuildID: "123", JobName: "periodic-capz",
+			BuildID: "123", JobName: "periodic-capz", ProwURL: "https://prow.example/view/123",
+			WebURL:   "https://artifacts.example/123",
 			RepoRefs: map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "main:" + analysisFixRevision},
 		},
 		TestCases: []models.TestCase{{
@@ -82,6 +83,31 @@ func exactBuildRequestInput() AnalysisFixInput {
 	input.SourceBranch = "release-1.24"
 	input.AssistantAnswer = "Guard the az CLI installation before invoking it."
 	return input
+}
+
+func TestAnalysisFailureForGenerationCarriesRecordedProwURL(t *testing.T) {
+	for _, detail := range []models.JobDetail{exactJUnitDetail(), exactBuildDetail()} {
+		for _, prowURL := range []string{"", "https://prow.example/view/123"} {
+			t.Run(detail.Runs[0].TestCases[0].Name+"/url="+prowURL, func(t *testing.T) {
+				dir := t.TempDir()
+				detail.Runs[0].ProwURL = prowURL
+				writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+				service := NewService(exactAnalysisConfig(), dir, AIConfig{})
+				identity := exactIdentity()
+				if detail.Runs[0].TestCases[0].Source == models.TestCaseSourceBuild {
+					identity = exactBuildIdentity()
+				}
+				subject, err := service.ResolveAnalysisActionSubject(identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				failure := analysisFailureForGeneration(subject, exactAnalysisRequestInput())
+				if failure.ProwURL != prowURL {
+					t.Fatalf("generation Prow URL = %q, want %q", failure.ProwURL, prowURL)
+				}
+			})
+		}
+	}
 }
 
 func TestResolveAnalysisActionSubjectSupportsExactBuildIdentity(t *testing.T) {

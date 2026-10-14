@@ -527,6 +527,7 @@ func analysisFailureForGeneration(subject *AnalysisActionSubject, input Analysis
 	return fixpr.AnalysisFailure{
 		ID: subject.ID, Project: subject.Identity.Project, JobID: subject.Identity.JobID, JobName: subject.JobName,
 		BuildID: subject.Identity.BuildID, TestName: subject.Identity.TestName, Source: subject.Identity.Source,
+		ProwURL:             subject.Build.ProwURL,
 		AnalysisGeneratedAt: input.TargetAnalysis.GeneratedAt,
 		AnalysisHash:        subject.ContentHash, RootCause: input.TargetAnalysis.RootCause, SuggestedFix: input.TargetAnalysis.SuggestedFix,
 		FailureMessage:  boundedAnalysisFailureText(subject.Failure.FailureMessage),

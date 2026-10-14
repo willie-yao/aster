@@ -1003,6 +1003,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	analysis := subject.Build.Failure.AIAnalysis
 	gf, err := mgr.GenerateBuildPreview(ctx, fixpr.BuildFailure{
 		ID: subject.ID, JobID: subject.Build.JobID, JobName: subject.Build.JobName, BuildID: subject.Build.Build.BuildID,
+		ProwURL:   subject.Build.Build.ProwURL,
 		RootCause: analysis.RootCause, SuggestedFix: analysis.SuggestedFix, RelevantFiles: subject.Build.RelevantFiles, SourceFiles: sourceFiles,
 	}, instruction)
 	if err != nil {
@@ -1055,15 +1056,19 @@ func (s *Service) generateFixPreviewForPattern(
 			generationPattern.RelevantFiles = append(generationPattern.RelevantFiles, target.Path)
 		}
 	}
+	builds, err := s.patternFixBuilds(pattern)
+	if err != nil {
+		return PreviewResult{}, nil, err
+	}
 	mgr, err := s.buildFixManagerFor(ctx, userToken, destination)
 	if err != nil {
 		return PreviewResult{}, nil, err
 	}
 	var gf *fixpr.GeneratedFix
 	if generationContext == nil {
-		gf, err = mgr.GeneratePreview(ctx, generationPattern, instruction)
+		gf, err = mgr.GeneratePreview(ctx, generationPattern, instruction, builds...)
 	} else {
-		gf, err = mgr.GeneratePreviewWithContext(ctx, generationPattern, instruction, *generationContext)
+		gf, err = mgr.GeneratePreviewWithContext(ctx, generationPattern, instruction, *generationContext, builds...)
 	}
 	if err != nil {
 		return PreviewResult{}, nil, safeFixPreviewError(err)
@@ -1077,6 +1082,22 @@ func (s *Service) generateFixPreviewForPattern(
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
 		VerifyOutput: gf.Preview.Verify.Output, Warnings: boundedWarnings(plainWarnings(gf.Warnings...)...),
 	}, s.patternFixPreviewEntry(pattern, gf, destination), nil
+}
+
+func (s *Service) patternFixBuilds(pattern models.PatternAnalysis) ([]models.BuildInfo, error) {
+	data, err := osReadFile(s.dataDir, pattern.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("reading Fix build metadata for %s: %w", pattern.JobID, err)
+	}
+	var detail models.JobDetail
+	if err := json.Unmarshal(data, &detail); err != nil {
+		return nil, fmt.Errorf("decoding Fix build metadata for %s: %w", pattern.JobID, err)
+	}
+	builds := make([]models.BuildInfo, 0, len(detail.Runs))
+	for _, run := range detail.Runs {
+		builds = append(builds, run.BuildInfo)
+	}
+	return builds, nil
 }
 
 func (s *Service) patternFixPreviewEntry(pattern models.PatternAnalysis, fix *fixpr.GeneratedFix, destinations ...project.FixDestination) *previewEntry {

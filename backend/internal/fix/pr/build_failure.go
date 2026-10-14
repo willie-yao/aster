@@ -13,6 +13,7 @@ type BuildFailure struct {
 	JobID         string
 	JobName       string
 	BuildID       string
+	ProwURL       string
 	RootCause     string
 	SuggestedFix  string
 	RelevantFiles []string
@@ -115,7 +116,8 @@ func critiqueBuildFix(ctx context.Context, client Completer, failure BuildFailur
 
 func buildFailureDescription(failure BuildFailure, fix *proposedFix) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**Proposed change:** %s\n\n**Analyzed build:** `%s` in `%s`\n", oneLine(fix.rationale), failure.BuildID, failure.JobName)
+	fmt.Fprintf(&b, "**Proposed change:** %s\n\n**Analyzed build:** %s of `%s`\n",
+		oneLine(fix.rationale), buildLink(failure.BuildID, failure.ProwURL), failure.JobName)
 	if rootCause := strings.TrimSpace(failure.RootCause); rootCause != "" {
 		fmt.Fprintf(&b, "**Published root-cause hypothesis:** %s\n", oneLine(rootCause))
 	}
@@ -125,15 +127,12 @@ func buildFailureDescription(failure BuildFailure, fix *proposedFix) string {
 
 func buildFailurePRBody(failure BuildFailure, fix *proposedFix, verified VerifyResult, key, dashboardURL, description string) string {
 	var b strings.Builder
-	b.WriteString("> [!WARNING]\n> Draft PR proposed from one analyzed CI build. Review carefully; this analysis covers one run only.\n\n")
-	b.WriteString(verifyBanner(verified))
 	b.WriteString(strings.TrimSpace(description))
-	b.WriteString("\n\n<details><summary>Proposed diff</summary>\n\n```diff\n")
+	b.WriteString("\n\nDraft PR proposed from one analyzed CI build. Review carefully; this analysis covers one run only.\n\n")
+	b.WriteString(verifySummary(verified))
+	b.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
 	b.WriteString(fix.diff)
 	b.WriteString("\n```\n</details>\n")
-	if dashboardURL != "" {
-		fmt.Fprintf(&b, "\nDashboard: %s\n", dashboardURL)
-	}
-	fmt.Fprintf(&b, "\n%s\n", markerFor(key))
+	b.WriteString(fixPRFooter(key, dashboardURL))
 	return b.String()
 }

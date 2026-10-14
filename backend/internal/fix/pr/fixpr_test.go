@@ -380,7 +380,12 @@ func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 	reviewer := &fakeCompleter{}
 	manager := newManager(t, &fakePR{}, agent, Options{Critique: reviewer, CritiqueRetries: 1})
 	generationContext := validGenerationContext()
-	fix, err := manager.GeneratePreviewWithContext(t.Context(), systemicPattern("etcd"), "keep compatibility", generationContext)
+	pattern := systemicPattern("etcd")
+	pattern.SharedBuilds = []string{"123"}
+	fix, err := manager.GeneratePreviewWithContext(
+		t.Context(), pattern, "keep compatibility", generationContext,
+		models.BuildInfo{BuildID: "123", ProwURL: bodyTestProwURL},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,6 +395,12 @@ func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 	}
 	if !strings.Contains(reviewer.lastUser, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) {
 		t.Fatalf("review context = %q", reviewer.lastUser)
+	}
+	if !strings.Contains(fix.Body, "[build 123](<"+bodyTestProwURL+">)") {
+		t.Fatalf("chat-backed pattern Fix dropped its Prow link: %s", fix.Body)
+	}
+	if strings.Contains(agent.spec.Instruction, bodyTestProwURL) || strings.Contains(reviewer.lastUser, bodyTestProwURL) {
+		t.Fatal("PR body metadata changed the Fix or critique prompt")
 	}
 }
 

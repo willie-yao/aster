@@ -41,6 +41,26 @@ func writeJobDetail(t *testing.T, dataDir, name string, detail models.JobDetail)
 	}
 }
 
+func TestPatternFixBuildsUsesRecordedProwURLs(t *testing.T) {
+	dir := t.TempDir()
+	detail := models.JobDetail{JobID: "periodic-x", Runs: []models.BuildResult{
+		{BuildInfo: models.BuildInfo{BuildID: "123", ProwURL: "https://prow.example/view/123", WebURL: "https://artifacts.example/123"}},
+		{BuildInfo: models.BuildInfo{BuildID: "124", WebURL: "https://artifacts.example/124"}},
+	}}
+	writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
+	service := NewService(&project.Config{}, dir, AIConfig{})
+	builds, err := service.patternFixBuilds(models.PatternAnalysis{JobID: detail.JobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(builds) != 2 || builds[0].ProwURL != detail.Runs[0].ProwURL || builds[1].ProwURL != "" {
+		t.Fatalf("recorded Prow URLs changed: %+v", builds)
+	}
+	if _, err := service.patternFixBuilds(models.PatternAnalysis{JobID: "missing"}); err == nil {
+		t.Fatal("missing build metadata was silently ignored")
+	}
+}
+
 func systemicPattern() models.PatternAnalysis {
 	pa := models.PatternAnalysis{
 		JobID: "periodic-x", Systemic: true, SharedRootCause: "etcd timeout", SuggestedFix: "Add MissingHelper.",

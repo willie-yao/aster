@@ -256,8 +256,10 @@ func executionVerifyResult(baseSHA string, execution *ExecutionVerification) Ver
 
 // renderBody builds the final PR description (reformatted to follow the repo PR
 // template when a filler is configured) and the full PR body that embeds it.
-func (m *Manager) renderBody(ctx context.Context, p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key string) (description, body string) {
-	description = prDescription(p, fix)
+func (m *Manager) renderBody(
+	ctx context.Context, p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key string, builds []models.BuildInfo,
+) (description, body string) {
+	description = prDescription(p, fix, builds)
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
@@ -340,7 +342,7 @@ func generatedFixWarningBanner(warnings []string) string {
 	if len(warnings) == 0 {
 		return ""
 	}
-	return "> [!WARNING]\n> This draft came from a manual investigation request. " + strings.Join(warnings, " ") + "\n\n"
+	return "**Investigation warnings:** This draft came from a manual investigation request. " + strings.Join(warnings, " ") + "\n\n"
 }
 
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
@@ -402,19 +404,25 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 // and body without opening anything. instruction is an optional maintainer
 // directive that steers the edit. The returned *GeneratedFix is opaque to
 // callers and is passed back to OpenFromPreview to open the PR.
-func (m *Manager) GeneratePreview(ctx context.Context, p models.PatternAnalysis, instruction string) (*GeneratedFix, error) {
-	return m.generatePreview(ctx, p, instruction, nil)
+func (m *Manager) GeneratePreview(
+	ctx context.Context, p models.PatternAnalysis, instruction string, builds ...models.BuildInfo,
+) (*GeneratedFix, error) {
+	return m.generatePreview(ctx, p, instruction, nil, builds)
 }
 
 // GeneratePreviewWithContext adds one bounded selected chat response to generation.
-func (m *Manager) GeneratePreviewWithContext(ctx context.Context, p models.PatternAnalysis, instruction string, generationContext GenerationContext) (*GeneratedFix, error) {
+func (m *Manager) GeneratePreviewWithContext(
+	ctx context.Context, p models.PatternAnalysis, instruction string, generationContext GenerationContext, builds ...models.BuildInfo,
+) (*GeneratedFix, error) {
 	if err := generationContext.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid fix context: %w", err)
 	}
-	return m.generatePreview(ctx, p, instruction, &generationContext)
+	return m.generatePreview(ctx, p, instruction, &generationContext, builds)
 }
 
-func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis, instruction string, generationContext *GenerationContext) (*GeneratedFix, error) {
+func (m *Manager) generatePreview(
+	ctx context.Context, p models.PatternAnalysis, instruction string, generationContext *GenerationContext, builds []models.BuildInfo,
+) (*GeneratedFix, error) {
 	if !patternTargetsRepository(p, m.opts.SourceOwner, m.opts.SourceName) {
 		return nil, fmt.Errorf("remediation targets do not match fix repository %s/%s", m.opts.SourceOwner, m.opts.SourceName)
 	}
@@ -431,7 +439,7 @@ func (m *Manager) generatePreview(ctx context.Context, p models.PatternAnalysis,
 		return nil, err
 	}
 	v := executionVerifyResult(base.HeadSHA, fix.executionVerification)
-	description, body := m.renderBody(ctx, p, fix, v, key)
+	description, body := m.renderBody(ctx, p, fix, v, key, builds)
 	generated := &GeneratedFix{
 		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
 		Title:                 prTitle(p),
@@ -676,10 +684,9 @@ func boundedTitle(title string) string {
 
 func prBody(p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key, dashboardURL, description string) string {
 	var sb strings.Builder
-	sb.WriteString("> [!WARNING]\n> Draft PR proposed from a CI failure investigation. Review carefully before use; the change is a starting point, not a merge-ready fix.\n\n")
-	sb.WriteString(verifyBanner(v))
 	sb.WriteString(strings.TrimSpace(description))
-	sb.WriteString("\n\n")
+	sb.WriteString("\n\nDraft PR proposed from a CI failure investigation. Review carefully before use; the change is a starting point, not a merge-ready fix.\n\n")
+	sb.WriteString(verifySummary(v))
 	sb.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
 	sb.WriteString(fix.diff)
 	sb.WriteString("\n```\n</details>\n")
@@ -688,22 +695,19 @@ func prBody(p models.PatternAnalysis, fix *proposedFix, v VerifyResult, key, das
 		sb.WriteString(strings.TrimSpace(v.Output))
 		sb.WriteString("\n```\n</details>\n")
 	}
-	if dashboardURL != "" {
-		fmt.Fprintf(&sb, "\nDashboard: %s\n", dashboardURL)
-	}
-	fmt.Fprintf(&sb, "\n%s\n", markerFor(key))
+	sb.WriteString(fixPRFooter(key, dashboardURL))
 	return sb.String()
 }
 
-// verifyBanner renders the verification verdict line for the PR body. Passed and
+// verifySummary renders the verification verdict line for the PR body. Passed and
 // failed are stated plainly; skipped is silent to avoid noise on deployments
 // without a verification toolchain.
-func verifyBanner(v VerifyResult) string {
+func verifySummary(v VerifyResult) string {
 	switch v.Status {
 	case VerifyPassed:
-		return fmt.Sprintf("> [!NOTE]\n> Automated verification passed: %s.\n\n", oneLine(v.Summary))
+		return fmt.Sprintf("**Automated verification:** passed: %s.\n\n", oneLine(v.Summary))
 	case VerifyFailed:
-		return fmt.Sprintf("> [!CAUTION]\n> Automated verification failed: %s. The proposed change likely does not build as-is; treat it as a lead, not a fix.\n\n", oneLine(v.Summary))
+		return fmt.Sprintf("**Automated verification:** failed: %s. The proposed change likely does not build as-is; treat it as a lead, not a fix.\n\n", oneLine(v.Summary))
 	default:
 		return ""
 	}
@@ -711,7 +715,7 @@ func verifyBanner(v VerifyResult) string {
 
 // prDescription is the human-readable summary of the fix. It is the part that
 // gets reformatted to follow a repo PR template when one is configured.
-func prDescription(p models.PatternAnalysis, fix *proposedFix) string {
+func prDescription(p models.PatternAnalysis, fix *proposedFix, builds []models.BuildInfo) string {
 	var sb strings.Builder
 	if r := strings.TrimSpace(fix.rationale); r != "" {
 		fmt.Fprintf(&sb, "**Proposed change:** %s\n\n", oneLine(r))
@@ -720,11 +724,47 @@ func prDescription(p models.PatternAnalysis, fix *proposedFix) string {
 	if c := strings.TrimSpace(p.SharedRootCause); c != "" {
 		fmt.Fprintf(&sb, "**Published root-cause hypothesis:** %s\n", oneLine(c))
 	}
-	fmt.Fprintf(&sb, "**Builds in published context:** %d (confidence: %s)\n\n", p.BuildsAnalyzed, p.Confidence)
+	fmt.Fprintf(&sb, "**Builds in published context:** %d (confidence: %s)\n", p.BuildsAnalyzed, p.Confidence)
+	if len(p.SharedBuilds) > 0 {
+		const maxLinkedBuilds = 5
+		links := make([]string, 0, min(len(p.SharedBuilds), maxLinkedBuilds))
+		for _, buildID := range p.SharedBuilds[:min(len(p.SharedBuilds), maxLinkedBuilds)] {
+			prowURL := ""
+			for _, build := range builds {
+				if build.BuildID == buildID {
+					prowURL = build.ProwURL
+					break
+				}
+			}
+			links = append(links, buildLink(buildID, prowURL))
+		}
+		fmt.Fprintf(&sb, "**Failure sources:** %s", strings.Join(links, ", "))
+		if remaining := len(p.SharedBuilds) - len(links); remaining > 0 {
+			fmt.Fprintf(&sb, " and %d more", remaining)
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
 	sb.WriteString("**Before merging, a human must:**\n")
 	sb.WriteString("- Verify the change actually fixes the root cause (run the affected job).\n")
 	sb.WriteString("- Confirm it follows the project's conventions and doesn't regress other flavors.")
 	return sb.String()
+}
+
+func buildLink(buildID, prowURL string) string {
+	if strings.TrimSpace(prowURL) == "" {
+		return fmt.Sprintf("build `%s`", buildID)
+	}
+	return fmt.Sprintf("[build %s](<%s>)", buildID, prowURL)
+}
+
+func fixPRFooter(key, dashboardURL string) string {
+	aster := "Aster"
+	if strings.TrimSpace(dashboardURL) != "" {
+		aster = fmt.Sprintf("[Aster](<%s>)", dashboardURL)
+	}
+	return fmt.Sprintf("\nThis change was generated by an AI coding agent in %s from an automated analysis of the failure above. A maintainer reviewed the preview before this draft PR was opened; verify it before merging.\n\n%s\n",
+		aster, markerFor(key))
 }
 
 // confidenceRank orders verdict confidences. Unknown strings rank lowest.
