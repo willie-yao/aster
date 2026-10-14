@@ -22,6 +22,7 @@ type AnalysisFailure struct {
 	JobID                     string
 	JobName                   string
 	BuildID                   string
+	ProwURL                   string
 	TestName                  string
 	Source                    string
 	AnalysisGeneratedAt       string
@@ -75,8 +76,9 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	if m.opts.PRFiller != nil {
 		description = m.opts.PRFiller.FillBody(ctx, description)
 	}
-	// The note is added after template filling so it always reaches the PR.
-	description = analysisBackportNote(failure) + description
+	if note := analysisBackportNote(failure); note != "" {
+		description = strings.TrimSpace(description) + "\n\n" + note
+	}
 	body := analysisFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
 	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.TargetBranch)
 	if err != nil {
@@ -292,7 +294,11 @@ func analysisFailureDescription(failure AnalysisFailure, fix *proposedFix) strin
 	case len(failure.EvidenceWarnings) > 0:
 		evidenceQualification = "\n**Evidence qualification:** The selected chat answer has evidence warnings; warned claims remain hypotheses.\n"
 	}
-	return fmt.Sprintf("**Proposed change:** %s\n\n**Analyzed failure:** `%s` in build `%s` of `%s`\n**Published root cause:** %s\n**Selected chat finding:** %s%s\n**Failure source:** `%s@%s` on branch `%s`\n**Generation base:** `%s@%s` on branch `%s`\n\n**Before merging, a human must:**\n- Verify the change against the exact failed test or build.\n- Confirm the repository change is preferable to an external platform action.", oneLine(fix.rationale), failure.TestName, failure.BuildID, failure.JobName, oneLine(failure.RootCause), oneLine(failure.AssistantAnswer), evidenceQualification, failure.SourceRepository, failure.FailureRevision, failure.SourceBranch, failure.SourceRepository, failure.GenerationBaseRevision, failure.TargetBranch)
+	return fmt.Sprintf("**Proposed change:** %s\n\n**Analyzed failure:** `%s` in %s of `%s`\n**Published root cause:** %s\n**Selected chat finding:** %s%s\n**Failure source:** `%s@%s` on branch `%s`\n**Generation base:** `%s@%s` on branch `%s`\n\n**Before merging, a human must:**\n- Verify the change against the exact failed test or build.\n- Confirm the repository change is preferable to an external platform action.",
+		oneLine(fix.rationale), failure.TestName, buildLink(failure.BuildID, failure.ProwURL), failure.JobName,
+		oneLine(failure.RootCause), oneLine(failure.AssistantAnswer), evidenceQualification,
+		failure.SourceRepository, failure.FailureRevision, failure.SourceBranch,
+		failure.SourceRepository, failure.GenerationBaseRevision, failure.TargetBranch)
 }
 
 // analysisBackportNote suggests a cherry-pick when the PR targets another branch.
@@ -301,21 +307,19 @@ func analysisBackportNote(failure AnalysisFailure) string {
 	if failure.TargetBranch == failure.SourceBranch {
 		return ""
 	}
-	return fmt.Sprintf("> [!NOTE]\n> The failure was observed on `%s` at `%s`. This change targets `%s`. After it merges, comment `/cherry-pick %s` to backport it.\n\n",
+	return fmt.Sprintf("The failure was observed on `%s` at `%s`. This change targets `%s`. After it merges, comment `/cherry-pick %s` to backport it.",
 		failure.SourceBranch, failure.FailureRevision, failure.TargetBranch, failure.SourceBranch)
 }
 
 func analysisFailurePRBody(failure AnalysisFailure, fix *proposedFix, verified VerifyResult, key, dashboardURL, description string) string {
 	var b strings.Builder
-	b.WriteString("> [!WARNING]\n> Draft PR proposed from one exact failed test or build analysis and a selected chat hypothesis. Review the repository evidence carefully; this does not establish recurrence.\n\n")
-	b.WriteString(verifyBanner(verified))
 	b.WriteString(strings.TrimSpace(description))
-	b.WriteString("\n\n<details><summary>Proposed diff</summary>\n\n```diff\n")
+	b.WriteString("\n\nDraft PR proposed from one exact failed test or build analysis and a selected chat hypothesis. Review the repository evidence carefully; this does not establish recurrence.\n\n")
+	b.WriteString(verifySummary(verified))
+	b.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
 	b.WriteString(fix.diff)
 	b.WriteString("\n```\n</details>\n")
-	if dashboardURL != "" {
-		fmt.Fprintf(&b, "\nDashboard: %s\n", dashboardURL)
-	}
-	fmt.Fprintf(&b, "\n%s\n", markerFor(key))
+	source := fmt.Sprintf("%s of `%s`", buildLink(failure.BuildID, failure.ProwURL), failure.JobName)
+	b.WriteString(fixPRFooter(key, dashboardURL, source))
 	return b.String()
 }

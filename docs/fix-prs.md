@@ -33,6 +33,8 @@ Every Fix entry point gives the coding agent the same rule:
 
 The agent ends with a short summary of its change, the causal code path, and its caveats. The draft's **Proposed change** uses that summary, never the published suggested fix. If the summary is missing or fails draft-text validation, it lists the changed files instead.
 
+Fix PR bodies link the failed build to its recorded Prow URL, or list up to five builds for a pattern with a count of the rest. Builds without a recorded URL remain plain text. Verification results, investigation warnings, and any backport suggestion use plain text rather than GitHub callouts. An engine-owned footer repeats the build sources and discloses that an AI coding agent in Aster generated the change. These footer links, verification results, and backport suggestions survive repository-template filling. The footer links Aster to the configured dashboard when available and reminds reviewers to verify the change before merging.
+
 ## Warnings and rejections
 
 When the agent returns a patch, quality concerns become warnings on the ready preview and the maintainer decides whether to open the draft:
