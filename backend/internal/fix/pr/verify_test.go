@@ -11,12 +11,12 @@ func TestPRBody_RendersVerdict(t *testing.T) {
 	p := models.PatternAnalysis{Subject: "flaky job", BuildsAnalyzed: 4, Confidence: "high"}
 	fix := &proposedFix{diff: "- a\n+ b", rationale: "do x"}
 
-	passed := prBody(p, fix, VerifyResult{Status: VerifyPassed, Summary: "go build ./... passed"}, "k", "", "desc")
+	passed := prBody(p, fix, VerifyResult{Status: VerifyPassed, Summary: "go build ./... passed"}, "k", "", "desc", nil)
 	if !strings.Contains(passed, "**Automated verification:** passed:") {
 		t.Errorf("passed body missing verdict:\n%s", passed)
 	}
 
-	failed := prBody(p, fix, VerifyResult{Status: VerifyFailed, Summary: "go build ./... failed", Output: "undefined: Foo"}, "k", "", "desc")
+	failed := prBody(p, fix, VerifyResult{Status: VerifyFailed, Summary: "go build ./... failed", Output: "undefined: Foo"}, "k", "", "desc", nil)
 	if !strings.Contains(failed, "**Automated verification:** failed:") {
 		t.Errorf("failed body missing verdict:\n%s", failed)
 	}
@@ -24,7 +24,7 @@ func TestPRBody_RendersVerdict(t *testing.T) {
 		t.Errorf("failed body missing verification output:\n%s", failed)
 	}
 
-	skipped := prBody(p, fix, VerifyResult{Status: VerifySkipped}, "k", "", "desc")
+	skipped := prBody(p, fix, VerifyResult{Status: VerifySkipped}, "k", "", "desc", nil)
 	if strings.Contains(skipped, "**Automated verification:**") {
 		t.Errorf("skipped body should carry no verdict banner:\n%s", skipped)
 	}

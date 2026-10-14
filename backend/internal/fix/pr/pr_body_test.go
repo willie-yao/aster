@@ -61,7 +61,7 @@ func TestFixPRBodyRecordedBuildLinks(t *testing.T) {
 				if prowURL != "" {
 					want = "[build 123](<" + prowURL + ">)"
 				}
-				if !strings.Contains(fix.Description, want) || !strings.Contains(fix.Body, want) {
+				if !strings.Contains(fix.Description, want) || strings.Count(fix.Body, want) != 2 {
 					t.Fatalf("missing build source %q: %s", want, fix.Body)
 				}
 				if prowURL == "" && strings.Contains(fix.Body, "[build 123](") {
@@ -111,6 +111,13 @@ func TestFixPRBodyEngineOwnedTextSurvivesTemplateFilling(t *testing.T) {
 				if fix.Preview.Verify.Status != status || !strings.Contains(fix.Body, "## Repository template") {
 					t.Fatalf("template or verification changed: %s", fix.Body)
 				}
+				if strings.Contains(fix.Description, bodyTestProwURL) {
+					t.Fatalf("replacement template retained the source link: %s", fix.Description)
+				}
+				source := "[build 123](<" + bodyTestProwURL + ">) of `periodic-capz`"
+				if kind == "pattern" {
+					source = "[build 123](<" + bodyTestProwURL + ">), build `124`, build `125`, build `126`, build `127` and 1 more"
+				}
 				if status == VerifySkipped {
 					if strings.Contains(fix.Body, "**Automated verification:**") {
 						t.Fatalf("skipped verification added a verdict: %s", fix.Body)
@@ -134,7 +141,7 @@ func TestFixPRBodyEngineOwnedTextSurvivesTemplateFilling(t *testing.T) {
 				}
 				for _, want := range []string{
 					"AI coding agent in [Aster](<https://aster.example>)",
-					"from an automated analysis of the failure above",
+					"from an automated analysis of " + source + ".",
 					"A maintainer reviewed the preview before this draft PR was opened; verify it before merging.",
 					markerFor(fix.key),
 				} {
@@ -152,6 +159,25 @@ func TestFixPRBodyEngineOwnedTextSurvivesTemplateFilling(t *testing.T) {
 				assertNoFixCallouts(t, fix.Body)
 			})
 		}
+	}
+}
+
+func TestFixPRBodyFooterWithoutProwURLSurvivesTemplateFilling(t *testing.T) {
+	for kind, generate := range fixBodyGenerators() {
+		t.Run(kind, func(t *testing.T) {
+			client := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+			manager := newManager(t, client, goodAgent(), Options{
+				PRFiller: testPRFiller{replacement: "## Repository template\n\nA minimal patch."},
+			})
+			fix, err := generate(t.Context(), manager, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(fix.Body, "from an automated analysis of build `123`") ||
+				strings.Contains(fix.Body, "https://prow.example") {
+				t.Fatalf("footer dropped build identity or invented a link: %s", fix.Body)
+			}
+		})
 	}
 }
 

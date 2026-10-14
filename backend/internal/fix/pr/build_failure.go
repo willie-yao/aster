@@ -133,6 +133,7 @@ func buildFailurePRBody(failure BuildFailure, fix *proposedFix, verified VerifyR
 	b.WriteString("<details><summary>Proposed diff</summary>\n\n```diff\n")
 	b.WriteString(fix.diff)
 	b.WriteString("\n```\n</details>\n")
-	b.WriteString(fixPRFooter(key, dashboardURL))
+	source := fmt.Sprintf("%s of `%s`", buildLink(failure.BuildID, failure.ProwURL), failure.JobName)
+	b.WriteString(fixPRFooter(key, dashboardURL, source))
 	return b.String()
 }
