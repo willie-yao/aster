@@ -734,6 +734,9 @@ test("job detail primary layout keeps analysis before the run rail in every stat
     }
     if (!tc.pattern) assert.doesNotMatch(html, /Pattern analysis/, tc.name);
     if (!tc.build) assert.doesNotMatch(html, /Build analysis/, tc.name);
+    if (tc.pattern || tc.build) {
+      assert.match(html, /@media \(min-width:1200px\) and \(min-height: 800px\)\{[^}]*position:sticky;top:16px;/, tc.name);
+    }
   }
 });
 

@@ -37,6 +37,19 @@ export function softChipSx(theme: Theme, color: SoftColor) {
 }
 
 /**
+ * Pins a detail page's side rail while scrolling. The minimum height keeps the
+ * rail from sticking when it would extend past a short viewport.
+ */
+export function stickyRailSx(theme: Theme) {
+  return {
+    [`${theme.breakpoints.up("lg")} and (min-height: 800px)`]: {
+      position: "sticky",
+      top: 16,
+    },
+  } as const;
+}
+
+/**
  * MUI's Alert asserts by default, interrupting a screen reader. Only error and
  * warning earn that; information and success are announced politely.
  */
