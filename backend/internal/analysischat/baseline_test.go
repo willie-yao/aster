@@ -49,12 +49,13 @@ func TestSelectCauseBaselineRun(t *testing.T) {
 		{name: "metadata without artifacts excluded", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
 			runs[0].JUnitURLs = nil
 		}},
-		{name: "incomplete artifacts excluded", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
+		{name: "incomplete dashboard JUnit remains eligible", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
 			runs[0].JUnitComplete = false
-		}},
-		{name: "truncated artifacts excluded", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
+		}, want: "passing"},
+		{name: "truncated dashboard JUnit remains eligible", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
+			runs[0].JUnitComplete = false
 			runs[0].JUnitTruncated = true
-		}},
+		}, want: "passing"},
 		{name: "another failing test excluded", runs: []models.BuildResult{passing}, edit: func(runs []models.BuildResult) {
 			runs[0].Passed = false
 			runs[0].Result = "FAILURE"
@@ -118,6 +119,7 @@ func TestCauseBaselinePersistsWithoutChangingMembershipFixOrPreparedFindings(t *
 		t.Fatal(err)
 	}
 	baseline := passingBaselineRun("baseline", detail.Runs[0].Started.Add(-time.Hour))
+	baseline.JUnitComplete, baseline.JUnitTruncated = false, true
 	baseline.Commit, baseline.Revision = "baseline-commit", "baseline-revision"
 	detail.Runs = append(detail.Runs, baseline)
 	withBaseline, err := resolveCauseAnalysis(ref, detail)

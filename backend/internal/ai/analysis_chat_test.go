@@ -2018,6 +2018,7 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 		}
 		for _, want := range []string{
 			`"baseline_build"`, `"build_id": "0"`, `"first_failing_build_id": "1"`,
+			"baseline_build, when present, is the last fully passing retained run before first_failing_build_id.",
 			"before log contents", "prowjob.json images, args, env and refs",
 			"clone-records.json commits", "rendered cluster templates and provider resources",
 			"Node or Machine status.nodeInfo OS image and kernel", "only differences you actually read",
@@ -2027,6 +2028,9 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 				t.Fatalf("context missing %q: %s", want, context)
 			}
 		}
+	}
+	if strings.Contains(context, "complete fetched JUnit") {
+		t.Fatalf("context requires complete dashboard JUnit for baseline artifacts: %s", context)
 	}
 	if strings.Contains(context, "Answer only about this cause and its listed builds") {
 		t.Fatalf("context = %s", context)

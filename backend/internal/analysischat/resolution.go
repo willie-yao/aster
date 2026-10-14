@@ -477,8 +477,7 @@ func selectCauseBaselineRun(group models.PatternCausalGroup, runs []models.Build
 	for index := oldestMember + 1; index < len(ordered); index++ {
 		run := &ordered[index]
 		passing := run.Passed && run.Result == "SUCCESS" && run.TestsFailed == 0
-		// Complete fetched JUnit establishes retained artifact evidence.
-		artifactsAvailable := run.JUnitComplete && !run.JUnitTruncated && len(run.JUnitURLs) > 0
+		artifactsAvailable := len(run.JUnitURLs) > 0
 		if passing && artifactsAvailable {
 			return run
 		}
