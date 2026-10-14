@@ -61,6 +61,7 @@ type persistedResolvedAnalysis struct {
 	Pattern        *models.PatternAnalysis        `json:"pattern,omitempty"`
 	EvidenceBuilds []persistedArtifactBuild       `json:"evidence_builds,omitempty"`
 	Comparison     *persistedCauseComparison      `json:"comparison,omitempty"`
+	Baseline       *persistedCauseComparison      `json:"baseline,omitempty"`
 	FixTarget      *persistedResolvedFixTarget    `json:"fix_target,omitempty"`
 }
 
@@ -480,6 +481,7 @@ func persistResolved(resolved resolvedAnalysis, sourceRepo sourceinvestigation.R
 		Build: build, TestCase: testCase, Pattern: boundedPersistedPattern(resolved.pattern),
 		EvidenceBuilds: persistArtifactBuilds(resolved.evidenceBuilds),
 		Comparison:     persistCauseComparison(resolved.comparison),
+		Baseline:       persistCauseComparison(resolved.baseline),
 		FixTarget:      persistResolvedFixTarget(resolved.fixTarget, sourceRepo),
 	}
 }
@@ -656,6 +658,7 @@ func restoreResolved(resolved persistedResolvedAnalysis) resolvedAnalysis {
 		pattern:        clonePattern(resolved.Pattern),
 		evidenceBuilds: restoreArtifactBuilds(resolved.EvidenceBuilds),
 		comparison:     restoreCauseComparison(resolved.Comparison),
+		baseline:       restoreCauseComparison(resolved.Baseline),
 		fixTarget:      restoreResolvedFixTarget(resolved.FixTarget),
 	}
 }

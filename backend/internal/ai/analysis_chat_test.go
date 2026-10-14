@@ -1999,6 +1999,12 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 			}},
 			TestNames: []string{"Flatcar sysext cluster"},
 		},
+		Baseline: &analysischat.CauseComparison{
+			ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{
+				BuildID: "0", Result: "SUCCESS", Passed: true, Commit: "baseline-commit",
+			}},
+			TestNames: []string{"Flatcar sysext cluster"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2010,6 +2016,21 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 		if !strings.Contains(context, want) {
 			t.Fatalf("context missing %q: %s", want, context)
 		}
+		for _, want := range []string{
+			`"baseline_build"`, `"build_id": "0"`, `"first_failing_build_id": "1"`,
+			"baseline_build, when present, is the last fully passing retained run before first_failing_build_id.",
+			"before log contents", "prowjob.json images, args, env and refs",
+			"clone-records.json commits", "rendered cluster templates and provider resources",
+			"Node or Machine status.nodeInfo OS image and kernel", "only differences you actually read",
+			"not cause membership or recovery evidence",
+		} {
+			if !strings.Contains(context, want) {
+				t.Fatalf("context missing %q: %s", want, context)
+			}
+		}
+	}
+	if strings.Contains(context, "complete fetched JUnit") {
+		t.Fatalf("context requires complete dashboard JUnit for baseline artifacts: %s", context)
 	}
 	if strings.Contains(context, "Answer only about this cause and its listed builds") {
 		t.Fatalf("context = %s", context)
@@ -2026,17 +2047,62 @@ func TestAnalysisChatCauseComparisonBuildIsSeparateFromMemberBuilds(t *testing.T
 		Comparison: &analysischat.CauseComparison{
 			ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{BuildID: "3"}},
 		},
+		Baseline: &analysischat.CauseComparison{
+			ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{BuildID: "0"}},
+		},
 	}
 	builds := analysisChatArtifactBuilds(turn)
 	got := make([]string, 0, len(builds))
 	for _, build := range builds {
 		got = append(got, build.Build.BuildID)
 	}
-	if !slices.Equal(got, []string{"2", "1", "3"}) {
+	if !slices.Equal(got, []string{"2", "1", "3", "0"}) {
 		t.Fatalf("artifact builds = %v", got)
 	}
 	if !slices.Equal([]string{turn.EvidenceBuilds[0].Build.BuildID, turn.EvidenceBuilds[1].Build.BuildID}, []string{"2", "1"}) {
 		t.Fatalf("member builds mutated: %+v", turn.EvidenceBuilds)
+	}
+	turn.HistoricalSourceOnly = true
+	builds = analysisChatArtifactBuilds(turn)
+	if len(builds) != 3 {
+		t.Fatalf("prepared scope expanded: %+v", builds)
+	}
+}
+
+func TestAnalysisChatCauseContextWithoutBaseline(t *testing.T) {
+	turn := analysischat.Turn{
+		Scope: analysischat.ScopeCause,
+		Pattern: &models.PatternAnalysis{ID: "pattern", CausalGroups: []models.PatternCausalGroup{{
+			ID: "cause", Builds: []string{"1"}, RootCause: "cause",
+		}}},
+		EvidenceBuilds: []analysischat.ArtifactBuild{{Build: models.BuildInfo{BuildID: "1"}}},
+	}
+	context, err := analysisChatContext(turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(context, "No last passing baseline is available") ||
+		!strings.Contains(context, "do not guess or substitute a later run") ||
+		strings.Contains(context, `"baseline_build"`) {
+		t.Fatalf("missing baseline context = %s", context)
+	}
+	turn.HistoricalSourceOnly = true
+	original, err := analysisChatContext(turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn.Baseline = &analysischat.CauseComparison{
+		ArtifactBuild: analysischat.ArtifactBuild{Build: models.BuildInfo{BuildID: "0"}},
+	}
+	prepared, err := analysisChatContext(turn)
+	if err != nil || prepared != original || strings.Contains(prepared, "baseline") {
+		t.Fatalf("prepared context changed = %s, error = %v", prepared, err)
+	}
+	turn.Scope = analysischat.ScopePattern
+	turn.HistoricalSourceOnly = false
+	context, err = analysisChatContext(turn)
+	if err != nil || strings.Contains(context, "baseline") {
+		t.Fatalf("pattern context changed = %s, error = %v", context, err)
 	}
 }
 

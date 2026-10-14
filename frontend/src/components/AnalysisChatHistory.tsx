@@ -69,6 +69,7 @@ export function AnalysisChatHistoryList({ jobID = "", scope = "", currentSession
           <Typography color="textSecondary" sx={{ display: "block", overflowWrap: "anywhere", ...overviewTypography.data }}>
             {session.build_ids?.length ? `Builds: ${session.build_ids.join(", ")}` : ""}
             {session.comparison_build_id ? `${session.build_ids?.length ? " · " : ""}Comparison build: ${session.comparison_build_id}` : ""}
+            {session.baseline_build_id ? `${session.build_ids?.length || session.comparison_build_id ? " · " : ""}Baseline build: ${session.baseline_build_id}` : ""}
           </Typography>
         </Box>
       ))}

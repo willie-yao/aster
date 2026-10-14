@@ -70,6 +70,7 @@ import {
   streamAnalysisChatMessage,
 } from "../lib/analysisChat";
 import { fileToUrl, type FileToUrlContext } from "../lib/utils";
+import { causeSuggestedQuestions } from "../lib/patternChat";
 import { soft, accentLabelSx, softChipSx } from "../theme";
 import { dialogGutter, dialogPaperSx, overviewLayout, overviewTypography, sectionBandSx, touchTargetSx } from "../theme/overview";
 import { DialogHeader } from "./ActionDialog";
@@ -122,13 +123,6 @@ const patternSuggestedQuestions = [
   "Which builds support each cause?",
   "Are any builds unclassified or outliers?",
   "What evidence would change the grouping?",
-] as const;
-
-const causeSuggestedQuestions = [
-  "What evidence supports this cause across its builds?",
-  "Has this cause been resolved in the latest completed run?",
-  "What concrete change follows from this cause?",
-  "Is there a section of code that caused this failure?",
 ] as const;
 
 const assessmentConfig: Record<
@@ -1041,7 +1035,7 @@ export function AnalysisChat({
   // Not composerLocked: a pending turn locks the field but leaves the button
   // live, because that button is what resumes it.
   const sendBlocked = busy || restoring || Boolean(session?.active) || (pendingTurn?.question ?? question).trim() === "";
-  const questions = causeScope ? causeSuggestedQuestions : patternScope ? patternSuggestedQuestions : suggestedQuestions;
+  const questions = causeScope ? causeSuggestedQuestions(session?.baseline_build_id) : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactFailureAnalysis = !multiBuildScope &&
     (analysisRef.source === "build" || Boolean(analysisRef.junit_file));
   const causeFixEnabled = causeScope && Boolean(fixTarget);

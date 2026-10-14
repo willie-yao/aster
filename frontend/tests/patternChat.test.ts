@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { patternChatAvailability, patternChatEvidenceBuildIDs, patternChatHasEvidenceBuild } from "../src/lib/patternChat.js";
+import { causeSuggestedQuestions, patternChatAvailability, patternChatEvidenceBuildIDs, patternChatHasEvidenceBuild } from "../src/lib/patternChat.js";
 import type { PatternAnalysis } from "../src/types/dashboard.js";
 
 const pattern: PatternAnalysis = {
@@ -69,8 +69,17 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   assert.match(source, /exactFailureAnalysis = !multiBuildScope/);
   assert.match(source, /fixEligible=\{exactFixEnabled \|\| \(patternScope && Boolean\(features\.chat_fix\) && Boolean\(fixPatterns\.length\)\)/);
   assert.match(source, /chatTitle = causeScope \? "Investigate cause"/);
-  assert.match(source, /Has this cause been resolved in the latest completed run/);
-  assert.match(source, /What evidence supports this cause across its builds/);
-  assert.match(source, /What concrete change follows from this cause/);
+  assert.ok(causeSuggestedQuestions().includes("Has this cause been resolved in the latest completed run?"));
+  assert.ok(causeSuggestedQuestions().includes("What evidence supports this cause across its builds?"));
+  assert.ok(causeSuggestedQuestions().includes("What concrete change follows from this cause?"));
   assert.match(source, /Interrogate this cause across failed and later runs/);
+});
+
+test("cause chat offers last-passing comparisons only with a bound baseline", () => {
+  const question = "What changed since the last passing run?";
+  assert.equal(causeSuggestedQuestions().includes(question), false);
+  assert.equal(causeSuggestedQuestions("").includes(question), false);
+  assert.equal(causeSuggestedQuestions("100").includes(question), true);
+  const source = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
+  assert.match(source, /causeScope \? causeSuggestedQuestions\(session\?\.baseline_build_id\)/);
 });

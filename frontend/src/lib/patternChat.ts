@@ -2,6 +2,16 @@ import type { PatternAnalysis } from "../types/dashboard";
 
 export type PatternChatAvailability = "ready" | "stale" | "unavailable";
 
+export function causeSuggestedQuestions(baselineBuildID?: string): string[] {
+  return [
+    "What evidence supports this cause across its builds?",
+    ...(baselineBuildID ? ["What changed since the last passing run?"] : []),
+    "Has this cause been resolved in the latest completed run?",
+    "What concrete change follows from this cause?",
+    "Is there a section of code that caused this failure?",
+  ];
+}
+
 export function patternChatEvidenceBuildIDs(pattern: PatternAnalysis): string[] {
   const repeatedGroups = pattern.causal_groups?.filter((group) => group.builds.length >= 2) ?? [];
   const candidates = repeatedGroups.length > 0

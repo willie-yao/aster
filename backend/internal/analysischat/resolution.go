@@ -31,6 +31,7 @@ type resolvedAnalysis struct {
 	pattern        *models.PatternAnalysis
 	evidenceBuilds []ArtifactBuild
 	comparison     *CauseComparison
+	baseline       *CauseComparison
 	fixTarget      *resolvedFixTarget
 }
 
@@ -247,6 +248,10 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 	if err != nil {
 		return resolvedAnalysis{}, err
 	}
+	baseline, err := causeBaselineFor(detail, *selectedGroup, selectedRuns)
+	if err != nil {
+		return resolvedAnalysis{}, err
+	}
 
 	pattern := clonePatternAnalyses([]models.PatternAnalysis{*selected})[0]
 	var group models.PatternCausalGroup
@@ -292,6 +297,7 @@ func resolveCauseAnalysis(ref AnalysisRef, detail models.JobDetail) (resolvedAna
 		build: cloneBuildInfo(builds[0].Build), testCase: testCase,
 		patterns: clonePatternAnalyses(detail.PatternAnalyses), pattern: &causePattern,
 		evidenceBuilds: cloneArtifactBuilds(builds), comparison: cloneCauseComparison(comparison), fixTarget: fixTarget,
+		baseline: cloneCauseComparison(baseline),
 	}, nil
 }
 
@@ -429,6 +435,51 @@ func selectCauseComparisonRun(group models.PatternCausalGroup, runs []models.Bui
 		}
 		if candidate == nil && run.Result != "PENDING" {
 			candidate = run
+		}
+	}
+	return nil
+}
+
+func causeBaselineFor(
+	detail models.JobDetail,
+	group models.PatternCausalGroup,
+	memberRuns []models.BuildResult,
+) (*CauseComparison, error) {
+	run := selectCauseBaselineRun(group, detail.Runs)
+	if run == nil {
+		return nil, nil
+	}
+	build, err := artifactBuildFor(detail, *run)
+	if err != nil {
+		return nil, err
+	}
+	return &CauseComparison{ArtifactBuild: build, TestNames: representativeCauseTestNames(memberRuns)}, nil
+}
+
+func selectCauseBaselineRun(group models.PatternCausalGroup, runs []models.BuildResult) *models.BuildResult {
+	members := make(map[string]struct{}, len(group.Builds))
+	for _, buildID := range group.Builds {
+		if buildID = strings.TrimSpace(buildID); buildID != "" {
+			members[buildID] = struct{}{}
+		}
+	}
+	ordered := slices.Clone(runs)
+	sortPatternEvidenceRuns(ordered)
+	oldestMember := -1
+	for index, run := range ordered {
+		if _, member := members[run.BuildID]; member {
+			oldestMember = index
+		}
+	}
+	if oldestMember < 0 {
+		return nil
+	}
+	for index := oldestMember + 1; index < len(ordered); index++ {
+		run := &ordered[index]
+		passing := run.Passed && run.Result == "SUCCESS" && run.TestsFailed == 0
+		artifactsAvailable := len(run.JUnitURLs) > 0
+		if passing && artifactsAvailable {
+			return run
 		}
 	}
 	return nil

@@ -91,8 +91,14 @@ test("history filters use the shared mobile input treatment and offer clearing",
   assert.match(page, /Clear filters/);
   assert.match(page, /Evidence builds/);
   assert.match(page, /Comparison build/);
+  assert.match(page, /session\.baseline_build_id \? \[\["Baseline build", session\.baseline_build_id\]\]/);
   assert.match(page, /Pinned source/);
   assert.match(page, /Archived · Read-only/);
+});
+
+test("earlier conversation metadata distinguishes baseline from member and later builds", () => {
+  const history = readFileSync("src/components/AnalysisChatHistory.tsx", "utf8");
+  assert.match(history, /session\.baseline_build_id \? .*Baseline build: \$\{session\.baseline_build_id\}/);
 });
 
 test("new conversation copy only promises history for retained conversations", () => {

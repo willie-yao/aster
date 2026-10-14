@@ -216,6 +216,7 @@ func (s *Service) startTurn(ctx context.Context, id, owner, requestID, question 
 				TestCase: cloneTestCase(resolved.testCase), Pattern: clonePattern(resolved.pattern),
 				EvidenceBuilds: cloneArtifactBuilds(resolved.evidenceBuilds),
 				Comparison:     cloneCauseComparison(resolved.comparison),
+				Baseline:       cloneCauseComparison(resolved.baseline),
 				History:        cloneSessionView(current.View).Messages, Question: question,
 			},
 		}

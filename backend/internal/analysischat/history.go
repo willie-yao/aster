@@ -33,6 +33,7 @@ type SessionSummary struct {
 	Title             string      `json:"title"`
 	BuildIDs          []string    `json:"build_ids,omitempty"`
 	ComparisonBuildID string      `json:"comparison_build_id,omitempty"`
+	BaselineBuildID   string      `json:"baseline_build_id,omitempty"`
 }
 
 // HistoryPage is a bounded page of saved operator conversations.
@@ -95,6 +96,7 @@ func (s *Service) List(query HistoryQuery, owner string) (HistoryPage, error) {
 				HistoryExpiresAt: optionalTimestamp(current.HistoryExpiresAt), Archived: current.Archived,
 				ReadOnly: !sessionLive(current, now), Title: title, BuildIDs: builds,
 				ComparisonBuildID: persistedCauseComparisonBuildID(current.Resolved.Comparison),
+				BaselineBuildID:   persistedCauseComparisonBuildID(current.Resolved.Baseline),
 			})
 		}
 		return changed, nil
