@@ -626,6 +626,7 @@ export function AnalysisChat({
   fileCtx,
   fixPatterns = [],
   fixTarget,
+  baselineBuildID,
   fixable = true,
   appearance = "default",
   preparedFinding = false,
@@ -635,6 +636,7 @@ export function AnalysisChat({
   fileCtx: FileToUrlContext;
   fixPatterns?: PatternAnalysis[];
   fixTarget?: CausalGroupFixTarget;
+  baselineBuildID?: string;
   fixable?: boolean;
   appearance?: "default" | "detail";
   // A prepared finding is waiting for this cause. Resolved read-only by the
@@ -1035,7 +1037,7 @@ export function AnalysisChat({
   // Not composerLocked: a pending turn locks the field but leaves the button
   // live, because that button is what resumes it.
   const sendBlocked = busy || restoring || Boolean(session?.active) || (pendingTurn?.question ?? question).trim() === "";
-  const questions = causeScope ? causeSuggestedQuestions(session?.baseline_build_id) : patternScope ? patternSuggestedQuestions : suggestedQuestions;
+  const questions = causeScope ? causeSuggestedQuestions(baselineBuildID, session) : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactFailureAnalysis = !multiBuildScope &&
     (analysisRef.source === "build" || Boolean(analysisRef.junit_file));
   const causeFixEnabled = causeScope && Boolean(fixTarget);

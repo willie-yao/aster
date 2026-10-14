@@ -28,6 +28,7 @@ export function CausalGroupNextStep({
   fileCtx?: FileToUrlContext;
   chat?: {
     ref: CauseAnalysisChatReference;
+    baselineBuildID?: string;
     fileCtx: FileToUrlContext;
     preparedFinding?: boolean;
     onPreparedResolved?: (ready: boolean) => void;
@@ -83,6 +84,7 @@ export function CausalGroupNextStep({
           <AnalysisChat
             key={`${chat.ref.job_id}\u0000${chat.ref.pattern_id}\u0000${chat.ref.causal_group_id}\u0000${chat.ref.causal_group_hash}`}
             analysisRef={chat.ref}
+            baselineBuildID={chat.baselineBuildID}
             fileCtx={chat.fileCtx}
             preparedFinding={chat.preparedFinding}
             onPreparedResolved={chat.onPreparedResolved}
