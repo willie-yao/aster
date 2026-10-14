@@ -45,7 +45,7 @@ test("missing source hints and citations do not create permanent ineligibility n
   const chat = source("src/components/AnalysisChat.tsx");
   assert.doesNotMatch(chat, /Fix preview is not possible|no verified immutable source path/);
   assert.doesNotMatch(chat, /validated artifact citation.*start a fix preview/);
-  assert.match(chat, /questions = causeScope \? causeSuggestedQuestions\(session\?\.baseline_build_id\) : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
+  assert.match(chat, /questions = causeScope \? causeSuggestedQuestions\(baselineBuildID, session\) : patternScope \? patternSuggestedQuestions : suggestedQuestions/);
   assert.match(chat, /"What does the build log show at the failure\?"/);
 });
 

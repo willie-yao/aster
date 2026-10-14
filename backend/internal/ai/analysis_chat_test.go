@@ -2022,6 +2022,11 @@ func TestAnalysisChatCauseContextNamesTheSelectedCause(t *testing.T) {
 			"before log contents", "prowjob.json images, args, env and refs",
 			"clone-records.json commits", "rendered cluster templates and provider resources",
 			"Node or Machine status.nodeInfo OS image and kernel", "only differences you actually read",
+			"Start with targeted grep over both builds' artifact trees",
+			"image references and tags, osImage, kernelVersion, versions, and commit SHAs",
+			"Read the relevant files when grep results do not explain the difference",
+			"Issue the baseline and first-failing reads for the same input in one round using parallel tool calls",
+			"unless single_tool_call is configured",
 			"not cause membership or recovery evidence",
 		} {
 			if !strings.Contains(context, want) {
@@ -2970,6 +2975,9 @@ func TestAnalysisChatPromptStatesTheQuoteRules(t *testing.T) {
 		"copy enough of the tool output to identify one passage and no other",
 		"the engine replaces it with the exact text the tool returned",
 		"matches several passages cannot be resolved",
+		"well under the 2000-byte limit",
+		"specific line or lines that show each difference",
+		"each build. Do not quote whole files or resource objects",
 	} {
 		if !strings.Contains(analysisChatResponseFormat, want) {
 			t.Fatalf("prompt does not state %q", want)

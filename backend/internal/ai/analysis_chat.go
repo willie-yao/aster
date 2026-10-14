@@ -63,6 +63,9 @@ the current turn. The quote locates the passage: copy enough of the tool output 
 and the engine replaces it with the exact text the tool returned. Wrapping,
 indentation, and colour codes do not matter. A
 quote so short or so common that it matches several passages cannot be resolved.
+Keep each quote well under the 2000-byte limit. For comparisons, quote only the
+specific line or lines that show each difference, with a separate citation for
+each build. Do not quote whole files or resource objects.
 Use line_start and line_end only when a tool returned source line numbers. An
 answer whose citations cannot be verified is returned to the maintainer labelled
 unverified, so cite only evidence the tools actually returned. Output JSON only.`
@@ -78,6 +81,9 @@ that support the answer. For recurring-pattern builds, preserve the full builds/
 prefix in every artifact citation.`
 
 const (
+	// AnalysisChatPreparedMaxIters caps engine-prepared cause findings.
+	AnalysisChatPreparedMaxIters = 8
+
 	analysisChatFallbackContextBytes           = 192 << 10
 	analysisChatHistoryTargetPct               = 65
 	analysisChatMaxQuestionBytes               = 4096
@@ -435,9 +441,13 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	if sources != nil {
 		enabledTools = append(enabledTools, "list_repo_tree", "read_repo_file", "grep_repo")
 	}
+	maxIters := a.opts.MaxIters
+	if turn.HistoricalSourceOnly {
+		maxIters = min(maxIters, AnalysisChatPreparedMaxIters)
+	}
 	state := &agentState{
 		browser: browser, opts: AgenticOptions{
-			MaxIters: a.opts.MaxIters, ModelByteBudget: a.opts.ModelByteBudget,
+			MaxIters: maxIters, ModelByteBudget: a.opts.ModelByteBudget,
 			GCSByteBudget: a.opts.GCSByteBudget, ContextByteBudget: a.opts.ContextByteBudget,
 			Timeout: a.opts.Timeout, SingleToolCall: a.opts.SingleToolCall,
 		},
@@ -485,7 +495,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	result, err := a.client.runToolLoop(loopCtx, toolLoopParams{
 		messages:            messages,
 		schemas:             schemas,
-		maxIters:            a.opts.MaxIters,
+		maxIters:            maxIters,
 		maxToolCalls:        a.opts.MaxToolCalls,
 		singleToolCall:      a.opts.SingleToolCall,
 		contextByteBudget:   a.opts.ContextByteBudget,
@@ -1253,7 +1263,19 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 		if turn.Scope == analysischat.ScopeCause {
 			baselineGuidance := ""
 			if !turn.HistoricalSourceOnly {
-				baselineGuidance = "\n\nbaseline_build, when present, is the last fully passing retained run before first_failing_build_id. Its artifacts use the same builds/<build-id>/<path> prefix. It is read-only comparison evidence, not cause membership or recovery evidence. For change or regression questions, compare inputs between baseline_build and first_failing_build_id before log contents: prowjob.json images, args, env and refs; clone-records.json commits; rendered cluster templates and provider resources; and Node or Machine status.nodeInfo OS image and kernel. Name both builds and only differences you actually read. Check that the representative test and trigger are comparable; skipped, missing or materially different tests are inconclusive."
+				baselineGuidance = "\n\n" + `baseline_build, when present, is the last fully passing retained run before first_failing_build_id.
+Its artifacts use the same builds/<build-id>/<path> prefix. It is read-only comparison evidence,
+not cause membership or recovery evidence. For change or regression questions, compare inputs
+between baseline_build and first_failing_build_id before log contents: prowjob.json images, args, env and refs;
+clone-records.json commits; rendered cluster templates and provider resources;
+and Node or Machine status.nodeInfo OS image and kernel.
+Start with targeted grep over both builds' artifact trees for likely changed fields:
+image references and tags, osImage, kernelVersion, versions, and commit SHAs.
+Read the relevant files when grep results do not explain the difference.
+Issue the baseline and first-failing reads for the same input in one round using parallel tool calls,
+unless single_tool_call is configured. Name both builds and only differences you actually read.
+Check that the representative test and trigger are comparable;
+skipped, missing or materially different tests are inconclusive.`
 				if turn.Baseline == nil {
 					baselineGuidance += " No last passing baseline is available in this conversation. Say so when asked to compare with one; do not guess or substitute a later run."
 				}

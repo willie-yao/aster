@@ -31,7 +31,7 @@ import { useResolved } from "../hooks/useData";
 import { AnalysisChat } from "./AnalysisChat";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useAuth } from "../hooks/useAuth";
-import { patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
+import { causeBaselineBuildID, patternChatAvailability, patternChatHasEvidenceBuild } from "../lib/patternChat";
 import { lookupPreparedAnalysisChatFindings, applyPreparedFindingResolution, type PreparedFindingResult } from "../lib/analysisChat";
 import { patternActionEligibilityHint, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
@@ -546,6 +546,7 @@ export function PatternBanner({
                       causeChatRefs[index]
                         ? {
                             ref: causeChatRefs[index],
+                            baselineBuildID: causeBaselineBuildID(group, runs),
                             fileCtx: {
                               builds: Object.fromEntries(
                                 group.builds.flatMap((buildID) =>

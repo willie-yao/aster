@@ -2,6 +2,8 @@ package analysisruntime
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,8 +14,12 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/tools"
+	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
+	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/storage"
 )
 
 func TestResolveContextBudgets(t *testing.T) {
@@ -164,6 +170,129 @@ func TestAnalysisChatAgentTimeout(t *testing.T) {
 	}
 	if got := analysisChatAgentTimeout(45*time.Minute, 0); got != analysisChatDefaultTimeout {
 		t.Fatalf("legacy default timeout = %v", got)
+	}
+}
+
+func TestAnalysisChatAgentMaxIters(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		maxIters int
+		want     int
+	}{
+		{name: "short project budget", maxIters: 4, want: 4},
+		{name: "default project budget", maxIters: 15, want: 15},
+		{name: "extended project budget", maxIters: 30, want: 30},
+		{name: "misconfigured project bounded", maxIters: 1000, want: 100},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := analysisChatAgentMaxIters(testCase.maxIters); got != testCase.want {
+				t.Fatalf("max iterations = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestAnalysisChatAgentInteractiveAndPreparedBudgets(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		scope    string
+		maxIters int
+		prepared bool
+		want     int
+	}{
+		{name: "test uses project default", scope: analysischat.ScopeTest, want: 15},
+		{name: "cause uses project budget", scope: analysischat.ScopeCause, maxIters: 12, want: 12},
+		{name: "pattern uses project budget", scope: analysischat.ScopePattern, maxIters: 12, want: 12},
+		{name: "prepared cause keeps eight rounds", scope: analysischat.ScopeCause, maxIters: 12, prepared: true, want: 8},
+		{name: "prepared cause respects lower project budget", scope: analysischat.ScopeCause, maxIters: 4, prepared: true, want: 4},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var modelCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Tools []json.RawMessage `json:"tools"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decoding request: %v", err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				call := modelCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				if len(request.Tools) > 0 {
+					path := "."
+					if testCase.scope != analysischat.ScopeTest {
+						path = "builds/1"
+					}
+					args, _ := json.Marshal(map[string]string{"path": path})
+					_, _ = fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call-%d","type":"function","function":{"name":"list_artifacts","arguments":%q}}]}}]}`, call, args)
+					return
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"answer\":\"The available listing alone is inconclusive.\",\"citations\":[],\"assessment\":null,\"proposed_revision\":null}"}}]}`))
+			}))
+			defer server.Close()
+
+			registry := tools.NewRegistry()
+			filesystem.Register(registry)
+			enabled, err := registry.Enable([]string{"filesystem"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := storage.NewLocalBackend(t.TempDir(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := &Runtime{
+				Client: ai.NewClientWithOptions(ai.Options{
+					Endpoint: server.URL + "/v1/chat/completions", Model: "model", Token: "token",
+				}),
+				Registry: registry, EnabledTools: enabled,
+				Project: &Project{Config: &project.Config{
+					AI: &project.AI{Agentic: project.Agentic{MaxIters: testCase.maxIters}},
+				}, ConsumerPrompt: "Investigate artifacts."},
+			}
+			agent, err := runtime.NewAnalysisChatAgent(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			build := models.BuildInfo{BuildID: "1", JobName: "job"}
+			pattern := models.PatternAnalysis{
+				JobID: "job", Subject: "failure", Summary: "cause", Confidence: "high",
+				CausalGroups: []models.PatternCausalGroup{{Builds: []string{"1"}, RootCause: "cause", Confidence: "high"}},
+			}
+			models.AssignPatternIdentity(&pattern)
+			turn := analysischat.Turn{
+				Scope: testCase.scope, JobID: "job", BuildPrefix: "logs/job/1/", Build: build,
+				TestCase: models.TestCase{AIAnalysis: &models.AIAnalysis{RootCause: "cause"}},
+				Question: "What evidence is available?",
+			}
+			if testCase.scope != analysischat.ScopeTest {
+				turn.Pattern = &pattern
+				turn.EvidenceBuilds = []analysischat.ArtifactBuild{{BuildPrefix: turn.BuildPrefix, Build: build}}
+			}
+			if testCase.prepared {
+				group := pattern.CausalGroups[0]
+				turn, err = analysischat.PreparedCauseTurn(analysischat.AnalysisRef{
+					Scope: analysischat.ScopeCause, JobID: "job",
+					PatternID: pattern.ID, PatternHash: pattern.ContentHash,
+					CausalGroupID: group.ID, CausalGroupHash: group.ContentHash,
+				}, models.JobDetail{
+					JobID: "job", Name: "job", JobType: models.JobTypePeriodic,
+					Runs: []models.BuildResult{{BuildInfo: build}}, PatternAnalyses: []models.PatternAnalysis{pattern},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			reply, err := agent.Reply(t.Context(), turn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.ToolCalls != testCase.want || int(modelCalls.Load()) != testCase.want+1 {
+				t.Fatalf("tool calls = %d, model calls = %d; want %d rounds and one finalization",
+					reply.ToolCalls, modelCalls.Load(), testCase.want)
+			}
+		})
 	}
 }
 

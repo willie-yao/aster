@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 
-import { causeSuggestedQuestions, patternChatAvailability, patternChatEvidenceBuildIDs, patternChatHasEvidenceBuild } from "../src/lib/patternChat.js";
-import type { PatternAnalysis } from "../src/types/dashboard.js";
+import { causeBaselineBuildID, causeSuggestedQuestions, patternChatAvailability, patternChatEvidenceBuildIDs, patternChatHasEvidenceBuild } from "../src/lib/patternChat.js";
+import type { BuildResult, PatternAnalysis, PatternCausalGroup } from "../src/types/dashboard.js";
+import { failedJUnitRun } from "./helpers/failedJUnitRun.js";
 
 const pattern: PatternAnalysis = {
   id: "pattern-id",
@@ -75,11 +76,104 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   assert.match(source, /Interrogate this cause across failed and later runs/);
 });
 
-test("cause chat offers last-passing comparisons only with a bound baseline", () => {
+test("cause chat keeps a bound session baseline authoritative", () => {
   const question = "What changed since the last passing run?";
   assert.equal(causeSuggestedQuestions().includes(question), false);
   assert.equal(causeSuggestedQuestions("").includes(question), false);
   assert.equal(causeSuggestedQuestions("100").includes(question), true);
+  assert.equal(causeSuggestedQuestions("100", null).includes(question), true);
+  assert.equal(causeSuggestedQuestions("100", {}).includes(question), false);
+  assert.equal(causeSuggestedQuestions("100", { baseline_build_id: "" }).includes(question), false);
+  assert.equal(causeSuggestedQuestions(undefined, { baseline_build_id: "99" }).includes(question), true);
   const source = readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8");
-  assert.match(source, /causeScope \? causeSuggestedQuestions\(session\?\.baseline_build_id\)/);
+  const banner = readFileSync(resolve(process.cwd(), "src/components/PatternBanner.tsx"), "utf8");
+  const nextStep = readFileSync(resolve(process.cwd(), "src/components/CausalGroupNextStep.tsx"), "utf8");
+  assert.match(source, /causeScope \? causeSuggestedQuestions\(baselineBuildID, session\)/);
+  assert.match(banner, /baselineBuildID: causeBaselineBuildID\(group, runs\)/);
+  assert.match(nextStep, /baselineBuildID=\{chat\.baselineBuildID\}/);
+});
+
+const cause: PatternCausalGroup = {
+  builds: ["5", " 3 "],
+  root_cause: "cause",
+  confidence: "high",
+};
+
+function passingRun(buildID: string): BuildResult {
+  return {
+    ...failedJUnitRun(buildID, "TestCluster"),
+    passed: true,
+    result: "SUCCESS",
+    tests_failed: 0,
+    junit_urls: ["https://gcsweb.example/artifacts/junit.xml"],
+  };
+}
+
+test("cause chat offers the comparison question before a session exists", () => {
+  const runs = [
+    passingRun("4"),
+    passingRun("1"),
+    failedJUnitRun("5", "TestCluster"),
+    passingRun("2"),
+    failedJUnitRun("3", "TestCluster"),
+  ];
+  assert.equal(causeBaselineBuildID(cause, runs), "2");
+  assert.ok(causeSuggestedQuestions(causeBaselineBuildID(cause, runs), null)
+    .includes("What changed since the last passing run?"));
+  assert.deepEqual(runs.map((run) => run.build_id), ["4", "1", "5", "2", "3"]);
+});
+
+test("passing runs with truncated dashboard JUnit still enable the comparison question", () => {
+  const runs = [
+    failedJUnitRun("3", "TestCluster"),
+    { ...passingRun("2"), junit_truncated: true, junit_complete: false, test_cases: [] },
+  ];
+  assert.ok(causeSuggestedQuestions(causeBaselineBuildID(cause, runs))
+    .includes("What changed since the last passing run?"));
+});
+
+test("cause chat hides the comparison question without an older qualifying run", () => {
+  const member = failedJUnitRun("3", "TestCluster");
+  for (const runs of [
+    [],
+    [passingRun("2")],
+    [member],
+    [member, passingRun("4")],
+    [member, failedJUnitRun("2", "TestCluster")],
+    [member, { ...passingRun("2"), passed: false }],
+    [member, { ...passingRun("2"), result: "FAILURE" }],
+    [member, { ...passingRun("2"), tests_failed: 1 }],
+    [member, { ...passingRun("2"), junit_urls: [] }],
+    [member, { ...passingRun("2"), junit_urls: undefined }],
+  ]) {
+    assert.equal(causeSuggestedQuestions(causeBaselineBuildID(cause, runs))
+      .includes("What changed since the last passing run?"), false);
+  }
+});
+
+test("baseline selection skips ineligible runs and orders by time before build ID", () => {
+  const runs = [
+    { ...passingRun("100"), started: "2026-08-16T00:00:00Z" },
+    { ...passingRun("2"), started: "2026-08-17T00:00:00Z" },
+    { ...passingRun("1"), junit_urls: [], started: "2026-08-17T12:00:00Z" },
+    failedJUnitRun("3", "TestCluster"),
+  ];
+  assert.equal(causeBaselineBuildID(cause, runs), "2");
+});
+
+test("baseline build ID ordering preserves Prow integer precision", () => {
+  const group = { ...cause, builds: ["2107583444329435136"] };
+  const runs = [
+    passingRun("2106473116585693183"),
+    failedJUnitRun("2107583444329435136", "TestCluster"),
+    passingRun("2106473116585693184"),
+  ];
+  assert.equal(causeBaselineBuildID(group, runs), "2106473116585693184");
+});
+
+test("baseline ordering falls back to descending text for nonnumeric IDs", () => {
+  const group = { ...cause, builds: ["z"] };
+  assert.equal(causeBaselineBuildID(group, [
+    passingRun("a"), failedJUnitRun("z", "TestCluster"), passingRun("b"),
+  ]), "b");
 });

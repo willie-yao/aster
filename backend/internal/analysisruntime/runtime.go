@@ -31,7 +31,7 @@ import (
 const (
 	gcsByteBudget              = 1_000_000_000
 	analysisChatGCSByteBudget  = 128 << 20
-	analysisChatMaxIters       = 8
+	analysisChatMaxIters       = 100
 	analysisChatDefaultTimeout = analysischat.DefaultTurnTimeout
 )
 
@@ -223,10 +223,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 // AnalysisChatContractFingerprint identifies the effective prepared-finding runtime.
 func (r *Runtime) AnalysisChatContractFingerprint() string {
 	effective := r.Project.Config.AI.EffectiveAgentic()
-	maxIters := min(effective.MaxIters, analysisChatMaxIters)
-	if maxIters <= 0 {
-		maxIters = analysisChatMaxIters
-	}
+	maxIters := min(effective.MaxIters, ai.AnalysisChatPreparedMaxIters)
 	payload, _ := json.Marshal(struct {
 		API, Endpoint, Model, Reasoning, CacheGeneration, Prompt, SkillHash string
 		SourceOwner, SourceName                                             string
@@ -307,10 +304,7 @@ func (r *Runtime) newAnalysisChatAgent(backend storage.Backend, requestedTimeout
 		return nil, fmt.Errorf("analysis chat storage backend is required")
 	}
 	effective := r.Project.Config.AI.EffectiveAgentic()
-	maxIters := min(effective.MaxIters, analysisChatMaxIters)
-	if maxIters <= 0 {
-		maxIters = analysisChatMaxIters
-	}
+	maxIters := analysisChatAgentMaxIters(effective.MaxIters)
 	timeout := analysisChatAgentTimeout(effective.Timeout, requestedTimeout)
 	return ai.NewAnalysisChatAgent(
 		r.Client,
@@ -326,6 +320,10 @@ func (r *Runtime) newAnalysisChatAgent(backend storage.Backend, requestedTimeout
 			GitHubReadToken: r.GitHubReadToken,
 		},
 	)
+}
+
+func analysisChatAgentMaxIters(projectMaxIters int) int {
+	return min(projectMaxIters, analysisChatMaxIters)
 }
 
 func analysisChatAgentTimeout(projectTimeout, requestedTimeout time.Duration) time.Duration {
