@@ -667,6 +667,9 @@ func analysisChatArtifactBuilds(turn analysischat.Turn) []analysischat.ArtifactB
 	if turn.Scope == analysischat.ScopeCause && turn.Comparison != nil {
 		builds = append(builds, turn.Comparison.ArtifactBuild)
 	}
+	if turn.Scope == analysischat.ScopeCause && !turn.HistoricalSourceOnly && turn.Baseline != nil {
+		builds = append(builds, turn.Baseline.ArtifactBuild)
+	}
 	return builds
 }
 
@@ -1106,22 +1109,24 @@ type analysisChatCauseComparison struct {
 }
 
 type analysisChatPatternContext struct {
-	JobID           string                           `json:"job_id"`
-	PatternID       string                           `json:"pattern_id"`
-	Subject         string                           `json:"subject"`
-	Summary         string                           `json:"published_summary"`
-	Confidence      string                           `json:"confidence"`
-	BuildsAnalyzed  int                              `json:"builds_analyzed"`
-	Recurrence      models.PatternRecurrence         `json:"recurrence_classification,omitempty"`
-	CausalGroups    []analysisChatPatternCausalGroup `json:"causal_groups,omitempty"`
-	Unclassified    []string                         `json:"unclassified_builds,omitempty"`
-	Lifecycle       *analysisChatPatternLifecycle    `json:"lifecycle,omitempty"`
-	SharedRootCause string                           `json:"published_shared_root_cause,omitempty"`
-	SuggestedFix    string                           `json:"published_suggested_fix,omitempty"`
-	RelevantFiles   []string                         `json:"published_relevant_files,omitempty"`
-	SharedBuilds    []string                         `json:"shared_builds,omitempty"`
-	ArtifactBuilds  []string                         `json:"artifact_builds"`
-	ComparisonBuild *analysisChatCauseComparison     `json:"comparison_build,omitempty"`
+	JobID               string                           `json:"job_id"`
+	PatternID           string                           `json:"pattern_id"`
+	Subject             string                           `json:"subject"`
+	Summary             string                           `json:"published_summary"`
+	Confidence          string                           `json:"confidence"`
+	BuildsAnalyzed      int                              `json:"builds_analyzed"`
+	Recurrence          models.PatternRecurrence         `json:"recurrence_classification,omitempty"`
+	CausalGroups        []analysisChatPatternCausalGroup `json:"causal_groups,omitempty"`
+	Unclassified        []string                         `json:"unclassified_builds,omitempty"`
+	Lifecycle           *analysisChatPatternLifecycle    `json:"lifecycle,omitempty"`
+	SharedRootCause     string                           `json:"published_shared_root_cause,omitempty"`
+	SuggestedFix        string                           `json:"published_suggested_fix,omitempty"`
+	RelevantFiles       []string                         `json:"published_relevant_files,omitempty"`
+	SharedBuilds        []string                         `json:"shared_builds,omitempty"`
+	ArtifactBuilds      []string                         `json:"artifact_builds"`
+	ComparisonBuild     *analysisChatCauseComparison     `json:"comparison_build,omitempty"`
+	BaselineBuild       *analysisChatCauseComparison     `json:"baseline_build,omitempty"`
+	FirstFailingBuildID string                           `json:"first_failing_build_id,omitempty"`
 }
 
 func clampAnalysisChatPatternText(value string, maxBytes int) string {
@@ -1193,17 +1198,28 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 			RecoveryBuilds: boundedAnalysisChatBuildIDs(pattern.Lifecycle.RecoveryBuilds),
 		}
 	}
-	var comparison *analysisChatCauseComparison
-	if turn.Scope == analysischat.ScopeCause && turn.Comparison != nil {
-		build := turn.Comparison.ArtifactBuild.Build
-		comparison = &analysisChatCauseComparison{
+	comparisonContext := func(comparison *analysischat.CauseComparison) *analysisChatCauseComparison {
+		if turn.Scope != analysischat.ScopeCause || comparison == nil {
+			return nil
+		}
+		build := comparison.ArtifactBuild.Build
+		context := &analysisChatCauseComparison{
 			BuildID: clampAnalysisChatPatternText(build.BuildID, analysisChatMaxBuildIDBytes),
 			Result:  clampAnalysisChatPatternText(build.Result, 64), Passed: build.Passed,
 			Commit: clampAnalysisChatPatternText(build.Commit, 256), Revision: clampAnalysisChatPatternText(build.Revision, 256),
-			TestNames: boundedAnalysisChatTestNames(turn.Comparison.TestNames),
+			TestNames: boundedAnalysisChatTestNames(comparison.TestNames),
 		}
 		if !build.Started.IsZero() {
-			comparison.StartedAt = build.Started.UTC().Format(time.RFC3339)
+			context.StartedAt = build.Started.UTC().Format(time.RFC3339)
+		}
+		return context
+	}
+	var baseline *analysisChatCauseComparison
+	firstFailingBuildID := ""
+	if !turn.HistoricalSourceOnly {
+		baseline = comparisonContext(turn.Baseline)
+		if baseline != nil && len(artifactBuilds) > 0 {
+			firstFailingBuildID = artifactBuilds[len(artifactBuilds)-1]
 		}
 	}
 	payload := analysisChatPatternContext{
@@ -1215,7 +1231,8 @@ func encodeAnalysisChatPatternContext(turn analysischat.Turn) ([]byte, error) {
 		SuggestedFix:    clampAnalysisChatPatternText(pattern.SuggestedFix, 16<<10),
 		RelevantFiles:   boundedAnalysisChatFiles(pattern.RelevantFiles),
 		SharedBuilds:    boundedAnalysisChatBuildIDs(pattern.SharedBuilds), ArtifactBuilds: artifactBuilds,
-		ComparisonBuild: comparison,
+		ComparisonBuild: comparisonContext(turn.Comparison), BaselineBuild: baseline,
+		FirstFailingBuildID: firstFailingBuildID,
 	}
 	encoded, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -1234,8 +1251,15 @@ func analysisChatContext(turn analysischat.Turn) (string, error) {
 			return "", err
 		}
 		if turn.Scope == analysischat.ScopeCause {
+			baselineGuidance := ""
+			if !turn.HistoricalSourceOnly {
+				baselineGuidance = "\n\nbaseline_build, when present, is the last fully passing retained run before first_failing_build_id with complete fetched JUnit artifacts. Its artifacts use the same builds/<build-id>/<path> prefix. It is read-only comparison evidence, not cause membership or recovery evidence. For change or regression questions, compare inputs between baseline_build and first_failing_build_id before log contents: prowjob.json images, args, env and refs; clone-records.json commits; rendered cluster templates and provider resources; and Node or Machine status.nodeInfo OS image and kernel. Name both builds and only differences you actually read. Check that the representative test and trigger are comparable; skipped, missing or materially different tests are inconclusive."
+				if turn.Baseline == nil {
+					baselineGuidance += " No last passing baseline is available in this conversation. Say so when asked to compare with one; do not guess or substitute a later run."
+				}
+			}
 			return "Selected published causal-group analysis:\n\n" + string(encoded) +
-				"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. The causal group's artifact_builds field lists its failed member builds. comparison_build, when present, is the newest completed run available when this conversation was created and its artifacts are available under the same prefix. Answer only about this cause, using its member builds and the comparison build. A passing comparison proves only that the cause was not reproduced in that run. Compare the representative test, configuration, versions, source revision, and triggering conditions before describing the cause as resolved. Name the comparison build in the answer. Treat a skipped, missing, or materially different test as inconclusive.", nil
+				"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. The causal group's artifact_builds field lists its failed member builds. comparison_build, when present, is the newest completed run available when this conversation was created and its artifacts are available under the same prefix. Answer only about this cause, using its member builds and the comparison build. A passing comparison proves only that the cause was not reproduced in that run. Compare the representative test, configuration, versions, source revision, and triggering conditions before describing the cause as resolved. Name the comparison build in the answer. Treat a skipped, missing, or materially different test as inconclusive." + baselineGuidance, nil
 		}
 		return "Selected published recurring-pattern analysis:\n\n" + string(encoded) +
 			"\n\nArtifacts are available under builds/<build-id>/<path>. Use that exact full path in citations. Each causal group's artifact_builds field lists which selected builds have artifact access. Answer only about this recurring pattern and its listed builds.", nil

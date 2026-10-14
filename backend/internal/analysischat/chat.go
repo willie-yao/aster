@@ -247,6 +247,7 @@ type SessionView struct {
 	Title             string                          `json:"title,omitempty"`
 	BuildIDs          []string                        `json:"build_ids,omitempty"`
 	ComparisonBuildID string                          `json:"comparison_build_id,omitempty"`
+	BaselineBuildID   string                          `json:"baseline_build_id,omitempty"`
 	Messages          []Message                       `json:"messages"`
 	Attempts          []Attempt                       `json:"attempts"`
 	Active            *ActiveTurn                     `json:"active,omitempty"`
@@ -300,6 +301,7 @@ type Turn struct {
 	Pattern              *models.PatternAnalysis
 	EvidenceBuilds       []ArtifactBuild
 	Comparison           *CauseComparison
+	Baseline             *CauseComparison
 	History              []Message
 	Question             string
 	HistoricalSourceOnly bool
@@ -312,7 +314,7 @@ type ArtifactBuild struct {
 	Build       models.BuildInfo `json:"build"`
 }
 
-// CauseComparison is the newest completed run after a cause's member failures.
+// CauseComparison is a non-member run available as read-only cause evidence.
 type CauseComparison struct {
 	ArtifactBuild ArtifactBuild
 	TestNames     []string
@@ -771,8 +773,11 @@ func (s *Service) latestSessionForAnalysis(state *persistedState, resolved resol
 		if !sessionLive(current, s.opts.Now()) || current.View.Analysis != resolved.ref {
 			continue
 		}
-		if resolved.ref.Scope == ScopeCause && persistedCauseComparisonBuildID(current.Resolved.Comparison) != causeComparisonBuildID(resolved.comparison) {
-			continue
+		if resolved.ref.Scope == ScopeCause {
+			if persistedCauseComparisonBuildID(current.Resolved.Comparison) != causeComparisonBuildID(resolved.comparison) ||
+				persistedCauseComparisonBuildID(current.Resolved.Baseline) != causeComparisonBuildID(resolved.baseline) {
+				continue
+			}
 		}
 		if latest == nil || sharedSessionNewer(id, current, latestID, latest) {
 			latest, latestID = current, id
@@ -1082,6 +1087,7 @@ func (s *Service) sessionView(current *persistedSession) SessionView {
 	view.HistoryExpiresAt = optionalTimestamp(current.HistoryExpiresAt)
 	view.Title, view.BuildIDs = sessionDescription(current)
 	view.ComparisonBuildID = persistedCauseComparisonBuildID(current.Resolved.Comparison)
+	view.BaselineBuildID = persistedCauseComparisonBuildID(current.Resolved.Baseline)
 	view.CreatedBy = current.Owner
 	view.Attempts = attemptViews(current.Requests)
 	view.TurnsUsed = current.Turns

@@ -101,6 +101,7 @@ export function InvestigationSessionPage() {
     ...(session.created_by ? [["Started by", session.created_by]] : []),
     ...(session.build_ids?.length ? [["Evidence builds", session.build_ids.join(", ")]] : []),
     ...(session.comparison_build_id ? [["Comparison build", session.comparison_build_id]] : []),
+    ...(session.baseline_build_id ? [["Baseline build", session.baseline_build_id]] : []),
     ...(session.source_repository ? [["Pinned source", `${session.source_repository.owner}/${session.source_repository.name}@${session.source_repository.revision}`]] : []),
     ...(session.history_expires_at ? [["Retained until", new Date(session.history_expires_at).toLocaleString()]] : []),
   ] : [];

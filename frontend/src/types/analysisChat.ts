@@ -149,6 +149,7 @@ export interface AnalysisChatSession {
   title?: string;
   build_ids?: string[];
   comparison_build_id?: string;
+  baseline_build_id?: string;
   messages: AnalysisChatMessage[];
   attempts?: AnalysisChatAttempt[];
   active?: AnalysisChatActiveTurn;
@@ -194,6 +195,7 @@ export interface AnalysisChatSessionSummary {
   title: string;
   build_ids?: string[];
   comparison_build_id?: string;
+  baseline_build_id?: string;
 }
 
 export interface AnalysisChatHistoryPage {
