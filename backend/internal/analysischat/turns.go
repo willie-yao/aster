@@ -323,7 +323,8 @@ func (s *Service) finishTurn(id, owner, requestID, leaseID, question string, rep
 				EvidenceWarnings: slices.Clone(reply.EvidenceWarnings),
 				ToolCalls:        reply.ToolCalls, GCSBytes: reply.GCSBytes, ElapsedMs: reply.ElapsedMs,
 				ProviderMs: reply.ProviderMs, ValidationRetries: reply.ValidationRetries,
-				CreatedAt: stamp,
+				StopReason: reply.StopReason,
+				CreatedAt:  stamp,
 			},
 		)
 		current.View.UpdatedAt = stamp

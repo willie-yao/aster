@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/transport"
@@ -218,9 +220,6 @@ type AnalysisChatOptions struct {
 func (o AnalysisChatOptions) normalized() AnalysisChatOptions {
 	if o.MaxIters <= 0 {
 		o.MaxIters = 8
-	}
-	if o.MaxToolCalls <= 0 {
-		o.MaxToolCalls = 24
 	}
 	if o.ModelByteBudget <= 0 {
 		o.ModelByteBudget = 300_000
@@ -442,8 +441,15 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		enabledTools = append(enabledTools, "list_repo_tree", "read_repo_file", "grep_repo")
 	}
 	maxIters := a.opts.MaxIters
+	maxToolCalls := a.opts.MaxToolCalls
 	if turn.HistoricalSourceOnly {
 		maxIters = min(maxIters, AnalysisChatPreparedMaxIters)
+	}
+	if maxToolCalls <= 0 {
+		maxToolCalls = 4 * maxIters
+		if turn.HistoricalSourceOnly {
+			maxToolCalls = 24
+		}
 	}
 	state := &agentState{
 		browser: browser, opts: AgenticOptions{
@@ -483,6 +489,9 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	schemaBytes := schemaPayloadBytes(schemas)
 	messages, err := buildAnalysisChatMessages(a.systemPrompt, contextMessage, turn.History, turn.Question, schemaBytes, a.opts.ContextByteBudget)
 	if err != nil {
+		if errors.Is(err, errToolLoopContextBudget) {
+			recordAnalysisChatResponseFailure(loopCtx, "initial_context", 0, 0, nil, analysisChatParseStats{StopReason: "bytes"}, "context_budget")
+		}
 		return analysischat.Reply{}, err
 	}
 	evidence := seedAnalysisChatEvidence(turn.History, a.opts.ContextByteBudget)
@@ -496,10 +505,14 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		messages:            messages,
 		schemas:             schemas,
 		maxIters:            maxIters,
-		maxToolCalls:        a.opts.MaxToolCalls,
+		maxToolCalls:        maxToolCalls,
 		singleToolCall:      a.opts.SingleToolCall,
 		contextByteBudget:   a.opts.ContextByteBudget,
 		strictContextBudget: true,
+		canStartRound: func(recentModelRequest time.Duration) bool {
+			deadline, ok := loopCtx.Deadline()
+			return !ok || time.Until(deadline) >= 2*recentModelRequest+critiqueFinalizationReserve
+		},
 		dispatch: func(ctx context.Context, toolCall transport.ToolCall) (string, map[string]any, tools.Result) {
 			// agentState owns the model and GCS byte budgets, so the loop sees
 			// no separate tool result to account for.
@@ -531,6 +544,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			turn.ReportProgress(analysischat.PhaseFinalizing)
 			reply, stats, validationErr := parseAnalysisChatReplyCandidatesWithSource(answer.Content, evidence, sourceCitationContext)
 			if validationErr == nil && stats.EvidenceGate == "" {
+				stats.StopReason = "answered"
 				recordAnalysisChatResponseTelemetry(
 					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
 				)
@@ -556,6 +570,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				return toolLoopCorrect(analysisChatRepairPrompt(answer.Content, stats, validationErr, detail)).granting()
 			}
 			if validationErr == nil {
+				stats.StopReason = "answered"
 				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceStatus(reply), stats.EvidenceGate, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
 				recordAnalysisChatResponseTelemetry(
 					loopCtx, "success", "tool_loop", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, "",
@@ -564,6 +579,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				return toolLoopAccept()
 			}
 			if fallback.usable(evidenceRevision) {
+				stats.StopReason = "answered"
 				recordAnalysisChatResponseFallback(
 					loopCtx, "validation_retry", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
 				)
@@ -571,12 +587,14 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 				return toolLoopAccept()
 			}
 			if salvaged, ok := salvageAnalysisChatReply(answer.Content); ok {
+				stats.StopReason = "answered"
 				recordAnalysisChatResponseDegraded(
 					loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
 				)
 				accepted = &salvaged
 				return toolLoopAccept()
 			}
+			stats.StopReason = "error"
 			recordAnalysisChatResponseFailure(
 				loopCtx, "tool_loop_validation", answer.ModelCalls, answer.ProviderAttempts, answer.Response, stats, category,
 			)
@@ -623,16 +641,17 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	providerAttempts := result.ProviderAttempts
 	providerElapsedMs := result.ProviderMs
 	if accepted != nil {
-		return completeAnalysisChatReply(*accepted, state, start, providerElapsedMs, correctiveRounds), nil
+		return completeAnalysisChatReply(*accepted, state, start, providerElapsedMs, correctiveRounds, result.StopReason), nil
 	}
 
 	turn.ReportProgress(analysischat.PhaseFinalizing)
 	messages, err = prepareAnalysisChatFinalizeMessages(result.Messages, a.opts.ContextByteBudget)
 	if err != nil {
 		if fallback.usable(evidenceRevision) {
-			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{}, "context_budget")
-			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds), nil
+			recordAnalysisChatResponseFallback(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{StopReason: "bytes"}, "context_budget")
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds, "bytes"), nil
 		}
+		recordAnalysisChatResponseFailure(loopCtx, "finalize_context", modelCalls, providerAttempts, nil, analysisChatParseStats{StopReason: "bytes"}, "context_budget")
 		return analysischat.Reply{}, err
 	}
 	providerStart := time.Now()
@@ -641,6 +660,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 	providerElapsedMs += int(time.Since(providerStart) / time.Millisecond)
 	modelCalls += structured.modelCalls()
 	providerAttempts += structured.providerAttempts()
+	stats.StopReason = result.StopReason
 	if err != nil {
 		category := analysisChatStructuredErrorCategory(err, stats)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -649,11 +669,11 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		}
 		if fallback.usable(evidenceRevision) {
 			recordAnalysisChatStructuredResponse(loopCtx, "fallback", "finalize", modelCalls, providerAttempts, structured, stats, category)
-			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds), nil
+			return completeAnalysisChatReply(fallback.reply, state, start, providerElapsedMs, correctiveRounds, result.StopReason), nil
 		}
 		if salvaged, ok := salvageAnalysisChatReply(raw); ok {
 			recordAnalysisChatStructuredResponse(loopCtx, "degraded", "finalize", modelCalls, providerAttempts, structured, stats, category)
-			return completeAnalysisChatReply(salvaged, state, start, providerElapsedMs, correctiveRounds), nil
+			return completeAnalysisChatReply(salvaged, state, start, providerElapsedMs, correctiveRounds, result.StopReason), nil
 		}
 		recordAnalysisChatStructuredResponse(loopCtx, "error", "finalize", modelCalls, providerAttempts, structured, stats, category)
 		if analysisChatStructuredProviderFailure(err) {
@@ -669,7 +689,7 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		recordAnalysisChatEvidenceStatus(loopCtx, status, outcome, "", evidenceRevision, analysisChatEvidenceBytes(evidence))
 	}
 	recordAnalysisChatStructuredResponse(loopCtx, "success", "finalize", modelCalls, providerAttempts, structured, stats, "")
-	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds), nil
+	return completeAnalysisChatReply(reply, state, start, providerElapsedMs, correctiveRounds, result.StopReason), nil
 }
 
 func analysisChatArtifactBuilds(turn analysischat.Turn) []analysischat.ArtifactBuild {
@@ -688,18 +708,20 @@ func analysisChatArtifactBuilds(turn analysischat.Turn) []analysischat.ArtifactB
 // calling is reported alongside the provider failure, and anything the model
 // returned that chat cannot use becomes a validation gate.
 func (a *AnalysisChatAgent) classifyAnalysisChatLoopError(ctx context.Context, result toolLoopResult, err error) error {
+	stats := analysisChatParseStats{StopReason: result.StopReason}
 	if errors.Is(err, errToolLoopContextBudget) {
+		recordAnalysisChatResponseFailure(ctx, "tool_loop_context", result.ModelCalls, result.ProviderAttempts, nil, stats, "context_budget")
 		return fmt.Errorf("analysis chat request exceeds the %d-byte context budget after compaction", a.opts.ContextByteBudget)
 	}
 	var modelErr *toolLoopModelError
 	if errors.As(err, &modelErr) {
 		response := analysisChatStatusResponse(modelErr.httpStatus)
 		if modelErr.empty {
-			recordAnalysisChatResponseFailure(ctx, "tool_loop_response", result.ModelCalls, result.ProviderAttempts, response, analysisChatParseStats{}, "empty_response")
+			recordAnalysisChatResponseFailure(ctx, "tool_loop_response", result.ModelCalls, result.ProviderAttempts, response, stats, "empty_response")
 			return &analysischat.ValidationError{Gate: analysischat.GateCandidate}
 		}
 		category := analysisChatRequestErrorCategory(modelErr.err)
-		recordAnalysisChatResponseFailure(ctx, "tool_loop_request", result.ModelCalls, result.ProviderAttempts, response, analysisChatParseStats{}, category)
+		recordAnalysisChatResponseFailure(ctx, "tool_loop_request", result.ModelCalls, result.ProviderAttempts, response, stats, category)
 		if errors.Is(modelErr.err, context.Canceled) || errors.Is(modelErr.err, context.DeadlineExceeded) {
 			return modelErr.err
 		}
@@ -711,7 +733,7 @@ func (a *AnalysisChatAgent) classifyAnalysisChatLoopError(ctx context.Context, r
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		recordAnalysisChatResponseFailure(
 			ctx, "tool_loop_request", result.ModelCalls, result.ProviderAttempts, nil,
-			analysisChatParseStats{}, analysisChatRequestErrorCategory(err),
+			stats, analysisChatRequestErrorCategory(err),
 		)
 	}
 	return err
@@ -781,12 +803,13 @@ func (fallback *analysisChatFallback) usable(evidenceRevision int) bool {
 	return fallback != nil && fallback.evidenceRevision == evidenceRevision
 }
 
-func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time, providerMs, validationRetries int) analysischat.Reply {
+func completeAnalysisChatReply(reply analysischat.Reply, state *agentState, start time.Time, providerMs, validationRetries int, stopReason string) analysischat.Reply {
 	reply.ToolCalls = state.calls
 	reply.GCSBytes = state.gcsBytes
 	reply.ElapsedMs = int(time.Since(start) / time.Millisecond)
 	reply.ProviderMs = providerMs
 	reply.ValidationRetries = validationRetries
+	reply.StopReason = stopReason
 	return reply
 }
 
@@ -938,9 +961,16 @@ func recordAnalysisChatResponseTelemetryWithAttempt(
 	if stats.ValidationDetail != "" && category == stats.Category {
 		detail = fmt.Sprintf(" validation_detail=%q", stats.ValidationDetail)
 	}
+	stopReason := stats.StopReason
+	if category == "request_timeout" {
+		stopReason = "time"
+	}
+	if stopReason == "" && outcome == "error" {
+		stopReason = "error"
+	}
 	log.Printf(
-		"analysis chat response: outcome=%s stage=%s structured_attempt=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s%s",
-		outcome, stage, structuredAttempt, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category, detail,
+		"analysis chat response: outcome=%s stage=%s stop_reason=%s structured_attempt=%s model_calls=%d provider_attempts=%d http_status=%d candidate_count=%d validation=%s%s",
+		outcome, stage, stopReason, structuredAttempt, modelCalls, providerAttempts, httpStatus, stats.CandidateCount, category, detail,
 	)
 	recordTrace(ctx, TraceEvent{
 		Kind: "analysis_chat_response", Outcome: outcome, Status: stage, StructuredAttempt: structuredAttempt,
@@ -1023,7 +1053,7 @@ func buildAnalysisChatMessages(systemPrompt, contextMessage string, history []an
 		messages = append(messages, questionMessage)
 		if requestSizeEstimate(messages, schemaBytes) <= target || len(historyMessages) == 0 {
 			if size := requestSizeEstimate(messages, schemaBytes); size > budget {
-				return nil, fmt.Errorf("analysis chat base context is %d bytes, exceeding the %d-byte context budget", size, budget)
+				return nil, fmt.Errorf("analysis chat base context is %d bytes, exceeding the %d-byte context budget: %w", size, budget, errToolLoopContextBudget)
 			}
 			return messages, nil
 		}
@@ -1269,9 +1299,13 @@ not cause membership or recovery evidence. For change or regression questions, c
 between baseline_build and first_failing_build_id before log contents: prowjob.json images, args, env and refs;
 clone-records.json commits; rendered cluster templates and provider resources;
 and Node or Machine status.nodeInfo OS image and kernel.
-Start with targeted grep over both builds' artifact trees for likely changed fields:
+Use find_artifacts to locate the relevant files in each build: prowjob.json,
+clone-records.json, rendered cluster templates, and Machine or Node resources.
+Then use grep_artifact on those files for likely changed fields:
 image references and tags, osImage, kernelVersion, versions, and commit SHAs.
 Read the relevant files when grep results do not explain the difference.
+If a failing node never registered and has no status.nodeInfo, read its OS version
+and kernel from that machine's boot or console log.
 Issue the baseline and first-failing reads for the same input in one round using parallel tool calls,
 unless single_tool_call is configured. Name both builds and only differences you actually read.
 Check that the representative test and trigger are comparable;
@@ -1400,9 +1434,8 @@ func seedAnalysisChatEvidence(history []analysischat.Message, contextByteBudget 
 	return evidence
 }
 
-// seedAnalysisChatEvidenceLines restores a cited line range only when the quote
-// has exactly the lines that range covers, so a re-cite verifies against the
-// same text the original read returned.
+// seedAnalysisChatEvidenceLines restores coordinates when the excerpt's line
+// count matches the cited range. The first and last lines may be partial.
 func seedAnalysisChatEvidenceLines(entry *analysisChatEvidence, citation analysischat.Citation, quote string) {
 	if citation.LineStart <= 0 || citation.LineEnd < citation.LineStart {
 		return
@@ -1610,31 +1643,87 @@ func analysisChatQuoteRun(normalized []string, start int, want string) (int, boo
 	return 0, false
 }
 
-// clampAnalysisChatQuote trims an attributed quote to the downstream budget,
-// dropping whole trailing lines so what remains is still text a tool returned,
-// and reports how many lines survived. Invalid bytes are replaced first, because
-// the text comes from raw artifact content rather than from a decoded response.
-func clampAnalysisChatQuote(quote string) (string, int) {
+// clampAnalysisChatQuote keeps a bounded verbatim excerpt containing locator,
+// preferring whole lines. It returns the skipped and retained line counts.
+func clampAnalysisChatQuote(quote, locator string) (string, int, int) {
 	quote = strings.ToValidUTF8(quote, "")
-	lines := strings.Split(quote, "\n")
 	if len(quote) <= analysisChatMaxQuoteBytes {
-		return quote, len(lines)
+		return quote, 0, strings.Count(quote, "\n") + 1
 	}
-	kept, keptLines := 0, 0
-	for i, line := range lines {
-		next := kept + len(line)
-		if i > 0 {
-			next++
+	start, end, ok := analysisChatQuoteMatch(quote, NormalizeCitationText(locator))
+	if !ok || end-start > analysisChatMaxQuoteBytes {
+		return "", 0, 0
+	}
+	lineStart := strings.LastIndexByte(quote[:start], '\n') + 1
+	lineEnd := len(quote)
+	if at := strings.IndexByte(quote[end:], '\n'); at >= 0 {
+		lineEnd = end + at
+	}
+	if lineEnd-lineStart <= analysisChatMaxQuoteBytes {
+		start, end = lineStart, lineEnd
+		for end < len(quote) {
+			next := len(quote)
+			if at := strings.IndexByte(quote[end+1:], '\n'); at >= 0 {
+				next = end + 1 + at
+			}
+			if next-start > analysisChatMaxQuoteBytes {
+				break
+			}
+			end = next
 		}
-		if next > analysisChatMaxQuoteBytes {
-			break
+	} else {
+		room := analysisChatMaxQuoteBytes - (end - start)
+		start = max(lineStart, start-room/2)
+		end = min(lineEnd, start+analysisChatMaxQuoteBytes)
+		start = max(lineStart, end-analysisChatMaxQuoteBytes)
+		for start > 0 && !utf8.RuneStart(quote[start]) {
+			start++
 		}
-		kept, keptLines = next, i+1
+		for end < len(quote) && !utf8.RuneStart(quote[end]) {
+			end--
+		}
 	}
-	if keptLines == 0 {
-		return strings.ToValidUTF8(quote[:analysisChatMaxQuoteBytes], ""), 1
+	excerpt := quote[start:end]
+	return excerpt, strings.Count(quote[:start], "\n"), strings.Count(excerpt, "\n") + 1
+}
+
+// analysisChatQuoteMatch maps a normalized locator back to raw byte offsets,
+// retaining whitespace and display codes inside the matched passage.
+func analysisChatQuoteMatch(quote, locator string) (int, int, bool) {
+	var normalized strings.Builder
+	starts, ends := []int{}, []int{}
+	noise := citationDisplayNoise.FindAllStringIndex(quote, -1)
+	noiseIndex, spaceStart := 0, -1
+	for i := 0; i < len(quote); {
+		if noiseIndex < len(noise) && i == noise[noiseIndex][0] {
+			i = noise[noiseIndex][1]
+			noiseIndex++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(quote[i:])
+		if unicode.IsSpace(r) {
+			if normalized.Len() > 0 && spaceStart < 0 {
+				spaceStart = i
+			}
+			i += size
+			continue
+		}
+		if spaceStart >= 0 {
+			normalized.WriteByte(' ')
+			starts, ends = append(starts, spaceStart), append(ends, i)
+			spaceStart = -1
+		}
+		normalized.WriteString(quote[i : i+size])
+		for range size {
+			starts, ends = append(starts, i), append(ends, i+size)
+		}
+		i += size
 	}
-	return quote[:kept], keptLines
+	at := strings.Index(normalized.String(), locator)
+	if locator == "" || at < 0 {
+		return 0, 0, false
+	}
+	return starts[at], ends[at+len(locator)-1], true
 }
 
 func analysisChatEvidenceContains(evidence *analysisChatEvidence, quote string) bool {

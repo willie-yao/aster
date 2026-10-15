@@ -49,6 +49,7 @@ const (
 type analysisChatParseStats struct {
 	CandidateCount int
 	Category       string
+	StopReason     string
 	// EvidenceGate is set when the selected reply needs citation repair.
 	EvidenceGate string
 	// EvidenceDetail is engine-generated repair text for the corrective round.
@@ -739,13 +740,16 @@ func validateAnalysisChatCitationEvidence(
 				}
 				locator = unnumberedLocator
 			}
-			clamped, kept := clampAnalysisChatQuote(quote)
-			if clamped != quote && !strings.Contains(NormalizeCitationText(clamped), locator) {
-				return tooLong
+			if strings.Contains(NormalizeCitationText(quote), locator) {
+				clamped, skipped, kept := clampAnalysisChatQuote(quote, locator)
+				if clamped == "" {
+					return tooLong
+				}
+				citation.Quote = clamped
+				citation.LineStart += skipped
+				citation.LineEnd = citation.LineStart + kept - 1
+				return nil
 			}
-			citation.Quote = clamped
-			citation.LineEnd = citation.LineStart + kept - 1
-			return nil
 		}
 	}
 	if kind == "source" && citation.LineStart > 0 {
@@ -819,8 +823,8 @@ func attributeAnalysisChatCitation(
 			),
 		}
 	}
-	clamped, _ := clampAnalysisChatQuote(quote)
-	if !strings.Contains(NormalizeCitationText(clamped), locator) {
+	clamped, _, _ := clampAnalysisChatQuote(quote, locator)
+	if clamped == "" || !strings.Contains(NormalizeCitationText(clamped), locator) {
 		return tooLong
 	}
 	citation.Quote = clamped

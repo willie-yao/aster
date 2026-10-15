@@ -149,6 +149,7 @@ func TestServiceCreateAndSend(t *testing.T) {
 		Citations:        []Citation{{Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller exited"}},
 		EvidenceWarnings: []string{"citation 2 quote did not match"},
 		ToolCalls:        2, GCSBytes: 1024, ElapsedMs: 50,
+		StopReason: "tool_calls",
 	}}
 	now := time.Date(2026, 7, 23, 13, 0, 0, 0, time.UTC)
 	service := newTestService(t, t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
@@ -177,14 +178,20 @@ func TestServiceCreateAndSend(t *testing.T) {
 		t.Fatalf("successful attempt = %+v", attempt)
 	}
 	assistant := got.Messages[1]
-	if assistant.Assessment != "supports" || assistant.ToolCalls != 2 || len(assistant.Citations) != 1 ||
+	if assistant.Assessment != "supports" || assistant.ToolCalls != 2 || assistant.StopReason != "tool_calls" || len(assistant.Citations) != 1 ||
 		!slices.Equal(assistant.EvidenceWarnings, []string{"citation 2 quote did not match"}) {
 		t.Fatalf("assistant = %+v", assistant)
 	}
 	got.Messages[1].EvidenceWarnings[0] = "mutated response"
 	restored, err := service.Get(created.ID, "alice")
-	if err != nil || !slices.Equal(restored.Messages[1].EvidenceWarnings, []string{"citation 2 quote did not match"}) {
+	if err != nil || restored.Messages[1].StopReason != "tool_calls" ||
+		!slices.Equal(restored.Messages[1].EvidenceWarnings, []string{"citation 2 quote did not match"}) {
 		t.Fatalf("restored evidence warnings = %v err=%v", restored.Messages[1].EvidenceWarnings, err)
+	}
+	restarted := newTestService(t, t.Context(), dir, runner, Options{Now: func() time.Time { return now }})
+	persisted, err := restarted.Get(created.ID, "alice")
+	if err != nil || persisted.Messages[1].StopReason != "tool_calls" {
+		t.Fatalf("persisted stop reason was lost: view=%+v err=%v", persisted, err)
 	}
 
 	if _, err := service.Send(context.Background(), created.ID, "alice", testRequestID(t), "What should I check next?"); err != nil {
