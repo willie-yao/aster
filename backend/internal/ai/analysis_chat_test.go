@@ -1456,17 +1456,13 @@ func TestAnalysisChatCitationLineValidation(t *testing.T) {
 	if reply.Citations[0].LineStart != 42 || reply.Citations[0].LineEnd != 42 {
 		t.Fatalf("verified line range was not retained: %+v", reply.Citations[0])
 	}
-	canonical := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"stopped"}],"proposed_revision":null}`
+	canonical := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"the controller exited"}],"proposed_revision":null}`
 	reply, err = parseAnalysisChatReply(canonical, evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reply.Citations[0].Quote != "controller stopped" {
 		t.Fatalf("canonical quote = %q", reply.Citations[0].Quote)
-	}
-	mismatched := `{"answer":"The controller stopped.","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"the controller exited"}]}`
-	if analysisChatReplyVerified(parseAnalysisChatReply(mismatched, evidence)) {
-		t.Fatal("a ranged citation naming no recorded passage was accepted")
 	}
 	invalid := `{"answer":"The controller stopped.","assessment":"supports","citations":[{"path":"build-log.txt","line_start":40,"line_end":40,"quote":"controller stopped"}],"proposed_revision":null}`
 	reply, err = parseAnalysisChatReply(invalid, evidence)
@@ -2661,7 +2657,7 @@ func TestAnalysisChatPatternArtifactCitationKeepsBuildPrefix(t *testing.T) {
 	}))
 	server.push(200, chatRespFinal(`{
 		"answer":"Build 104 records the group failure.",
-		"citations":[{"path":"builds/104/build-log.txt","line_start":1,"line_end":1,"quote":"group failure"}],
+		"citations":[{"path":"builds/104/build-log.txt","line_start":1,"line_end":1,"quote":"the group failed"}],
 		"assessment":"supports","proposed_revision":null
 	}`))
 	agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{files: map[string][]byte{
@@ -2719,6 +2715,34 @@ func TestSeedAnalysisChatEvidenceRestoresProvenCitations(t *testing.T) {
 	// mapped back to lines, so only its text is restored.
 	if len(evidence["junit.xml"].Lines) != 0 {
 		t.Fatalf("mismatched range seeded lines: %+v", evidence["junit.xml"].Lines)
+	}
+}
+
+func TestAnalysisChatRereadRestoresCanonicalRangeAcceptance(t *testing.T) {
+	evidence := seedAnalysisChatEvidence([]analysischat.Message{{
+		Role: "assistant", Citations: []analysischat.Citation{{
+			Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller stopped",
+		}},
+	}}, 0)
+	raw := `{"answer":"The controller stopped.","citations":[{"path":"build-log.txt","line_start":42,"line_end":42,"quote":"the controller exited"}]}`
+	if analysisChatReplyVerified(parseAnalysisChatReply(raw, evidence)) {
+		t.Fatal("a history excerpt was treated as a complete recorded line")
+	}
+	_, recorded := recordAnalysisChatEvidence(evidence, transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`,
+	}}, map[string]any{"matches": []any{map[string]any{
+		"context": []any{"> 42: controller stopped"},
+	}}}, analysisChatEvidenceFallbackMaxBytes)
+	if !recorded || evidence["build-log.txt"].SeededLines[42] {
+		t.Fatal("fresh complete line retained history-only provenance")
+	}
+	reply, err := parseAnalysisChatReply(raw, evidence)
+	if err != nil || reply.Unverified || len(reply.Citations) != 1 {
+		t.Fatalf("canonical range was not restored: reply=%+v err=%v", reply, err)
+	}
+	citation := reply.Citations[0]
+	if citation.Quote != "controller stopped" || citation.LineStart != 42 || citation.LineEnd != 42 {
+		t.Fatalf("canonical citation = %+v", citation)
 	}
 }
 

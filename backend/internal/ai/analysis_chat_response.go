@@ -740,7 +740,14 @@ func validateAnalysisChatCitationEvidence(
 				}
 				locator = unnumberedLocator
 			}
-			if strings.Contains(NormalizeCitationText(quote), locator) {
+			seeded := false
+			for line := citation.LineStart; line <= citation.LineEnd; line++ {
+				if recorded.SeededLines[line] {
+					seeded = true
+					break
+				}
+			}
+			if !seeded || strings.Contains(NormalizeCitationText(quote), locator) {
 				clamped, skipped, kept := clampAnalysisChatQuote(quote, locator)
 				if clamped == "" {
 					return tooLong

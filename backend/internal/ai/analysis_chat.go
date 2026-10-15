@@ -1386,9 +1386,10 @@ func analysisChatSeedPathBudget(contextByteBudget int) int {
 }
 
 type analysisChatEvidence struct {
-	Segments []string
-	Lines    map[int]string
-	Bytes    int
+	Segments    []string
+	Lines       map[int]string
+	SeededLines map[int]bool
+	Bytes       int
 }
 
 var analysisChatContextLineRE = regexp.MustCompile(`^[> ]\s*(\d+):\s?(.*)$`)
@@ -1435,7 +1436,7 @@ func seedAnalysisChatEvidence(history []analysischat.Message, contextByteBudget 
 }
 
 // seedAnalysisChatEvidenceLines restores coordinates when the excerpt's line
-// count matches the cited range. The first and last lines may be partial.
+// count matches the cited range. Seeded lines may contain only part of a line.
 func seedAnalysisChatEvidenceLines(entry *analysisChatEvidence, citation analysischat.Citation, quote string) {
 	if citation.LineStart <= 0 || citation.LineEnd < citation.LineStart {
 		return
@@ -1444,8 +1445,13 @@ func seedAnalysisChatEvidenceLines(entry *analysisChatEvidence, citation analysi
 	if len(lines) != citation.LineEnd-citation.LineStart+1 {
 		return
 	}
+	if entry.SeededLines == nil {
+		entry.SeededLines = map[int]bool{}
+	}
 	for i, text := range lines {
-		entry.Lines[citation.LineStart+i] = text
+		line := citation.LineStart + i
+		entry.Lines[line] = text
+		entry.SeededLines[line] = true
 	}
 }
 
@@ -1521,6 +1527,7 @@ func recordAnalysisChatEvidence(evidence map[string]*analysisChatEvidence, toolC
 	entry.Bytes += candidate.Bytes
 	for line, text := range candidate.Lines {
 		entry.Lines[line] = text
+		delete(entry.SeededLines, line)
 	}
 	return maxBytes - entry.Bytes, true
 }
