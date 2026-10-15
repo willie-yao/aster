@@ -6,6 +6,7 @@ export interface ChatFixRequestPresentation {
   severity: "info" | "warning" | "error";
   message: string;
   canRegenerate: boolean;
+  canStartOver: boolean;
   shouldObserve: boolean;
 }
 
@@ -15,6 +16,7 @@ export function chatFixRequestPresentation(request: ChatFixRequest): ChatFixRequ
       severity: "info",
       message: "This admitted request is still being observed. Reopening the dialog continues with the same request ID.",
       canRegenerate: false,
+      canStartOver: false,
       shouldObserve: true,
     };
   }
@@ -25,6 +27,17 @@ export function chatFixRequestPresentation(request: ChatFixRequest): ChatFixRequ
       severity: canRegenerate ? "warning" : "error",
       message: failureMessage(request),
       canRegenerate,
+      canStartOver: request.failure?.category !== "no_reviewable_patch"
+        && request.reason_code !== "no_reviewable_patch",
+      shouldObserve: false,
+    };
+  }
+  if (request.status === "cancelled" || request.status === "expired") {
+    return {
+      severity: "info",
+      message: request.status === "cancelled" ? "Fix preview generation was cancelled." : "This fix preview request expired.",
+      canRegenerate: false,
+      canStartOver: true,
       shouldObserve: false,
     };
   }
@@ -46,7 +59,7 @@ function failureMessage(request: ChatFixRequest): string {
     case "safety_integrity":
       return "Fix preview generation was blocked by a safety or integrity check.";
     case "source_changed":
-      return "The source repository or generation base changed before the preview completed.";
+      return "The source repository or target changed, or the target branch changed a patched file or no longer contains the pinned generation base.";
     case "cancelled":
       return "Fix preview generation was cancelled.";
     case "timed_out":

@@ -624,6 +624,26 @@ func TestResolveBaseDefaultsToDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestResolveBaseReportsMissingBranch(t *testing.T) {
+	f := newFakeGitHub(t, "main")
+	if _, err := testClient(f).ResolveBase(t.Context(), "o", "r", "deleted"); !errors.Is(err, ErrBranchNotFound) {
+		t.Fatalf("missing branch error=%v", err)
+	}
+}
+
+func TestResolveCommitTreeUsesPinnedRevision(t *testing.T) {
+	client := lifecycleClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/git/commits/pinned" {
+			t.Errorf("commit URL=%s", r.URL)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"tree": map[string]string{"sha": "pinned-tree"}})
+	})
+	tree, err := client.ResolveCommitTree(t.Context(), "o", "r", "pinned")
+	if err != nil || tree != "pinned-tree" {
+		t.Fatalf("tree=%q err=%v", tree, err)
+	}
+}
+
 // The branch comes from build metadata, so an unsafe name must be rejected
 // before it reaches an API path.
 func TestResolveBaseRejectsUnsafeBranch(t *testing.T) {

@@ -38,7 +38,7 @@ const markerPrefix = "prow-ai-dashboard-fix"
 // ErrWriteOutcomeUnknown means GitHub may have accepted the PR create request.
 var ErrWriteOutcomeUnknown = errors.New("fix PR write outcome unknown")
 
-// ErrPreviewBaseChanged means the pinned source revision is no longer the target branch head.
+// ErrPreviewBaseChanged means the target no longer safely contains the pinned patch base.
 var ErrPreviewBaseChanged = errors.New("fix preview base changed")
 
 // ErrPreviewSourceUnavailable means a pre-write source check failed without proving drift.
@@ -50,6 +50,8 @@ type prClient interface {
 	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	ResolveBase(ctx context.Context, owner, repo, branch string) (ghpr.Base, error)
+	ResolveCommitTree(ctx context.Context, owner, repo, revision string) (string, error)
+	CompareCommitFiles(ctx context.Context, owner, repo, base, head string) (bool, []string, error)
 }
 
 // Options tunes the reconcile.
@@ -564,13 +566,8 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		return url, nil
 	}
 	if gf.requireBaseCurrent {
-		current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, gf.base.Branch)
-		if err != nil {
-			return "", fmt.Errorf("%w: checking current fix base in %s/%s: %w",
-				ErrPreviewSourceUnavailable, m.opts.SourceOwner, m.opts.SourceName, err)
-		}
-		if current.Branch != gf.base.Branch || !strings.EqualFold(current.HeadSHA, gf.base.HeadSHA) || current.TreeSHA != gf.base.TreeSHA {
-			return "", ErrPreviewBaseChanged
+		if err := m.validatePreviewBase(ctx, gf.base, gf.Preview.Files); err != nil {
+			return "", err
 		}
 	}
 	url, err := m.openPR(ctx, gf.Title, gf.Body, gf.Preview.Files, gf.base)
@@ -589,6 +586,42 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	}
 	m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 	return url, nil
+}
+
+func (m *Manager) validatePreviewBase(ctx context.Context, base ghpr.Base, files map[string]string) error {
+	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, base.Branch)
+	if err != nil {
+		if errors.Is(err, ghpr.ErrBranchNotFound) {
+			return fmt.Errorf("%w: %w", ErrPreviewBaseChanged, err)
+		}
+		return fmt.Errorf("%w: checking current fix base in %s/%s: %w",
+			ErrPreviewSourceUnavailable, m.opts.SourceOwner, m.opts.SourceName, err)
+	}
+	if current.Branch != base.Branch {
+		return ErrPreviewBaseChanged
+	}
+	if strings.EqualFold(current.HeadSHA, base.HeadSHA) {
+		if current.TreeSHA != base.TreeSHA {
+			return ErrPreviewBaseChanged
+		}
+		return nil
+	}
+	contains, changed, err := m.pr.CompareCommitFiles(
+		ctx, m.opts.SourceOwner, m.opts.SourceName, base.HeadSHA, current.HeadSHA,
+	)
+	if err != nil {
+		return fmt.Errorf("%w: comparing fix base %s to %s in %s/%s: %w",
+			ErrPreviewSourceUnavailable, base.HeadSHA, current.HeadSHA, m.opts.SourceOwner, m.opts.SourceName, err)
+	}
+	if !contains {
+		return ErrPreviewBaseChanged
+	}
+	for _, path := range changed {
+		if _, touched := files[path]; touched {
+			return fmt.Errorf("%w: patched file %q changed on the target branch", ErrPreviewBaseChanged, path)
+		}
+	}
+	return nil
 }
 
 // eligible filters to systemic patterns at or above minConfidence that carry a

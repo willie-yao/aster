@@ -435,13 +435,17 @@ func (s *Service) PreviewAnalysisFix(
 	}
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, repository, input.SourceBranch, input.BranchTarget)
 	if err != nil {
+		if errors.Is(err, ghpr.ErrBranchNotFound) || ReasonCodeOf(err) == ReasonSourceRevisionDiverged {
+			return PreviewResult{}, classifiedAnalysisFixFailure(
+				ReasonEvidenceUnavailable, AnalysisFixFailureSourceChanged, "", err,
+			)
+		}
 		if _, ok := ReasonCodeFrom(err); ok {
 			return PreviewResult{}, err
 		}
 		return PreviewResult{}, fmt.Errorf("%w: checking exact analysis Fix repository/base: %w", ErrPreviewRejected, err)
 	}
-	if !strings.EqualFold(input.FailureRevision, repository.Revision) || compatibility.TargetBranch != input.TargetBranch ||
-		!strings.EqualFold(input.GenerationBaseRevision, compatibility.GenerationBaseRevision) {
+	if !strings.EqualFold(input.FailureRevision, repository.Revision) || compatibility.TargetBranch != input.TargetBranch {
 		return PreviewResult{}, ErrPreviewTargetChanged
 	}
 	if err := s.setRequestWarnings(ctx, warnings...); err != nil {

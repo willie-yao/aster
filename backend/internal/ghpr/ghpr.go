@@ -30,6 +30,9 @@ const maxResponseBytes = 16 << 20
 // ErrWriteOutcomeUnknown means GitHub may have created a PR before the response was lost.
 var ErrWriteOutcomeUnknown = errors.New("pull request write outcome unknown")
 
+// ErrBranchNotFound means the requested branch ref no longer exists.
+var ErrBranchNotFound = errors.New("branch not found")
+
 type transportError struct{ err error }
 
 func (e *transportError) Error() string { return e.err.Error() }
@@ -124,6 +127,22 @@ func (c *Client) ResolveBase(ctx context.Context, owner, repo, branch string) (B
 		return Base{}, err
 	}
 	return Base{Branch: resolved, HeadSHA: head, TreeSHA: tree}, nil
+}
+
+// ResolveCommitTree returns the tree for one immutable commit.
+func (c *Client) ResolveCommitTree(ctx context.Context, owner, repo, revision string) (string, error) {
+	var commit struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := c.get(ctx, c.url(owner, repo, "git/commits/"+url.PathEscape(revision)), &commit); err != nil {
+		return "", err
+	}
+	if commit.Tree.SHA == "" {
+		return "", fmt.Errorf("commit %q has no tree", revision)
+	}
+	return commit.Tree.SHA, nil
 }
 
 // OpenPR commits the request's files to a new branch and opens a PR against the
@@ -343,17 +362,16 @@ func (c *Client) baseRef(ctx context.Context, owner, repo, branch string) (resol
 		} `json:"object"`
 	}
 	if err = c.get(ctx, c.url(owner, repo, "git/ref/heads/"+escapeRefPath(branch)), &ref); err != nil {
+		if isResponseStatus(err, http.StatusNotFound) {
+			err = fmt.Errorf("%w: %w", ErrBranchNotFound, err)
+		}
 		return "", "", "", fmt.Errorf("reading %s head (does the branch exist? is the repo empty?): %w", branch, err)
 	}
-	var commit struct {
-		Tree struct {
-			SHA string `json:"sha"`
-		} `json:"tree"`
-	}
-	if err = c.get(ctx, c.url(owner, repo, "git/commits/"+ref.Object.SHA), &commit); err != nil {
+	treeSHA, err = c.ResolveCommitTree(ctx, owner, repo, ref.Object.SHA)
+	if err != nil {
 		return "", "", "", err
 	}
-	return branch, ref.Object.SHA, commit.Tree.SHA, nil
+	return branch, ref.Object.SHA, treeSHA, nil
 }
 
 // ValidBranchName applies the git ref rules that matter for a branch used as an

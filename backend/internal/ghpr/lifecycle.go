@@ -163,6 +163,47 @@ func (c *Client) CompareCommits(ctx context.Context, owner, repo, base, head str
 	return status == "ahead" || status == "identical", status, nil
 }
 
+// CompareCommitFiles reports ancestry and all changed paths, including rename sources.
+// It rejects potentially truncated file lists rather than proving false disjointness.
+func (c *Client) CompareCommitFiles(ctx context.Context, owner, repo, base, head string) (bool, []string, error) {
+	if base == "" || head == "" {
+		return false, nil, fmt.Errorf("compare commits requires base and head")
+	}
+	var raw struct {
+		Status string `json:"status"`
+		Files  *[]struct {
+			Filename         string `json:"filename"`
+			PreviousFilename string `json:"previous_filename"`
+		} `json:"files"`
+	}
+	path := "compare/" + url.PathEscape(base) + "..." + url.PathEscape(head) + "?per_page=1"
+	if err := c.get(ctx, c.url(owner, repo, path), &raw); err != nil {
+		return false, nil, err
+	}
+	switch strings.ToLower(raw.Status) {
+	case "behind", "diverged":
+		return false, nil, nil
+	case "ahead", "identical":
+	default:
+		return false, nil, fmt.Errorf("commit comparison returned an unknown status %q", raw.Status)
+	}
+	// GitHub returns at most 300 files, on the first comparison page only.
+	if raw.Files == nil || len(*raw.Files) >= MaxChangedFiles {
+		return false, nil, fmt.Errorf("commit comparison did not return a complete changed-file list")
+	}
+	paths := make([]string, 0, len(*raw.Files))
+	for _, file := range *raw.Files {
+		if file.Filename == "" {
+			return false, nil, fmt.Errorf("commit comparison returned an empty changed-file path")
+		}
+		paths = append(paths, file.Filename)
+		if file.PreviousFilename != "" {
+			paths = append(paths, file.PreviousFilename)
+		}
+	}
+	return true, paths, nil
+}
+
 // PullRequestSearchResult is one marker-matched pull request.
 type PullRequestSearchResult struct {
 	Number    int

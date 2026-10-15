@@ -166,6 +166,7 @@ export function ChatFixDialog({
   const [patternID, setPatternID] = useState("");
   const [branches, setBranches] = useState<ChatFixBranches | null>(null);
   const [branchTarget, setBranchTarget] = useState<ChatFixBranchTarget>("tested");
+  const [submittedBranchTarget, setSubmittedBranchTarget] = useState<ChatFixBranchTarget>("tested");
   const [instruction, setInstruction] = useState("");
   const [submittedInstruction, setSubmittedInstruction] = useState("");
   const [preview, setPreview] = useState<ChatFixPreview | null>(null);
@@ -191,10 +192,12 @@ export function ChatFixDialog({
   const requestPresentation = exactAnalysis && request ? chatFixRequestPresentation(request) : null;
   const isProviderCredentialRetry = request?.status === "failed"
     && request.failure?.category === "provider_credential";
+  const isNoPatchRetry = request?.status === "failed" && request.failure?.category === "no_reviewable_patch";
+  const hasChangedTarget = branchTarget !== submittedBranchTarget;
   const hasRevisedInstruction = Boolean(
     instruction.trim() && instruction.trim() !== submittedInstruction.trim(),
   );
-  const instructionHelperText = requestPresentation?.canRegenerate && !isProviderCredentialRetry && !hasRevisedInstruction
+  const instructionHelperText = requestPresentation?.canRegenerate && !isProviderCredentialRetry && !hasRevisedInstruction && !hasChangedTarget
     ? `Change the previous instruction to enable regeneration. ${chatFixInstructionBytes(instruction)}/4096 bytes`
     : `${chatFixInstructionBytes(instruction)}/4096 bytes`;
   const generating = busy === "preview" || busy === "regenerate";
@@ -208,6 +211,7 @@ export function ChatFixDialog({
     setPatternID(firstPatternID);
     setBranches(null);
     setBranchTarget("tested");
+    setSubmittedBranchTarget("tested");
     setInstruction("");
     setSubmittedInstruction("");
     setPreview(null);
@@ -270,6 +274,7 @@ export function ChatFixDialog({
     setInstruction(stored.instruction);
     setSubmittedInstruction(stored.instruction);
     setBranchTarget(stored.branch_target);
+    setSubmittedBranchTarget(stored.branch_target);
     setBusy("preview");
     setError(null);
     setObservationMessage(null);
@@ -322,6 +327,7 @@ export function ChatFixDialog({
           branch_target: branchTarget,
         });
         setSubmittedInstruction(instruction);
+        setSubmittedBranchTarget(branchTarget);
         setRequest(request);
         admitted = true;
         await observeAnalysisFixRequest(request.id, requestIdentity, controller, request);
@@ -358,7 +364,7 @@ export function ChatFixDialog({
   async function regeneratePreview() {
     if (!exactAnalysis || !message?.request_id || !request?.id || busy) return;
     const providerCredentialRetry = request.status === "failed" && request.failure?.category === "provider_credential";
-    if (!providerCredentialRetry && (!instruction.trim() || instruction.trim() === submittedInstruction.trim())) {
+    if (!providerCredentialRetry && !hasChangedTarget && !hasRevisedInstruction) {
       setError("Edit the maintainer instruction before regenerating the preview.");
       return;
     }
@@ -369,9 +375,10 @@ export function ChatFixDialog({
     setBusy("regenerate");
     setError(null);
     setObservationMessage(null);
+    let observedRequestID = request.id;
     try {
-      const feedbackReplacement = request.status === "failed" && request.failure?.category === "no_reviewable_patch";
-      if (!providerCredentialRetry && !feedbackReplacement) {
+      const feedbackReplacement = isNoPatchRetry && !hasChangedTarget;
+      if (!providerCredentialRetry && !isNoPatchRetry) {
         let cancelled = await cancelAnalysisChatFixRequest(request.id);
         while (actionRequestIsPollable(cancelled.status)) {
           await new Promise((resolve) => window.setTimeout(resolve, 1000));
@@ -406,12 +413,16 @@ export function ChatFixDialog({
         branch_target: branchTarget,
       });
       setSubmittedInstruction(instruction);
+      setSubmittedBranchTarget(branchTarget);
       setRequest(replacement);
+      observedRequestID = replacement.id;
       await observeAnalysisFixRequest(replacement.id, requestIdentity, controller, replacement);
     } catch (regenerateError) {
       if (regenerateError instanceof Error && regenerateError.name === "AbortError") return;
-      if (identityRef.current === requestIdentity) {
+      const refreshError = await refreshTerminalRequest(observedRequestID, requestIdentity, controller);
+      if (identityRef.current === requestIdentity && controllerRef.current === controller) {
         setError(regenerateError instanceof Error ? regenerateError.message : "Could not regenerate the fix preview.");
+        setObservationMessage(refreshError);
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -419,6 +430,34 @@ export function ChatFixDialog({
         if (identityRef.current === requestIdentity) setBusy(null);
       }
     }
+  }
+
+  async function refreshTerminalRequest(id: string | undefined, requestIdentity: string, controller: AbortController): Promise<string | null> {
+    if (!exactAnalysis || !id) return null;
+    try {
+      const current = await loadAnalysisChatFixRequest(id, controller.signal);
+      if (identityRef.current !== requestIdentity || controllerRef.current !== controller) return null;
+      if (current.status === "failed" || current.status === "cancelled" || current.status === "expired") {
+        setRequest(current);
+        setPreview(null);
+      }
+      return null;
+    } catch (refreshError) {
+      if (refreshError instanceof Error && refreshError.name === "AbortError") return null;
+      return "The request could not be refreshed. Reopen this dialog to check its current status.";
+    }
+  }
+
+  function startOver() {
+    if (!exactAnalysis || !message?.request_id || busy || !requestPresentation?.canStartOver) return;
+    controllerRef.current?.abort();
+    controllerRef.current = null;
+    clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
+    setRequest(null);
+    setPreview(null);
+    setSubmittedInstruction("");
+    setError(null);
+    setObservationMessage(null);
   }
 
   async function confirm() {
@@ -436,8 +475,10 @@ export function ChatFixDialog({
       if (message?.request_id) clearStoredChatFixRequest(window.sessionStorage, sessionID, message.request_id);
     } catch (confirmError) {
       if (confirmError instanceof Error && confirmError.name === "AbortError") return;
-      if (identityRef.current === requestIdentity) {
+      const refreshError = await refreshTerminalRequest(request?.id, requestIdentity, controller);
+      if (identityRef.current === requestIdentity && controllerRef.current === controller) {
         setError(confirmError instanceof Error ? confirmError.message : "Could not open the draft PR.");
+        setObservationMessage(refreshError);
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -571,13 +612,13 @@ export function ChatFixDialog({
                 >
                   <FormControlLabel
                     value="tested"
-                    disabled={busy !== null || request !== null}
+                    disabled={busy !== null || (request !== null && !isNoPatchRetry)}
                     control={<Radio size="small" />}
                     label={`${branchChoice.tested} (tested branch)`}
                   />
                   <FormControlLabel
                     value="default"
-                    disabled={busy !== null || request !== null}
+                    disabled={busy !== null || (request !== null && !isNoPatchRetry)}
                     control={<Radio size="small" />}
                     label={`${branchChoice.default} (default branch)`}
                   />
@@ -633,15 +674,16 @@ export function ChatFixDialog({
               <Button
                 variant="outlined"
                 onClick={() => void regeneratePreview()}
-                disabled={busy !== null || (!isProviderCredentialRetry && !hasRevisedInstruction)}
+                disabled={busy !== null || (!isProviderCredentialRetry && !hasChangedTarget && !hasRevisedInstruction)}
                 sx={{ alignSelf: "flex-start" }}
               >
-                {isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
+                {hasChangedTarget ? "Generate fix preview" : isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
               </Button>
             )}
             {exactAnalysis && (
               <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
-                The repository and generation base are pinned when the request is admitted. The preview is rejected if either changes.
+                The repository and generation base are pinned when the request is admitted. Later target-branch changes are allowed
+                only if they preserve that base and do not touch patched files. The pull request keeps the pinned base without rebasing.
               </Typography>
             )}
           </Stack>
@@ -724,6 +766,11 @@ export function ChatFixDialog({
             disabled={busy !== null || (!exactAnalysis && !patternID)}
           >
             {busy === "preview" ? "Generating" : "Generate fix preview"}
+          </Button>
+        )}
+        {requestPresentation?.canStartOver && !url && (
+          <Button variant="outlined" onClick={startOver} disabled={busy !== null}>
+            Start over
           </Button>
         )}
         {request?.status === "ready" && request.preview && !preview && !url && (

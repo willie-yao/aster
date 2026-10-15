@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,6 +52,47 @@ func TestCompareCommits(t *testing.T) {
 	contains, status, err := client.CompareCommits(context.Background(), "o", "r", "merge", "build")
 	if err != nil || !contains || status != "ahead" {
 		t.Fatalf("contains=%v status=%q err=%v", contains, status, err)
+	}
+}
+
+func TestCompareCommitFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     map[string]any
+		status   int
+		contains bool
+		paths    []string
+		wantErr  bool
+	}{
+		{name: "ahead", body: map[string]any{"status": "ahead", "files": []map[string]string{
+			{"filename": "go.mod"}, {"filename": "new.go", "previous_filename": "old.go"},
+		}}, contains: true, paths: []string{"go.mod", "new.go", "old.go"}},
+		{name: "empty diff", body: map[string]any{"status": "ahead", "files": []any{}}, contains: true, paths: []string{}},
+		{name: "diverged", body: map[string]any{"status": "diverged"}},
+		{name: "behind", body: map[string]any{"status": "behind"}},
+		{name: "missing files", body: map[string]any{"status": "ahead"}, wantErr: true},
+		{name: "file cap", body: map[string]any{"status": "ahead", "files": make([]map[string]string, MaxChangedFiles)}, wantErr: true},
+		{name: "empty path", body: map[string]any{"status": "ahead", "files": []map[string]string{{}}}, wantErr: true},
+		{name: "unknown status", body: map[string]any{"status": "unknown"}, wantErr: true},
+		{name: "lookup failure", status: http.StatusBadGateway, wantErr: true},
+		{name: "comparison not found", status: http.StatusNotFound, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := lifecycleClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/repos/o/r/compare/base...head" || r.URL.RawQuery != "per_page=1" {
+					t.Errorf("comparison URL=%s", r.URL)
+				}
+				status := tc.status
+				if status == 0 {
+					status = http.StatusOK
+				}
+				writeJSON(w, status, tc.body)
+			})
+			contains, paths, err := client.CompareCommitFiles(t.Context(), "o", "r", "base", "head")
+			if (err != nil) != tc.wantErr || contains != tc.contains || !slices.Equal(paths, tc.paths) {
+				t.Fatalf("contains=%t paths=%v err=%v", contains, paths, err)
+			}
+		})
 	}
 }
 

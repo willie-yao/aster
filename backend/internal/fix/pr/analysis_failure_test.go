@@ -253,11 +253,11 @@ func TestGenerateAnalysisPreviewUsesCurrentGenerationBase(t *testing.T) {
 	}
 }
 
-func TestAnalysisPreviewRequiresCurrentPinnedBaseAtGenerationAndConfirmation(t *testing.T) {
+func TestAnalysisPreviewRejectsRewrittenBaseAndAllowsSourceCheckRetry(t *testing.T) {
 	failure := validAnalysisFailure()
-	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("b", 40), TreeSHA: "tree-b"}}
+	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("b", 40), TreeSHA: "tree-b"}, pinnedTree: "tree-a"}
 	manager := newManager(t, pr, goodAgent(), Options{})
-	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); err == nil || !strings.Contains(err.Error(), "no longer the current fix base") {
+	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); !errors.Is(err, ErrPreviewBaseChanged) {
 		t.Fatalf("generation drift error = %v", err)
 	}
 
@@ -311,18 +311,91 @@ func TestAnalysisPreviewRequiresExplicitMatchingTargetBranch(t *testing.T) {
 	}
 }
 
-func TestAnalysisPreviewRejectsBaseAdvanceDuringGeneration(t *testing.T) {
-	failure := validAnalysisFailure()
-	initial := ghpr.Base{Branch: "main", HeadSHA: failure.GenerationBaseRevision, TreeSHA: "tree-a"}
-	advanced := ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
-	pr := &fakePR{bases: []ghpr.Base{initial, advanced}}
-	agent := goodAgent()
-	manager := newManager(t, pr, agent, Options{})
-	if _, err := manager.GenerateAnalysisPreview(t.Context(), failure, ""); !errors.Is(err, ErrPreviewBaseChanged) {
-		t.Fatalf("generation-time base drift error = %v", err)
+func TestAnalysisPreviewChecksChangedFilesAndAncestryOnBaseAdvance(t *testing.T) {
+	lookupErr := errors.New("502 Bad Gateway")
+	for _, stage := range []string{"before generation", "during generation", "confirmation"} {
+		for _, tc := range []struct {
+			name     string
+			contains bool
+			paths    []string
+			err      error
+			want     error
+		}{
+			{name: "unrelated files", contains: true, paths: []string{"go.mod", "go.sum"}},
+			{name: "patched file", contains: true, paths: []string{"templates/cluster.yaml"}, want: ErrPreviewBaseChanged},
+			{name: "rewritten branch", want: ErrPreviewBaseChanged},
+			{name: "compare unavailable", err: lookupErr, want: ErrPreviewSourceUnavailable},
+		} {
+			t.Run(stage+"/"+tc.name, func(t *testing.T) {
+				failure := validAnalysisFailure()
+				initial := ghpr.Base{Branch: "main", HeadSHA: failure.GenerationBaseRevision, TreeSHA: "tree-a"}
+				advanced := ghpr.Base{Branch: "main", HeadSHA: strings.Repeat("c", 40), TreeSHA: "tree-c"}
+				pr := &fakePR{
+					base: initial, pinnedTree: initial.TreeSHA,
+					compareContains: tc.contains, comparePaths: tc.paths, compareErr: tc.err,
+				}
+				switch stage {
+				case "before generation":
+					pr.base = advanced
+				case "during generation":
+					pr.bases = []ghpr.Base{initial, advanced}
+				}
+				agent := goodAgent()
+				manager := newManager(t, pr, agent, Options{})
+				fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
+				if stage == "confirmation" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					pr.base = advanced
+					_, err = manager.OpenFromPreview(t.Context(), RestoreGeneratedFix(fix.Snapshot()))
+				}
+				if !errors.Is(err, tc.want) || tc.want == ErrPreviewSourceUnavailable && errors.Is(err, ErrPreviewBaseChanged) {
+					t.Fatalf("error=%v want=%v", err, tc.want)
+				}
+				if tc.err != nil && !errors.Is(err, tc.err) {
+					t.Fatalf("compare cause lost: %v", err)
+				}
+				wantComparison := [2]string{initial.HeadSHA, advanced.HeadSHA}
+				if agent.calls != 1 || len(pr.comparisons) == 0 || pr.comparisons[0] != wantComparison {
+					t.Fatalf("agent calls=%d comparisons=%v", agent.calls, pr.comparisons)
+				}
+				if tc.want != nil {
+					if len(pr.opened) != 0 {
+						t.Fatalf("rejected preview wrote PR: %+v", pr.opened)
+					}
+					return
+				}
+				if fix.Snapshot().Base != initial || agent.spec.Repo.Ref != initial.HeadSHA {
+					t.Fatalf("pinned base changed: %+v agent=%+v", fix.Snapshot().Base, agent.spec.Repo)
+				}
+				if stage != "confirmation" {
+					if _, err := manager.OpenFromPreview(t.Context(), fix); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if len(pr.opened) != 1 || pr.opened[0].Base == nil || *pr.opened[0].Base != initial {
+					t.Fatalf("PR did not use pinned base: %+v", pr.opened)
+				}
+			})
+		}
 	}
-	if agent.calls != 1 || len(pr.opened) != 0 {
-		t.Fatalf("agent calls=%d opened=%d", agent.calls, len(pr.opened))
+}
+
+func TestAnalysisPreviewRejectsMissingTargetBranch(t *testing.T) {
+	initial := ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}
+	pr := &fakePR{base: initial}
+	manager := newManager(t, pr, goodAgent(), Options{})
+	fix, err := manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr.resolveErr = ghpr.ErrBranchNotFound
+	if _, err := manager.OpenFromPreview(t.Context(), fix); !errors.Is(err, ErrPreviewBaseChanged) {
+		t.Fatalf("missing branch error=%v", err)
+	}
+	if len(pr.opened) != 0 {
+		t.Fatal("missing target branch wrote PR")
 	}
 }
 
