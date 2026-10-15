@@ -139,6 +139,7 @@ func preparedMessage(finding PreparedCauseFinding, key string, now time.Time) (M
 		EvidenceWarnings: append([]string(nil), finding.Reply.EvidenceWarnings...), ToolCalls: finding.Reply.ToolCalls,
 		GCSBytes: finding.Reply.GCSBytes, ElapsedMs: finding.Reply.ElapsedMs, ProviderMs: finding.Reply.ProviderMs,
 		ValidationRetries: finding.Reply.ValidationRetries, CreatedAt: stamp,
+		StopReason: finding.Reply.StopReason,
 	}, persistedRequest{QuestionHash: hashText(PreparedCauseQuestion), Question: PreparedCauseQuestion, Status: requestSucceeded, Prepared: true, CreatedAt: stamp, UpdatedAt: stamp}
 }
 

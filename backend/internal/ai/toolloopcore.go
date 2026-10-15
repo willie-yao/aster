@@ -100,6 +100,9 @@ type toolLoopParams struct {
 	onDispatch func(*toolLoopDispatch)
 	// progress reports loop position for caller-side status reporting.
 	progress func(toolLoopPhase)
+	// canStartRound reserves caller-owned finalization time after the first
+	// model request, using the most recent request duration.
+	canStartRound func(time.Duration) bool
 }
 
 // toolLoopResult is what one loop run produced. It is returned alongside any
@@ -117,8 +120,10 @@ type toolLoopResult struct {
 	ModelCalls       int
 	ProviderAttempts int
 	ProviderMs       int
+	// StopReason identifies the exit path, independently of finalization.
+	StopReason string
 	// BudgetExhausted reports that the loop ended without an accepted
-	// tools-free answer, either out of iterations or out of tool calls.
+	// tools-free answer, out of iterations, tool calls, or time headroom.
 	BudgetExhausted bool
 }
 
@@ -140,8 +145,8 @@ func (e *toolLoopModelError) Error() string {
 
 func (e *toolLoopModelError) Unwrap() error { return e.err }
 
-// errToolLoopContextBudget reports that a compacted request still exceeds the
-// caller's context budget. Only returned when strictContextBudget is set.
+// errToolLoopContextBudget reports that a request still exceeds the caller's
+// context budget after history compaction.
 var errToolLoopContextBudget = errors.New("tool loop: request exceeds the context byte budget after compaction")
 
 // runToolLoop drives the shared tool-calling round: compact, call the model,
@@ -157,7 +162,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 	}
 	schemaBytes := schemaPayloadBytes(params.schemas)
 	messages := append([]transport.Message(nil), params.messages...)
-	result := toolLoopResult{}
+	result := toolLoopResult{StopReason: "rounds"}
 
 	var parallelToolCalls *bool
 	if params.singleToolCall {
@@ -165,7 +170,12 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		parallelToolCalls = &value
 	}
 
+	var recentModelRequest time.Duration
 	for iter := 0; iter < maxIters; iter++ {
+		if iter > 0 && params.canStartRound != nil && !params.canStartRound(recentModelRequest) {
+			result.StopReason = "time"
+			break
+		}
 		if iter > 0 && params.progress != nil {
 			params.progress(toolLoopPhaseTurn)
 		}
@@ -177,6 +187,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			}
 			if params.strictContextBudget && requestSizeEstimate(messages, schemaBytes) > params.contextByteBudget {
 				result.Messages = messages
+				result.StopReason = "bytes"
 				return result, errToolLoopContextBudget
 			}
 		}
@@ -187,7 +198,8 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		}
 		providerStart := time.Now()
 		response, err := c.callModelRequest(ctx, request)
-		result.ProviderMs += int(time.Since(providerStart) / time.Millisecond)
+		recentModelRequest = time.Since(providerStart)
+		result.ProviderMs += int(recentModelRequest / time.Millisecond)
 		result.ModelCalls++
 		result.ProviderAttempts += modelResponseAttempts(response)
 		result.Messages = messages
@@ -196,9 +208,14 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			httpStatus = response.HTTPStatus
 		}
 		if err != nil {
+			result.StopReason = "error"
+			if errors.Is(err, context.DeadlineExceeded) {
+				result.StopReason = "time"
+			}
 			return result, &toolLoopModelError{iter: iter, httpStatus: httpStatus, err: err}
 		}
 		if response == nil || !response.HasMessage {
+			result.StopReason = "error"
 			return result, &toolLoopModelError{iter: iter, empty: true, httpStatus: httpStatus}
 		}
 		message := response.Message
@@ -220,6 +237,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			}
 			if decision.stop {
 				result.Messages = messages
+				result.StopReason = "error"
 				return result, decision.err
 			}
 			if decision.corrective() {
@@ -233,6 +251,7 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			messages = appendToolsFreeAssistant(messages, message)
 			result.Messages = messages
 			result.Content = content
+			result.StopReason = "answered"
 			return result, nil
 		}
 		if params.progress != nil {
@@ -246,11 +265,13 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 			remaining := params.maxToolCalls - result.Calls
 			if remaining <= 0 {
 				result.BudgetExhausted = true
+				result.StopReason = "tool_calls"
 				break
 			}
 			if len(toolCalls) > remaining {
 				toolCalls = toolCalls[:remaining]
 				result.BudgetExhausted = true
+				result.StopReason = "tool_calls"
 			}
 		}
 
@@ -277,12 +298,19 @@ func (c *Client) runToolLoop(ctx context.Context, params toolLoopParams) (toolLo
 		}
 		if err := ctx.Err(); err != nil {
 			result.Messages = messages
+			result.StopReason = "error"
+			if errors.Is(err, context.DeadlineExceeded) {
+				result.StopReason = "time"
+			}
 			return result, err
 		}
 	}
 
 	result.Messages = messages
 	result.BudgetExhausted = true
+	if result.StopReason == "rounds" && params.maxToolCalls > 0 && result.Calls >= params.maxToolCalls {
+		result.StopReason = "tool_calls"
+	}
 	return result, nil
 }
 

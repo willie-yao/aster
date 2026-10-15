@@ -198,6 +198,7 @@ type Reply struct {
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
 	ProviderMs        int        `json:"provider_ms,omitempty"`
 	ValidationRetries int        `json:"validation_retries,omitempty"`
+	StopReason        string     `json:"stop_reason,omitempty"`
 }
 
 // Message is one user or assistant entry in a session transcript.
@@ -218,6 +219,7 @@ type Message struct {
 	ElapsedMs         int        `json:"elapsed_ms,omitempty"`
 	ProviderMs        int        `json:"provider_ms,omitempty"`
 	ValidationRetries int        `json:"validation_retries,omitempty"`
+	StopReason        string     `json:"stop_reason,omitempty"`
 	CreatedAt         string     `json:"created_at"`
 }
 

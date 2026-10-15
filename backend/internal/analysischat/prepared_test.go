@@ -105,7 +105,7 @@ func TestServiceCreateSeedsPreparedCauseFindingWithoutUsingATurn(t *testing.T) {
 		Generation: generation,
 		Findings: map[string]PreparedCauseFinding{key: {
 			Ref: ref, PreparedAt: "2026-08-25T01:00:00Z",
-			Reply: Reply{Answer: "The artifact supports changing the controller.", Assessment: "supports", Citations: []Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}}},
+			Reply: Reply{Answer: "The artifact supports changing the controller.", Assessment: "supports", StopReason: "rounds", Citations: []Citation{{Path: "builds/1/build-log.txt", Quote: "failure"}}},
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestServiceCreateSeedsPreparedCauseFindingWithoutUsingATurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.TurnsUsed != 0 || len(session.Messages) != 1 || session.Messages[0].RequestID == "" {
+	if session.TurnsUsed != 0 || len(session.Messages) != 1 || session.Messages[0].RequestID == "" || session.Messages[0].StopReason != "rounds" {
 		t.Fatalf("session = %+v", session)
 	}
 	if len(session.Attempts) != 1 || session.Attempts[0].Outcome != requestSucceeded || session.Attempts[0].Turn != 0 {
