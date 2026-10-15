@@ -43,7 +43,7 @@ When the agent returns a patch, quality concerns become warnings on the ready pr
 - concrete concerns from the Fix critique, or a warning that critique was unavailable;
 - analysis, evidence qualification, and eligibility concerns.
 
-These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, a moved base, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
+These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, unsafe exact-analysis target drift described below, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
 
 ## Exact failure analysis handoff
 
@@ -56,7 +56,7 @@ After a completed response, **Use this finding in a fix proposal** admits a sepa
 - build metadata resolves the exact repository and full tested commit, using `clone-records.json` to identify each repository's commit in multi-repository builds;
 - the configured Fix destination matches the analyzed repository;
 - for the tested-branch target, the failure revision is the head of that branch or an ancestor of it;
-- the pinned generation base remains current through preview generation and confirmation.
+- the target branch still contains the pinned generation base and has not changed a file the patch touches.
 
 The coding agent receives the available failure details, selected answer, retained citations, and optional source hints. It investigates the repository before editing. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified; they are not relabeled as verified because a proposal was requested.
 
@@ -68,11 +68,15 @@ Deleting or expiring chat does not revoke an admitted Fix or a Fix request that 
 
 Closing the browser or losing the HTTP connection does not cancel an admitted Sandbox. Reopening the dialog restores the initiating operator's request, and repeating the same admission input reconnects instead of creating another Sandbox.
 
+Exact-analysis previews tolerate target-branch advances that leave patched files unchanged. Generation and confirmation compare the pinned base to the current head, rejecting a deleted or rewritten branch or an overlapping file change as `source_changed`. The PR commit stays on the pinned base; Aster does not rebase or rerun validators on the new head. A failed or incomplete GitHub comparison is a source-check failure, not proof of source drift. Pattern and build previews keep their existing pinned-base behavior.
+
 ### Preview, warnings, regeneration, and confirmation
 
 The ready preview shows the exact source revision, changed files, canonical diff, validator results, pull-request title and body, and engine-generated warnings. Warnings never authorize a write and cannot be hidden by model prose.
 
 If the reviewer changes the instruction or asks for regeneration, the server creates a replacement request and cancels or supersedes the older active draft. The replacement receives a new identity and must be reviewed from the beginning. The old preview cannot be confirmed after it is superseded.
+
+After a failed, cancelled, or expired exact-analysis request, **Start over** clears that finding's saved request so the maintainer can reselect the target branch, edit the instruction, and generate again in the same dialog. Provider-credential failures also retain **Retry fix preview**. A `no_reviewable_patch` result requires revised feedback to regenerate on the same branch; selecting a different branch starts a fresh request without that feedback requirement.
 
 Confirmation is a separate authenticated POST bound to the owner and exact preview. It rechecks the pattern or admitted failure evidence identity, the action-owned selected finding when applicable, pinned source/base, destination policy, canonical patch, ordered executor results, warning state, and GitHub deduplication marker. Exact-analysis confirmation also rechecks the target branch head. Any bound identity or patch drift fails closed. The dashboard does not rerun target commands during confirmation and never silently regenerates content.
 
@@ -108,7 +112,7 @@ Previews and confirmations use the server-held `BOT_TOKEN`. It must be a PAT for
 
 Use the narrowest credential that supports the selected mode. Do not put `BOT_TOKEN`, the model provider credential, OAuth credentials, or a general operator PAT inside Agent Sandbox.
 
-Action source checks prefer `SOURCE_INVESTIGATION_GITHUB_TOKEN`, then `GITHUB_READ_TOKEN`, `BOT_TOKEN`, and `GITHUB_TOKEN`. A failed GitHub source check keeps the preview available for confirmation retry; a changed source base or failure evidence invalidates it.
+Action source checks prefer `SOURCE_INVESTIGATION_GITHUB_TOKEN`, then `GITHUB_READ_TOKEN`, `BOT_TOKEN`, and `GITHUB_TOKEN`. A failed GitHub source check keeps the preview available for confirmation retry; unsafe target drift or changed failure evidence invalidates it.
 
 ## Required project configuration
 

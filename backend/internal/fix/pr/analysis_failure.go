@@ -58,10 +58,23 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 	}
 	base, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.TargetBranch)
 	if err != nil {
-		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
+		if errors.Is(err, ghpr.ErrBranchNotFound) {
+			return nil, fmt.Errorf("%w: %w", ErrPreviewBaseChanged, err)
+		}
+		return nil, fmt.Errorf("%w: resolving %s/%s base: %w",
+			ErrPreviewSourceUnavailable, m.opts.SourceOwner, m.opts.SourceName, err)
 	}
-	if base.Branch != failure.TargetBranch || !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
-		return nil, fmt.Errorf("%w: generation base is no longer the current fix base", ErrPreviewBaseChanged)
+	if base.Branch != failure.TargetBranch {
+		return nil, ErrPreviewBaseChanged
+	}
+	if !strings.EqualFold(base.HeadSHA, failure.GenerationBaseRevision) {
+		tree, err := m.pr.ResolveCommitTree(
+			ctx, m.opts.SourceOwner, m.opts.SourceName, failure.GenerationBaseRevision,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("%w: resolving pinned generation tree: %w", ErrPreviewSourceUnavailable, err)
+		}
+		base.HeadSHA, base.TreeSHA = failure.GenerationBaseRevision, tree
 	}
 	fix, err := generateAnalysisWithAgent(ctx, genParams{
 		critique: m.opts.Critique, owner: m.opts.SourceOwner, repo: m.opts.SourceName, ref: failure.GenerationBaseRevision,
@@ -80,12 +93,8 @@ func (m *Manager) GenerateAnalysisPreview(ctx context.Context, failure AnalysisF
 		description = strings.TrimSpace(description) + "\n\n" + note
 	}
 	body := analysisFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
-	current, err := m.pr.ResolveBase(ctx, m.opts.SourceOwner, m.opts.SourceName, failure.TargetBranch)
-	if err != nil {
-		return nil, fmt.Errorf("rechecking current generation base: %w", err)
-	}
-	if current.Branch != base.Branch || !strings.EqualFold(current.HeadSHA, base.HeadSHA) || current.TreeSHA != base.TreeSHA {
-		return nil, ErrPreviewBaseChanged
+	if err := m.validatePreviewBase(ctx, base, fix.files); err != nil {
+		return nil, err
 	}
 	return &GeneratedFix{
 		Preview:               Preview{Subject: failure.TestName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},

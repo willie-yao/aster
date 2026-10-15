@@ -89,7 +89,8 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /Generation continues in the background/);
   assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
   assert.match(dialog, /repository and generation base are pinned when the request is admitted/);
-  assert.match(dialog, /The preview is rejected if either changes/);
+  assert.match(dialog, /Later target-branch changes are allowed/);
+  assert.match(dialog, /only if they preserve that base and do not touch patched files/);
   assert.match(dialog, /chatFixFindingCaveats\(message, request\?\.warnings\)/);
   assert.match(dialog, /Generate fix preview/);
   assert.match(dialog, /Open draft PR with warnings/);
@@ -206,7 +207,7 @@ test("fix dialog offers the default branch only for exact analysis and keeps the
   assert.match(dialog, /const branchChoice = exactAnalysis \? chatFixBranchChoice\(branches\) : null/);
   assert.match(dialog, /\{branchChoice && \(\s*<ContextSection title="Target branch">/);
   assert.match(dialog, /loadAnalysisChatFixBranches\(sessionID, message\.request_id, controller\.signal\)/);
-  assert.match(dialog, /disabled=\{busy !== null \|\| request !== null\}/);
+  assert.match(dialog, /disabled=\{busy !== null \|\| \(request !== null && !isNoPatchRetry\)\}/);
   assert.match(dialog, /setBranchTarget\(stored\.branch_target\)/);
   assert.match(dialog, /suggests \/cherry-pick \{branchChoice\.tested\} after merge/);
   const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
@@ -275,6 +276,7 @@ test("exact JUnit request presentation separates recoverable hard and observatio
     severity: "warning",
     message: "The coding agent completed, but no repository change was generated. If the remedy belongs in this repository, revise the maintainer instruction and regenerate. If it is external or operational, no patch can be generated.",
     canRegenerate: true,
+    canStartOver: false,
     shouldObserve: false,
   });
   const tooBroad = chatFixRequestPresentation({
@@ -335,6 +337,7 @@ test("provider request failures explain configuration and show diagnostics witho
     severity: "error",
     message: "The model provider rejected the request. Check the configured model, API, and endpoint.",
     canRegenerate: false,
+    canStartOver: true,
     shouldObserve: false,
   });
   const dialog = source("src/components/ChatFixDialog.tsx");
@@ -353,7 +356,7 @@ test("exact JUnit regeneration keeps feedback replacement separate from provider
   const dialog = source("src/components/ChatFixDialog.tsx");
   const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function confirm"));
   assert.match(regenerate, /providerCredentialRetry = request\.status === "failed" && request\.failure\?\.category === "provider_credential"/);
-  assert.match(regenerate, /feedbackReplacement = request\.status === "failed" && request\.failure\?\.category === "no_reviewable_patch"/);
+  assert.match(regenerate, /feedbackReplacement = isNoPatchRetry && !hasChangedTarget/);
   const createRequest = regenerate.indexOf("const replacement = await createAnalysisChatFixRequest");
   const providerClearBranch = regenerate.indexOf("if (providerCredentialRetry)", createRequest);
   const clearStored = regenerate.indexOf("clearStoredChatFixRequest", providerClearBranch);
@@ -361,14 +364,98 @@ test("exact JUnit regeneration keeps feedback replacement separate from provider
   const beforeCreate = regenerate.slice(0, createRequest);
   assert.doesNotMatch(beforeCreate, /if \(providerCredentialRetry\) \{[\s\S]*clearStoredChatFixRequest/);
   assert.doesNotMatch(beforeCreate, /setRequest\(null\)/);
-  assert.match(regenerate, /if \(!providerCredentialRetry && !feedbackReplacement\) \{[\s\S]*cancelAnalysisChatFixRequest/);
+  assert.match(regenerate, /if \(!providerCredentialRetry && !isNoPatchRetry\) \{[\s\S]*cancelAnalysisChatFixRequest/);
   assert.equal((regenerate.match(/createAnalysisChatFixRequest\(/g) ?? []).length, 1);
   assert.match(regenerate, /feedbackReplacement \? request\.id : undefined/);
-  assert.match(dialog, /disabled=\{busy !== null \|\| \(!isProviderCredentialRetry && !hasRevisedInstruction\)\}/);
+  assert.match(dialog, /disabled=\{busy !== null \|\| \(!isProviderCredentialRetry && !hasChangedTarget && !hasRevisedInstruction\)\}/);
   assert.match(dialog, /Retry fix preview/);
   assert.match(dialog, /Provider diagnostic/);
   assert.match(dialog, /!request && !preview && !url/);
   assert.match(dialog, /Review fix preview/);
+});
+
+test("terminal exact-analysis requests allow start-over except no-patch feedback", () => {
+  const base = {
+    id: "request", failure_id: "failure", kind: "analysis-fix" as const, owner: "alice",
+    created_at: "2026-08-14T00:00:00Z", updated_at: "2026-08-14T00:00:00Z",
+    expires_at: "2026-08-15T00:00:00Z",
+  };
+  for (const category of [
+    "source_changed", "runtime_infrastructure", "provider_credential", "provider_request",
+    "result_contract", "safety_integrity", "cancelled", "timed_out",
+  ] as const) {
+    const presentation = chatFixRequestPresentation({ ...base, status: "failed", failure: { category } });
+    assert.equal(presentation?.canStartOver, true, category);
+    assert.equal(presentation?.shouldObserve, false, category);
+  }
+  assert.equal(chatFixRequestPresentation({ ...base, status: "failed" })?.canStartOver, true);
+  for (const status of ["cancelled", "expired"] as const) {
+    const presentation = chatFixRequestPresentation({ ...base, status });
+    assert.equal(presentation?.canStartOver, true, status);
+    assert.ok(presentation?.message, status);
+  }
+  for (const status of ["pending", "cancelling", "unknown", "ready", "confirmed"] as const) {
+    assert.notEqual(chatFixRequestPresentation({ ...base, status })?.canStartOver, true, status);
+  }
+  assert.equal(chatFixRequestPresentation({
+    ...base, status: "failed", failure: { category: "no_reviewable_patch" },
+  })?.canStartOver, false);
+  assert.equal(chatFixRequestPresentation({
+    ...base, status: "failed", reason_code: "no_reviewable_patch",
+  })?.canStartOver, false);
+});
+
+test("start-over clears only the selected finding's saved request and restores generation controls", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const startOver = dialog.slice(dialog.indexOf("function startOver()"), dialog.indexOf("async function confirm"));
+  assert.match(startOver, /!exactAnalysis \|\| !message\?\.request_id \|\| busy \|\| !requestPresentation\?\.canStartOver/);
+  assert.match(startOver, /controllerRef\.current\?\.abort\(\)/);
+  assert.match(startOver, /clearStoredChatFixRequest\(window\.sessionStorage, sessionID, message\.request_id\)/);
+  for (const setter of ["setRequest", "setPreview", "setError", "setObservationMessage"]) {
+    assert.ok(startOver.includes(`${setter}(null)`), setter);
+  }
+  assert.doesNotMatch(startOver, /setInstruction|setBranchTarget|createAnalysisChatFixRequest|cancelAnalysisChatFixRequest/);
+  assert.match(dialog, /requestPresentation\?\.canStartOver && !url/);
+  assert.match(dialog, /onClick=\{startOver\} disabled=\{busy !== null\}/);
+  assert.match(dialog, /!request && !preview && !url/);
+
+  const storage = new MemoryStorage();
+  const saved = { id: "failed-request", instruction: "keep the change narrow", branch_target: "default" as const };
+  storeChatFixRequest(storage, "session", "finding", saved);
+  storeChatFixRequest(storage, "session", "another-finding", saved);
+  clearStoredChatFixRequest(storage, "session", "finding");
+  assert.equal(readStoredChatFixRequest(storage, "session", "finding"), null);
+  assert.deepEqual(readStoredChatFixRequest(storage, "session", "another-finding"), saved);
+});
+
+test("no-patch branch changes admit a fresh request without bypassing same-branch feedback", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  assert.match(dialog, /setSubmittedBranchTarget\(stored\.branch_target\)/);
+  assert.match(dialog, /hasChangedTarget = branchTarget !== submittedBranchTarget/);
+  assert.match(dialog, /feedbackReplacement = isNoPatchRetry && !hasChangedTarget/);
+  assert.match(dialog, /feedbackReplacement \? request\.id : undefined/);
+  assert.match(dialog, /!providerCredentialRetry && !hasChangedTarget && !hasRevisedInstruction/);
+  assert.match(dialog, /setSubmittedBranchTarget\(branchTarget\)/);
+});
+
+test("regeneration and confirmation errors refresh terminal state without discarding a retryable preview", () => {
+  const dialog = source("src/components/ChatFixDialog.tsx");
+  const refresh = dialog.slice(dialog.indexOf("async function refreshTerminalRequest"), dialog.indexOf("function startOver()"));
+  assert.match(refresh, /await loadAnalysisChatFixRequest\(id, controller\.signal\)/);
+  assert.match(refresh, /identityRef\.current !== requestIdentity \|\| controllerRef\.current !== controller/);
+  assert.match(refresh, /current\.status === "failed" \|\| current\.status === "cancelled" \|\| current\.status === "expired"/);
+  assert.match(refresh, /setRequest\(current\);\s*setPreview\(null\)/);
+  assert.doesNotMatch(refresh.slice(refresh.indexOf("catch (refreshError)")), /setRequest|setPreview/);
+  for (const error of ["regenerateError", "confirmError"]) {
+    const handler = dialog.slice(dialog.indexOf(`catch (${error})`), dialog.indexOf("finally", dialog.indexOf(`catch (${error})`)));
+    assert.match(handler, /await refreshTerminalRequest\([^,]+, requestIdentity, controller\)/);
+    assert.match(handler, /identityRef\.current === requestIdentity && controllerRef\.current === controller/);
+    assert.match(handler, /setObservationMessage\(refreshError\)/);
+  }
+  const regenerate = dialog.slice(dialog.indexOf("async function regeneratePreview"), dialog.indexOf("async function refreshTerminalRequest"));
+  assert.match(regenerate, /let observedRequestID = request\.id/);
+  assert.match(regenerate, /observedRequestID = replacement\.id;\s*await observeAnalysisFixRequest/);
+  assert.match(regenerate, /refreshTerminalRequest\(observedRequestID, requestIdentity, controller\)/);
 });
 
 test("recoverable no-patch feedback is grouped with regeneration controls", () => {

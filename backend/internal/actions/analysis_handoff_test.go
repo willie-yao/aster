@@ -93,7 +93,7 @@ func TestBuildAnalysisHandoffRechecksFailureAndPreservesPinnedBranch(t *testing.
 			writeJobDetail(t, dir, models.JobDataFilename(detail.JobID), detail)
 			_, generationErr := service.resolveAnalysisFixTarget(input, true)
 			confirmationErr := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: &input})
-			if change == "unchanged" {
+			if change == "unchanged" || change == "base" {
 				if generationErr != nil || confirmationErr != nil {
 					t.Fatalf("generation=%v confirmation=%v", generationErr, confirmationErr)
 				}
@@ -223,17 +223,110 @@ func TestDefaultBranchAnalysisFixRequestIsSeparateAndRechecksBase(t *testing.T) 
 	client.mu.Lock()
 	client.base.HeadSHA = capzReleaseBaseRevision
 	client.mu.Unlock()
-	if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: handoff}); !errors.Is(err, ErrPreviewTargetChanged) {
+	if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: handoff}); err != nil {
 		t.Fatalf("moved default branch validation = %v", err)
+	}
+	if handoff.GenerationBaseRevision != capzGenerationBaseRevision {
+		t.Fatal("advanced branch changed the pinned generation base")
 	}
 	if err := service.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: testedHandoff}); err != nil {
 		t.Fatalf("tested branch validation = %v", err)
 	}
+	client.mu.Lock()
+	client.base.Branch = "trunk"
+	client.mu.Unlock()
 	if _, err := service.Confirm(t.Context(), defaultReady.Preview.Token, "alice", "token"); !errors.Is(err, ErrPreviewTargetChanged) {
-		t.Fatalf("moved default branch confirmation = %v", err)
+		t.Fatalf("changed default branch confirmation = %v", err)
 	}
 	if _, err := service.previewStore.take("alice", defaultReady.Preview.Token); !errors.Is(err, ErrPreviewNotFound) {
 		t.Fatalf("changed base preview was retained: %v", err)
+	}
+}
+
+func TestNoPatchAnalysisFixAllowsFreshRequestOnDifferentBranch(t *testing.T) {
+	service, _, _ := defaultBranchRequestService(t)
+	inputs := make(chan AnalysisFixInput, 2)
+	service.analysisRequestGenerator = func(_ context.Context, input AnalysisFixInput, _, _, _ string) (PreviewResult, error) {
+		inputs <- input
+		return PreviewResult{}, classifiedAnalysisFixFailure(
+			ReasonNoReviewablePatch, AnalysisFixFailureNoReviewablePatch, "", ErrPreviewRejected,
+		)
+	}
+	input := exactBuildRequestInput()
+	first, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRequest(t, service, first.ID, "alice", RequestFailed)
+	if _, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", ""); ReasonCodeOf(err) != ReasonNoReviewablePatch {
+		t.Fatalf("identical no-patch retry=%v", err)
+	}
+	input.BranchTarget = FixBranchDefault
+	retry, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "token", "")
+	if err != nil || retry.ID == first.ID {
+		t.Fatalf("different branch retry=%+v err=%v", retry, err)
+	}
+	waitRequest(t, service, retry.ID, "alice", RequestFailed)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-inputs
+	handoff := <-inputs
+	if handoff.TargetBranch != "main" || handoff.GenerationBaseRevision != capzGenerationBaseRevision {
+		t.Fatalf("new branch handoff=%+v", handoff)
+	}
+}
+
+func TestAnalysisFixSourceCheckFailureDoesNotClaimDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		category AnalysisFixFailureCategory
+	}{
+		{name: "changed source", err: fixpr.ErrPreviewBaseChanged, category: AnalysisFixFailureSourceChanged},
+		{name: "comparison unavailable", err: fixpr.ErrPreviewSourceUnavailable, category: AnalysisFixFailureRuntimeInfrastructure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := safeAnalysisFixPreviewError(tc.err)
+			failure := analysisFixFailureView(err)
+			if failure == nil || failure.Category != tc.category || !errors.Is(err, tc.err) {
+				t.Fatalf("failure=%+v err=%v", failure, err)
+			}
+		})
+	}
+}
+
+func TestAdmittedAnalysisFixClassifiesPreGenerationSourceDrift(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		rewrite bool
+		changed bool
+	}{
+		{name: "missing branch", err: ghpr.ErrBranchNotFound, changed: true},
+		{name: "rewritten branch", rewrite: true, changed: true},
+		{name: "lookup unavailable", err: errors.New("502 Bad Gateway")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := analysisRequestTestService(t)
+			input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := service.sourceRevisionClient.(*fakeAnalysisSourceRevisionClient)
+			client.resolveErr = tc.err
+			if tc.rewrite {
+				client.base.HeadSHA = capzGenerationBaseRevision
+			}
+			_, err = service.PreviewAnalysisFix(t.Context(), input, "alice", "token", "")
+			failure := analysisFixFailureView(err)
+			if err == nil || (failure != nil && failure.Category == AnalysisFixFailureSourceChanged) != tc.changed {
+				t.Fatalf("failure=%+v err=%v", failure, err)
+			}
+			if !tc.changed && (!errors.Is(err, tc.err) || !errors.Is(err, errAnalysisSourceUnavailable)) {
+				t.Fatalf("lookup failure lost source-unavailable classification: %v", err)
+			}
+		})
 	}
 }
 
@@ -750,7 +843,7 @@ func TestActionOwnedHandoffRechecksCauseBeyondRepresentativeJUnit(t *testing.T) 
 func TestActionOwnedHandoffRejectsChangedPublicationAndSource(t *testing.T) {
 	for _, change := range []string{
 		"failure message", "failure body", "failure location", "status", "JUnit file",
-		"repository", "branch", "generation base", "destination",
+		"repository", "branch", "destination",
 	} {
 		t.Run(change, func(t *testing.T) {
 			service, _ := analysisRequestTestService(t)
@@ -774,8 +867,6 @@ func TestActionOwnedHandoffRejectsChangedPublicationAndSource(t *testing.T) {
 				detail.Runs[0].RepoRefs = map[string]string{"other/repo": "main:" + analysisFixRevision}
 			case "branch":
 				detail.Runs[0].RepoRefs = map[string]string{"kubernetes-sigs/cluster-api-provider-azure": "release:" + analysisFixRevision}
-			case "generation base":
-				service.sourceRevisionClient = &fakeAnalysisSourceRevisionClient{base: ghpr.Base{Branch: "main", HeadSHA: capzGenerationBaseRevision}, contains: true}
 			case "destination":
 				service.cfg.AI.FixPRs.Repo.Name = "other"
 			}

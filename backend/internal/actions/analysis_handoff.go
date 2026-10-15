@@ -13,6 +13,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
+	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
@@ -184,13 +185,15 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 	}
 	compatibility, err := s.verifyAnalysisSourceCompatibility(ctx, input.SourceRepository, input.SourceBranch, input.BranchTarget)
 	if err != nil {
+		if errors.Is(err, ghpr.ErrBranchNotFound) {
+			return ErrPreviewTargetChanged
+		}
 		if errors.Is(err, errAnalysisSourceUnavailable) {
 			return err
 		}
 		return ErrPreviewTargetChanged
 	}
-	if compatibility.TargetBranch != input.TargetBranch ||
-		!strings.EqualFold(compatibility.GenerationBaseRevision, input.GenerationBaseRevision) {
+	if compatibility.TargetBranch != input.TargetBranch {
 		return ErrPreviewTargetChanged
 	}
 	return nil

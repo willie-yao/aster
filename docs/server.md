@@ -137,6 +137,8 @@ Persistent requests survive normal restarts when ready. Unfinished external runt
 
 File Issue and Mark Resolved use the standard server runtime. Fix generation is separate, experimental, and uses Agent Sandbox. Its source, patch, warning, regeneration, and confirmation contracts are in [Fix PR generation](fix-prs.md).
 
+Exact-analysis Fix previews allow the target branch to advance when it still contains the pinned base and no patched file changed. Confirmation opens the reviewed patch on that pinned base without rebasing. After a failed, cancelled, or expired request, the dialog can start over with the same finding and a newly selected branch. No-patch results still require changed feedback for a same-branch retry.
+
 Successful GitHub confirmations append a private write-audit record containing the initiating and confirming login, action kind, target, result URL, timestamps, and reconciliation status. Credentials are not stored.
 If audit or request-state persistence fails, the request reconciles the external result before confirmation is reported as complete.
 

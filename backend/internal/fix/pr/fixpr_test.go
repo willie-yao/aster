@@ -49,6 +49,11 @@ type fakePR struct {
 	resolveCalls    int
 	resolveErr      error
 	resolveBranches []string
+	compareContains bool
+	comparePaths    []string
+	compareErr      error
+	comparisons     [][2]string
+	pinnedTree      string
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -88,6 +93,15 @@ func (f *fakePR) ResolveBase(_ context.Context, _, _, branch string) (ghpr.Base,
 		return f.base, nil
 	}
 	return ghpr.Base{Branch: "main", HeadSHA: "pinned-sha-123", TreeSHA: "basetree"}, nil
+}
+
+func (f *fakePR) ResolveCommitTree(_ context.Context, _, _, _ string) (string, error) {
+	return f.pinnedTree, nil
+}
+
+func (f *fakePR) CompareCommitFiles(_ context.Context, _, _, base, head string) (bool, []string, error) {
+	f.comparisons = append(f.comparisons, [2]string{base, head})
+	return f.compareContains, f.comparePaths, f.compareErr
 }
 
 const sampleFile = `apiVersion: v1
