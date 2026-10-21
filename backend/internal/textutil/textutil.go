@@ -2,9 +2,23 @@
 package textutil
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
+
+var (
+	recurrenceTimestamp = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*`)
+	recurrenceNumber    = regexp.MustCompile(`\d+(?:\.\d+)*`)
+	recurrenceSpace     = regexp.MustCompile(`\s+`)
+)
+
+// NormalizeErrorRecurrence removes timestamps, varying numbers, and whitespace.
+func NormalizeErrorRecurrence(message string) string {
+	message = recurrenceTimestamp.ReplaceAllString(strings.TrimSpace(message), "<timestamp>")
+	message = recurrenceNumber.ReplaceAllString(message, "<num>")
+	return recurrenceSpace.ReplaceAllString(message, " ")
+}
 
 // TrimCredential removes surrounding whitespace from a secret value and reports
 // whether anything was removed. A Secret written with `echo` rather than

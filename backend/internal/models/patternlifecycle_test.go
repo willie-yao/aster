@@ -2,10 +2,164 @@ package models
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+func recurrenceTestFailure(name, message string) TestCase {
+	return TestCase{
+		Name: name, Status: "failed", SuiteName: "e2e", ClassName: "cluster",
+		FailureLocation: "test/e2e/cluster.go:120", FailureMessage: message,
+		AIAnalysis: &AIAnalysis{RootCause: "cause", Disposition: AnalysisDispositionPreliminary},
+	}
+}
+
+func TestRefreshRetainedPatternLifecycleSameCause(t *testing.T) {
+	failure := recurrenceTestFailure("Azure Linux 3", "Timed out after 1200.001s joining etcd")
+	unrelated := recurrenceTestFailure("MSI", "identity unavailable")
+	detail := JobDetail{JobID: "job"}
+	signature := FailureRecurrenceSignature(detail, &failure)
+	pass := func(id string) BuildResult {
+		return BuildResult{BuildInfo: BuildInfo{BuildID: id, Result: "SUCCESS", Passed: true}}
+	}
+	newFailure := func(cases ...TestCase) BuildResult {
+		return BuildResult{
+			BuildInfo: BuildInfo{
+				BuildID: "recurrence", Result: "FAILURE",
+				Started: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC),
+			},
+			TestCases: cases,
+		}
+	}
+	for _, test := range []struct {
+		name       string
+		runs       []BuildResult
+		mutate     func(*PatternAnalysis, *JobDetail)
+		wantState  PatternLifecycleState
+		wantBuilds []string
+		recurrence bool
+	}{
+		{
+			name:      "unrelated failure does not reset or count",
+			runs:      []BuildResult{pass("3"), newFailure(unrelated), pass("2")},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3", "2"},
+		},
+		{
+			name:      "three passes separated by unrelated failures recover",
+			runs:      []BuildResult{pass("3"), newFailure(unrelated), pass("2"), pass("1")},
+			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
+		},
+		{
+			name: "truncated discovery with all failures analyzed does not reset",
+			runs: []BuildResult{pass("3"), newFailure(unrelated), pass("2"), pass("1")},
+			mutate: func(_ *PatternAnalysis, detail *JobDetail) {
+				detail.Runs[1].JUnitTruncated = true
+				detail.Runs[1].TestsFailed = 1
+			},
+			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
+		},
+		{
+			name:      "non representative matching failure resets",
+			runs:      []BuildResult{pass("3"), newFailure(unrelated, failure), pass("2"), pass("1")},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"}, recurrence: true,
+		},
+		{
+			name: "varying timeout and failure line still match",
+			runs: []BuildResult{pass("3"), newFailure(failure), pass("2"), pass("1")},
+			mutate: func(_ *PatternAnalysis, detail *JobDetail) {
+				detail.Runs[1].TestCases[0].FailureMessage = "Timed out after 1234.987s joining etcd"
+				detail.Runs[1].TestCases[0].FailureLocation = "test/e2e/cluster.go:456:12"
+			},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"}, recurrence: true,
+		},
+		{
+			name: "legacy identity resets conservatively",
+			runs: []BuildResult{pass("3"), newFailure(unrelated), pass("2")},
+			mutate: func(pattern *PatternAnalysis, _ *JobDetail) {
+				pattern.CausalGroups[0].RecurrenceSignature = ""
+			},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"},
+		},
+		{
+			name:      "unanalyzed failure resets conservatively",
+			runs:      []BuildResult{pass("3"), newFailure(), pass("2")},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"},
+		},
+		{
+			name:      "one unanalyzed failed test prevents ruling out recurrence",
+			runs:      []BuildResult{pass("3"), newFailure(unrelated, TestCase{Name: "unknown", Status: "failed"}), pass("2")},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"},
+		},
+		{
+			name: "incomplete junit prevents ruling out recurrence",
+			runs: []BuildResult{pass("3"), newFailure(unrelated), pass("2")},
+			mutate: func(_ *PatternAnalysis, detail *JobDetail) {
+				detail.Runs[1].TestsFailed = 2
+			},
+			wantState: PatternLifecycleActive, wantBuilds: []string{"3"},
+		},
+		{
+			name: "pending failure does not reset",
+			runs: []BuildResult{
+				pass("3"), {BuildInfo: BuildInfo{BuildID: "pending", Result: "PENDING"}},
+				newFailure(unrelated), pass("2"), pass("1"),
+			},
+			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
+		},
+		{
+			name: "different provenance is unrelated",
+			runs: []BuildResult{pass("3"), newFailure(failure), pass("2"), pass("1")},
+			mutate: func(_ *PatternAnalysis, detail *JobDetail) {
+				detail.Runs[1].TestCases[0].SuiteName = "other suite"
+			},
+			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pattern := PatternAnalysis{
+				Systemic: true, SharedBuilds: []string{"old-1", "old-2"},
+				CausalGroups: []PatternCausalGroup{{Builds: []string{"old-1", "old-2"}, RecurrenceSignature: signature}},
+			}
+			current := JobDetail{JobID: "job", Runs: test.runs}
+			if test.mutate != nil {
+				test.mutate(&pattern, &current)
+			}
+			RefreshRetainedPatternLifecycle(current, &pattern)
+			got := pattern.Lifecycle
+			if got.State != test.wantState || got.RecoveryStreak != len(test.wantBuilds) ||
+				!slices.Equal(got.RecoveryBuilds, test.wantBuilds) {
+				t.Fatalf("lifecycle = %+v, want %s with passes %v", got, test.wantState, test.wantBuilds)
+			}
+			if test.recurrence {
+				if got.LatestRecurrenceBuildID != "recurrence" || got.LatestRecurrenceStarted != "2026-10-19T12:00:00Z" {
+					t.Fatalf("recurrence = %+v", got)
+				}
+			} else if got.LatestRecurrenceBuildID != "" || got.LatestRecurrenceStarted != "" {
+				t.Fatalf("unconfirmed recurrence published: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRefreshRetainedPatternLifecyclePreservesLatestRecurrence(t *testing.T) {
+	pattern := PatternAnalysis{
+		Systemic: true, SharedBuilds: []string{"old-1", "old-2"},
+		Lifecycle: &PatternLifecycle{
+			State: PatternLifecycleRecovered, RecoveryStreak: 3, RecoveryBuilds: []string{"3", "2", "1"},
+			LatestRecurrenceBuildID: "recurrence", LatestRecurrenceStarted: "2026-10-19T12:00:00Z",
+		},
+	}
+	RefreshRetainedPatternLifecycle(JobDetail{Runs: []BuildResult{{
+		BuildInfo: BuildInfo{BuildID: "4", Result: "SUCCESS", Passed: true},
+	}}}, &pattern)
+	if pattern.Lifecycle.State != PatternLifecycleRecovered ||
+		pattern.Lifecycle.LatestRecurrenceBuildID != "recurrence" ||
+		pattern.Lifecycle.LatestRecurrenceStarted != "2026-10-19T12:00:00Z" {
+		t.Fatalf("lifecycle = %+v", pattern.Lifecycle)
+	}
+}
 
 const lifecycleRevision = "0123456789abcdef0123456789abcdef01234567"
 

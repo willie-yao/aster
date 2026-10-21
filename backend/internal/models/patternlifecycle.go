@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -31,9 +32,25 @@ func RefreshRetainedPatternLifecycle(detail JobDetail, pattern *PatternAnalysis)
 	if pattern.Lifecycle == nil {
 		return
 	}
+	if previous != nil {
+		pattern.Lifecycle.LatestRecurrenceBuildID = previous.LatestRecurrenceBuildID
+		pattern.Lifecycle.LatestRecurrenceStarted = previous.LatestRecurrenceStarted
+	}
 
 	newerRuns := runsAfterCorrelatedFailure(detail, *pattern)
 	builds, encounteredFailure := leadingPassingBuilds(JobDetail{Runs: newerRuns})
+	correlated := hasCorrelatedFailure(detail, *pattern)
+	if !correlated {
+		var latest *BuildResult
+		builds, encounteredFailure, latest = retainedRecoveryBuilds(detail, *pattern)
+		if latest != nil {
+			pattern.Lifecycle.LatestRecurrenceBuildID = latest.BuildID
+			pattern.Lifecycle.LatestRecurrenceStarted = ""
+			if !latest.Started.IsZero() {
+				pattern.Lifecycle.LatestRecurrenceStarted = latest.Started.UTC().Format(time.RFC3339)
+			}
+		}
+	}
 	if encounteredFailure {
 		pattern.Lifecycle.State = PatternLifecycleActive
 		pattern.Lifecycle.Reason = "A newer completed failure occurred after the prior lifecycle evidence."
@@ -43,7 +60,9 @@ func RefreshRetainedPatternLifecycle(detail JobDetail, pattern *PatternAnalysis)
 		applyObservedRecovery(pattern.Lifecycle)
 		return
 	}
-	if pattern.Lifecycle.State == PatternLifecycleObserving || pattern.Lifecycle.State == PatternLifecycleVerifiedFixed || hasCorrelatedFailure(detail, *pattern) {
+	sourceVerified := pattern.Lifecycle.State == PatternLifecycleObserving ||
+		pattern.Lifecycle.State == PatternLifecycleVerifiedFixed
+	if sourceVerified || correlated {
 		return
 	}
 
@@ -58,6 +77,59 @@ func RefreshRetainedPatternLifecycle(detail JobDetail, pattern *PatternAnalysis)
 		pattern.Lifecycle.RecoveryStreak = max(previous.RecoveryStreak, len(pattern.Lifecycle.RecoveryBuilds))
 		applyObservedRecovery(pattern.Lifecycle)
 	}
+}
+
+// retainedRecoveryBuilds skips unrelated failures without counting them as passes.
+// Unknown failures break recovery but are not published as confirmed recurrences.
+func retainedRecoveryBuilds(detail JobDetail, pattern PatternAnalysis) ([]string, bool, *BuildResult) {
+	signatures := make(map[string]bool, len(pattern.CausalGroups))
+	unknownGroup := len(pattern.CausalGroups) == 0
+	for _, group := range pattern.CausalGroups {
+		if group.RecurrenceSignature == "" {
+			unknownGroup = true
+		} else {
+			signatures[group.RecurrenceSignature] = true
+		}
+	}
+	builds := make([]string, 0, len(detail.Runs))
+	encounteredFailure := false
+	var latest *BuildResult
+	for index := range detail.Runs {
+		run := &detail.Runs[index]
+		if run.Result == "PENDING" {
+			continue
+		}
+		if run.Passed {
+			if !encounteredFailure {
+				builds = append(builds, run.BuildID)
+			}
+			continue
+		}
+		matched := false
+		unknown := unknownGroup
+		failedTests := 0
+		for testIndex := range run.TestCases {
+			failure := &run.TestCases[testIndex]
+			if failure.Status != "failed" {
+				continue
+			}
+			failedTests++
+			signature := FailureRecurrenceSignature(detail, failure)
+			if signature == "" {
+				unknown = true
+			} else if signatures[signature] {
+				matched = true
+			}
+		}
+		if matched && latest == nil {
+			latest = run
+		}
+		incomplete := failedTests == 0 || failedTests < run.TestsFailed
+		if matched || unknown || incomplete {
+			encounteredFailure = true
+		}
+	}
+	return builds, encounteredFailure, latest
 }
 
 // ApplyPatternLifecycle derives active, recovered, observing, or verified-fixed
@@ -127,7 +199,7 @@ func applyObservedRecovery(lifecycle *PatternLifecycle) {
 	}
 	lifecycle.State = PatternLifecycleRecovered
 	lifecycle.Reason = fmt.Sprintf(
-		"The job has passed %d consecutive observed runs since the last correlated failure. The recovery has not been source-verified as a fix.",
+		"The job has passed %d observed runs since the last relevant failure. The recovery has not been source-verified as a fix.",
 		lifecycle.RecoveryStreak,
 	)
 }

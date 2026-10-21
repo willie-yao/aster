@@ -461,6 +461,9 @@ type PatternCausalGroup struct {
 	// window. It is deliberately excluded from ContentHash and PatternHash so
 	// assigning it never churns pattern or causal-group identity.
 	Signature string `json:"signature,omitempty"`
+	// RecurrenceSignature collapses run-varying numbers for retained recovery.
+	// Like Signature, it is excluded from content hashes.
+	RecurrenceSignature string `json:"recurrence_signature,omitempty"`
 	// CauseLocation is the repository owning this cause. It is engine-derived
 	// from the member builds' analyses and is set only when they agree, so a
 	// group of mixed ownership stays unattributed rather than guessing.
@@ -580,12 +583,14 @@ const (
 
 // PatternLifecycle describes whether a recurring cause remains active.
 type PatternLifecycle struct {
-	State          PatternLifecycleState `json:"state"`
-	Reason         string                `json:"reason"`
-	SourceRevision string                `json:"source_revision,omitempty"`
-	PassingBuilds  []string              `json:"passing_builds,omitempty"`
-	RecoveryStreak int                   `json:"recovery_streak,omitempty"`
-	RecoveryBuilds []string              `json:"recovery_builds,omitempty"`
+	State                   PatternLifecycleState `json:"state"`
+	Reason                  string                `json:"reason"`
+	SourceRevision          string                `json:"source_revision,omitempty"`
+	PassingBuilds           []string              `json:"passing_builds,omitempty"`
+	RecoveryStreak          int                   `json:"recovery_streak,omitempty"`
+	RecoveryBuilds          []string              `json:"recovery_builds,omitempty"`
+	LatestRecurrenceBuildID string                `json:"latest_recurrence_build_id,omitempty"`
+	LatestRecurrenceStarted string                `json:"latest_recurrence_started,omitempty"`
 }
 
 // FailureClassification indicates the type of failure.

@@ -163,11 +163,16 @@ export function patternRecurringBuildCount(
 // currentPatternFailureStreak counts newest completed failures attributed to
 // one recurring cause. Pending runs neither extend nor break the streak.
 export function currentPatternFailureStreak(
-  pattern: Pick<PatternAnalysis, "causal_groups" | "shared_builds">,
+  pattern: Pick<PatternAnalysis, "causal_groups" | "shared_builds" | "lifecycle">,
   job?: Pick<JobSummary, "recent_runs">,
 ): number {
   if (!job) return 0;
   let longest = 0;
+  const latestRecurrence = pattern.lifecycle?.latest_recurrence_build_id;
+  if (latestRecurrence) {
+    const latestCompleted = job.recent_runs.find((run) => run.result !== "PENDING");
+    if (latestCompleted?.build_id === latestRecurrence && !latestCompleted.passed) longest = 1;
+  }
   for (const group of recurringBuildGroups(pattern)) {
     const builds = new Set(group);
     let streak = 0;
@@ -226,6 +231,17 @@ export function patternEvidenceLabel(
   const recurring = countLabel(recurringBuilds, "same-cause failure");
   if (recurringBuilds === pattern.builds_analyzed) return `${recurring}${suffix}`;
   return `${recurring} across ${countLabel(pattern.builds_analyzed, "analyzed build")}${suffix}`;
+}
+
+export function patternRecurrenceLabel(
+  pattern: Pick<PatternAnalysis, "lifecycle">,
+): string | null {
+  const lifecycle = pattern.lifecycle;
+  if (!lifecycle?.latest_recurrence_build_id) return null;
+  const started = new Date(lifecycle.latest_recurrence_started ?? "");
+  if (!Number.isFinite(started.getTime())) return "Latest recurrence";
+  const date = started.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return `Recurred ${date}`;
 }
 
 export function needsAttentionSummary(
