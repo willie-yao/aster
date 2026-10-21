@@ -52,6 +52,15 @@ func TestRefreshRetainedPatternLifecycleSameCause(t *testing.T) {
 			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
 		},
 		{
+			name: "truncated discovery with all failures analyzed does not reset",
+			runs: []BuildResult{pass("3"), newFailure(unrelated), pass("2"), pass("1")},
+			mutate: func(_ *PatternAnalysis, detail *JobDetail) {
+				detail.Runs[1].JUnitTruncated = true
+				detail.Runs[1].TestsFailed = 1
+			},
+			wantState: PatternLifecycleRecovered, wantBuilds: []string{"3", "2", "1"},
+		},
+		{
 			name:      "non representative matching failure resets",
 			runs:      []BuildResult{pass("3"), newFailure(unrelated, failure), pass("2"), pass("1")},
 			wantState: PatternLifecycleActive, wantBuilds: []string{"3"}, recurrence: true,

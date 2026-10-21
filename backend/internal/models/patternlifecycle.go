@@ -124,7 +124,7 @@ func retainedRecoveryBuilds(detail JobDetail, pattern PatternAnalysis) ([]string
 		if matched && latest == nil {
 			latest = run
 		}
-		incomplete := failedTests == 0 || failedTests < run.TestsFailed || run.JUnitTruncated
+		incomplete := failedTests == 0 || failedTests < run.TestsFailed
 		if matched || unknown || incomplete {
 			encounteredFailure = true
 		}
