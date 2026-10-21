@@ -123,6 +123,19 @@ test("an admin can dismiss the causal-group patterns the engine actually publish
   assert.doesNotMatch(html, /Preview generation failed/);
 });
 
+test("pattern banner links to the latest confirmed recurrence beside its evidence", () => {
+  const pattern = causalGroupPattern({
+    lifecycle: {
+      state: "active", reason: "recurrence", recovery_streak: 1,
+      latest_recurrence_build_id: "oct-19", latest_recurrence_started: "2026-10-19T12:00:00Z",
+    },
+  });
+  const html = render(pattern, admin, serverCapabilities, { state: "retained", evidence_available: false });
+  assert.match(html, /3 builds \(earlier window\)/);
+  assert.match(html, /href="\/job\/periodic-capz-e2e-main\?run=oct-19"[^>]*>Recurred Oct 19<\/a>/);
+  assert.doesNotMatch(render(causalGroupPattern()), /Recurred /);
+});
+
 test("dismissal follows the same gates the server enforces", () => {
   assert.doesNotMatch(render(causalGroupPattern({ systemic: false })), /Resolve pattern/);
   assert.doesNotMatch(render(causalGroupPattern({ id: undefined })), /Resolve pattern/);

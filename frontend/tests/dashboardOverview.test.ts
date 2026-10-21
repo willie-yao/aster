@@ -16,6 +16,7 @@ import {
   needsAttentionSummary,
   orderedDashboardBranches,
   patternEvidenceLabel,
+  patternRecurrenceLabel,
   rankRecurringPatterns,
   overviewBranchFromParam,
   overviewStatusFromParam,
@@ -405,6 +406,47 @@ test("recurring pattern evidence distinguishes matching failures from analyzed b
 
   assert.equal(patternEvidenceLabel(partial), "2 same-cause failures across 5 analyzed builds");
   assert.equal(patternEvidenceLabel(active), "3 same-cause failures");
+});
+
+test("latest recurrence label tolerates missing timestamps without inventing a date", () => {
+  assert.equal(patternRecurrenceLabel({}), null);
+  assert.equal(patternRecurrenceLabel({ lifecycle: { state: "active", reason: "" } }), null);
+  const lifecycle = { state: "active" as const, reason: "", latest_recurrence_build_id: "new" };
+  assert.equal(patternRecurrenceLabel({ lifecycle }), "Latest recurrence");
+  assert.equal(patternRecurrenceLabel({ lifecycle: { ...lifecycle, latest_recurrence_started: "invalid" } }), "Latest recurrence");
+  assert.equal(patternRecurrenceLabel({
+    lifecycle: { ...lifecycle, latest_recurrence_started: "2026-10-19T00:30:00Z" },
+  }), "Recurred Oct 19");
+});
+
+test("featured pattern links latest recurrence separately from passing status and old evidence", () => {
+  const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 1);
+  pattern.lifecycle = {
+    state: "active", reason: "recent recurrence", recovery_streak: 1,
+    latest_recurrence_build_id: "oct-19", latest_recurrence_started: "2026-10-19T12:00:00Z",
+  };
+  const html = render(createElement(FeaturedPatternRow, {
+    pattern, rank: 1, prefix: "", stale: true, job: job({ job_id: "main" }),
+  }));
+  assert.match(html, /Passing now/);
+  assert.match(html, /2 same-cause failures across 3 analyzed builds/);
+  assert.match(html, /href="\/job\/main\?run=oct-19"[^>]*>Recurred Oct 19<\/a>/);
+});
+
+test("ranking recognizes the newest retained recurrence without combining distinct causal groups", () => {
+  const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 0);
+  pattern.lifecycle = { state: "active", reason: "", latest_recurrence_build_id: "new" };
+  const current = job({
+    recent_runs: [
+      { build_id: "pending", passed: false, result: "PENDING", timestamp: "" },
+      { build_id: "new", passed: false, result: "FAILURE", timestamp: "" },
+      { build_id: "old-2", passed: false, result: "FAILURE", timestamp: "" },
+    ],
+  });
+  assert.equal(currentPatternFailureStreak(pattern, current), 1);
+  assert.equal(currentPatternFailureStreak(pattern, {
+    recent_runs: [{ build_id: "pass", passed: true, result: "SUCCESS", timestamp: "" }, ...current.recent_runs],
+  }), 0);
 });
 
 test("disclosure labels pluralize and expose expansion state", () => {

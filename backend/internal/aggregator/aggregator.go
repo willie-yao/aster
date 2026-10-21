@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 const maxRecentRuns = 20
@@ -229,11 +230,6 @@ func NormalizeErrorMessage(msg string) string {
 	return s
 }
 
-// numberRunRegex matches a run of digits with optional decimal groups anywhere in
-// a token, including one glued to a unit or identifier such as "3600.001s",
-// "1823ms", or "worker-7".
-var numberRunRegex = regexp.MustCompile(`\d+(?:\.\d+)*`)
-
 // NormalizeErrorRecurrence normalizes an error message for counting how long a
 // failure has been recurring. It collapses every run of digits, unlike
 // NormalizeErrorMessage, whose word-boundary matching leaves numbers glued to a
@@ -247,10 +243,7 @@ var numberRunRegex = regexp.MustCompile(`\d+(?:\.\d+)*`)
 // It is deliberately not used for durable verdict identity, which needs the
 // opposite trade-off. See NormalizeErrorSignature.
 func NormalizeErrorRecurrence(msg string) string {
-	s := strings.TrimSpace(msg)
-	s = timestampRegex.ReplaceAllString(s, "<timestamp>")
-	s = numberRunRegex.ReplaceAllString(s, "<num>")
-	return whitespaceRegex.ReplaceAllString(s, " ")
+	return textutil.NormalizeErrorRecurrence(msg)
 }
 
 // NormalizeErrorSignature normalizes an error message for durable identity rather

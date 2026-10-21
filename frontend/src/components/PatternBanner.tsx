@@ -35,7 +35,7 @@ import { causeBaselineBuildID, patternChatAvailability, patternChatHasEvidenceBu
 import { lookupPreparedAnalysisChatFindings, applyPreparedFindingResolution, type PreparedFindingResult } from "../lib/analysisChat";
 import { patternActionEligibilityHint, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
-import { buildsAnalyzedLabel, patternCountOutdated } from "../lib/dashboardOverview";
+import { buildsAnalyzedLabel, patternCountOutdated, patternRecurrenceLabel } from "../lib/dashboardOverview";
 import { AnalysisBriefing } from "./AnalysisBriefing";
 import { overviewTypography, touchTargetSx } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
@@ -267,6 +267,12 @@ export function PatternBanner({
         ? "Watching recovery"
         : recurrenceLabel;
   const metadata = `${buildsAnalyzedLabel(pattern, refreshStatus)} · ${pattern.confidence} confidence`;
+  const latestRecurrenceLabel = patternRecurrenceLabel(pattern);
+  const latestRecurrence = jobID && lifecycle?.latest_recurrence_build_id && latestRecurrenceLabel ? (
+    <Link component={RouterLink} to={jobRunPath(jobID, lifecycle.latest_recurrence_build_id)}>
+      {latestRecurrenceLabel}
+    </Link>
+  ) : null;
   const staleNotice = refreshStatus && refreshStatus.state !== "current" ? (
     <Alert severity="warning" role="status" variant="outlined" sx={{ borderRadius: "4px" }}>
       Pattern from the last successful refresh at {refreshStatus.last_successful_at ?? "an earlier time"}.
@@ -796,8 +802,8 @@ export function PatternBanner({
       title="Analysis briefing"
       mobileTitle={patternLabel}
       icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
-      metadata={`${patternLabel} · ${metadata}`}
-      mobileMetadata={staleNotice ? `Last successful refresh · ${metadata}` : metadata}
+      metadata={<>{patternLabel} · {metadata}{latestRecurrence && <> · {latestRecurrence}</>}</>}
+      mobileMetadata={<>{staleNotice ? `Last successful refresh · ${metadata}` : metadata}{latestRecurrence && <> · {latestRecurrence}</>}</>}
       mobileNotice={mobileNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       summaryAside={summaryFacts}

@@ -289,8 +289,12 @@ func TestMergeLastGoodAssignsAndPreservesSignatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	assigned := details[0].PatternAnalyses[0].CausalGroups[0].Signature
+	recurrence := details[0].PatternAnalyses[0].CausalGroups[0].RecurrenceSignature
 	if assigned == "" {
 		t.Fatal("a current pattern was published without a signature")
+	}
+	if recurrence == "" || recurrence != BuildRecurrenceSignature(fresh, &fresh.Runs[0]) {
+		t.Fatalf("recurrence signature = %q", recurrence)
 	}
 
 	// The next pass fails correlation and the builds have rolled away, so the
@@ -311,6 +315,37 @@ func TestMergeLastGoodAssignsAndPreservesSignatures(t *testing.T) {
 	}
 	if got := next[0].PatternAnalyses[0].CausalGroups[0].Signature; got != assigned {
 		t.Fatalf("retained signature=%q, want the published %q", got, assigned)
+	}
+	if got := next[0].PatternAnalyses[0].CausalGroups[0].RecurrenceSignature; got != recurrence {
+		t.Fatalf("retained recurrence signature = %q, want %q", got, recurrence)
+	}
+}
+
+func TestCausalGroupRecurrenceSignaturePersistsDominantNormalizedFailure(t *testing.T) {
+	detail := signatureJob("job",
+		failedBuild{"10", "TestJoin", "Timed out after 1200.001s"},
+		failedBuild{"11", "TestJoin", "Timed out after 1234.987s"},
+		failedBuild{"12", "TestOther", "identity unavailable"},
+	)
+	detail.PatternAnalyses = []models.PatternAnalysis{{
+		CausalGroups: []models.PatternCausalGroup{groupOf("10", "11", "12")},
+	}}
+	ApplyCausalGroupSignatures(&detail)
+	want := BuildRecurrenceSignature(detail, &detail.Runs[0])
+	group := &detail.PatternAnalyses[0].CausalGroups[0]
+	if want == "" || group.RecurrenceSignature != want {
+		t.Fatalf("recurrence signature = %q, want %q", group.RecurrenceSignature, want)
+	}
+	// A retained group must not switch identity when only its outlier remains.
+	detail.Runs = detail.Runs[2:]
+	BackfillCausalGroupSignatures(&detail)
+	if group.RecurrenceSignature != want {
+		t.Fatalf("retained recurrence signature changed to %q", group.RecurrenceSignature)
+	}
+	group.RecurrenceSignature = ""
+	BackfillCausalGroupSignatures(&detail)
+	if got := group.RecurrenceSignature; got != "" {
+		t.Fatalf("legacy recurrence signature was inferred from a retained outlier: %q", got)
 	}
 }
 

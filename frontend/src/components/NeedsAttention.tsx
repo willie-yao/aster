@@ -22,6 +22,7 @@ import {
   needsAttentionSummary,
   passRateSummary,
   patternEvidenceLabel,
+  patternRecurrenceLabel,
   persistOverviewHistoryState,
   rankRecurringPatterns,
   readOverviewHistoryState,
@@ -30,7 +31,7 @@ import {
   unlistedPatternResolutions,
   type AttentionGroup,
 } from "../lib/dashboardOverview";
-import { jobPath, testPath, testRunPath } from "../lib/routes";
+import { jobPath, jobRunPath, testPath, testRunPath } from "../lib/routes";
 import { patternLifecycleActive } from "../lib/actionEligibility";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
@@ -163,6 +164,8 @@ export function FeaturedPatternRow({
         ? "Passing now"
         : currentStatus === "UNKNOWN" ? "Current status unknown" : "Recurring";
   const signal = attentionSignal(pattern.confidence, stale);
+  const recurrenceLabel = patternRecurrenceLabel(pattern);
+  const recurrenceBuildID = pattern.lifecycle?.latest_recurrence_build_id;
   const jobName = shortJobName(pattern.subject, prefix);
 
   return (
@@ -342,6 +345,15 @@ export function FeaturedPatternRow({
         >
           {patternEvidenceLabel(pattern, refreshStatus)}
         </Typography>
+        {pattern.job_id && recurrenceBuildID && recurrenceLabel && (
+          <Link
+            component={RouterLink}
+            to={jobRunPath(pattern.job_id, recurrenceBuildID)}
+            sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
+          >
+            {recurrenceLabel}
+          </Link>
+        )}
         <Typography
           variant="caption"
           color="textSecondary"

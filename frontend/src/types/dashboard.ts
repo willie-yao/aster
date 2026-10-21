@@ -251,6 +251,7 @@ export interface PatternCausalGroup {
   // or ageing out of the group. A cause without one cannot be resolved on its
   // own.
   signature?: string;
+  recurrence_signature?: string;
   cause_location?: AnalysisCauseLocation;
   // The action this cause's own member analyses reported. It is a suggestion;
   // maintainers can question the cause or open a representative failure.
@@ -306,6 +307,8 @@ export interface PatternLifecycle {
   passing_builds?: string[];
   recovery_streak?: number;
   recovery_builds?: string[];
+  latest_recurrence_build_id?: string;
+  latest_recurrence_started?: string;
 }
 
 export interface RemediationTarget {

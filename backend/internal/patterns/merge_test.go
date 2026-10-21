@@ -3,6 +3,7 @@ package patterns
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
@@ -218,6 +219,48 @@ func TestMergeLastGoodReactivatesRecoveredHistoryAfterFailuresLeaveWindow(t *tes
 	}
 	if got := CollectRecurring(details); len(got) != 1 {
 		t.Fatalf("reactivated retained pattern was not surfaced: %+v", got)
+	}
+}
+
+func TestMergeLastGoodRetainedRecurrenceChecksEveryFailedTest(t *testing.T) {
+	detail := signatureJob("job",
+		failedBuild{"old-1", "TestEtcdJoin", "Timed out after 1200.001s"},
+		failedBuild{"old-2", "TestEtcdJoin", "Timed out after 1200.002s"},
+	)
+	detail.PatternAnalyses = []models.PatternAnalysis{{
+		Subject: "job", JobID: "job", Systemic: true,
+		SharedBuilds: []string{"old-1", "old-2"},
+		CausalGroups: []models.PatternCausalGroup{groupOf("old-1", "old-2")},
+	}}
+	ApplyCausalGroupSignatures(&detail)
+	models.AssignPatternIdentity(&detail.PatternAnalyses[0])
+	prior := map[string]models.JobDetail{"job": detail}
+	current := signatureJob("job", failedBuild{"new", "TestILB", "worker count timeout"})
+	current.Runs[0].Started = time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	matching := detail.Runs[0].TestCases[0]
+	matching.FailureMessage = "Timed out after 1234.567s"
+	matching.AIAnalysis = &models.AIAnalysis{
+		RootCause: "etcd join timeout", Severity: "medium", Disposition: models.AnalysisDispositionPreliminary,
+	}
+	current.Runs[0].TestCases = append(current.Runs[0].TestCases, matching)
+	if rep := RepresentativeAnalyzedFailure(&current.Runs[0]); rep.Name != "TestILB" {
+		t.Fatalf("representative = %+v", rep)
+	}
+	details := []models.JobDetail{current}
+	if _, err := MergeLastGood(details, prior, AnalyzeResult{}); err != nil {
+		t.Fatal(err)
+	}
+	got := details[0].PatternAnalyses[0]
+	if got.Lifecycle.State != models.PatternLifecycleActive ||
+		got.Lifecycle.LatestRecurrenceBuildID != "new" ||
+		got.Lifecycle.LatestRecurrenceStarted != "2026-10-19T00:00:00Z" {
+		t.Fatalf("retained lifecycle = %+v", got.Lifecycle)
+	}
+	if got.ContentHash != models.PatternHash(got) {
+		t.Fatal("retained lifecycle hash was not refreshed")
+	}
+	if prior["job"].PatternAnalyses[0].Lifecycle != nil {
+		t.Fatal("retaining a pattern mutated the prior snapshot")
 	}
 }
 

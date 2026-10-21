@@ -36,7 +36,7 @@ func CausalGroupSignature(detail models.JobDetail, group models.PatternCausalGro
 	if subject == "" {
 		return ""
 	}
-	dominant := dominantFailureKey(detail, group)
+	dominant := dominantFailureKey(detail, group, aggregator.NormalizeErrorSignature)
 	if dominant == "" {
 		return ""
 	}
@@ -61,15 +61,7 @@ func CausalGroupSignature(detail models.JobDetail, group models.PatternCausalGro
 // build-level stand-in whose message is a constant, or when it carries no
 // message to key on.
 func BuildRecurrenceSignature(detail models.JobDetail, run *models.BuildResult) string {
-	subject := signatureSubject(detail)
-	if subject == "" {
-		return ""
-	}
-	key := failureKey(RepresentativeAnalyzedFailure(run), aggregator.NormalizeErrorRecurrence)
-	if key == "" {
-		return ""
-	}
-	return signatureOf(recurrenceDomain, subject, key)
+	return models.FailureRecurrenceSignature(detail, RepresentativeAnalyzedFailure(run))
 }
 
 // recurrenceDomain keeps recurrence identities out of the verdict key space. A
@@ -106,6 +98,12 @@ func assignCausalGroupSignatures(detail *models.JobDetail, onlyMissing bool) {
 	effective := make([]string, len(groups))
 	counts := map[string]int{}
 	for index, group := range groups {
+		if !onlyMissing {
+			key := dominantFailureKey(*detail, *group, aggregator.NormalizeErrorRecurrence)
+			if key != "" && signatureSubject(*detail) != "" {
+				group.RecurrenceSignature = signatureOf(recurrenceDomain, signatureSubject(*detail), key)
+			}
+		}
 		effective[index] = effectiveSignature(*detail, *group, onlyMissing)
 		if effective[index] != "" {
 			counts[effective[index]]++
@@ -160,7 +158,11 @@ func signatureSubject(detail models.JobDetail) string {
 // across the group's builds, breaking ties on the key itself so the result is
 // deterministic regardless of build ordering. A failure with no discriminating
 // evidence is skipped.
-func dominantFailureKey(detail models.JobDetail, group models.PatternCausalGroup) string {
+func dominantFailureKey(
+	detail models.JobDetail,
+	group models.PatternCausalGroup,
+	normalize func(string) string,
+) string {
 	runs := make(map[string]*models.BuildResult, len(detail.Runs))
 	for index := range detail.Runs {
 		runs[detail.Runs[index].BuildID] = &detail.Runs[index]
@@ -171,7 +173,7 @@ func dominantFailureKey(detail models.JobDetail, group models.PatternCausalGroup
 		if !ok {
 			continue
 		}
-		if key := failureKey(RepresentativeAnalyzedFailure(run), aggregator.NormalizeErrorSignature); key != "" {
+		if key := models.FailureIdentityKey(RepresentativeAnalyzedFailure(run), normalize); key != "" {
 			counts[key]++
 		}
 	}
@@ -189,32 +191,4 @@ func dominantFailureKey(detail models.JobDetail, group models.PatternCausalGroup
 		return ""
 	}
 	return keys[0]
-}
-
-// failureKey is the discriminating preimage of one analyzed failure. normalize
-// decides how much of the message survives, which is what separates the
-// verdict-bearing identity from the recurrence-counting one. It returns "" for a
-// failure with no evidence worth keying on.
-func failureKey(failure *models.TestCase, normalize func(string) string) string {
-	if failure == nil || failure.Source == models.TestCaseSourceBuild {
-		// A build-level stand-in carries a constant synthesized name and
-		// message (see models.NewProwJobExecutionFailure), so every such
-		// failure in a job would key to one signature regardless of cause.
-		return ""
-	}
-	name := strings.TrimSpace(failure.Name)
-	normalized := strings.TrimSpace(normalize(failure.FailureMessage))
-	if name == "" || normalized == "" {
-		return ""
-	}
-	// Suite, class, and failure location are stable per test and separate
-	// same-named tests in different suites or shards, so they cost no recall
-	// and narrow what one identity can cover.
-	return strings.Join([]string{
-		strings.TrimSpace(failure.SuiteName),
-		strings.TrimSpace(failure.ClassName),
-		name,
-		FailureLocationFile(failure.FailureLocation),
-		normalized,
-	}, "\x00")
 }
