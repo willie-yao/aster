@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
-import { createElement } from "react";
+import { createElement, type Context } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
 import {
-  attentionSignal,
+  attentionGroups,
   countLabel,
   currentPatternFailureStreak,
   disclosureLabel,
@@ -23,9 +23,10 @@ import {
   readOverviewHistoryState,
   withOverviewFilters,
 } from "../src/lib/dashboardOverview.js";
-import type { BuildResult, JobSummary, PatternAnalysis } from "../src/types/dashboard.js";
+import type { BuildResult, FlakinessReport, JobSummary, PatternAnalysis, PatternRefreshStatus, TestFlakiness } from "../src/types/dashboard.js";
+import type { Manifest } from "../src/types/manifest.js";
 
-const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, RunHistory, defaultTheme } = await withSSR(async (vite) => {
+const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, defaultTheme } = await withSSR(async (vite) => {
   const { HealthPanel } = (await vite.ssrLoadModule("/src/components/HealthPanel.tsx")) as {
     HealthPanel: (props: {
       jobs: JobSummary[];
@@ -40,6 +41,7 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
     AttentionRow,
     DisclosureButton,
     FeaturedPatternRow,
+    NeedsAttention,
   } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
     AttentionRow: (props: {
       to: string;
@@ -62,9 +64,18 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
       pattern: PatternAnalysis;
       rank: number;
       prefix: string;
-      stale: boolean;
+      refreshStatus?: PatternRefreshStatus;
       job?: JobSummary;
     }) => ReturnType<typeof createElement>;
+    NeedsAttention: (props: {
+      report: FlakinessReport;
+      loading: boolean;
+      error: string | null;
+      jobsByID: Record<string, JobSummary>;
+    }) => ReturnType<typeof createElement>;
+  };
+  const { ManifestContext } = (await vite.ssrLoadModule("/src/hooks/useManifest.ts")) as {
+    ManifestContext: Context<Manifest | null>;
   };
   const { RunHistory } = (await vite.ssrLoadModule("/src/components/RunHistory.tsx")) as {
     RunHistory: (props: {
@@ -76,7 +87,7 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
     defaultTheme: Theme;
   };
-  return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, RunHistory, defaultTheme };
+  return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, defaultTheme };
 });
 
 function job(overrides: Partial<JobSummary> = {}): JobSummary {
@@ -166,6 +177,35 @@ function render(element: ReturnType<typeof createElement>, width = desktopWidth)
       createElement(MemoryRouter, null, element),
     ),
   );
+}
+
+function testAlert(testName: string, jobID: string, buildID?: string): TestFlakiness {
+  return {
+    test_name: testName, job_name: jobID, job_id: jobID,
+    total_runs: 7, failures: 5, passes: 2, flip_rate: 0.2, fail_rate: 5 / 7,
+    consecutive_failures: 5, classification: "persistent",
+    last_failure: buildID ? { build_id: buildID, timestamp: "", failure_message: "", error_hash: "" } : undefined,
+  };
+}
+
+function alertReport(overrides: Partial<FlakinessReport>): FlakinessReport {
+  return {
+    generated_at: "", most_flaky: [], persistent_failures: [],
+    recently_broken: [], build_failures: [], ...overrides,
+  };
+}
+
+function renderAttention(report: FlakinessReport): string {
+  const manifest: Manifest = {
+    id: "example", name: "Example", source: {},
+    testgrid: { dashboard: "example" }, storage: { provider: "gcs", bucket: "logs" },
+    branding: { title: "Example", base_path: "/", site_url: "", source_repo: { owner: "example", name: "example" } },
+  };
+  return render(createElement(
+    ManifestContext.Provider,
+    { value: manifest },
+    createElement(NeedsAttention, { report, loading: false, error: null, jobsByID: {} }),
+  ));
 }
 
 test("health summary exposes counts and pressed filter state", () => {
@@ -347,8 +387,6 @@ test("overview count labels place dynamic counts in Needs attention", () => {
   assert.equal(needsAttentionSummary(5, 12, false, false), "5 recurring patterns · 12 test alerts");
   assert.equal(needsAttentionSummary(null, null, true, false), "recurring patterns loading · test alerts loading");
   assert.equal(needsAttentionSummary(null, null, false, true), "recurring patterns unavailable · test alerts unavailable");
-  assert.equal(attentionSignal("high", false), "high confidence");
-  assert.equal(attentionSignal("medium", true), "medium confidence · Last successful refresh");
 });
 
 test("recurring pattern ranking leads with an active same-cause streak", () => {
@@ -404,8 +442,24 @@ test("recurring pattern evidence distinguishes matching failures from analyzed b
   const partial = recurringPattern("partial", 5, ["2", "1"], 0);
   const active = recurringPattern("active", 3, ["3", "2", "1"], 0);
 
-  assert.equal(patternEvidenceLabel(partial), "2 same-cause failures across 5 analyzed builds");
-  assert.equal(patternEvidenceLabel(active), "3 same-cause failures");
+  assert.equal(patternEvidenceLabel(partial), "2 of 5 runs");
+  assert.equal(patternEvidenceLabel(active), "3 of 3 runs");
+  assert.equal(patternEvidenceLabel({ ...partial, shared_builds: [], causal_groups: [] }), "5 analyzed runs");
+  assert.equal(patternEvidenceLabel({ ...partial, confidence: "medium" }), "2 of 5 runs · medium confidence");
+  assert.equal(patternEvidenceLabel({ ...partial, confidence: "low" }), "2 of 5 runs · low confidence");
+});
+
+test("overview evidence uses one stale marker from the last successful refresh", () => {
+  const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 1);
+  const refresh: PatternRefreshStatus = {
+    state: "retained", evidence_available: false, last_successful_at: "2026-09-28T23:30:00Z",
+  };
+  assert.equal(patternEvidenceLabel(pattern, refresh), "2 of 3 runs · as of Sep 28");
+  assert.equal(patternEvidenceLabel({ ...pattern, confidence: "medium" }, refresh), "2 of 3 runs · medium confidence · as of Sep 28");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, state: "current" }), "2 of 3 runs");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, evidence_available: true }), "2 of 3 runs · as of Sep 28");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: undefined }), "2 of 3 runs · earlier refresh");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: "invalid" }), "2 of 3 runs · earlier refresh");
 });
 
 test("latest recurrence label tolerates missing timestamps without inventing a date", () => {
@@ -419,18 +473,98 @@ test("latest recurrence label tolerates missing timestamps without inventing a d
   }), "Recurred Oct 19");
 });
 
-test("featured pattern links latest recurrence separately from passing status and old evidence", () => {
+test("featured pattern combines passing recurrence and recovery above its evidence line", () => {
   const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 1);
   pattern.lifecycle = {
     state: "active", reason: "recent recurrence", recovery_streak: 1,
     latest_recurrence_build_id: "oct-19", latest_recurrence_started: "2026-10-19T12:00:00Z",
   };
   const html = render(createElement(FeaturedPatternRow, {
-    pattern, rank: 1, prefix: "", stale: true, job: job({ job_id: "main" }),
+    pattern, rank: 1, prefix: "", job: job({ job_id: "main" }),
+    refreshStatus: { state: "retained", evidence_available: false, last_successful_at: "2026-09-28T12:00:00Z" },
   }));
-  assert.match(html, /Passing now/);
-  assert.match(html, /2 same-cause failures across 3 analyzed builds/);
-  assert.match(html, /href="\/job\/main\?run=oct-19"[^>]*>Recurred Oct 19<\/a>/);
+  assert.match(html, /aria-label="Passing · recurred Oct 19 · 1 of 3 passes to clear"/);
+  const content = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
+  assert.match(content, />Passing · <a[^>]*href="\/job\/main\?run=oct-19"[^>]*>recurred Oct 19<\/a> · 1\/3 passes<\/div>/);
+  assert.match(html, />2 of 3 runs · as of Sep 28</);
+  assert.doesNotMatch(html, /high confidence|earlier window|Last successful refresh|Passing now/);
+  assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
+});
+
+test("recovery progress follows the active lifecycle below the recovery threshold", () => {
+  const pattern = recurringPattern("main", 3, ["2", "1"], 2);
+  const row = (value: PatternAnalysis, currentJob: JobSummary | undefined = job()) =>
+    render(createElement(FeaturedPatternRow, { pattern: value, rank: 1, prefix: "", job: currentJob }));
+  assert.match(row(pattern), /aria-label="Passing · 2 of 3 passes to clear"/);
+  assert.match(row(pattern), />Passing · 2\/3 passes</);
+  assert.match(row(pattern, job({ current_status: "RUNNING" })), />Running · 2\/3 passes</);
+  assert.doesNotMatch(row(recurringPattern("main", 3, ["2", "1"], 0)), /passes to clear|\/3 passes/);
+  assert.doesNotMatch(row(recurringPattern("main", 3, ["2", "1"], 3)), /passes to clear|\/3 passes/);
+  assert.doesNotMatch(row({ ...pattern, lifecycle: { state: "recovered", reason: "", recovery_streak: 3 } }), /passes to clear|\/3 passes/);
+  const unknown = recurringPattern("main", 3, ["2", "1"], 0);
+  assert.match(row(unknown, job({ current_status: "UNKNOWN" })), />Current status unknown</);
+  assert.match(render(createElement(FeaturedPatternRow, { pattern: unknown, rank: 1, prefix: "" })), />Recurring</);
+});
+
+test("covered alerts require the same job and exact last failure in displayed active evidence", () => {
+  const pattern = recurringPattern("main", 3, ["shared"], 0);
+  pattern.causal_groups = [{ builds: ["causal"], root_cause: "cause", confidence: "high" }];
+  const report = alertReport({
+    recently_broken: [
+      testAlert("covered-shared", "main", "shared"),
+      testAlert("covered-causal", "main", "causal"),
+      testAlert("other-job", "other", "shared"),
+      testAlert("other-run", "main", "different"),
+      testAlert("missing-failure", "main"),
+    ],
+  });
+  const names = (patterns: PatternAnalysis[]) => attentionGroups(report, undefined, patterns)
+    .flatMap((group) => group.items.map((item) => item.test_name));
+  assert.deepEqual(names([pattern]), ["other-job", "other-run", "missing-failure"]);
+  assert.equal(names([]).length, 5);
+  assert.equal(names([{ ...pattern, lifecycle: { state: "recovered", reason: "" } }]).length, 5);
+  assert.deepEqual(names([{ ...pattern, lifecycle: undefined }]), ["other-job", "other-run", "missing-failure"]);
+});
+
+test("covered alerts are removed from all groups before the shared item limit", () => {
+  const pattern = recurringPattern("main", 7, ["failure"], 0);
+  const covered = testAlert("covered", "main", "failure");
+  const uncovered = Array.from({ length: 10 }, (_, index) => testAlert(`uncovered-${index}`, "other", "failure"));
+  const report = alertReport({
+    recurring_patterns: [pattern],
+    recently_broken: Array.from({ length: 10 }, (_, index) => ({ ...covered, test_name: `covered-${index}` })),
+    persistent_failures: [covered, ...uncovered],
+    most_flaky: [covered],
+    low_pass_rate: [{ ...covered, pass_rate: 0.5, window_runs: 10 }],
+  });
+  const groups = attentionGroups(report, undefined, [pattern]);
+  assert.deepEqual(groups.map((group) => group.kind), ["persistent"]);
+  assert.deepEqual(groups[0].items.map((item) => item.test_name), uncovered.map((item) => item.test_name));
+  assert.match(renderAttention(report), /1 recurring pattern · 10 test alerts/);
+  const onlyCovered = { ...report, persistent_failures: [covered] };
+  assert.deepEqual(attentionGroups(onlyCovered, undefined, [pattern]), []);
+  const html = renderAttention(onlyCovered);
+  assert.match(html, /1 recurring pattern · 0 test alerts/);
+  assert.doesNotMatch(html, /aria-label="Persistent failures"|aria-label="Flaky tests"|aria-label="Low pass rate"/);
+});
+
+test("patterns outside the displayed recurring list do not hide test alerts", () => {
+  const patterns = Array.from({ length: 5 }, (_, index) => recurringPattern(`job-${index}`, 3, ["2", "1"], 0));
+  const unlisted = recurringPattern("zz-unlisted", 3, ["2", "1"], 0);
+  const recovered = recurringPattern("recovered", 3, ["2", "1"], 3);
+  recovered.lifecycle = { state: "recovered", reason: "", recovery_streak: 3 };
+  const html = renderAttention(alertReport({
+    recurring_patterns: [...patterns, unlisted, recovered],
+    recently_broken: [
+      testAlert("covered-alert", "job-0", "2"),
+      testAlert("unlisted-alert", "zz-unlisted", "2"),
+      testAlert("recovered-alert", "recovered", "2"),
+    ],
+  }));
+  assert.match(html, /5 recurring patterns · 2 test alerts/);
+  assert.match(html, />Unlisted-alert</);
+  assert.match(html, />Recovered-alert</);
+  assert.doesNotMatch(html, />Covered-alert</);
 });
 
 test("ranking recognizes the newest retained recurrence without combining distinct causal groups", () => {
@@ -519,19 +653,18 @@ test("featured recurring pattern exposes a current same-cause streak", () => {
     pattern,
     rank: 1,
     prefix: "",
-    stale: false,
     job: activeJob,
   }));
 
-  assert.match(html, /Failing now · 3 in a row/);
-  assert.match(html, /3 same-cause failures/);
+  assert.match(html, />Failing · 3 in a row</);
+  assert.match(html, />3 of 3 runs</);
+  assert.doesNotMatch(html, /high confidence/);
   assert.doesNotMatch(html, />Flaky</);
 
   const running = render(createElement(FeaturedPatternRow, {
     pattern,
     rank: 1,
     prefix: "",
-    stale: false,
     job: {
       ...activeJob,
       current_status: "RUNNING",
@@ -541,8 +674,8 @@ test("featured recurring pattern exposes a current same-cause streak", () => {
       ],
     },
   }));
-  assert.match(running, /Running now · after 3 same-cause failures/);
-  assert.doesNotMatch(running, /Failing now/);
+  assert.match(running, /Running · after 3 same-cause failures/);
+  assert.doesNotMatch(running, />Failing/);
 });
 
 test("featured recurring pattern keeps current failure separate from causal grouping", () => {
@@ -570,11 +703,10 @@ test("featured recurring pattern keeps current failure separate from causal grou
     pattern,
     rank: 1,
     prefix: "",
-    stale: false,
     job: failingJob,
   }));
-  assert.match(failing, /Failing now/);
-  assert.match(failing, /3 same-cause failures across 4 analyzed builds/);
+  assert.match(failing, />Failing</);
+  assert.match(failing, />3 of 4 runs</);
   assert.doesNotMatch(failing, /in a row/);
   assert.doesNotMatch(failing, />Flaky</);
 
@@ -582,10 +714,9 @@ test("featured recurring pattern keeps current failure separate from causal grou
     pattern,
     rank: 1,
     prefix: "",
-    stale: false,
     job: { ...failingJob, current_status: "PASSING" },
   }));
-  assert.match(passing, /Passing now/);
+  assert.match(passing, />Passing</);
   assert.doesNotMatch(passing, />Flaky/);
 });
 
@@ -605,7 +736,6 @@ test("featured analysis link precedes separate recent-run links", () => {
     pattern: recurring,
     rank: 1,
     prefix: "",
-    stale: false,
     job: job({ overall_status: "FAILING" }),
   }));
   const destinations = [...html.matchAll(/<a\b[^>]*href="([^"]+)"/g)].map((match) => match[1]);

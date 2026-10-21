@@ -14,7 +14,6 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import {
   attentionGroupNoun,
   attentionGroups,
-  attentionSignal,
   countLabel,
   currentPatternFailureStreak,
   disclosureLabel,
@@ -51,6 +50,8 @@ import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const FEATURED_PATTERNS = 3;
+// Mirrors minObservedRecoveryPasses in backend/internal/models/patternlifecycle.go.
+const MIN_OBSERVED_RECOVERY_PASSES = 3;
 const attentionDesktopBreakpoint = "@media (min-width: 1024px)";
 
 interface NeedsAttentionProps {
@@ -140,14 +141,12 @@ export function FeaturedPatternRow({
   pattern,
   rank,
   prefix,
-  stale,
   refreshStatus,
   job,
 }: {
   pattern: PatternAnalysis;
   rank: number;
   prefix: string;
-  stale: boolean;
   refreshStatus?: PatternRefreshStatus;
   job?: JobSummary;
 }) {
@@ -157,15 +156,24 @@ export function FeaturedPatternRow({
   const currentStatus = job?.current_status;
   const color = currentStatus ? statusToMuiColor(currentStatus) : "default";
   const status = currentStatus === "RUNNING"
-    ? `Running now${failureStreak > 0 ? ` · after ${countLabel(failureStreak, "same-cause failure")}` : ""}`
+    ? `Running${failureStreak > 0 ? ` · after ${countLabel(failureStreak, "same-cause failure")}` : ""}`
     : currentStatus === "FAILING"
-      ? `Failing now${failureStreak > 1 ? ` · ${failureStreak} in a row` : ""}`
+      ? `Failing${failureStreak > 1 ? ` · ${failureStreak} in a row` : ""}`
       : currentStatus === "PASSING"
-        ? "Passing now"
+        ? "Passing"
         : currentStatus === "UNKNOWN" ? "Current status unknown" : "Recurring";
-  const signal = attentionSignal(pattern.confidence, stale);
-  const recurrenceLabel = patternRecurrenceLabel(pattern);
+  const recurrence = currentStatus === "PASSING" ? patternRecurrenceLabel(pattern) : null;
+  const recurrenceLabel = recurrence ? recurrence[0].toLowerCase() + recurrence.slice(1) : null;
   const recurrenceBuildID = pattern.lifecycle?.latest_recurrence_build_id;
+  const recoveryStreak = pattern.lifecycle?.recovery_streak ?? 0;
+  const recovering = patternLifecycleActive(pattern.lifecycle) &&
+    recoveryStreak > 0 && recoveryStreak < MIN_OBSERVED_RECOVERY_PASSES;
+  const statusDetail = [
+    status,
+    recurrenceLabel,
+    recovering ? `${recoveryStreak} of ${MIN_OBSERVED_RECOVERY_PASSES} passes to clear` : null,
+  ].filter(Boolean).join(" · ");
+  const evidence = patternEvidenceLabel(pattern, refreshStatus);
   const jobName = shortJobName(pattern.subject, prefix);
 
   return (
@@ -330,6 +338,10 @@ export function FeaturedPatternRow({
       >
         <Typography
           variant="caption"
+          component="div"
+          noWrap
+          title={statusDetail}
+          aria-label={statusDetail}
           sx={{
             color: color === "default" ? "text.secondary" : `${color}.main`,
             fontWeight: 700,
@@ -337,29 +349,28 @@ export function FeaturedPatternRow({
           }}
         >
           {status}
+          {pattern.job_id && recurrenceBuildID && recurrenceLabel && (
+            <>
+              {" · "}
+              <Link
+                component={RouterLink}
+                to={jobRunPath(pattern.job_id, recurrenceBuildID)}
+                sx={{ color: "inherit" }}
+              >
+                {recurrenceLabel}
+              </Link>
+            </>
+          )}
+          {recovering && ` · ${recoveryStreak}/${MIN_OBSERVED_RECOVERY_PASSES} passes`}
         </Typography>
-        <Typography
-          variant="data"
-          color="textSecondary"
-          sx={{ display: "block", mt: 0.25, ...overviewTypography.data }}
-        >
-          {patternEvidenceLabel(pattern, refreshStatus)}
-        </Typography>
-        {pattern.job_id && recurrenceBuildID && recurrenceLabel && (
-          <Link
-            component={RouterLink}
-            to={jobRunPath(pattern.job_id, recurrenceBuildID)}
-            sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
-          >
-            {recurrenceLabel}
-          </Link>
-        )}
         <Typography
           variant="caption"
+          noWrap
           color="textSecondary"
+          title={evidence}
           sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
         >
-          {signal}
+          {evidence}
         </Typography>
         {job && (
           <Box
@@ -770,8 +781,8 @@ export function NeedsAttention({
   );
 
   const groups = useMemo<AttentionGroup[]>(
-    () => attentionGroups(report, manifest.attention?.low_pass_rate?.threshold),
-    [manifest, report],
+    () => attentionGroups(report, manifest.attention?.low_pass_rate?.threshold, recurring),
+    [manifest, recurring, report],
   );
 
   const testAlerts = report
@@ -879,7 +890,6 @@ export function NeedsAttention({
                 pattern={pattern}
                 rank={index + 1}
                 prefix={filePrefix}
-                stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
                 refreshStatus={refreshStatus}
                 job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
               />
@@ -913,7 +923,6 @@ export function NeedsAttention({
                       pattern={pattern}
                       rank={FEATURED_PATTERNS + index + 1}
                       prefix={filePrefix}
-                      stale={Boolean(refreshStatus && refreshStatus.state !== "current")}
                       refreshStatus={refreshStatus}
                       job={pattern.job_id ? jobsByID[pattern.job_id] : undefined}
                     />

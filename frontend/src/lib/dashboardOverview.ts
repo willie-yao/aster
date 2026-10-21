@@ -8,6 +8,7 @@ import type {
   ResolvedState,
   TestFlakiness,
 } from "../types/dashboard";
+import { patternLifecycleActive } from "./actionEligibility.js";
 
 export const MAX_OVERVIEW_PATTERNS = 5;
 
@@ -222,15 +223,23 @@ export function rankRecurringPatterns(
 }
 
 export function patternEvidenceLabel(
-  pattern: Pick<PatternAnalysis, "builds_analyzed" | "causal_groups" | "shared_builds">,
+  pattern: Pick<PatternAnalysis, "builds_analyzed" | "causal_groups" | "shared_builds" | "confidence">,
   refreshStatus?: PatternRefreshStatus,
 ): string {
-  const suffix = patternCountOutdated(pattern, refreshStatus) ? " (earlier window)" : "";
   const recurringBuilds = patternRecurringBuildCount(pattern);
-  if (recurringBuilds === 0) return buildsAnalyzedLabel(pattern, refreshStatus);
-  const recurring = countLabel(recurringBuilds, "same-cause failure");
-  if (recurringBuilds === pattern.builds_analyzed) return `${recurring}${suffix}`;
-  return `${recurring} across ${countLabel(pattern.builds_analyzed, "analyzed build")}${suffix}`;
+  const parts = [
+    recurringBuilds > 0
+      ? `${recurringBuilds} of ${countLabel(pattern.builds_analyzed, "run")}`
+      : countLabel(pattern.builds_analyzed, "analyzed run"),
+  ];
+  if (pattern.confidence !== "high") parts.push(`${pattern.confidence} confidence`);
+  if (refreshStatus && refreshStatus.state !== "current") {
+    const refreshed = new Date(refreshStatus.last_successful_at ?? "");
+    parts.push(Number.isFinite(refreshed.getTime())
+      ? `as of ${refreshed.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`
+      : "earlier refresh");
+  }
+  return parts.join(" · ");
 }
 
 export function patternRecurrenceLabel(
@@ -266,10 +275,6 @@ export function disclosureLabel(
   return `${open ? "Hide" : "Show"} ${countLabel(count, singular, plural)}`;
 }
 
-export function attentionSignal(confidence: string, stale: boolean): string {
-  return `${confidence} confidence${stale ? " · Last successful refresh" : ""}`;
-}
-
 function attentionItemKey(test: TestFlakiness): string {
   return `${test.job_id}::${test.test_name}`;
 }
@@ -302,16 +307,28 @@ export function attentionGroupNoun(kind: AttentionGroupKind): readonly [string, 
 
 // attentionGroups builds the test-alert groups for the overview. Recent and
 // persistent failures lead; flaky tests fill in only when neither is present.
+// Listed patterns cover matching alerts before the shared item budget applies.
 // The optional pass-rate section is appended from the budget those leave behind
 // and never repeats a test an earlier group already listed.
 export function attentionGroups(
   report: FlakinessReport | null,
   threshold?: number,
+  displayedPatterns: PatternAnalysis[] = [],
 ): AttentionGroup[] {
   if (!report) return [];
-  const broken = report.recently_broken ?? [];
-  const persistent = report.persistent_failures ?? [];
-  const flaky = report.most_flaky ?? [];
+  const uncovered = (test: TestFlakiness) => {
+    const buildID = test.last_failure?.build_id;
+    if (!buildID) return true;
+    return !displayedPatterns.some((pattern) =>
+      pattern.job_id === test.job_id &&
+      patternLifecycleActive(pattern.lifecycle) &&
+      (pattern.shared_builds?.includes(buildID) ||
+        pattern.causal_groups?.some((group) => group.builds.includes(buildID))),
+    );
+  };
+  const broken = (report.recently_broken ?? []).filter(uncovered);
+  const persistent = (report.persistent_failures ?? []).filter(uncovered);
+  const flaky = (report.most_flaky ?? []).filter(uncovered);
   const groups: AttentionGroup[] = [];
   let remaining = MAX_ATTENTION_ITEMS;
 
@@ -337,7 +354,7 @@ export function attentionGroups(
   if (lowPassRate.length > 0 && remaining > 0) {
     const seen = new Set(groups.flatMap((group) => group.items.map(attentionItemKey)));
     const items = lowPassRate
-      .filter((entry) => !seen.has(attentionItemKey(entry)))
+      .filter((entry) => uncovered(entry) && !seen.has(attentionItemKey(entry)))
       .slice(0, remaining);
     if (items.length > 0) {
       groups.push({ kind: "lowPassRate", label: lowPassRateLabel(threshold), items });
