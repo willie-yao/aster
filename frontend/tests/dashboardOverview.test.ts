@@ -438,15 +438,17 @@ test("missing recovery metadata does not imply a recovered pattern", () => {
   );
 });
 
-test("recurring pattern evidence distinguishes matching failures from analyzed builds", () => {
+test("recurring pattern evidence distinguishes matching failures from analyzed failures", () => {
   const partial = recurringPattern("partial", 5, ["2", "1"], 0);
   const active = recurringPattern("active", 3, ["3", "2", "1"], 0);
 
-  assert.equal(patternEvidenceLabel(partial), "2 of 5 runs");
-  assert.equal(patternEvidenceLabel(active), "3 of 3 runs");
-  assert.equal(patternEvidenceLabel({ ...partial, shared_builds: [], causal_groups: [] }), "5 analyzed runs");
-  assert.equal(patternEvidenceLabel({ ...partial, confidence: "medium" }), "2 of 5 runs · medium confidence");
-  assert.equal(patternEvidenceLabel({ ...partial, confidence: "low" }), "2 of 5 runs · low confidence");
+  assert.equal(patternEvidenceLabel(partial), "2 of 5 failures");
+  assert.equal(patternEvidenceLabel(active), "3 of 3 failures");
+  assert.equal(patternEvidenceLabel({ ...partial, shared_builds: [], causal_groups: [] }), "5 analyzed failures");
+  assert.equal(patternEvidenceLabel({ ...partial, builds_analyzed: 1, shared_builds: ["1"], causal_groups: [] }), "1 of 1 failure");
+  assert.equal(patternEvidenceLabel({ ...partial, builds_analyzed: 1, shared_builds: [], causal_groups: [] }), "1 analyzed failure");
+  assert.equal(patternEvidenceLabel({ ...partial, confidence: "medium" }), "2 of 5 failures · medium confidence");
+  assert.equal(patternEvidenceLabel({ ...partial, confidence: "low" }), "2 of 5 failures · low confidence");
 });
 
 test("overview evidence uses one stale marker from the last successful refresh", () => {
@@ -454,12 +456,12 @@ test("overview evidence uses one stale marker from the last successful refresh",
   const refresh: PatternRefreshStatus = {
     state: "retained", evidence_available: false, last_successful_at: "2026-09-28T23:30:00Z",
   };
-  assert.equal(patternEvidenceLabel(pattern, refresh), "2 of 3 runs · as of Sep 28");
-  assert.equal(patternEvidenceLabel({ ...pattern, confidence: "medium" }, refresh), "2 of 3 runs · medium confidence · as of Sep 28");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, state: "current" }), "2 of 3 runs");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, evidence_available: true }), "2 of 3 runs · as of Sep 28");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: undefined }), "2 of 3 runs · earlier refresh");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: "invalid" }), "2 of 3 runs · earlier refresh");
+  assert.equal(patternEvidenceLabel(pattern, refresh), "2 of 3 failures · as of Sep 28");
+  assert.equal(patternEvidenceLabel({ ...pattern, confidence: "medium" }, refresh), "2 of 3 failures · medium confidence · as of Sep 28");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, state: "current" }), "2 of 3 failures");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, evidence_available: true }), "2 of 3 failures · as of Sep 28");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: undefined }), "2 of 3 failures · earlier refresh");
+  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: "invalid" }), "2 of 3 failures · earlier refresh");
 });
 
 test("latest recurrence label tolerates missing timestamps without inventing a date", () => {
@@ -486,7 +488,7 @@ test("featured pattern combines passing recurrence and recovery above its eviden
   assert.match(html, /aria-label="Passing · recurred Oct 19 · 1 of 3 passes to clear"/);
   const content = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
   assert.match(content, />Passing · <a[^>]*href="\/job\/main\?run=oct-19"[^>]*>recurred Oct 19<\/a> · 1\/3 passes<\/div>/);
-  assert.match(html, />2 of 3 runs · as of Sep 28</);
+  assert.match(html, />2 of 3 failures · as of Sep 28</);
   assert.doesNotMatch(html, /high confidence|earlier window|Last successful refresh|Passing now/);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
 });
@@ -657,7 +659,7 @@ test("featured recurring pattern exposes a current same-cause streak", () => {
   }));
 
   assert.match(html, />Failing · 3 in a row</);
-  assert.match(html, />3 of 3 runs</);
+  assert.match(html, />3 of 3 failures</);
   assert.doesNotMatch(html, /high confidence/);
   assert.doesNotMatch(html, />Flaky</);
 
@@ -706,7 +708,7 @@ test("featured recurring pattern keeps current failure separate from causal grou
     job: failingJob,
   }));
   assert.match(failing, />Failing</);
-  assert.match(failing, />3 of 4 runs</);
+  assert.match(failing, />3 of 4 failures</);
   assert.doesNotMatch(failing, /in a row/);
   assert.doesNotMatch(failing, />Flaky</);
 

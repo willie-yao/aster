@@ -229,8 +229,8 @@ export function patternEvidenceLabel(
   const recurringBuilds = patternRecurringBuildCount(pattern);
   const parts = [
     recurringBuilds > 0
-      ? `${recurringBuilds} of ${countLabel(pattern.builds_analyzed, "run")}`
-      : countLabel(pattern.builds_analyzed, "analyzed run"),
+      ? `${recurringBuilds} of ${countLabel(pattern.builds_analyzed, "failure")}`
+      : countLabel(pattern.builds_analyzed, "analyzed failure"),
   ];
   if (pattern.confidence !== "high") parts.push(`${pattern.confidence} confidence`);
   if (refreshStatus && refreshStatus.state !== "current") {
