@@ -96,9 +96,15 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
               minWidth: 0,
               minHeight: 70,
               display: "grid",
-              gridTemplateColumns: "auto minmax(0, 1fr) auto",
+              gridTemplateColumns: { xs: "minmax(0, 1fr) auto", sm: "auto minmax(0, 1fr) auto" },
+              // On phones the label takes the full row, so the count moves
+              // beside the percentage, and the dot gives up its column.
+              gridTemplateAreas: {
+                xs: '"label label" "percent count"',
+                sm: '"dot label count" "dot percent count"',
+              },
               alignItems: "center",
-              gap: 1,
+              columnGap: 1,
               px: { xs: 1, sm: 1.5 },
               py: 1,
               border: 0,
@@ -117,20 +123,18 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
               },
             }}
           >
-            <Box aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
-            <Box sx={{ minWidth: 0 }}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                <Typography variant="body2" component="span" sx={{ fontWeight: 600, ...overviewTypography.primaryBody }}>
-                  {row.label}
-                </Typography>
-                {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
-              </Box>
-              <Typography variant="data" component="span" color="textSecondary" sx={overviewTypography.data}>
-                {percentage}%
-                <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}> of jobs</Box>
+            <Box aria-hidden="true" sx={{ gridArea: "dot", display: { xs: "none", sm: "block" }, width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
+            <Box sx={{ gridArea: "label", minWidth: 0, display: "flex", alignItems: "center", gap: 0.5 }}>
+              <Typography variant="body2" component="span" sx={{ fontWeight: 600, ...overviewTypography.primaryBody }}>
+                {row.label}
               </Typography>
+              {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
             </Box>
-            <Typography variant="stat" component="span" sx={{ fontSize: "19px", color: `${row.color}.main` }}>
+            <Typography variant="data" component="span" color="textSecondary" sx={{ gridArea: "percent", ...overviewTypography.data }}>
+              {percentage}%
+              <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}> of jobs</Box>
+            </Typography>
+            <Typography variant="stat" component="span" sx={{ gridArea: "count", fontSize: "19px", color: `${row.color}.main` }}>
               {row.count}
             </Typography>
           </ButtonBase>

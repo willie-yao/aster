@@ -89,6 +89,8 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
         <Link
           component={RouterLink}
           to={jobPath(job.job_id)}
+          // The head and tail spans would otherwise add a space to the name.
+          aria-label={displayName}
           underline="none"
           sx={{
             minWidth: 0,
