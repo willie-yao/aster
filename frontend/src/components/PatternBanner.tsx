@@ -774,6 +774,10 @@ export function PatternBanner({
     </NextStepPreview>
   ) : undefined;
 
+  // With several causes the synopsis follows the lead cause, like the next step.
+  const mobileSynopsisSource =
+    (causalGroups.length > 1 ? causalGroups[0].root_cause : undefined) || (pattern.shared_root_cause ?? pattern.summary);
+
   const causeCount = causalGroups.length > 0 ? String(causalGroups.length) : "None isolated";
 
   // The band beside the title already carries builds and confidence, so this
@@ -829,7 +833,7 @@ export function PatternBanner({
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       summaryAside={summaryFacts}
       mobileNextStep={mobileNextStep}
-      mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
+      mobileSynopsis={firstSentence(mobileSynopsisSource)}
       details={details}
       actions={actions}
     />

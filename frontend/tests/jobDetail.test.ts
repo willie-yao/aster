@@ -142,7 +142,7 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
   assert.match(page, /<TechnicalIdentity[\s\S]*Canonical job ID[\s\S]*Copy canonical job ID/);
   assert.match(page, /<MetricStrip items=\{metricItems\} label="Job metrics"/);
-  assert.match(page, /label: "Current"/);
+  assert.match(page, /label: "Latest run"/);
   assert.match(page, /label: "Last 10 runs"/);
   assert.match(page, /label: "Recovery streak"/);
   assert.match(page, /label: "Median duration"/);

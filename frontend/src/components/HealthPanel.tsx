@@ -126,7 +126,8 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
                 {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
               </Box>
               <Typography variant="data" component="span" color="textSecondary" sx={overviewTypography.data}>
-                {percentage}% of jobs
+                {percentage}%
+                <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}> of jobs</Box>
               </Typography>
             </Box>
             <Typography variant="stat" component="span" sx={{ fontSize: "19px", color: `${row.color}.main` }}>

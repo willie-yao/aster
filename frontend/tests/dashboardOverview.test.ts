@@ -226,7 +226,7 @@ test("health summary exposes counts and pressed filter state", () => {
   assert.match(html, /mix of passing and failing results/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /aria-label="Unreliable: 1 job, 33% of jobs\./);
-  assert.match(html, />33% of jobs</);
+  assert.match(html, /33%.{0,400}> of jobs<\/span>/);
   assert.match(html, /inset 0 -3px 0/);
 });
 
@@ -894,7 +894,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(filters, /sm: "0 4px 4px 0 !important"/);
   assert.match(health, /onFilterClick\?\.\(active \? "ALL" : row\.status\)/);
   assert.match(health, /borderLeft: "1px solid"/);
-  assert.match(health, /% of jobs/);
+  assert.match(health, /% of jobs|> of jobs</);
   assert.match(health, /mix of passing and failing results/);
   assert.doesNotMatch(health, /borderRight:/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);
