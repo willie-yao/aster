@@ -76,6 +76,24 @@ function BriefingBody({
   );
 }
 
+// NextStepPreview is the phone briefing's action, shown with the summary so it
+// is readable before the Full analysis collapse.
+export function NextStepPreview({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <Typography component="h3" sx={overviewTypography.subsectionHeading}>
+        Next step
+      </Typography>
+      <Typography
+        component="div"
+        sx={{ mt: 0.5, ...overviewTypography.primaryBody, color: "text.primary", fontWeight: 500 }}
+      >
+        {children}
+      </Typography>
+    </>
+  );
+}
+
 export function AnalysisBriefing({
   id,
   title,
@@ -87,6 +105,7 @@ export function AnalysisBriefing({
   mobileSynopsis,
   mobileMetadata,
   mobileNotice,
+  mobileNextStep,
   details,
   actions,
   collapseDetailsOnMobile = true,
@@ -101,6 +120,8 @@ export function AnalysisBriefing({
   mobileSynopsis?: ReactNode;
   mobileMetadata?: ReactNode;
   mobileNotice?: ReactNode;
+  // Shown with the synopsis so the action is visible before the collapse.
+  mobileNextStep?: ReactNode;
   details?: ReactNode;
   actions?: ReactNode;
   collapseDetailsOnMobile?: boolean;
@@ -179,6 +200,9 @@ export function AnalysisBriefing({
         <Box sx={{ px: 1.5, py: 1.5, ...overviewTypography.primaryBody, overflowWrap: "anywhere" }}>
           {mobileSynopsis ?? summary}
         </Box>
+        {mobileNextStep && (
+          <Box sx={{ px: 1.5, pb: 1.5, overflowWrap: "anywhere" }}>{mobileNextStep}</Box>
+        )}
         {mobileNotice && <Box sx={{ px: 1.5, pb: 1.5 }}>{mobileNotice}</Box>}
       </Box>
 

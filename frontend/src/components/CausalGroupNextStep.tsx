@@ -5,11 +5,8 @@ import { CausalGroupFixNotice } from "./CausalGroupFixRouting";
 import { AnalysisChat } from "./AnalysisChat";
 import type { FileToUrlContext } from "../lib/utils";
 import type { CauseAnalysisChatReference } from "../types/analysisChat";
-import type { CausalGroupFixTarget } from "../lib/patternFixGuidance";
-import type {
-  AnalysisCauseLocation,
-  PatternCausalGroup,
-} from "../types/dashboard";
+import type { CausalGroupFixTarget, CausalGroupNextStepSource } from "../lib/patternFixGuidance";
+import type { AnalysisCauseLocation, PatternCausalGroup } from "../types/dashboard";
 import { overviewTypography } from "../theme/overview";
 
 // CausalGroupNextStep is the one place a cause offers something to act on: the
@@ -20,12 +17,17 @@ export function CausalGroupNextStep({
   group,
   jobID,
   fileCtx,
+  nextStep,
   chat,
   routing,
 }: {
   group: PatternCausalGroup;
   jobID?: string;
   fileCtx?: FileToUrlContext;
+  // The remediation from the newest affected build, which the page derives so
+  // the cause agrees with the Test detail it links to. Defaults to the
+  // remediation the engine carried on the group.
+  nextStep?: CausalGroupNextStepSource | null;
   chat?: {
     ref: CauseAnalysisChatReference;
     baselineBuildID?: string;
@@ -40,7 +42,9 @@ export function CausalGroupNextStep({
     evidencePresent?: boolean;
   };
 }) {
-  const suggested = group.remediation?.suggested_fix?.trim();
+  const carried = group.remediation;
+  const source = nextStep ?? (carried ? { suggestedFix: carried.suggested_fix.trim(), buildID: carried.build_id } : null);
+  const suggested = source?.suggestedFix;
   // Routing has nothing to explain without a job, which is the same condition
   // CausalGroupFixNotice returns null on.
   const routable = routing && jobID ? routing : undefined;
@@ -53,22 +57,26 @@ export function CausalGroupNextStep({
 
   return (
     <Box sx={{ mt: 1.5, minWidth: 0 }}>
-      <Typography component="h5" sx={overviewTypography.eyebrow}>
+      <Typography component="h5" sx={overviewTypography.subsectionHeading}>
         Next step
       </Typography>
       {suggested && (
         <Box sx={{ mt: 0.75, minWidth: 0 }}>
-          <Typography component="h6" color="textSecondary" sx={overviewTypography.eyebrow}>
-            Suggested remediation
-            {group.remediation?.build_id ? ` from build ${group.remediation.build_id}` : ""}
-          </Typography>
           <Typography
             component="div"
-            color="textSecondary"
-            sx={{ mt: 0.5, ...overviewTypography.description }}
+            sx={{ ...overviewTypography.primaryBody, color: "text.primary", fontWeight: 500 }}
           >
             <RichText text={suggested} steps fileCtx={fileCtx} />
           </Typography>
+          {source?.buildID && (
+            <Typography
+              component="p"
+              color="textSecondary"
+              sx={{ m: 0, mt: 0.5, ...overviewTypography.description }}
+            >
+              Suggested remediation from build {source.buildID}
+            </Typography>
+          )}
         </Box>
       )}
       {routable && (

@@ -31,7 +31,7 @@ const fixCapable: Capabilities = {
   features: { actions: true, analysis_chat: true, junit_chat_fix: true },
 };
 
-const run = failedJUnitRun("300", "[It] Conformance Tests conformance tests should pass");
+const run = failedJUnitRun("300", "[It] Conformance Tests conformance tests should pass", "");
 
 function pattern(options: { classified: boolean; reportedFix: boolean }): PatternAnalysis {
   return {
@@ -60,7 +60,7 @@ function pattern(options: { classified: boolean; reportedFix: boolean }): Patter
   };
 }
 
-function render(analysis: PatternAnalysis, capabilities: Capabilities): string {
+function render(analysis: PatternAnalysis, capabilities: Capabilities, runs: BuildResult[] = [run]): string {
   const tree: ReactNode = createElement(
     ThemeProvider,
     { theme: defaultTheme },
@@ -70,7 +70,7 @@ function render(analysis: PatternAnalysis, capabilities: Capabilities): string {
       createElement(
         CapabilitiesContext.Provider,
         { value: capabilities },
-        createElement(PatternBanner, { pattern: analysis, jobID: analysis.job_id, runs: [run] }),
+        createElement(PatternBanner, { pattern: analysis, jobID: analysis.job_id, runs }),
       ),
     ),
   );
@@ -80,7 +80,7 @@ function render(analysis: PatternAnalysis, capabilities: Capabilities): string {
 test("a cause gathers everything it offers under one Next step section", () => {
   const html = render(pattern({ classified: true, reportedFix: true }), fixCapable);
 
-  assert.equal(html.match(/Next step/g)?.length, 1);
+  assert.equal(html.match(/<h5[^>]*>Next step/g)?.length, 1);
   assert.match(html, /Suggested remediation from build 300/);
   assert.match(html, /Bump the node image to the current release\./);
   assert.match(html, /Conformance tests should pass in build 300, open representative failure/);
@@ -99,6 +99,15 @@ test("a published-only deploy still gets the cause's reported remediation", () =
   // Neither capability is present, so neither control may be offered.
   assert.doesNotMatch(html, /open representative failure/);
   assert.doesNotMatch(html, /Expand investigate cause/);
+});
+
+test("a cause quotes the newest affected build's analysis over the carried remediation", () => {
+  const newest = failedJUnitRun("300", "[It] Conformance Tests conformance tests should pass", "Upgrade to the fixed release.");
+  const html = render(pattern({ classified: true, reportedFix: true }), published, [newest]);
+
+  assert.match(html, /Upgrade to the fixed release\./);
+  assert.doesNotMatch(html, /Bump the node image to the current release\./);
+  assert.match(html, /Suggested remediation from build 300/);
 });
 
 test("a cause with nothing to offer renders no Next step section at all", () => {

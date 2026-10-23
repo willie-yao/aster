@@ -549,18 +549,6 @@ export function JobDetailPage() {
         )}
       </Box>
 
-      <TechnicalIdentity
-        desktopInline
-        summary="Canonical job ID"
-        items={[
-          {
-            label: "Canonical job ID",
-            value: canonicalJobID,
-            copyLabel: "Copy canonical job ID",
-          },
-        ]}
-      />
-
       <MetricStrip items={metricItems} label="Job metrics" />
 
       {!hasRuns ? (
@@ -702,6 +690,18 @@ export function JobDetailPage() {
           ) : null}
         </>
       )}
+
+      <TechnicalIdentity
+        desktopInline
+        summary="Canonical job ID"
+        items={[
+          {
+            label: "Canonical job ID",
+            value: canonicalJobID,
+            copyLabel: "Copy canonical job ID",
+          },
+        ]}
+      />
     </Box>
   );
 }

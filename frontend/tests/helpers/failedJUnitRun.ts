@@ -1,6 +1,6 @@
 import type { BuildResult } from "../../src/types/dashboard.js";
 
-export function failedJUnitRun(buildID: string, testName: string): BuildResult {
+export function failedJUnitRun(buildID: string, testName: string, suggestedFix = "fix"): BuildResult {
   return {
     build_id: buildID,
     job_name: "periodic-capz-e2e-main",
@@ -22,7 +22,7 @@ export function failedJUnitRun(buildID: string, testName: string): BuildResult {
         generated_at: "2026-08-18T00:00:00Z",
         root_cause: "cause",
         severity: "high",
-        suggested_fix: "fix",
+        suggested_fix: suggestedFix,
         disposition: "citations_verified",
         file_links: { "a/b.go": "https://github.com/o/r/blob/rev/a/b.go" },
       },

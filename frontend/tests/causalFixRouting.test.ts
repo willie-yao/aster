@@ -124,15 +124,15 @@ test("routing actions stay distinguishable when two causes humanize to one title
   assert.equal(new Set(visible).size, 3, `visible labels must be unique, got ${JSON.stringify(visible)}`);
   assert.equal(new Set(actions.map((action) => action.accessible)).size, 3);
 
-  // The two colliding causes each carry their build; the distinct one does not
-  // pay for 19 digits it does not need.
+  // Causes render newest build first. The two colliding causes each carry
+  // their build; the distinct one does not pay for 19 digits it does not need.
   assert.deepEqual(
     visible.map((label) => label.includes(" in build ")),
-    [true, true, false],
+    [false, true, true],
   );
-  assert.ok(visible[0].startsWith("Highly available cluster in build 100"));
+  assert.equal(visible[0], "Conformance tests should pass");
   assert.ok(visible[1].startsWith("Highly available cluster in build 250"));
-  assert.equal(visible[2], "Conformance tests should pass");
+  assert.ok(visible[2].startsWith("Highly available cluster in build 100"));
 });
 
 test("the routing action names the test the way the rest of the page does", () => {

@@ -525,15 +525,16 @@ test("a cause offers its route and its resolution in one action bar", () => {
   // sends the overflow to its ellipsis instead; the max-content cap is what
   // stops that basis growing the route past its own label.
   const routing = source("src/components/CausalGroupFixRouting.tsx");
-  assert.match(routing, /flex: "1 1 0"/);
-  assert.match(routing, /maxWidth: "max-content"/);
+  assert.match(routing, /flex: \{ xs: "none", sm: "1 1 0" \}/);
+  assert.match(routing, /maxWidth: \{ xs: "100%", sm: "max-content" \}/);
   // Stack's margin-based spacing outranks a child's sx, so the resolution's
   // auto margin only survives when the bar spaces with a real gap.
   assert.match(source("src/components/PatternBanner.tsx"), /useFlexGap/);
   assert.match(source("src/components/CauseResolution.tsx"), /ml: \{ sm: "auto" \}/);
+  assert.match(source("src/components/CauseResolution.tsx"), /width: \{ xs: "100%", sm: "auto" \}/);
   assert.doesNotMatch(source("src/components/PatternBanner.tsx"), /justifyContent: "space-between"/);
   assert.match(routing, /minWidth: 0/);
-  assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: "wrap"/);
+  assert.match(source("src/components/PatternBanner.tsx"), /flexWrap: \{ xs: "nowrap", sm: "wrap" \}/);
 
   const barStart = html.indexOf("open representative failure");
   const resolveAt = html.indexOf("Resolve failure");
@@ -555,7 +556,7 @@ test("a cause's remediation precedes its representative route and resolution", (
       auth: { mode: "oauth" },
     },
     undefined,
-    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster", "Remove the conflicting CNI configuration.")],
   );
   const anchors = [
     "Next step", "Remove the conflicting CNI configuration.",
@@ -709,7 +710,7 @@ test("a cause with a route but no remediation and no chat renders no Next step h
     admin,
     fixCapable,
     undefined,
-    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster")],
+    [failedJUnitRun("100", "[It] Workload cluster creation Creating a highly available cluster", "")],
   );
 
   // The route still renders, from the bar.
