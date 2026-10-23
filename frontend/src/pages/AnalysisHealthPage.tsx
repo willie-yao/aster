@@ -121,7 +121,7 @@ function TracePrivacyDisclosure() {
         <Typography
           id={contentID}
           color="textSecondary"
-          sx={{ px: 1.5, py: 1.5, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.secondaryBody }}
+          sx={{ px: 1.5, py: 1.5, borderTop: "1px solid", borderColor: "divider", maxWidth: "74ch", ...overviewTypography.secondaryBody }}
         >
           Health is derived from private, content-free runtime metadata. Prompts, tool arguments, tool results, credentials, diagnostic content, and billing records are never shown. Cached analyses are omitted because they record no new evidence.
         </Typography>

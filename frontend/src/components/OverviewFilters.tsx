@@ -11,9 +11,10 @@ import { overviewTypography } from "../theme/overview";
 
 const statusFilters: { label: string; value: OverviewStatusFilter }[] = [
   { label: "All", value: "ALL" },
-  { label: "Passing", value: "PASSING" },
+  { label: "Healthy", value: "HEALTHY" },
   { label: "Flaky", value: "FLAKY" },
-  { label: "Failing", value: "FAILING" },
+  { label: "Unreliable", value: "UNRELIABLE" },
+  { label: "Latest run failed", value: "LATEST_FAILED" },
 ];
 
 interface OverviewFiltersProps {
@@ -53,10 +54,10 @@ export function OverviewFilters({
         onChange={(_, value: OverviewStatusFilter | null) => {
           if (value) onStatusChange(value);
         }}
-        aria-label="Reliability over the last 10 runs"
+        aria-label="Job status filter"
         sx={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gridTemplateColumns: { xs: "repeat(4, minmax(0, 1fr))", sm: "repeat(4, auto) auto" },
           "& .MuiToggleButtonGroup-grouped": {
             minWidth: 0,
             minHeight: 44,
@@ -68,9 +69,16 @@ export function OverviewFilters({
             color: "text.secondary",
             textTransform: "none",
             ...overviewTypography.tableHeading,
-            "&:first-of-type": { borderRadius: "4px 0 0 4px !important" },
-            "&:last-of-type": { borderRadius: "0 4px 4px 0 !important" },
+            "&:first-of-type": { borderRadius: { xs: "4px 0 0 0 !important", sm: "4px 0 0 4px !important" } },
+            "&:nth-of-type(4)": { borderRadius: { xs: "0 4px 0 0 !important", sm: "0 !important" } },
             "&:not(:first-of-type)": { ml: "-1px" },
+            // The long label takes its own row on phones.
+            "&:last-of-type": {
+              borderRadius: { xs: "0 0 4px 4px !important", sm: "0 4px 4px 0 !important" },
+              gridColumn: { xs: "1 / -1", sm: "auto" },
+              ml: { xs: 0, sm: "-1px" },
+              mt: { xs: "-1px", sm: 0 },
+            },
             "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
             "&.Mui-selected": {
               position: "relative",

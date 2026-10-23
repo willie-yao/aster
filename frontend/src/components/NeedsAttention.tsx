@@ -361,7 +361,7 @@ export function FeaturedPatternRow({
               </Link>
             </>
           )}
-          {recovering && ` · ${recoveryStreak}/${MIN_OBSERVED_RECOVERY_PASSES} passes`}
+          {recovering && ` · ${recoveryStreak}/${MIN_OBSERVED_RECOVERY_PASSES} passes to clear`}
         </Typography>
         <Typography
           variant="caption"

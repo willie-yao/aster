@@ -25,7 +25,41 @@ export type AttentionGroup =
   | { kind: "recent" | "persistent" | "flaky"; label: string; items: TestFlakiness[] }
   | { kind: "lowPassRate"; label: string; items: LowPassRateEntry[] };
 
-export type OverviewStatusFilter = "ALL" | "PASSING" | "FLAKY" | "FAILING";
+// Reliability buckets come from overall_status, the last 10 runs. They use
+// their own names so "Failed" and "Passed" stay reserved for a run's result.
+export type OverviewStatusFilter = "ALL" | "HEALTHY" | "FLAKY" | "UNRELIABLE" | "LATEST_FAILED";
+
+export const reliabilityLabels = {
+  HEALTHY: "Healthy",
+  FLAKY: "Flaky",
+  UNRELIABLE: "Unreliable",
+} as const;
+
+const reliabilityByOverallStatus: Record<JobSummary["overall_status"], keyof typeof reliabilityLabels> = {
+  PASSING: "HEALTHY",
+  FLAKY: "FLAKY",
+  FAILING: "UNRELIABLE",
+};
+
+export function jobMatchesStatusFilter(job: JobSummary, filter: OverviewStatusFilter): boolean {
+  if (filter === "ALL") return true;
+  if (filter === "LATEST_FAILED") return job.current_status === "FAILING";
+  return reliabilityByOverallStatus[job.overall_status] === filter;
+}
+
+// Run words describe one run's result, as opposed to the reliability buckets.
+export function runStatusLabel(status: JobSummary["current_status"]): string {
+  switch (status) {
+    case "PASSING":
+      return "Passed";
+    case "FAILING":
+      return "Failed";
+    case "RUNNING":
+      return "Running";
+    default:
+      return "Unknown";
+  }
+}
 
 export interface OverviewHistoryState {
   additionalOpen: boolean;
@@ -46,8 +80,8 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 }
 
 export function overviewStatusFromParam(value: string | null): OverviewStatusFilter {
-  const normalized = value?.trim().toUpperCase();
-  return normalized === "PASSING" || normalized === "FLAKY" || normalized === "FAILING"
+  const normalized = value?.trim().toUpperCase().replace(/-/g, "_");
+  return normalized === "HEALTHY" || normalized === "FLAKY" || normalized === "UNRELIABLE" || normalized === "LATEST_FAILED"
     ? normalized
     : "ALL";
 }
@@ -64,7 +98,7 @@ export function withOverviewFilters(
 ): URLSearchParams {
   const next = new URLSearchParams(current);
   if (status === "ALL") next.delete("status");
-  else next.set("status", status.toLowerCase());
+  else next.set("status", status.toLowerCase().replace(/_/g, "-"));
   if (branch === "ALL") next.delete("branch");
   else next.set("branch", branch);
   return next;

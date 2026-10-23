@@ -3,7 +3,7 @@ import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
 import { soft, type SoftColor } from "../theme";
-import { countLabel } from "../lib/dashboardOverview";
+import { countLabel, jobMatchesStatusFilter, reliabilityLabels } from "../lib/dashboardOverview";
 import type { JobSummary } from "../types/dashboard";
 import { overviewTypography } from "../theme/overview";
 
@@ -17,29 +17,29 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
   const total = jobs.length;
   const rows: {
     label: string;
-    status: "PASSING" | "FLAKY" | "FAILING";
+    status: "HEALTHY" | "FLAKY" | "UNRELIABLE";
     count: number;
     color: Extract<SoftColor, "success" | "warning" | "error">;
     description: string;
   }[] = [
     {
-      label: "Passing",
-      status: "PASSING",
-      count: jobs.filter((job) => job.overall_status === "PASSING").length,
+      label: reliabilityLabels.HEALTHY,
+      status: "HEALTHY",
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "HEALTHY")).length,
       color: "success",
       description: "Jobs with at least a 90% pass rate across up to the last 10 published runs.",
     },
     {
-      label: "Flaky",
+      label: reliabilityLabels.FLAKY,
       status: "FLAKY",
-      count: jobs.filter((job) => job.overall_status === "FLAKY").length,
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "FLAKY")).length,
       color: "warning",
       description: "Jobs with a mix of passing and failing results across up to the last 10 published runs.",
     },
     {
-      label: "Failing",
-      status: "FAILING",
-      count: jobs.filter((job) => job.overall_status === "FAILING").length,
+      label: reliabilityLabels.UNRELIABLE,
+      status: "UNRELIABLE",
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "UNRELIABLE")).length,
       color: "error",
       description: "Jobs with a pass rate of 30% or less across up to the last 10 published runs.",
     },
