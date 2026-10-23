@@ -190,7 +190,7 @@ test("causal group rhythm and headings express the hierarchy", () => {
   assert.match(cause, /component="h4"/);
   assert.match(cause, /component="h5"[\s\S]*Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
   assert.match(nextStep, /component="h5"[\s\S]*>\s*Next step\s*</);
-  assert.match(nextStep, /component="h6"[\s\S]*>\s*Suggested remediation/);
+  assert.match(nextStep, /Suggested remediation from build/);
 });
 
 test("one shared component defines the briefing section treatment", () => {

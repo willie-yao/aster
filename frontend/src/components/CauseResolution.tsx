@@ -101,6 +101,7 @@ export function CauseResolution({
     ? {
         textTransform: "none" as const,
         flexShrink: 0,
+        width: { xs: "100%", sm: "auto" },
         ml: { sm: "auto" },
         minHeight: { xs: 44, sm: 32 },
         ...overviewTypography.secondaryBody,

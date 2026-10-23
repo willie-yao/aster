@@ -100,9 +100,10 @@ export function CausalGroupFixButton({
           // the resolution stay on one row and this ellipsizes instead. The
           // max-content cap is what stops it growing past its own label to fill
           // the row. minWidth: 0 permits shrinking below the label's width.
-          flex: "1 1 0",
+          flex: { xs: "none", sm: "1 1 0" },
           minWidth: 0,
-          maxWidth: "max-content",
+          width: { xs: "100%", sm: "auto" },
+          maxWidth: { xs: "100%", sm: "max-content" },
           px: 0,
           justifyContent: "flex-start",
           textAlign: "left",

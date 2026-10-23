@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { causalGroupEvidencePresent, causalGroupFixTarget, patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
+import { causalGroupEvidencePresent, causalGroupFixTarget, causalGroupIsEarlier, causalGroupNextStep, orderCausalGroups, patternFixGuidanceBuildID } from "../src/lib/patternFixGuidance.js";
 import type { BuildResult, PatternAnalysis, PatternCausalGroup } from "../src/types/dashboard.js";
 
 function source(path: string): string {
@@ -469,32 +469,57 @@ test("guidance keeps a contained mobile action and points to the nearby test led
   assert.match(grid, /Choose a failed test from the Test results section below/);
 });
 
-test("a cause opens the build its displayed suggestion came from", () => {
+test("a cause opens the newest affected build, the one its next step is quoted from", () => {
   const otherBuild: BuildResult = { ...groundedRun, build_id: "208726" };
   const runs = [groundedRun, otherBuild];
 
-  // Without a reported remediation the first eligible member still wins.
-  assert.deepEqual(causalGroupFixTarget(firstGroup, runs), { buildID: "208060", testName: "fails" });
+  assert.deepEqual(causalGroupFixTarget(firstGroup, runs), { buildID: "208726", testName: "fails" });
 
-  // With one, the button opens the same analysis the briefing quoted, so the
-  // two surfaces cannot disagree about which build the fix came from.
+  // A newest build that cannot start a Fix investigation falls back rather
+  // than leaving the cause with no route at all.
   assert.deepEqual(
-    causalGroupFixTarget(
-      { ...firstGroup, remediation: { suggested_fix: "Raise the budget.", build_id: "208726" } },
-      runs,
-    ),
-    { buildID: "208726", testName: "fails" },
-  );
-
-  // A suggestion from a build that cannot start a Fix investigation falls back
-  // rather than leaving the cause with no route at all.
-  assert.deepEqual(
-    causalGroupFixTarget(
-      { ...firstGroup, remediation: { suggested_fix: "Raise the budget.", build_id: "208726" } },
-      [groundedRun, { ...otherBuild, test_cases: [] }],
-    ),
+    causalGroupFixTarget(firstGroup, [groundedRun, { ...otherBuild, test_cases: [] }]),
     { buildID: "208060", testName: "fails" },
   );
+});
+
+test("the active cause leads and older causes are marked earlier", () => {
+  const ordered = orderCausalGroups(causalPattern.causal_groups!);
+
+  assert.deepEqual(ordered.map((group) => group.root_cause), ["second cause", "first cause"]);
+  assert.equal(causalGroupIsEarlier(ordered[1], ordered[0]), true);
+  assert.equal(causalGroupIsEarlier(ordered[0], ordered[0]), false);
+  // Ties keep the larger group, then the engine's order.
+  const tied = [
+    { builds: ["5"], root_cause: "one", confidence: "high" as const },
+    { builds: ["4", "5"], root_cause: "two", confidence: "high" as const },
+  ];
+  assert.deepEqual(orderCausalGroups(tied).map((group) => group.root_cause), ["two", "one"]);
+});
+
+test("a cause's next step comes from its newest analyzed build", () => {
+  const withFix = (buildID: string, fix: string): BuildResult => ({
+    ...groundedRun,
+    build_id: buildID,
+    test_cases: [{ ...groundedRun.test_cases[0], ai_analysis: { ...analysis, suggested_fix: fix } }],
+  });
+  const group: PatternCausalGroup = {
+    ...firstGroup,
+    remediation: { suggested_fix: "carried", build_id: "208060" },
+  };
+
+  assert.deepEqual(
+    causalGroupNextStep(group, [withFix("208726", "newest"), withFix("208060", "oldest")]),
+    { suggestedFix: "newest", buildID: "208726" },
+  );
+  // A newest build with no analysis defers to the next newest.
+  assert.deepEqual(
+    causalGroupNextStep(group, [{ ...withFix("208726", "x"), test_cases: [] }, withFix("208060", "oldest")]),
+    { suggestedFix: "oldest", buildID: "208060" },
+  );
+  // With no run in the window the engine's carried remediation stands.
+  assert.deepEqual(causalGroupNextStep(group, []), { suggestedFix: "carried", buildID: "208060" });
+  assert.equal(causalGroupNextStep(firstGroup, []), null);
 });
 
 // A cause offers no fix target for two unrelated reasons, and only one of them

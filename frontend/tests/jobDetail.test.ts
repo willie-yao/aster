@@ -122,7 +122,7 @@ test("job detail separates current observation from rolling reliability", () => 
 
 test("job header keeps status on the right above mobile widths", () => {
   const page = source("src/pages/JobDetailPage.tsx");
-  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<TechnicalIdentity"));
+  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<MetricStrip"));
 
   assert.match(header, /gridTemplateColumns: \{\s*xs: "minmax\(0, 1fr\)",\s*sm: "minmax\(0, 1fr\) auto",\s*\}/);
   assert.match(header, /role="status"/);

@@ -83,6 +83,6 @@ test("job config metadata encodes paths and escapes branch text", () => {
 test("job page renders config metadata in its header using canonical job identity", () => {
   const page = readFileSync(resolve(process.cwd(), "src/pages/JobDetailPage.tsx"), "utf8");
   assert.match(page, /dashboard\?\.jobs\.find\(\(job\) => job\.job_id === canonicalJobID\)/);
-  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<TechnicalIdentity"));
+  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<MetricStrip"));
   assert.match(header, /<JobConfigMetadata\s+job=\{data\}\s+discovery=\{manifest\.discovery\}\s+branch=\{jobSummary\?\.branch\}/);
 });
