@@ -371,6 +371,12 @@ test("the attribution banner leads each failure and cites its evidence", () => {
   assert.match(detail, /const runPath = baseBranchRunPath\(item\)/);
 });
 
+test("a check kept while a rerun runs names the running build", () => {
+  const detail = source("src/pages/PullRequestDetailPage.tsx");
+
+  assert.match(detail, /check\.rerun_build_id \? ` · newer build \$\{check\.rerun_build_id\} still running`/);
+});
+
 test("base-branch evidence links to the run that fails the same test", () => {
   const evidence = {
     kind: "base_branch",

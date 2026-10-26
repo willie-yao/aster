@@ -19,7 +19,7 @@ pull_requests:
 | --- | ---: | --- |
 | `enabled` | `false` | Publish the pull request index, detail pages, and shared-failure view. |
 | `max` | `100` | Maximum open pull requests per pass, newest updates first. |
-| `builds_per_job` | `3` | Presubmit builds examined before selecting the newest applicable build. |
+| `builds_per_job` | `3` | Presubmit builds examined per check. The newest is used, except that a rerun keeps the newest finished failure of the same revision. |
 
 With TestGrid discovery, triage considers applicable presubmits for `branding.source_repo`, including jobs without the selected dashboard annotation. This is independent of AI and Fix configuration.
 
@@ -70,6 +70,7 @@ Important boundaries:
 - One peer is retained as evidence but does not produce `widespread`; two peers are required.
 - Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
 - A build that tested an older pull request head is marked stale.
+- While a newer build reruns the same revision, the check keeps the newest finished build when it failed, so a retest does not hide the failure. Aborted builds are skipped. A run on a newly pushed revision is reported as running.
 - A failed check without a failing JUnit case receives one synthesized `Prow job execution` failure. It is compared with the same job on peers, not with base-branch tests by the generic name.
 - When build artifacts have expired, the check is `UNKNOWN` even if GitHub still retains its commit status.
 

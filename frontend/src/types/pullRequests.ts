@@ -72,6 +72,9 @@ export interface PullRequestCheck {
   stale?: boolean;
   web_url?: string;
   build_log_url?: string;
+  // A newer build still running on the same revision. Set only when this
+  // check reports the newest finished build because it failed.
+  rerun_build_id?: string;
   tests_failed?: number;
   failures?: PullRequestFailure[];
   // Set when the per-check storage cap dropped some failing cases.
