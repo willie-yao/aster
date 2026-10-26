@@ -28,9 +28,9 @@ const widespreadVerdictMinPulls = 2
 
 // Baseline is the observed non-pull-request evidence for one base branch.
 type Baseline struct {
-	// FailingOnBase maps test name to the base-branch jobs currently reporting
-	// it as failed.
-	FailingOnBase map[string][]string
+	// FailingOnBase maps test name to the base-branch jobs whose newest run
+	// reports it as failed.
+	FailingOnBase map[string][]models.BaseBranchFailure
 	// FlakyTests maps test name to the base-branch jobs whose history classifies
 	// it flaky.
 	FlakyTests map[string][]string
@@ -58,7 +58,7 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport,
 		}
 		baseline := baselines[branch]
 		if !baseline.Observed {
-			baseline.FailingOnBase = map[string][]string{}
+			baseline.FailingOnBase = map[string][]models.BaseBranchFailure{}
 			baseline.FlakyTests = map[string][]string{}
 			baseline.KnownTests = map[string]bool{}
 		}
@@ -70,7 +70,9 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport,
 			}
 			baseline.KnownTests[tc.Name] = true
 			if tc.Status == "failed" {
-				baseline.FailingOnBase[tc.Name] = appendUnique(baseline.FailingOnBase[tc.Name], detail.Name)
+				baseline.FailingOnBase[tc.Name] = appendBaseFailure(baseline.FailingOnBase[tc.Name], models.BaseBranchFailure{
+					JobID: detail.JobID, JobName: detail.Name, BuildID: newest.BuildID,
+				})
 			}
 		}
 		baselines[branch] = baseline
@@ -220,16 +222,24 @@ func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline
 	// pull request. Build-level failures are skipped because their generic name
 	// matches every failed job.
 	if !buildLevel {
-		if jobs := baseline.FailingOnBase[tc.Name]; len(jobs) > 0 {
+		if failing := baseline.FailingOnBase[tc.Name]; len(failing) > 0 {
+			names := make([]string, len(failing))
+			evidence := make([]models.AttributionEvidence, len(failing))
+			for i, job := range failing {
+				names[i] = job.JobName
+				evidence[i] = models.AttributionEvidence{
+					Kind:     models.AttributionEvidenceBaseBranch,
+					Detail:   fmt.Sprintf("The newest run on %s of %s reports this test as failed.", key.baseRef, job.JobName),
+					JobID:    job.JobID,
+					BuildID:  job.BuildID,
+					TestName: tc.Name,
+				}
+			}
 			return &models.FailureAttribution{
 				Verdict:    models.AttributionPreExisting,
 				Confidence: models.AttributionConfidenceHigh,
-				Summary:    fmt.Sprintf("This test is already failing on the base branch %s in %s, so this pull request did not introduce it.", key.baseRef, humanList(jobs)),
-				Evidence: []models.AttributionEvidence{{
-					Kind:     models.AttributionEvidenceBaseBranch,
-					Detail:   fmt.Sprintf("The newest run on %s of %s reports this test as failed.", key.baseRef, humanList(jobs)),
-					TestName: tc.Name,
-				}},
+				Summary:    fmt.Sprintf("This test is already failing on the base branch %s in %s, so this pull request did not introduce it.", key.baseRef, humanList(names)),
+				Evidence:   evidence,
 			}
 		}
 	}
@@ -420,6 +430,15 @@ func humanList(names []string) string {
 func appendUnique(existing []string, value string) []string {
 	for _, candidate := range existing {
 		if candidate == value {
+			return existing
+		}
+	}
+	return append(existing, value)
+}
+
+func appendBaseFailure(existing []models.BaseBranchFailure, value models.BaseBranchFailure) []models.BaseBranchFailure {
+	for _, candidate := range existing {
+		if candidate.JobID == value.JobID {
 			return existing
 		}
 	}

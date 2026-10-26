@@ -30,7 +30,8 @@ import {
   unlistedPatternResolutions,
   type AttentionGroup,
 } from "../lib/dashboardOverview";
-import { jobPath, jobRunPath, testPath, testRunPath } from "../lib/routes";
+import { jobPath, jobRunPath, sharedFailurePath, testPath, testRunPath } from "../lib/routes";
+import { baseBranchNote, orderSharedFailures, sharedFailureScope } from "../lib/sharedFailures";
 import { patternLifecycleActive } from "../lib/actionEligibility";
 import { shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
@@ -43,6 +44,7 @@ import type {
   ResolvedEntry,
   TestFlakiness,
 } from "../types/dashboard";
+import type { SharedFailure } from "../types/pullRequests";
 import { FailureActions } from "./FailureActions";
 import { CauseResolution } from "./CauseResolution";
 import type { ResolutionScope } from "../lib/resolution";
@@ -50,6 +52,8 @@ import { Sparkline } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const FEATURED_PATTERNS = 3;
+const INITIAL_SHARED_FAILURES = 3;
+const SHARED_FAILURE_GROUP = "Failing across pull requests";
 // Mirrors minObservedRecoveryPasses in backend/internal/models/patternlifecycle.go.
 const MIN_OBSERVED_RECOVERY_PASSES = 3;
 const attentionDesktopBreakpoint = "@media (min-width: 1024px)";
@@ -59,6 +63,9 @@ interface NeedsAttentionProps {
   loading: boolean;
   error: string | null;
   jobsByID: Record<string, JobSummary>;
+  // Failures shared by several open pull requests, or null when pull request
+  // triage is off or its index has not loaded.
+  sharedFailures?: SharedFailure[] | null;
 }
 
 function statusLabel(status: string): string {
@@ -66,6 +73,37 @@ function statusLabel(status: string): string {
   return normalized
     ? normalized[0].toUpperCase() + normalized.slice(1)
     : status;
+}
+
+function AttentionGroupHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <Box
+      sx={{
+        minHeight: overviewLayout.subsectionBandMinHeight,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 1,
+        px: 1.25,
+        py: 0.75,
+        bgcolor: "surface.containerHigh",
+        borderBlock: "1px solid",
+        borderColor: "divider",
+      }}
+    >
+      <Typography
+        variant="label"
+        component="h3"
+        color="textSecondary"
+        sx={overviewTypography.subsectionHeading}
+      >
+        {label}
+      </Typography>
+      <Typography variant="data" color="textSecondary" sx={overviewTypography.data}>
+        {count}
+      </Typography>
+    </Box>
+  );
 }
 
 export function DisclosureButton({
@@ -720,6 +758,7 @@ export function NeedsAttention({
   loading,
   error,
   jobsByID,
+  sharedFailures = null,
 }: NeedsAttentionProps) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
@@ -785,6 +824,11 @@ export function NeedsAttention({
     [manifest, recurring, report],
   );
 
+  const shared = useMemo(
+    () => orderSharedFailures(sharedFailures ?? []),
+    [sharedFailures],
+  );
+
   const testAlerts = report
     ? groups.reduce((sum, group) => sum + group.items.length, 0)
     : null;
@@ -793,10 +837,29 @@ export function NeedsAttention({
     testAlerts,
     loading,
     Boolean(error) || (!loading && !report),
+    shared.length,
   );
   const featured = recurring.slice(0, FEATURED_PATTERNS);
   const additional = recurring.slice(FEATURED_PATTERNS);
-  const hasActiveItems = recurring.length > 0 || groups.length > 0;
+  const hasActiveItems = recurring.length > 0 || groups.length > 0 || shared.length > 0;
+  const sharedOpen = expandedGroups[SHARED_FAILURE_GROUP] ?? false;
+  const renderSharedFailure = (failure: SharedFailure) => {
+    const subject = shortJobName(failure.job_name, filePrefix);
+    const testName = shortTestName(failure.test_name);
+    return (
+      <AttentionRow
+        key={failure.id}
+        to={sharedFailurePath(failure.id)}
+        destinationLabel={`Open shared failure for ${testName} in ${subject}`}
+        subject={subject}
+        summary={testName}
+        detail={baseBranchNote(failure, (jobName) => shortJobName(jobName, filePrefix))}
+        count={sharedFailureScope(failure)}
+        signal="Shared"
+        statusColor="error"
+      />
+    );
+  };
   const noActiveAlerts = Boolean(report && !hasActiveItems);
 
   return (
@@ -932,6 +995,33 @@ export function NeedsAttention({
             </Box>
           )}
 
+          {shared.length > 0 && (
+            <Box component="section" aria-label={SHARED_FAILURE_GROUP} sx={{ mt: 1 }}>
+              <AttentionGroupHeader label={SHARED_FAILURE_GROUP} count={shared.length} />
+              <Box>{shared.slice(0, INITIAL_SHARED_FAILURES).map(renderSharedFailure)}</Box>
+              {shared.length > INITIAL_SHARED_FAILURES && (
+                <>
+                  <DisclosureButton
+                    label={disclosureLabel(
+                      sharedOpen,
+                      shared.length - INITIAL_SHARED_FAILURES,
+                      "additional shared failure",
+                      "additional shared failures",
+                    )}
+                    open={sharedOpen}
+                    controls="attention-group-shared-failures"
+                    onClick={() =>
+                      setExpandedGroups((current) => ({ ...current, [SHARED_FAILURE_GROUP]: !sharedOpen }))
+                    }
+                  />
+                  <Collapse id="attention-group-shared-failures" in={sharedOpen} timeout="auto" unmountOnExit>
+                    {shared.slice(INITIAL_SHARED_FAILURES).map(renderSharedFailure)}
+                  </Collapse>
+                </>
+              )}
+            </Box>
+          )}
+
           {groups.map((group) => {
             const progressive = group.kind !== "recent";
             const initialCount = group.kind === "recent"
@@ -977,32 +1067,7 @@ export function NeedsAttention({
             };
             return (
               <Box key={group.label} component="section" aria-label={group.label} sx={{ mt: 1 }}>
-                <Box
-                  sx={{
-                    minHeight: overviewLayout.subsectionBandMinHeight,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 1,
-                    px: 1.25,
-                    py: 0.75,
-                    bgcolor: "surface.containerHigh",
-                    borderBlock: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  <Typography
-                    variant="label"
-                    component="h3"
-                    color="textSecondary"
-                    sx={overviewTypography.subsectionHeading}
-                  >
-                    {group.label}
-                  </Typography>
-                  <Typography variant="data" color="textSecondary" sx={overviewTypography.data}>
-                    {group.items.length}
-                  </Typography>
-                </Box>
+                <AttentionGroupHeader label={group.label} count={group.items.length} />
                 <Box>{initialItems.map(renderItem)}</Box>
                 {progressive && additionalItems.length > 0 && (
                   <>

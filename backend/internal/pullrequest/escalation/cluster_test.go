@@ -340,7 +340,7 @@ func TestClusterResolveReadsWhatAttributionPublishes(t *testing.T) {
 	}}, models.FlakinessReport{}, prattribution.Repository{Owner: "org", Name: "repo"})
 	prattribution.Annotate(details, baseline, prattribution.Repository{Owner: "org", Name: "repo"}, nil)
 
-	clusters := prattribution.Clusters(details)
+	clusters := prattribution.Clusters(details, baseline)
 	if len(clusters) != 1 || !clusters[0].Escalatable {
 		t.Fatalf("expected one escalatable cluster, got %+v", clusters)
 	}

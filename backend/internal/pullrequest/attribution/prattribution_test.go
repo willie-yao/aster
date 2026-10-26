@@ -45,7 +45,7 @@ func detailOnBase(number int, baseRef, jobName string, failures ...models.PullRe
 // common case a pull-request-specific failure is judged against.
 func observedBaseline(known ...string) Baseline {
 	baseline := Baseline{
-		FailingOnBase: map[string][]string{},
+		FailingOnBase: map[string][]models.BaseBranchFailure{},
 		FlakyTests:    map[string][]string{},
 		KnownTests:    map[string]bool{},
 		Observed:      true,
@@ -54,6 +54,11 @@ func observedBaseline(known ...string) Baseline {
 		baseline.KnownTests[name] = true
 	}
 	return baseline
+}
+
+// failingOnBase is one base-branch job whose newest run fails a test.
+func failingOnBase(jobName string) []models.BaseBranchFailure {
+	return []models.BaseBranchFailure{{JobID: jobName, JobName: jobName, BuildID: "base-1"}}
 }
 
 func annotateOne(t *testing.T, baseline Baseline, details []models.PullRequestDetail) *models.FailureAttribution {
@@ -76,15 +81,37 @@ func evidenceKinds(a *models.FailureAttribution) []string {
 
 func TestBaseBranchFailureRulesOutThePullRequest(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
+	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
 
 	got := annotateOne(t, baseline, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
 
 	if got.Verdict != models.AttributionPreExisting || got.Confidence != models.AttributionConfidenceHigh {
 		t.Fatalf("attribution = %+v, want high-confidence pre_existing", got)
 	}
-	if len(got.Evidence) != 1 || got.Evidence[0].Kind != models.AttributionEvidenceBaseBranch {
-		t.Errorf("evidence = %+v", got.Evidence)
+	want := models.AttributionEvidence{
+		Kind:     models.AttributionEvidenceBaseBranch,
+		Detail:   "The newest run on main of " + basePeriodicJob + " reports this test as failed.",
+		JobID:    basePeriodicJob,
+		BuildID:  "base-1",
+		TestName: testName,
+	}
+	// The evidence names the failing base run so the page can link to it.
+	if len(got.Evidence) != 1 || !reflect.DeepEqual(got.Evidence[0], want) {
+		t.Errorf("evidence = %+v, want %+v", got.Evidence, want)
+	}
+}
+
+func TestBaseBranchFailureRecordsEachFailingJob(t *testing.T) {
+	baseline := observedBaseline(testName)
+	baseline.FailingOnBase[testName] = append(failingOnBase(basePeriodicJob), failingOnBase("periodic-project-other")...)
+
+	got := annotateOne(t, baseline, []models.PullRequestDetail{detail(1, e2eJob, failure(testName))})
+
+	if len(got.Evidence) != 2 || got.Evidence[0].JobID != basePeriodicJob || got.Evidence[1].JobID != "periodic-project-other" {
+		t.Fatalf("evidence = %+v, want one item per failing base job", got.Evidence)
+	}
+	if !strings.Contains(got.Summary, basePeriodicJob+" and periodic-project-other") {
+		t.Errorf("summary = %q, want both jobs named", got.Summary)
 	}
 }
 
@@ -136,7 +163,7 @@ func TestWidespreadConfidenceScalesWithPeerCount(t *testing.T) {
 // main explains every pull request hitting it.
 func TestBaseBranchOutranksWidespread(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
+	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, failure(testName)),
 		detail(2, e2eJob, failure(testName)),
@@ -152,7 +179,7 @@ func TestBaseBranchOutranksWidespread(t *testing.T) {
 // corroboration from other pull requests.
 func TestPreExistingDoesNotRecordPeers(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{basePeriodicJob}
+	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, failure(testName)),
 		detail(2, e2eJob, failure(testName)),
@@ -331,7 +358,7 @@ func TestMissingBaseBranchDataIsInconclusive(t *testing.T) {
 // never be matched against the base branch or across unrelated jobs by name.
 func TestBuildLevelFailuresAreNotMatchedByName(t *testing.T) {
 	baseline := observedBaseline()
-	baseline.FailingOnBase[models.ProwJobExecutionFailureName] = []string{basePeriodicJob}
+	baseline.FailingOnBase[models.ProwJobExecutionFailureName] = failingOnBase(basePeriodicJob)
 	baseline.FlakyTests[models.ProwJobExecutionFailureName] = []string{basePeriodicJob}
 	details := []models.PullRequestDetail{
 		detail(1, e2eJob, buildFailure()),
@@ -417,6 +444,21 @@ func TestBuildBaselineUsesTheNewestBaseBranchRunOnly(t *testing.T) {
 	}
 	if len(baseline.FailingOnBase[testName]) != 0 {
 		t.Errorf("the newest run passed, so it must not be recorded as failing: %+v", baseline.FailingOnBase)
+	}
+}
+
+func TestBuildBaselineRecordsTheFailingRun(t *testing.T) {
+	newest := models.BuildResult{
+		BuildInfo: models.BuildInfo{BuildID: "7", RepoRefs: map[string]string{"example/project": "main"}, Started: time.Unix(2000, 0)},
+		TestCases: []models.TestCase{{Name: testName, Status: "failed"}},
+	}
+	baseline := BuildBaseline([]models.JobDetail{{
+		Name: basePeriodicJob, JobID: "periodic-id", JobType: models.JobTypePeriodic, Runs: []models.BuildResult{newest},
+	}}, models.FlakinessReport{}, testRepo)["main"]
+
+	want := []models.BaseBranchFailure{{JobID: "periodic-id", JobName: basePeriodicJob, BuildID: "7"}}
+	if got := baseline.FailingOnBase[testName]; !reflect.DeepEqual(got, want) {
+		t.Errorf("FailingOnBase = %+v, want %+v", got, want)
 	}
 }
 

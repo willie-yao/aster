@@ -30,7 +30,7 @@ func sharedDetails(t *testing.T) []models.SharedFailure {
 		clusterDetail(3, "main", e2eJob, "b3", base.Add(2*time.Hour), failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	return Clusters(details)
+	return Clusters(details, nil)
 }
 
 func TestClustersPublishesASharedFailure(t *testing.T) {
@@ -76,7 +76,7 @@ func TestClustersIgnoresZeroBuildStarts(t *testing.T) {
 		clusterDetail(2, "main", e2eJob, "b2", started, failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 1 {
 		t.Fatalf("expected 1 cluster, got %d", len(clusters))
 	}
@@ -91,7 +91,7 @@ func TestClustersNeedsSeveralPullRequests(t *testing.T) {
 		clusterDetail(1, "main", e2eJob, "b1", started, failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	if clusters := Clusters(details); len(clusters) != 0 {
+	if clusters := Clusters(details, nil); len(clusters) != 0 {
 		t.Fatalf("expected no cluster for a failure on one pull request, got %d", len(clusters))
 	}
 }
@@ -103,7 +103,7 @@ func TestClustersSeparateBaseBranches(t *testing.T) {
 		clusterDetail(2, "release-1.0", e2eJob, "b2", started, failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	if clusters := Clusters(details); len(clusters) != 0 {
+	if clusters := Clusters(details, nil); len(clusters) != 0 {
 		t.Fatalf("pull requests on different base branches must not correlate, got %d clusters", len(clusters))
 	}
 }
@@ -115,7 +115,7 @@ func TestClustersSeparateJobsForBuildLevelFailures(t *testing.T) {
 		clusterDetail(2, "main", "pull-project-unit", "b2", started, buildFailure()),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline()}, testRepo, nil)
-	if clusters := Clusters(details); len(clusters) != 0 {
+	if clusters := Clusters(details, nil); len(clusters) != 0 {
 		t.Fatalf("a build-level failure carries a generic name, so jobs must not correlate; got %d clusters", len(clusters))
 	}
 }
@@ -127,12 +127,45 @@ func TestClustersMarksBuildLevelFailures(t *testing.T) {
 		clusterDetail(2, "main", e2eJob, "b2", started, buildFailure()),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline()}, testRepo, nil)
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 1 {
 		t.Fatalf("expected 1 cluster, got %d", len(clusters))
 	}
 	if !clusters[0].BuildLevel {
 		t.Error("expected the cluster to be marked build-level")
+	}
+}
+
+func TestClustersNameTheBaseBranchFailures(t *testing.T) {
+	started := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	baseline := observedBaseline(testName)
+	baseline.FailingOnBase[testName] = append(failingOnBase("periodic-z"), failingOnBase("periodic-a")...)
+	baseline.FailingOnBase[models.ProwJobExecutionFailureName] = failingOnBase("periodic-a")
+	baselines := map[string]Baseline{"main": baseline}
+	details := []models.PullRequestDetail{
+		clusterDetail(1, "main", e2eJob, "b1", started, failure(testName), buildFailure()),
+		clusterDetail(2, "main", e2eJob, "b2", started, failure(testName), buildFailure()),
+	}
+	Annotate(details, baselines, testRepo, nil)
+
+	clusters := Clusters(details, baselines)
+	if len(clusters) != 2 {
+		t.Fatalf("expected a test and a build-level cluster, got %+v", clusters)
+	}
+	for _, cluster := range clusters {
+		if cluster.BuildLevel {
+			if len(cluster.BaseBranchFailures) != 0 {
+				t.Errorf("build-level cluster = %+v, want no base-branch match by generic name", cluster.BaseBranchFailures)
+			}
+			continue
+		}
+		if got := cluster.BaseBranchFailures; len(got) != 2 || got[0].JobName != "periodic-a" || got[1].JobName != "periodic-z" {
+			t.Errorf("base-branch failures = %+v, want both jobs ordered by name", got)
+		}
+	}
+	// Ordering the published copy must not reorder the baseline attribution read.
+	if got := baseline.FailingOnBase[testName]; got[0].JobName != "periodic-z" {
+		t.Errorf("baseline was mutated: %+v", got)
 	}
 }
 
@@ -146,7 +179,7 @@ func TestClustersEscalatableOnlyWhenNoMemberCanEscalateAlone(t *testing.T) {
 		clusterDetail(3, "main", e2eJob, "b3", started, failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 1 || !clusters[0].Escalatable {
 		t.Fatalf("a cluster whose members are all widespread must be escalatable, got %+v", clusters)
 	}
@@ -158,7 +191,7 @@ func TestClustersEscalatableOnlyWhenNoMemberCanEscalateAlone(t *testing.T) {
 		clusterDetail(2, "main", e2eJob, "b2", started, failure(testName)),
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	clusters = Clusters(details)
+	clusters = Clusters(details, nil)
 	if len(clusters) != 1 {
 		t.Fatalf("expected 1 cluster, got %d", len(clusters))
 	}
@@ -178,7 +211,7 @@ func TestClustersStaleMemberDoesNotOfferIndividualEscalation(t *testing.T) {
 	details[0].Checks[0].Stale = true
 	details[1].Checks[0].Stale = true
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 1 {
 		t.Fatalf("expected 1 cluster, got %d", len(clusters))
 	}
@@ -201,7 +234,7 @@ func TestClustersRecordOnePullRequestOnce(t *testing.T) {
 	details[0].Checks = append(details[0].Checks, newer)
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName)}, testRepo, nil)
 
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 1 {
 		t.Fatalf("expected 1 cluster, got %d", len(clusters))
 	}
@@ -223,7 +256,7 @@ func TestClustersOrderWidestFirst(t *testing.T) {
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName, narrow)}, testRepo, nil)
 
-	clusters := Clusters(details)
+	clusters := Clusters(details, nil)
 	if len(clusters) != 2 {
 		t.Fatalf("expected 2 clusters, got %d", len(clusters))
 	}
@@ -241,9 +274,9 @@ func TestClustersOrderIsStable(t *testing.T) {
 	}
 	Annotate(details, map[string]Baseline{"main": observedBaseline(testName, other)}, testRepo, nil)
 
-	first := Clusters(details)
+	first := Clusters(details, nil)
 	for range 20 {
-		again := Clusters(details)
+		again := Clusters(details, nil)
 		for j := range first {
 			if first[j].ID != again[j].ID {
 				t.Fatalf("cluster order changed between passes at %d: %q then %q", j, first[j].ID, again[j].ID)

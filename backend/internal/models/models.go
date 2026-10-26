@@ -777,8 +777,10 @@ const (
 type AttributionEvidence struct {
 	Kind   string `json:"kind"`
 	Detail string `json:"detail"`
-	// JobID and TestName point at the dashboard data backing the claim.
+	// JobID, BuildID, and TestName point at the dashboard data backing the
+	// claim.
 	JobID    string `json:"job_id,omitempty"`
+	BuildID  string `json:"build_id,omitempty"`
 	TestName string `json:"test_name,omitempty"`
 	// Paths lists the repository-relative files the claim refers to.
 	Paths []string `json:"paths,omitempty"`
@@ -933,6 +935,18 @@ type SharedFailure struct {
 	// per-pull-request escalation, which is what makes the shared failure the
 	// only remaining way to investigate it.
 	Escalatable bool `json:"escalatable"`
+	// BaseBranchFailures are the base-branch jobs whose newest run also fails
+	// this test, ordered by job name. Their published runs may already carry an
+	// analysis of the failure.
+	BaseBranchFailures []BaseBranchFailure `json:"base_branch_failures,omitempty"`
+}
+
+// BaseBranchFailure is one non-presubmit job whose newest run on a base branch
+// reports a test as failed.
+type BaseBranchFailure struct {
+	JobID   string `json:"job_id"`
+	JobName string `json:"job_name"`
+	BuildID string `json:"build_id"`
 }
 
 // SharedFailureIndex is the top-level structure for pull-request-failures.json.

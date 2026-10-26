@@ -1,6 +1,7 @@
 package attribution
 
 import (
+	"slices"
 	"sort"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 // that verdict from a dead end into a link.
 //
 // It must run after Annotate, because a member carries the verdict it received
-// and the cluster's escalatability is derived from every member's verdict.
-func Clusters(details []models.PullRequestDetail) []models.SharedFailure {
+// and the cluster's escalatability is derived from every member's verdict. It
+// reads the same baselines Annotate did, so a shared failure names the
+// base-branch runs behind its members' pre_existing verdicts.
+func Clusters(details []models.PullRequestDetail, baselines map[string]Baseline) []models.SharedFailure {
 	groups := map[failureKey]*models.SharedFailure{}
 	// Escalatability is tracked outside the published shape because it is a
 	// property of the members, and a member's own escalatability is not
@@ -60,6 +63,11 @@ func Clusters(details []models.PullRequestDetail) []models.SharedFailure {
 		// A shared failure is only the last resort when no member offers the
 		// cheaper per-pull-request path to the same analysis.
 		group.Escalatable = !individuallyEscalatable[key]
+		// Build-level failures share a generic name, so attribution never
+		// matches them against the base branch either.
+		if !group.BuildLevel {
+			group.BaseBranchFailures = baseBranchFailures(baselines[key.baseRef], key.testName)
+		}
 		out = append(out, *group)
 	}
 	sortClusters(out)
@@ -102,6 +110,14 @@ func addMember(group *models.SharedFailure, detail models.PullRequestDetail, che
 // head.
 func escalatableOnPull(check models.PullRequestCheck, failure models.PullRequestFailure) bool {
 	return !check.Stale && failure.Attribution.NeedsInvestigation()
+}
+
+// baseBranchFailures copies the base-branch jobs failing a test, ordered by job
+// name so an unchanged pass republishes the same order.
+func baseBranchFailures(baseline Baseline, testName string) []models.BaseBranchFailure {
+	failing := slices.Clone(baseline.FailingOnBase[testName])
+	sort.Slice(failing, func(i, j int) bool { return failing[i].JobName < failing[j].JobName })
+	return failing
 }
 
 // buildWindow returns the earliest and latest member build start. Zero times

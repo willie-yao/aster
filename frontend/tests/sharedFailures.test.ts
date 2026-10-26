@@ -9,6 +9,8 @@ import {
 } from "../src/lib/sharedFailureEscalation.js";
 
 import {
+  baseBranchCase,
+  baseBranchNote,
   evidenceMember,
   findSharedFailureFor,
   orderSharedFailures,
@@ -17,6 +19,7 @@ import {
   sharedFailureScope,
   sharedFailureSubject,
 } from "../src/lib/sharedFailures.js";
+import type { BuildResult, JobDetail, TestCase } from "../src/types/dashboard.js";
 import type { SharedFailure, SharedFailureMember } from "../src/types/pullRequests.js";
 
 function source(path: string): string {
@@ -145,6 +148,66 @@ test("the scope states how many pull requests and which branch", () => {
     sharedFailureScope(failure({ pull_requests: [member(1, "2026-05-01T12:00:00Z")] })),
     "1 pull request targeting main",
   );
+});
+
+test("the base-branch note names where the test already fails", () => {
+  const base = (name: string) => ({ job_id: name, job_name: name, build_id: "7" });
+
+  assert.equal(baseBranchNote(failure()), undefined);
+  assert.equal(
+    baseBranchNote(failure({ base_branch_failures: [base("periodic-project-e2e")] })),
+    "Already failing on main in periodic-project-e2e",
+  );
+  assert.equal(
+    baseBranchNote(
+      failure({ base_branch_failures: [base("periodic-a"), base("periodic-b"), base("periodic-c")] }),
+      (name) => name.replace("periodic-", ""),
+    ),
+    "Already failing on main in a and 2 other jobs",
+  );
+});
+
+test("the base-branch case is the failing test in the named run, preferring an analysis", () => {
+  const testCase = (overrides: Partial<TestCase>): TestCase => ({
+    name: "[It] creates a cluster",
+    status: "failed",
+    duration_seconds: 1,
+    ...overrides,
+  } as TestCase);
+  const analyzed = testCase({ suite_name: "analyzed", ai_analysis: { root_cause: "x" } as TestCase["ai_analysis"] });
+  const run = (buildID: string, cases: TestCase[]) => ({ build_id: buildID, test_cases: cases } as BuildResult);
+  const detail = {
+    runs: [
+      run("6", [analyzed]),
+      run("7", [
+        testCase({ status: "passed" }),
+        testCase({ name: "other", ai_analysis: analyzed.ai_analysis }),
+        testCase({ suite_name: "plain" }),
+        analyzed,
+      ]),
+    ],
+  } as JobDetail;
+  const base = { job_id: "periodic", job_name: "periodic", build_id: "7" };
+
+  const found = baseBranchCase(detail, base, "[It] creates a cluster");
+  assert.equal(found?.run.build_id, "7");
+  assert.equal(found?.testCase, analyzed);
+  assert.equal(baseBranchCase(detail, { ...base, build_id: "8" }, "[It] creates a cluster"), undefined);
+  assert.equal(baseBranchCase(null, base, "[It] creates a cluster"), undefined);
+  // A run that reports the test without an analysis still yields it, so the page can link the run.
+  const plain = baseBranchCase({ runs: [run("7", [testCase({})])] } as JobDetail, base, "[It] creates a cluster");
+  assert.equal(plain?.testCase.ai_analysis, undefined);
+});
+
+test("the shared failure view reuses the test analysis panel for the base-branch run", () => {
+  const page = source("src/pages/SharedFailurePage.tsx");
+
+  assert.match(page, /failure\.base_branch_failures\?\.map\(\(base\) =>/);
+  assert.match(page, /useJobDetail\(base\.job_id\)/);
+  assert.match(page, /<AnalysisBriefing/);
+  assert.match(page, /<AiAnalysisPanel/);
+  assert.match(page, /chatRef=\{\{/);
+  assert.match(page, /to=\{runPath\}/);
 });
 
 test("a failure is matched to its cluster on the whole correlation key", () => {

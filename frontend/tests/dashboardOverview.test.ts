@@ -387,6 +387,8 @@ test("overview count labels place dynamic counts in Needs attention", () => {
   assert.equal(needsAttentionSummary(5, 12, false, false), "5 recurring patterns · 12 test alerts");
   assert.equal(needsAttentionSummary(null, null, true, false), "recurring patterns loading · test alerts loading");
   assert.equal(needsAttentionSummary(null, null, false, true), "recurring patterns unavailable · test alerts unavailable");
+  assert.equal(needsAttentionSummary(5, 12, false, false, 0), "5 recurring patterns · 12 test alerts");
+  assert.equal(needsAttentionSummary(1, 0, false, false, 2), "1 recurring pattern · 0 test alerts · 2 shared PR failures");
 });
 
 test("recurring pattern ranking leads with an active same-cause streak", () => {

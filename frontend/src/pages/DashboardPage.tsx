@@ -2,7 +2,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import { useDashboard, useFlakinessReport } from "../hooks/useData";
+import { useDashboard, useFlakinessReport, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   timeAgo,
@@ -84,6 +84,7 @@ export function DashboardPage() {
   const { data, loading, error } = useDashboard();
   const attention = useFlakinessReport();
   const manifest = useManifest();
+  const shared = useSharedFailures(manifest.pull_requests?.enabled ?? false);
   const categoryLabels = useMemo(
     () => categoryLabelsFromRules(manifest.categories),
     [manifest.categories],
@@ -111,7 +112,7 @@ export function DashboardPage() {
   }
 
   useLayoutEffect(() => {
-    if (!data || attention.loading || restoredScroll.current) return;
+    if (!data || attention.loading || shared.loading || restoredScroll.current) return;
     const frame = requestAnimationFrame(() => {
       restoredScroll.current = true;
       if (initialHistoryState.current.scrollY > 0) {
@@ -126,7 +127,7 @@ export function DashboardPage() {
       target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [attention.loading, data, location.hash]);
+  }, [attention.loading, data, location.hash, shared.loading]);
 
   useEffect(() => {
     let frame = 0;
@@ -215,6 +216,7 @@ export function DashboardPage() {
         loading={attention.loading}
         error={attention.error}
         jobsByID={jobsByID}
+        sharedFailures={shared.data?.failures ?? null}
       />
 
       <Box component="section" aria-labelledby="job-ledger-heading">

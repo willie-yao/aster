@@ -100,12 +100,13 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 	details := result.Details
 	changes := p.pullRequestChanges(ctx, client, repo, details)
 	attributionRepo := prattribution.Repository{Owner: repo.Owner, Name: repo.Name}
-	prattribution.Annotate(details, res.attributionBaseline(attributionRepo), attributionRepo, changes)
+	baselines := res.attributionBaseline(attributionRepo)
+	prattribution.Annotate(details, baselines, attributionRepo, changes)
 	index := result.Index
 	// Clustering reads the verdicts Annotate just attached, so it runs after it.
 	shared := models.SharedFailureIndex{
 		Repo:     index.Repo,
-		Failures: prattribution.Clusters(details),
+		Failures: prattribution.Clusters(details, baselines),
 	}
 
 	index.GeneratedAt = time.Now().UTC()
