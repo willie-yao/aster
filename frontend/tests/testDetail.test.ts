@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { summarizeTestHistory } from "../src/lib/testDetail.js";
+import { fixPatternsForRun, summarizeTestHistory } from "../src/lib/testDetail.js";
 import { DEFAULT_PERSISTENT_AFTER, persistentAfter } from "../src/lib/attention.js";
 import type { Manifest } from "../src/types/manifest.js";
-import type { TestCase } from "../src/types/dashboard.js";
+import type { PatternAnalysis, TestCase } from "../src/types/dashboard.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -131,7 +131,7 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.match(page, /traceRef=\{traceRef\}/);
   assert.match(page, /fixPatterns=\{fixPatterns\}/);
   assert.doesNotMatch(page, /patternLifecycleActive\(pattern\.lifecycle\)|chat_fix_min_confidence|meetsConfidenceFloor/);
-  assert.match(page, /!pattern\.recurrence_classification/);
+  assert.match(page, /fixPatternsForRun\(data\.pattern_analyses, selectedRun\.build_id\)/);
   assert.match(page, /chatRef=\{\{/);
   assert.match(page, /title="Stack trace"/);
   assert.match(page, /aria-expanded=\{stackOpen\}/);
@@ -150,4 +150,23 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.doesNotMatch(page, /<Panel/);
   assert.doesNotMatch(page, /<StatusChip/);
   assert.doesNotMatch(page, /ai-aurora/);
+});
+
+test("a fix can cite only identified, non-recurrence patterns that include its run", () => {
+  const pattern = (id: string, overrides: Partial<PatternAnalysis> = {}) => ({
+    id,
+    content_hash: `hash-${id}`,
+    shared_builds: ["7"],
+    ...overrides,
+  } as PatternAnalysis);
+  const patterns = [
+    pattern("eligible"),
+    pattern("other-run", { shared_builds: ["8"] }),
+    pattern("recurrence", { recurrence_classification: "shared_cause" }),
+    pattern("", {}),
+    pattern("unhashed", { content_hash: "" }),
+  ];
+
+  assert.deepEqual(fixPatternsForRun(patterns, "7").map((p) => p.id), ["eligible"]);
+  assert.deepEqual(fixPatternsForRun(undefined, "7"), []);
 });

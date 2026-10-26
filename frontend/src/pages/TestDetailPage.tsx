@@ -33,7 +33,12 @@ import {
 } from "../lib/utils";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
-import { summarizeTestHistory } from "../lib/testDetail";
+import {
+  firstSentence,
+  fixPatternsForRun,
+  summarizeTestHistory,
+  testRunFileContext,
+} from "../lib/testDetail";
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
 import { DetailSectionBand } from "../components/DetailSectionBand";
@@ -57,11 +62,6 @@ function normalizeMessage(message: string): string {
     .replace(/\d+/gu, "…")
     .replace(/…[.…]+/gu, "…")
     .trim();
-}
-
-function firstSentence(value: string): string {
-  const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
-  return match?.[0].trim() || value.trim();
 }
 
 interface TestOccurrence {
@@ -284,22 +284,11 @@ export function TestDetailPage() {
   const selectedMetadataCase = selectedTestCase ?? latestTestCase;
 
   const fixPatterns: PatternAnalysis[] = selectedRun
-    ? (data.pattern_analyses ?? []).filter(
-        (pattern) =>
-          !pattern.recurrence_classification &&
-          Boolean(pattern.id) &&
-          Boolean(pattern.content_hash) &&
-          Boolean(pattern.shared_builds?.includes(selectedRun.build_id)),
-      )
+    ? fixPatternsForRun(data.pattern_analyses, selectedRun.build_id)
     : [];
 
   const selectedFileContext = selectedTestCase
-    ? {
-        buildLogUrl: selectedRun?.build_log_url,
-        clusterArtifacts: selectedTestCase.cluster_artifacts,
-        webUrl: selectedRun?.web_url,
-        fileLinks: selectedTestCase.ai_analysis?.file_links,
-      }
+    ? testRunFileContext(selectedRun, selectedTestCase)
     : {};
 
   const traceRef =

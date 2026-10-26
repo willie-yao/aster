@@ -220,7 +220,7 @@ func TestMissingChangedFilesLeaveTheBaselineVerdict(t *testing.T) {
 // explains is not made more explicable by touching changed code.
 func TestOverlapDoesNotOverrideAnExplainedVerdict(t *testing.T) {
 	baseline := observedBaseline(testName)
-	baseline.FailingOnBase[testName] = []string{"periodic-project-e2e"}
+	baseline.FailingOnBase[testName] = failingOnBase("periodic-project-e2e")
 	details := []models.PullRequestDetail{detail(1, e2eJob,
 		locatedFailure(testName, "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:412", e2eSiteURL))}
 

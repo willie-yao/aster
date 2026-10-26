@@ -19,6 +19,7 @@ import { useManifest } from "../hooks/useManifest";
 import {
   attributionLabel,
   attributionTone,
+  baseBranchRunPath,
   checkState,
   checkStatusLabel,
   checkSummaryLine,
@@ -149,15 +150,26 @@ function AttributionBanner({
       <Typography color="textPrimary" sx={{ mt: 0.5, ...overviewTypography.secondaryBody }}>
         {attribution.summary}
       </Typography>
-      {attribution.evidence?.map((item, index) => (
-        <Typography
-          key={`${item.kind}-${index}`}
-          color="textSecondary"
-          sx={{ mt: 0.5, ...overviewTypography.description }}
-        >
-          {item.detail}
-        </Typography>
-      ))}
+      {attribution.evidence?.map((item, index) => {
+        const runPath = baseBranchRunPath(item);
+        return (
+          <Typography
+            key={`${item.kind}-${index}`}
+            color="textSecondary"
+            sx={{ mt: 0.5, ...overviewTypography.description }}
+          >
+            {item.detail}
+            {runPath && (
+              <>
+                {" "}
+                <Link component={RouterLink} to={runPath} underline="none">
+                  Open the failing run
+                </Link>
+              </>
+            )}
+          </Typography>
+        );
+      })}
       {cluster && (
         <Link
           component={RouterLink}

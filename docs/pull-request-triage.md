@@ -84,9 +84,12 @@ A shared failure:
 - has a stable ID derived from that key;
 - records each member pull request, build, and attribution;
 - reports only the oldest and newest member builds observed in the current pass;
+- names the base-branch jobs whose newest run also fails the test, when any do;
 - is `escalatable` only when no member already offers the cheaper single-pull-request escalation path.
 
 Clustering uses no model calls and is published by both deployment paths.
+
+When the base branch already fails the test, the shared failure page shows that base-branch run's published analysis with the same panel, chat, and fix path as the test page. A `pre_existing` verdict on a pull request page links to the same run. The overview's Needs attention section lists every shared failure, widest first.
 
 ## Optional bot comment
 

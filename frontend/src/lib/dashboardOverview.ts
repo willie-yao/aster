@@ -258,12 +258,16 @@ export function needsAttentionSummary(
   testAlerts: number | null,
   loading: boolean,
   failed: boolean,
+  sharedFailures = 0,
 ): string {
   if (loading) return "recurring patterns loading · test alerts loading";
   if (failed || recurringPatterns === null || testAlerts === null) {
     return "recurring patterns unavailable · test alerts unavailable";
   }
-  return `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(testAlerts, "test alert")}`;
+  const summary = `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(testAlerts, "test alert")}`;
+  return sharedFailures > 0
+    ? `${summary} · ${countLabel(sharedFailures, "shared PR failure")}`
+    : summary;
 }
 
 export function disclosureLabel(

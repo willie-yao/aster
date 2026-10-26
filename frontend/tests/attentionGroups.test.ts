@@ -19,6 +19,7 @@ import type {
   TestFlakiness,
 } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
+import type { SharedFailure } from "../src/types/pullRequests.js";
 
 const { NeedsAttention, ManifestContext, defaultTheme } = await withSSR(async (vite) => {
   const { NeedsAttention } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
@@ -27,6 +28,7 @@ const { NeedsAttention, ManifestContext, defaultTheme } = await withSSR(async (v
       loading: boolean;
       error: string | null;
       jobsByID: Record<string, JobSummary>;
+      sharedFailures?: SharedFailure[] | null;
     }) => ReturnType<typeof createElement>;
   };
   const { ManifestContext } = (await vite.ssrLoadModule("/src/hooks/useManifest.ts")) as {
@@ -55,7 +57,11 @@ function manifest(threshold?: number): Manifest {
   } as Manifest;
 }
 
-function renderAttention(report: FlakinessReport, threshold?: number): string {
+function renderAttention(
+  report: FlakinessReport,
+  threshold?: number,
+  sharedFailures: SharedFailure[] | null = null,
+): string {
   return renderToStaticMarkup(
     createElement(
       ThemeProvider,
@@ -71,6 +77,7 @@ function renderAttention(report: FlakinessReport, threshold?: number): string {
             loading: false,
             error: null,
             jobsByID: {},
+            sharedFailures,
           }),
         ),
       ),
@@ -235,4 +242,52 @@ test("a currently failing test still reads as failing outside the pass-rate grou
   assert.match(markup, /Recent failures/);
   assert.match(markup, /Failing/);
   assert.match(markup, /2 consecutive failures/);
+});
+
+function sharedFailure(id: string, pulls: number, overrides: Partial<SharedFailure> = {}): SharedFailure {
+  return {
+    id,
+    base_ref: "main",
+    job_name: "pull-example-e2e",
+    job_id: "example/example/pull-example-e2e",
+    test_name: `[It] ${id}`,
+    pull_requests: Array.from({ length: pulls }, (_, index) => ({
+      number: index + 1,
+      build_id: `b${index + 1}`,
+      started: "2026-03-15T12:00:00Z",
+    })),
+    oldest_build_started: "2026-03-15T12:00:00Z",
+    newest_build_started: "2026-03-15T12:00:00Z",
+    escalatable: false,
+    ...overrides,
+  };
+}
+
+test("needs attention lists failures shared across pull requests, widest first", () => {
+  const html = renderAttention(report(), undefined, [
+    sharedFailure("narrow", 2),
+    sharedFailure("wide", 3, {
+      base_branch_failures: [{ job_id: "periodic-example", job_name: "periodic-example", build_id: "7" }],
+    }),
+    sharedFailure("third", 2),
+    sharedFailure("fourth", 2),
+  ]);
+
+  assert.match(html, /aria-label="Failing across pull requests"/);
+  assert.match(html, /4 shared PR failures/);
+  assert.doesNotMatch(html, /No active test alerts/);
+  assert.ok(html.indexOf("/pull-requests/shared/wide") < html.indexOf("/pull-requests/shared/narrow"));
+  assert.match(html, /href="\/pull-requests\/shared\/wide"/);
+  assert.match(html, /3 pull requests targeting main/);
+  assert.match(html, /Already failing on main in periodic-example/);
+  // Three lead and the rest wait behind a disclosure.
+  assert.match(html, /Show 1 additional shared failure/);
+});
+
+test("needs attention omits the shared group when triage publishes none", () => {
+  const html = renderAttention(report(), undefined, []);
+
+  assert.doesNotMatch(html, /Failing across pull requests/);
+  assert.doesNotMatch(html, /shared PR failure/);
+  assert.match(html, /No active test alerts/);
 });

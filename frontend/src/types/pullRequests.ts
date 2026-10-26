@@ -35,7 +35,10 @@ export type AttributionConfidence = "high" | "medium" | "low";
 export interface AttributionEvidence {
   kind: string;
   detail: string;
+  // job_id, build_id, and test_name point at the dashboard data backing the
+  // claim. A pre_existing verdict sets all three for each failing base run.
   job_id?: string;
+  build_id?: string;
   test_name?: string;
   // Repository-relative files the claim refers to.
   paths?: string[];
@@ -120,6 +123,17 @@ export interface SharedFailure {
   newest_build_started: string;
   // Set when no member can already be analyzed from its own pull request.
   escalatable: boolean;
+  // Base-branch jobs whose newest run also fails this test, ordered by job
+  // name. Their published runs may already carry an analysis.
+  base_branch_failures?: BaseBranchFailure[];
+}
+
+// BaseBranchFailure is one non-presubmit job whose newest run on the base
+// branch fails the shared test, mirroring models.BaseBranchFailure.
+export interface BaseBranchFailure {
+  job_id: string;
+  job_name: string;
+  build_id: string;
 }
 
 export interface SharedFailureIndex {

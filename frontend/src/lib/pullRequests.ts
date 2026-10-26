@@ -1,4 +1,6 @@
+import { testRunPath } from "./routes.js";
 import type {
+  AttributionEvidence,
   AttributionVerdict,
   PullRequestCIState,
   PullRequestCheck,
@@ -162,6 +164,15 @@ export function attributionTone(
     default:
       return "default";
   }
+}
+
+// baseBranchRunPath links base-branch evidence to the run that fails the same
+// test, where its analysis is published. Evidence that names no run has no link.
+export function baseBranchRunPath(evidence: AttributionEvidence): string | undefined {
+  if (evidence.kind !== "base_branch" || !evidence.job_id || !evidence.build_id || !evidence.test_name) {
+    return undefined;
+  }
+  return testRunPath(evidence.job_id, evidence.test_name, evidence.build_id);
 }
 
 // needsInvestigation reports whether a failure was left for a human, which is

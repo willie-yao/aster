@@ -1,4 +1,9 @@
-import type { SharedFailure, SharedFailureMember } from "../types/pullRequests.js";
+import type { BuildResult, JobDetail, TestCase } from "../types/dashboard.js";
+import type {
+  BaseBranchFailure,
+  SharedFailure,
+  SharedFailureMember,
+} from "../types/pullRequests.js";
 
 // orderSharedFailures leads with the failure hitting the most pull requests,
 // then the most recently observed. The remaining comparisons are on the
@@ -26,6 +31,37 @@ export function sharedFailureScope(failure: SharedFailure): string {
   const count = failure.pull_requests.length;
   const pulls = count === 1 ? "1 pull request" : `${count} pull requests`;
   return failure.base_ref ? `${pulls} targeting ${failure.base_ref}` : pulls;
+}
+
+// baseBranchNote names where the base branch already fails the shared test, or
+// returns undefined when it does not.
+export function baseBranchNote(
+  failure: SharedFailure,
+  shorten: (jobName: string) => string = (jobName) => jobName,
+): string | undefined {
+  const jobs = failure.base_branch_failures ?? [];
+  if (jobs.length === 0) return undefined;
+  const others = jobs.length - 1;
+  const where = others === 0
+    ? shorten(jobs[0].job_name)
+    : `${shorten(jobs[0].job_name)} and ${others} other ${others === 1 ? "job" : "jobs"}`;
+  return `Already failing on ${failure.base_ref} in ${where}`;
+}
+
+// baseBranchCase finds the failing case a base-branch run reported for the
+// shared test, preferring one that carries an analysis.
+export function baseBranchCase(
+  detail: JobDetail | null | undefined,
+  failure: BaseBranchFailure,
+  testName: string,
+): { run: BuildResult; testCase: TestCase } | undefined {
+  const run = detail?.runs.find((candidate) => candidate.build_id === failure.build_id);
+  if (!run) return undefined;
+  const failing = (run.test_cases ?? []).filter(
+    (testCase) => testCase.name === testName && testCase.status === "failed",
+  );
+  const testCase = failing.find((candidate) => candidate.ai_analysis) ?? failing[0];
+  return testCase ? { run, testCase } : undefined;
 }
 
 // findSharedFailure locates one cluster by its published id.

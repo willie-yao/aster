@@ -1,23 +1,31 @@
+import AutoAwesome from "@mui/icons-material/AutoAwesome";
 import OpenInNew from "@mui/icons-material/OpenInNew";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { Link as RouterLink, useParams } from "react-router-dom";
+import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
+import { AnalysisBriefing } from "../components/AnalysisBriefing";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { ErrorState } from "../components/ErrorState";
 import { EscalationPanel } from "../components/EscalationPanel";
 import { LoadingState } from "../components/LoadingState";
+import { RichText } from "../components/RichText";
 import { RunMetadata } from "../components/RunMetadata";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { useSharedFailures } from "../hooks/useData";
+import { useJobDetail, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { attributionLabel } from "../lib/pullRequests";
-import { jobPath, pullRequestPath, pullRequestsPath } from "../lib/routes";
+import { jobPath, pullRequestPath, pullRequestsPath, testRunPath } from "../lib/routes";
 import {
+  baseBranchCase,
+  baseBranchNote,
   evidenceMember,
   findSharedFailure,
+  sharedFailureAnalyzable,
   sharedFailureBlockedReason,
   sharedFailureScope,
   sharedFailureSubject,
@@ -26,8 +34,14 @@ import {
   getSharedFailureEscalation,
   startSharedFailureEscalation,
 } from "../lib/sharedFailureEscalation";
+import { firstSentence, fixPatternsForRun, testRunFileContext } from "../lib/testDetail";
+import { shortJobName } from "../lib/utils";
 import { overviewTypography } from "../theme/overview";
-import type { SharedFailure, SharedFailureMember } from "../types/pullRequests";
+import type {
+  BaseBranchFailure,
+  SharedFailure,
+  SharedFailureMember,
+} from "../types/pullRequests";
 
 function formatTimestamp(value: string | undefined): string {
   if (!value) return "Not available";
@@ -137,6 +151,95 @@ function SharedFailureEscalation({ failure, enabled }: { failure: SharedFailure;
   );
 }
 
+// BaseBranchAnalysis shows the base-branch run that also fails the shared test,
+// with the same analysis panel, chat, and fix path the test page offers. A run
+// with no published analysis is linked instead.
+function BaseBranchAnalysis({
+  base,
+  failure,
+  escalationOffered,
+}: {
+  base: BaseBranchFailure;
+  failure: SharedFailure;
+  escalationOffered: boolean;
+}) {
+  const manifest = useManifest();
+  const jobName = shortJobName(base.job_name, manifest.short_name_prefix ?? "");
+  const { data, loading, error } = useJobDetail(base.job_id);
+  const found = baseBranchCase(data, base, failure.test_name);
+  const runPath = testRunPath(base.job_id, failure.test_name, base.build_id);
+  const runLink = (
+    <Link component={RouterLink} to={runPath} underline="none">
+      {jobName} build {base.build_id}
+    </Link>
+  );
+  const analysis = found?.testCase.ai_analysis;
+
+  if (!found || !analysis) {
+    const message = loading
+      ? "Loading the base-branch run."
+      : error
+        ? "The base-branch run could not be loaded."
+        : "No analysis is published for this run.";
+    return (
+      <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
+        <DetailSectionBand title="Base branch run" metadata={jobName} />
+        <Typography color="textSecondary" sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, ...overviewTypography.secondaryBody }}>
+          The newest run of {runLink} on {failure.base_ref} also fails this test. {message}
+        </Typography>
+      </Box>
+    );
+  }
+
+  const { run, testCase } = found;
+  const fileCtx = testRunFileContext(run, testCase);
+  const jobID = data?.job_id ?? base.job_id;
+  return (
+    <AnalysisBriefing
+      title="Base branch analysis"
+      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
+      metadata={`${analysis.severity} severity · ${jobName}`}
+      mobileNotice={analysis.disposition !== "citations_verified" ? (
+        <Alert severity="warning" variant="outlined">
+          Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
+        </Alert>
+      ) : undefined}
+      summary={(
+        <RichText
+          text={testCase.ai_summary?.summary ?? firstSentence(analysis.root_cause)}
+          fileCtx={fileCtx}
+        />
+      )}
+      details={(
+        <>
+          <Typography color="textSecondary" sx={overviewTypography.description}>
+            Read from {runLink}, the newest run on {failure.base_ref}. Confirm the pull request failures match it before relying on it.
+            {escalationOffered && " Investigate a pull request build below only if its failure looks different."}
+          </Typography>
+          <AiAnalysisPanel
+            analysis={analysis}
+            fileCtx={fileCtx}
+            buildWebURL={run.web_url}
+            traceRef={{ job_id: jobID, build_id: run.build_id, test_name: testCase.name }}
+            fixPatterns={fixPatternsForRun(data?.pattern_analyses, run.build_id)}
+            chatRef={{
+              job_id: jobID,
+              build_id: run.build_id,
+              test_name: testCase.name,
+              suite_name: testCase.suite_name,
+              class_name: testCase.class_name,
+              junit_file: testCase.junit_file,
+              analysis_generated_at: analysis.generated_at,
+            }}
+            appearance="detail"
+            severityInHeader
+          />
+        </>
+      )}
+    />
+  );
+}
+
 export function SharedFailurePage() {
   const { id } = useParams<{ id: string }>();
   const manifest = useManifest();
@@ -206,6 +309,9 @@ export function SharedFailurePage() {
   }
 
   const evidence = evidenceMember(failure);
+  const prefix = manifest.short_name_prefix ?? "";
+  const baseNote = baseBranchNote(failure, (jobName) => shortJobName(jobName, prefix));
+  const escalationOffered = escalationEnabled && failure.escalatable;
 
   return (
     <Stack spacing={{ xs: 2.5, sm: 3.5 }} sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}>
@@ -250,14 +356,19 @@ export function SharedFailurePage() {
         links={[]}
       />
 
+      {failure.base_branch_failures?.map((base) => (
+        <BaseBranchAnalysis
+          key={base.job_id}
+          base={base}
+          failure={failure}
+          escalationOffered={escalationEnabled && sharedFailureAnalyzable(failure)}
+        />
+      ))}
+
       <Box component="section" sx={{ minWidth: 0 }}>
         <DetailSectionBand
           title="Why this is shared"
-          metadata={
-            escalationEnabled && failure.escalatable
-              ? "One analysis for every affected pull request"
-              : undefined
-          }
+          metadata={escalationOffered ? "One analysis for every affected pull request" : undefined}
         />
         <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
           <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
@@ -268,6 +379,11 @@ export function SharedFailurePage() {
             another. The build window above covers only the builds this pass
             observed, so it is not when the failure started.
           </Typography>
+          {baseNote && (
+            <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.secondaryBody }}>
+              {baseNote}, so these pull requests did not introduce it.
+            </Typography>
+          )}
           <SharedFailureEscalation failure={failure} enabled={escalationEnabled} />
         </Box>
       </Box>

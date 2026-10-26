@@ -7,6 +7,7 @@ import * as ts from "typescript";
 import {
   attributionLabel,
   attributionTone,
+  baseBranchRunPath,
   checkState,
   checkStatusLabel,
   checkSummaryLine,
@@ -184,6 +185,7 @@ test("pull request routes receive route-specific page titles", () => {
   assert.equal(pageTitleForPath("/pull-requests/6209"), "Pull request checks");
   assert.equal(pageTitleForPath("/pull-requests//6209"), "Page not found");
   assert.equal(pageTitleForPath("/pull-requests/6209/extra"), "Page not found");
+  assert.equal(pageTitleForPath("/pull-requests/shared/bd4060d134cf681d"), "Shared failure");
 });
 
 test("the pull request nav tab and routes are gated on the manifest", () => {
@@ -366,6 +368,25 @@ test("the attribution banner leads each failure and cites its evidence", () => {
   assert.ok(
     detail.indexOf("<AttributionBanner") < detail.indexOf("{failure.failure_message &&"),
   );
+  assert.match(detail, /const runPath = baseBranchRunPath\(item\)/);
+});
+
+test("base-branch evidence links to the run that fails the same test", () => {
+  const evidence = {
+    kind: "base_branch",
+    detail: "The newest run on main of periodic-e2e reports this test as failed.",
+    job_id: "periodic-e2e",
+    build_id: "42",
+    test_name: "[It] creates a cluster",
+  };
+
+  assert.equal(
+    baseBranchRunPath(evidence),
+    "/job/periodic-e2e/test/%5BIt%5D%20creates%20a%20cluster?run=42",
+  );
+  // Evidence that names no run, or is not about the base branch, has no link.
+  assert.equal(baseBranchRunPath({ ...evidence, build_id: undefined }), undefined);
+  assert.equal(baseBranchRunPath({ ...evidence, kind: "other_pull_requests" }), undefined);
 });
 
 test("outbound pull request links cannot reach the opener", () => {

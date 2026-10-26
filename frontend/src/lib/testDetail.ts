@@ -1,4 +1,40 @@
-import type { TestCase } from "../types/dashboard";
+import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
+import type { FileToUrlContext } from "./utils";
+
+// firstSentence returns the leading sentence of an analysis for a synopsis.
+export function firstSentence(value: string): string {
+  const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
+  return match?.[0].trim() || value.trim();
+}
+
+// testRunFileContext resolves artifact and source links for one test case in
+// one run.
+export function testRunFileContext(
+  run: BuildResult | null | undefined,
+  testCase: TestCase,
+): FileToUrlContext {
+  return {
+    buildLogUrl: run?.build_log_url,
+    clusterArtifacts: testCase.cluster_artifacts,
+    webUrl: run?.web_url,
+    fileLinks: testCase.ai_analysis?.file_links,
+  };
+}
+
+// fixPatternsForRun selects the published patterns a fix from this run can
+// cite.
+export function fixPatternsForRun(
+  patterns: PatternAnalysis[] | undefined,
+  buildID: string,
+): PatternAnalysis[] {
+  return (patterns ?? []).filter(
+    (pattern) =>
+      !pattern.recurrence_classification &&
+      Boolean(pattern.id) &&
+      Boolean(pattern.content_hash) &&
+      Boolean(pattern.shared_builds?.includes(buildID)),
+  );
+}
 
 export interface TestHistoryOccurrence {
   testCase: Pick<TestCase, "status"> | null;

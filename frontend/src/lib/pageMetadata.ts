@@ -6,6 +6,7 @@ const pageRoutes = [
   { path: "/flaky", title: "Failure Trends" },
   { path: "/pull-requests", title: "Pull Requests" },
   { path: "/pull-requests/:number", title: "Pull request checks" },
+  { path: "/pull-requests/shared/:id", title: "Shared failure" },
   { path: "/analysis-health", title: "Analysis Health" },
   { path: "/investigations", title: "Investigation history" },
   { path: "/investigations/:sessionID", title: "Saved conversation" },
