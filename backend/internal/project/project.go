@@ -109,8 +109,9 @@ type PullRequests struct {
 	// Max bounds how many open pull requests one pass triages, most recently
 	// updated first. Non-positive uses the engine default.
 	Max int `yaml:"max,omitempty" json:"max,omitempty"`
-	// BuildsPerJob is how many builds are listed per presubmit before the
-	// newest is selected. Non-positive uses the engine default.
+	// BuildsPerJob is how many builds are listed per presubmit. The newest is
+	// reported, or the newest finished failure while it reruns. Non-positive
+	// uses the engine default.
 	BuildsPerJob int `yaml:"builds_per_job,omitempty" json:"builds_per_job,omitempty"`
 	// Comment optionally posts one bot comment on each newly observed pull
 	// request, linking to its triage page. It is operational configuration with

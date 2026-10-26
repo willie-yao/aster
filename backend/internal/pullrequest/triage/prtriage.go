@@ -27,8 +27,8 @@ const (
 	// DefaultMaxPullRequests bounds one pass so an unusually busy repository
 	// cannot stall a refresh.
 	DefaultMaxPullRequests = 100
-	// DefaultBuildsPerJob is how many builds are listed per presubmit before the
-	// newest is selected.
+	// DefaultBuildsPerJob is how many builds are listed per presubmit. The
+	// newest is reported, or the newest finished failure while it reruns.
 	DefaultBuildsPerJob = 3
 	// DefaultWorkers bounds concurrent per-check bucket reads.
 	DefaultWorkers = 8
@@ -192,25 +192,70 @@ func collectChecks(ctx context.Context, backend storage.Backend, pulls []ghpr.Pu
 }
 
 // newestCheck observes the newest build of one presubmit on one pull request.
-// A nil check means the presubmit has not run on that pull request.
+// While that build reruns a revision whose newest finished build failed, the
+// check reports that failure instead, so a retest does not hide it. A nil check
+// means the presubmit has not run on that pull request.
 func newestCheck(ctx context.Context, backend storage.Backend, pull ghpr.PullRequest, job jobconfig.JobDefinition, opts Options) (*models.PullRequestCheck, error) {
-	pullNumber := strconv.Itoa(pull.Number)
-	builds, err := prowbuild.ListPullBuilds(ctx, backend, job.Repo, pullNumber, job.Name, opts.BuildsPerJob)
+	builds, err := prowbuild.ListPullBuilds(ctx, backend, job.Repo, strconv.Itoa(pull.Number), job.Name, opts.BuildsPerJob)
 	if err != nil {
 		return nil, fmt.Errorf("listing builds: %w", err)
 	}
 	if len(builds) == 0 {
 		return nil, nil
 	}
+	observed, err := observeBuild(ctx, backend, pull, job, builds[0].ID)
+	if err != nil {
+		return nil, err
+	}
+	if running(observed.check) {
+		if previous, ok := lastFinishedFailure(ctx, backend, pull, job, observed.check.TestedSHA, builds[1:]); ok {
+			previous.check.RerunBuildID = observed.check.BuildID
+			observed = previous
+		}
+	}
+	check := observed.check
+	if check.Passed || running(check) {
+		return &check, nil
+	}
+	failures, err := failingCases(ctx, backend, observed.loc)
+	if err != nil {
+		// A build whose JUnit is unreadable is still a reportable failure.
+		log.Printf("    ⚠ pr #%d %s/%s: %v", pull.Number, job.Name, check.BuildID, err)
+		return &check, nil
+	}
+	// A job can fail without any failing JUnit case, for example a build or
+	// verify step. Stand in a build-level failure so the check still names a
+	// subject, matching how the job pipeline reports the same situation.
+	if failures.total == 0 && failures.complete && !failures.truncated {
+		failures.cases = []models.PullRequestFailure{{TestCase: models.NewProwJobExecutionFailure(observed.durationSeconds)}}
+		failures.total = 1
+	}
+	check.TestsFailed = failures.total
+	check.Failures = failures.cases
+	check.FailuresTruncated = failures.total > len(failures.cases)
+	return &check, nil
+}
+
+// observedBuild is one presubmit build's check, before its failing cases are
+// read, and where those cases live.
+type observedBuild struct {
+	check           models.PullRequestCheck
+	loc             prowbuild.BuildLocation
+	durationSeconds float64
+}
+
+// observeBuild reads one presubmit build's metadata.
+func observeBuild(ctx context.Context, backend storage.Backend, pull ghpr.PullRequest, job jobconfig.JobDefinition, buildID string) (observedBuild, error) {
+	pullNumber := strconv.Itoa(pull.Number)
 	loc := prowbuild.BuildLocation{
 		JobLocation: prowbuild.JobLocation{JobType: models.JobTypePresubmit, Repo: job.Repo},
 		JobName:     job.Name,
-		BuildID:     builds[0].ID,
+		BuildID:     buildID,
 		PullNumber:  pullNumber,
 	}
 	info, err := prowbuild.FetchBuildInfo(ctx, backend, loc)
 	if err != nil {
-		return nil, fmt.Errorf("fetching build info: %w", err)
+		return observedBuild{}, fmt.Errorf("fetching build info: %w", err)
 	}
 
 	check := models.PullRequestCheck{
@@ -229,26 +274,33 @@ func newestCheck(ctx context.Context, backend storage.Backend, pull ghpr.PullReq
 		check.TestedSHA = tested
 		check.Stale = pull.Head.SHA != "" && !strings.EqualFold(tested, pull.Head.SHA)
 	}
-	if check.Passed || running(check) {
-		return &check, nil
+	return observedBuild{check: check, loc: loc, durationSeconds: info.DurationSeconds}, nil
+}
+
+// lastFinishedFailure returns the newest finished build among older builds when
+// it failed on the same revision the running build tests. Running and aborted
+// builds are skipped because neither reports an outcome. A pass yields nothing,
+// because there is no failure to hide, and so does another revision, because a
+// push may have fixed the failure.
+func lastFinishedFailure(ctx context.Context, backend storage.Backend, pull ghpr.PullRequest, job jobconfig.JobDefinition, testedSHA string, builds []prowbuild.Build) (observedBuild, bool) {
+	if testedSHA == "" {
+		return observedBuild{}, false
 	}
-	failures, err := failingCases(ctx, backend, loc)
-	if err != nil {
-		// A build whose JUnit is unreadable is still a reportable failure.
-		log.Printf("    ⚠ pr #%d %s/%s: %v", pull.Number, job.Name, info.BuildID, err)
-		return &check, nil
+	for _, build := range builds {
+		observed, err := observeBuild(ctx, backend, pull, job, build.ID)
+		if err != nil {
+			log.Printf("    ⚠ pr #%d %s/%s: %v", pull.Number, job.Name, build.ID, err)
+			return observedBuild{}, false
+		}
+		if running(observed.check) || observed.check.Result == "ABORTED" {
+			continue
+		}
+		if observed.check.Passed || !strings.EqualFold(observed.check.TestedSHA, testedSHA) {
+			return observedBuild{}, false
+		}
+		return observed, true
 	}
-	// A job can fail without any failing JUnit case, for example a build or
-	// verify step. Stand in a build-level failure so the check still names a
-	// subject, matching how the job pipeline reports the same situation.
-	if failures.total == 0 && failures.complete && !failures.truncated {
-		failures.cases = []models.PullRequestFailure{{TestCase: models.NewProwJobExecutionFailure(info.DurationSeconds)}}
-		failures.total = 1
-	}
-	check.TestsFailed = failures.total
-	check.Failures = failures.cases
-	check.FailuresTruncated = failures.total > len(failures.cases)
-	return &check, nil
+	return observedBuild{}, false
 }
 
 // buildFailures is one build's failing cases plus the discovery status needed

@@ -458,6 +458,7 @@ function CheckCard({
           <Typography color="textSecondary" sx={{ mt: 0.25, ...overviewTypography.description }}>
             {checkSummaryLine(check)} · build {check.build_id} · {checkDuration(check)}
             {check.tested_sha ? ` · ${shortSHA(check.tested_sha)}` : ""}
+            {check.rerun_build_id ? ` · newer build ${check.rerun_build_id} still running` : ""}
           </Typography>
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", justifySelf: { xs: "start", sm: "end" } }}>

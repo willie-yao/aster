@@ -716,7 +716,7 @@ type PullRequestSummary struct {
 	UpdatedAt time.Time          `json:"updated_at"`
 	CIState   PullRequestCIState `json:"ci_state"`
 	// ChecksObserved counts presubmits with at least one build for this pull
-	// request. ChecksFailing counts those whose newest build did not pass.
+	// request. ChecksFailing counts those whose reported build did not pass.
 	ChecksObserved int `json:"checks_observed"`
 	ChecksFailing  int `json:"checks_failing"`
 	// FailingTests totals the failing cases across every observed check,
@@ -823,7 +823,9 @@ type PullRequestFailure struct {
 	Attribution *FailureAttribution `json:"attribution,omitempty"`
 }
 
-// PullRequestCheck is one presubmit job's newest observed build on a pull request.
+// PullRequestCheck is one presubmit job's newest observed build on a pull
+// request, or its newest finished failure while a rerun of the same revision
+// runs.
 type PullRequestCheck struct {
 	JobName string `json:"job_name"`
 	JobID   string `json:"job_id"`
@@ -841,6 +843,10 @@ type PullRequestCheck struct {
 	Stale       bool   `json:"stale,omitempty"`
 	WebURL      string `json:"web_url,omitempty"`
 	BuildLogURL string `json:"build_log_url,omitempty"`
+	// RerunBuildID names a newer build that is still running on the same
+	// revision. It is set only when the check reports the newest finished build
+	// because that build failed, so a retest does not hide the failure.
+	RerunBuildID string `json:"rerun_build_id,omitempty"`
 	// TestsFailed is the true failing-case count for the build. Failures holds
 	// at most PullRequestCheckFailureCap of them, so it can be shorter.
 	TestsFailed int                  `json:"tests_failed,omitempty"`

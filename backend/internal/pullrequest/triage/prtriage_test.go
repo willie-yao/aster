@@ -63,6 +63,7 @@ type buildSpec struct {
 	buildID    string
 	passed     bool
 	running    bool
+	aborted    bool
 	testedSHA  string
 	failures   []string
 }
@@ -89,6 +90,8 @@ func writeBucket(t *testing.T, specs []buildSpec) storage.Backend {
 			result := "FAILURE"
 			if spec.passed {
 				result = "SUCCESS"
+			} else if spec.aborted {
+				result = "ABORTED"
 			}
 			finished := fmt.Sprintf(`{"timestamp":1700000600,"passed":%t,"result":%q}`, spec.passed, result)
 			writeFile(t, filepath.Join(dir, "finished.json"), finished)
@@ -203,6 +206,74 @@ func TestCollectReportsRunningBuildsAsPending(t *testing.T) {
 	}
 	if len(details[0].Checks) != 1 {
 		t.Fatalf("checks = %+v", details[0].Checks)
+	}
+}
+
+func TestCollectKeepsTheLastFailureWhileARerunRuns(t *testing.T) {
+	backend := writeBucket(t, []buildSpec{
+		{job: "pull-e2e", pullNumber: 7, buildID: "100", failures: []string{"TestA"}},
+		{job: "pull-e2e", pullNumber: 7, buildID: "205", running: true},
+	})
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	index, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e")))
+
+	check := details[0].Checks[0]
+	if check.BuildID != "100" || check.RerunBuildID != "205" || check.Finished.IsZero() {
+		t.Fatalf("check = %+v, want finished build 100 with rerun 205", check)
+	}
+	if len(check.Failures) != 1 || check.Failures[0].Name != "TestA" || check.Stale {
+		t.Errorf("check = %+v, want the current-head failure kept", check)
+	}
+	if index.PullRequests[0].CIState != models.PullRequestCIFailing {
+		t.Errorf("ci state = %q, want FAILING", index.PullRequests[0].CIState)
+	}
+}
+
+func TestCollectReportsARerunAfterAPassAsRunning(t *testing.T) {
+	backend := writeBucket(t, []buildSpec{
+		{job: "pull-e2e", pullNumber: 7, buildID: "100", passed: true},
+		{job: "pull-e2e", pullNumber: 7, buildID: "205", running: true},
+	})
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	index, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e")))
+
+	if check := details[0].Checks[0]; check.BuildID != "205" || check.RerunBuildID != "" {
+		t.Fatalf("check = %+v, want the running build", check)
+	}
+	if index.PullRequests[0].CIState != models.PullRequestCIPending {
+		t.Errorf("ci state = %q, want PENDING", index.PullRequests[0].CIState)
+	}
+}
+
+func TestCollectSkipsAbortedBuildsWhileARerunRuns(t *testing.T) {
+	backend := writeBucket(t, []buildSpec{
+		{job: "pull-e2e", pullNumber: 7, buildID: "100", failures: []string{"TestA"}},
+		{job: "pull-e2e", pullNumber: 7, buildID: "150", aborted: true},
+		{job: "pull-e2e", pullNumber: 7, buildID: "205", running: true},
+	})
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	_, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e")))
+
+	if check := details[0].Checks[0]; check.BuildID != "100" || check.RerunBuildID != "205" {
+		t.Fatalf("check = %+v, want failed build 100 past the aborted one", check)
+	}
+}
+
+// A run on a newly pushed revision may have fixed the failure, so the previous
+// revision's failure is not kept.
+func TestCollectReportsARunOnANewRevisionAsRunning(t *testing.T) {
+	backend := writeBucket(t, []buildSpec{
+		{job: "pull-e2e", pullNumber: 7, buildID: "100", failures: []string{"TestA"}, testedSHA: oldSHA},
+		{job: "pull-e2e", pullNumber: 7, buildID: "205", running: true},
+	})
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	index, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e")))
+
+	if check := details[0].Checks[0]; check.BuildID != "205" || check.RerunBuildID != "" || len(check.Failures) != 0 {
+		t.Fatalf("check = %+v, want the running build", check)
+	}
+	if index.PullRequests[0].CIState != models.PullRequestCIPending {
+		t.Errorf("ci state = %q, want PENDING", index.PullRequests[0].CIState)
 	}
 }
 

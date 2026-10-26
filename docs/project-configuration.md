@@ -153,7 +153,7 @@ pull_requests:
 | --- | ---: | --- |
 | `pull_requests.enabled` | `false` | Publish the pull request index, detail pages, and shared-failure view. |
 | `pull_requests.max` | `100` | Bound open pull requests per pass, most recently updated first. |
-| `pull_requests.builds_per_job` | `3` | Bound builds inspected per presubmit before selecting the newest applicable build. |
+| `pull_requests.builds_per_job` | `3` | Bound builds inspected per presubmit. The newest is used, except that a rerun keeps the newest finished failure of the same revision. |
 | `pull_requests.comment.enabled` | `false` | Enable the GitHub App commenting pass. Requires triage. |
 | `pull_requests.comment.dry_run` | `true` | Log comment bodies without posting unless explicitly set to `false`. |
 | `pull_requests.comment.max_per_pass` | `10` | Bound comments posted in one pass. |
