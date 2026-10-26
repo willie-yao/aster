@@ -108,7 +108,8 @@ export function RunHistory({
         >
           {sorted.map((run, index) => {
             const isSelected = run.build_id === selectedBuildId;
-            const showDate = sorted.length <= 10 || index % 5 === 0 || index === sorted.length - 1;
+            const fromEnd = sorted.length - 1 - index;
+            const showDate = sorted.length <= 6 || fromEnd === 0 || (index % 3 === 0 && fromEnd >= 2);
             const result = resultLabelFn(run);
             const color = colorFn ? colorFn(run) : dotColorFor(theme, run.passed, run.result);
             const tooltip = `#${run.build_id} · ${result} · ${formatAccessibleDate(run.started)}`;

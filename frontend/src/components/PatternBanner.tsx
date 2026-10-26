@@ -36,14 +36,14 @@ import { lookupPreparedAnalysisChatFindings, applyPreparedFindingResolution, typ
 import { patternActionEligibilityHint, patternResolvable, patternDraftable, patternLifecycleActive, causeResolvable, patternResolutionCovered } from "../lib/actionEligibility";
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated, patternRecurrenceLabel } from "../lib/dashboardOverview";
-import { AnalysisBriefing } from "./AnalysisBriefing";
+import { AnalysisBriefing, NextStepPreview } from "./AnalysisBriefing";
 import { overviewTypography, touchTargetSx } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { CausalGroupFixButton } from "./CausalGroupFixRouting";
 import { CauseResolution } from "./CauseResolution";
 import { causeResolutionAvailable } from "../lib/resolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
-import { causalGroupEvidencePresent, causalGroupFixTarget, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
+import { causalGroupEvidencePresent, causalGroupFixTarget, causalGroupIsEarlier, causalGroupNextStep, orderCausalGroups, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
 import { accentLabelSx } from "../theme";
 
@@ -90,7 +90,10 @@ export function PatternBanner({
   // resolution state, so a cause folds when resolved without pinning it there.
   const [expandedCauses, setExpandedCauses] = useState<Record<string, boolean>>({});
   const analysisOnly = Boolean(pattern.recurrence_classification);
-  const causalGroups = pattern.causal_groups ?? [];
+  // The cause still failing leads; the cards and the summary rail share this
+  // order so "Cause 1" means the same thing in both.
+  const causalGroups = orderCausalGroups(pattern.causal_groups ?? []);
+  const causeNextSteps = causalGroups.map((group) => causalGroupNextStep(group, runs));
   // Fix proposals start from an individual failed test, so the routing is
   // only offered where a chat session could actually run one.
   const fixCapable = Boolean(features.analysis_chat && features.junit_chat_fix);
@@ -463,6 +466,14 @@ export function PatternBanner({
                         causalGroups.length > 1 ? `Cause ${index + 1} of ${causalGroups.length}` : "Cause"
                       )}
                     </Typography>
+                    {index > 0 && causalGroupIsEarlier(group, causalGroups[0]) && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label="Earlier"
+                        sx={{ borderRadius: "4px", fontWeight: 650, color: "text.secondary" }}
+                      />
+                    )}
                     {causeResolutions[index] && (
                       <Chip
                         size="small"
@@ -508,6 +519,39 @@ export function PatternBanner({
                   <Collapse in={expanded} timeout="auto" unmountOnExit>
                 <Box sx={{ px: 1.5, py: 1.5, minWidth: 0 }}>
                   <RichText text={group.root_cause} steps fileCtx={patternFileCtx} />
+                  <CausalGroupNextStep
+                    group={group}
+                    jobID={jobID}
+                    fileCtx={patternFileCtx}
+                    nextStep={causeNextSteps[index]}
+                    chat={
+                      causeChatRefs[index]
+                        ? {
+                            ref: causeChatRefs[index],
+                            baselineBuildID: causeBaselineBuildID(group, runs),
+                            fileCtx: {
+                              builds: Object.fromEntries(
+                                group.builds.flatMap((buildID) =>
+                                  buildContexts[buildID] ? [[buildID, buildContexts[buildID]]] : [],
+                                ),
+                              ),
+                              fileLinks: pattern.file_links,
+                            },
+                            preparedFinding: preparedCauses[causePreparedKeys[index]],
+                            onPreparedResolved: (ready: boolean) => recordPrepared(causePreparedKeys[index], ready),
+                          }
+                        : undefined
+                    }
+                    routing={
+                      fixCapable
+                        ? {
+                            target: causalFixTargets[index],
+                            externalCause: externalCause(group.cause_location),
+                            evidencePresent: causalEvidencePresent[index],
+                          }
+                        : undefined
+                    }
+                  />
                   <Typography
                     component="h5"
                     color="textSecondary"
@@ -544,38 +588,6 @@ export function PatternBanner({
                       </Link>
                     ))}
                   </Stack>
-                  <CausalGroupNextStep
-                    group={group}
-                    jobID={jobID}
-                    fileCtx={patternFileCtx}
-                    chat={
-                      causeChatRefs[index]
-                        ? {
-                            ref: causeChatRefs[index],
-                            baselineBuildID: causeBaselineBuildID(group, runs),
-                            fileCtx: {
-                              builds: Object.fromEntries(
-                                group.builds.flatMap((buildID) =>
-                                  buildContexts[buildID] ? [[buildID, buildContexts[buildID]]] : [],
-                                ),
-                              ),
-                              fileLinks: pattern.file_links,
-                            },
-                            preparedFinding: preparedCauses[causePreparedKeys[index]],
-                            onPreparedResolved: (ready: boolean) => recordPrepared(causePreparedKeys[index], ready),
-                          }
-                        : undefined
-                    }
-                    routing={
-                      fixCapable
-                        ? {
-                            target: causalFixTargets[index],
-                            externalCause: externalCause(group.cause_location),
-                            evidencePresent: causalEvidencePresent[index],
-                          }
-                        : undefined
-                    }
-                  />
                   {causeActionsPresent[index] && (
                     // Both of a cause's actions share one bar, so the card ends
                     // with a single place to act rather than one control buried
@@ -597,7 +609,9 @@ export function PatternBanner({
                         // build suffix and the resolution control both refuse to
                         // shrink, so side by side they would overlap.
                         alignItems: { xs: "stretch", sm: "center" },
-                        flexWrap: "wrap",
+                        // Wrapping a column lets the widest label size the whole
+                        // row, so only the side-by-side layout wraps.
+                        flexWrap: { xs: "nowrap", sm: "wrap" },
                         rowGap: 1,
                         minWidth: 0,
                       }}
@@ -753,6 +767,17 @@ export function PatternBanner({
     </Stack>
   ) : undefined;
 
+  const leadNextStep = causalGroups.length > 0 && !causeResolutions[0] ? causeNextSteps[0] : null;
+  const mobileNextStep = leadNextStep ? (
+    <NextStepPreview>
+      <RichText text={leadNextStep.suggestedFix} steps fileCtx={patternFileCtx} />
+    </NextStepPreview>
+  ) : undefined;
+
+  // With several causes the synopsis follows the lead cause, like the next step.
+  const mobileSynopsisSource =
+    (causalGroups.length > 1 ? causalGroups[0].root_cause : undefined) || (pattern.shared_root_cause ?? pattern.summary);
+
   const causeCount = causalGroups.length > 0 ? String(causalGroups.length) : "None isolated";
 
   // The band beside the title already carries builds and confidence, so this
@@ -807,7 +832,8 @@ export function PatternBanner({
       mobileNotice={mobileNotice}
       summary={<RichText text={pattern.summary} steps fileCtx={patternFileCtx} />}
       summaryAside={summaryFacts}
-      mobileSynopsis={firstSentence(pattern.shared_root_cause ?? pattern.summary)}
+      mobileNextStep={mobileNextStep}
+      mobileSynopsis={firstSentence(mobileSynopsisSource)}
       details={details}
       actions={actions}
     />

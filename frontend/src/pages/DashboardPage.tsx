@@ -22,6 +22,7 @@ import {
   overviewStatusFromParam,
   persistOverviewHistoryState,
   readOverviewHistoryState,
+  jobMatchesStatusFilter,
   withOverviewFilters,
   type OverviewStatusFilter,
 } from "../lib/dashboardOverview";
@@ -147,7 +148,7 @@ export function DashboardPage() {
   const filtered = useMemo(() => {
     if (!data) return [];
     return data.jobs.filter((job: JobSummary) => {
-      if (statusFilter !== "ALL" && job.overall_status !== statusFilter) return false;
+      if (!jobMatchesStatusFilter(job, statusFilter)) return false;
       if (branchFilter !== "ALL" && job.branch !== branchFilter) return false;
       return true;
     });

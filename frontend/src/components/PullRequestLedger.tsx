@@ -12,8 +12,8 @@ import { StatusChip } from "./StatusChip";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "72px minmax(220px, 2fr) 104px 96px 92px 96px 82px";
-const wideColumns = "84px minmax(300px, 2.4fr) 128px 108px 104px 112px 88px";
+const compactColumns = "72px minmax(220px, 2fr) 104px 72px 112px 96px 82px";
+const wideColumns = "84px minmax(300px, 2.4fr) 120px 72px 164px 112px 88px";
 const headers = ["Pull", "Title", "Base", "Checks", "Failing", "Updated", "State"];
 
 // UNKNOWN has no dashboard status equivalent, so it renders as a neutral chip.

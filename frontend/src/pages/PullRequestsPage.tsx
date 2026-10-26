@@ -111,7 +111,7 @@ export function PullRequestsPage() {
           <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
             Pull Request Triage
           </Typography>
-          <Typography color="textSecondary" sx={{ mt: 0.75, ...overviewTypography.secondaryBody }}>
+          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: "74ch", ...overviewTypography.secondaryBody }}>
             Presubmit results for open pull requests in {data.repo}
           </Typography>
         </Box>

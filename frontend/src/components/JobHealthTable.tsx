@@ -7,6 +7,8 @@ import { Link as RouterLink } from "react-router-dom";
 import type { JobSummary } from "../types/dashboard";
 import { formatDuration, formatPercent, timeAgo } from "../lib/utils";
 import { jobPath } from "../lib/routes";
+import { splitForMiddleTruncation } from "../lib/middleTruncate";
+import { runStatusLabel } from "../lib/dashboardOverview";
 import { Sparkline } from "./Sparkline";
 import { StatusChip } from "./StatusChip";
 import { overviewLayout, overviewTypography } from "../theme/overview";
@@ -29,7 +31,7 @@ const desktopQuery = "(min-width: 1024px)";
 const wideBreakpoint = "@media (min-width: 1240px)";
 const compactColumns = "minmax(168px, 2fr) 76px 288px 76px 78px 58px 82px";
 const wideColumns = "minmax(280px, 2.4fr) 104px 288px 88px 96px 64px 88px";
-const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Last run", "Duration", "Current"];
+const headers = ["Job", "Branch", "Recent runs", "Last 10 pass", "Ran", "Duration", "Latest run"];
 
 function jobValues(job: JobSummary) {
   return {
@@ -57,6 +59,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
   const { displayName } = jobValues(job);
   const description = compact ? "" : job.description;
+  const { head, tail } = splitForMiddleTruncation(displayName);
   // Both lines truncate, and the description appears nowhere else in the
   // interface. The row's one focusable element carries the recovery: a Tooltip
   // opens on hover, on focus, and on touch long-press, where the title
@@ -86,14 +89,15 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
         <Link
           component={RouterLink}
           to={jobPath(job.job_id)}
+          // The head and tail spans would otherwise add a space to the name.
+          aria-label={displayName}
           underline="none"
           sx={{
             minWidth: 0,
             minHeight: compact ? 44 : 0,
-            display: compact ? "flex" : "block",
+            display: "flex",
             alignItems: compact ? "center" : undefined,
             overflow: "hidden",
-            textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             color: "text.primary",
             ...overviewTypography.jobIdentifier,
@@ -105,7 +109,8 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
             },
           }}
         >
-          {displayName}
+          <Box component="span" sx={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{head}</Box>
+          {tail && <Box component="span" sx={{ flexShrink: 0 }}>{tail}</Box>}
         </Link>
       </Tooltip>
       {description && (
@@ -165,7 +170,7 @@ function DesktopJobRow({ job }: { job: JobSummary }) {
       <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "last", ...overviewTypography.data }}>{lastRun}</Typography>
       <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "duration", ...overviewTypography.data }}>{duration}</Typography>
       <Box role="cell" sx={{ gridArea: "status", justifySelf: "end" }}>
-        <StatusChip status={job.current_status} sx={{ height: 26, fontSize: "13px" }} />
+        <StatusChip status={job.current_status} label={runStatusLabel(job.current_status)} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
     </Box>
   );
@@ -195,12 +200,12 @@ function MobileJobRow({ job }: { job: JobSummary }) {
     >
       <Box sx={{ gridArea: "job", minWidth: 0 }}><JobLink job={job} compact /></Box>
       <Box sx={{ gridArea: "status", justifySelf: "end" }}>
-        <StatusChip status={job.current_status} sx={{ height: 26, fontSize: "13px" }} />
+        <StatusChip status={job.current_status} label={runStatusLabel(job.current_status)} sx={{ height: 26, fontSize: "13px" }} />
       </Box>
       <Box sx={{ gridArea: "meta", display: "flex", minWidth: 0, alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         <Metric label="Branch" value={job.branch || "Not set"} />
         <Metric label="Last 10 pass" value={formatPercent(job.pass_rate_recent)} />
-        <Metric label="Last" value={lastRun} />
+        <Metric label="Ran" value={lastRun} />
         <Metric label="Duration" value={duration} />
       </Box>
       <Box sx={{ gridArea: "runs", minWidth: 0 }}><Sparkline runs={job.recent_runs} jobID={job.job_id} /></Box>

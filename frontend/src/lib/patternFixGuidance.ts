@@ -46,7 +46,7 @@ export function causalGroupFixTarget(
   // The briefing shows the suggested fix from one specific build, so open that
   // build's analysis when it can start a Fix investigation. Otherwise any
   // eligible member still gives the user a way in.
-  const preferred = group.remediation?.build_id;
+  const preferred = causalGroupNextStep(group, runs)?.buildID;
   const ordered = preferred
     ? [...runs].sort((a, b) => Number(b.build_id === preferred) - Number(a.build_id === preferred))
     : runs;
@@ -66,6 +66,61 @@ export function causalGroupFixTarget(
     };
   }
   return null;
+}
+
+// compareBuildIDs orders Prow build IDs, which are decimal and grow with time.
+function compareBuildIDs(a: string, b: string): number {
+  return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+function newestBuildID(builds: string[]): string {
+  return builds.reduce((newest, id) => (compareBuildIDs(id, newest) > 0 ? id : newest), "");
+}
+
+// orderCausalGroups puts the cause that reaches the newest build first, so the
+// cause still failing leads and older ones follow. Ties keep the larger group,
+// then the engine's order.
+export function orderCausalGroups(groups: PatternCausalGroup[]): PatternCausalGroup[] {
+  return groups
+    .map((group, index) => ({ group, index, newest: newestBuildID(group.builds) }))
+    .sort((a, b) =>
+      compareBuildIDs(b.newest, a.newest) ||
+      b.group.builds.length - a.group.builds.length ||
+      a.index - b.index)
+    .map(({ group }) => group);
+}
+
+// causalGroupIsEarlier reports whether a cause stopped failing before the lead
+// cause's newest build.
+export function causalGroupIsEarlier(group: PatternCausalGroup, lead: PatternCausalGroup): boolean {
+  return compareBuildIDs(newestBuildID(group.builds), newestBuildID(lead.builds)) < 0;
+}
+
+export interface CausalGroupNextStepSource {
+  suggestedFix: string;
+  buildID: string;
+}
+
+// causalGroupNextStep returns the remediation from the newest affected build
+// that still has an analyzed failure, which is the one the Test detail page
+// shows. It falls back to the engine's carried remediation when no affected run
+// is in the window.
+export function causalGroupNextStep(
+  group: PatternCausalGroup,
+  runs: BuildResult[],
+): CausalGroupNextStepSource | null {
+  const affected = new Set(group.builds);
+  const newestFirst = runs
+    .filter((run) => affected.has(run.build_id) && !run.passed)
+    .sort((a, b) => compareBuildIDs(b.build_id, a.build_id));
+  for (const run of newestFirst) {
+    const suggestedFix = representativeAnalyzedFailure(run.test_cases)?.ai_analysis?.suggested_fix?.trim();
+    if (suggestedFix) return { suggestedFix, buildID: run.build_id };
+  }
+  const carried = group.remediation?.suggested_fix?.trim();
+  return carried && group.remediation
+    ? { suggestedFix: carried, buildID: group.remediation.build_id }
+    : null;
 }
 
 const severityRank: Record<string, number> = {

@@ -3,7 +3,7 @@ import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Typography from "@mui/material/Typography";
 import { soft, type SoftColor } from "../theme";
-import { countLabel } from "../lib/dashboardOverview";
+import { countLabel, jobMatchesStatusFilter, reliabilityLabels } from "../lib/dashboardOverview";
 import type { JobSummary } from "../types/dashboard";
 import { overviewTypography } from "../theme/overview";
 
@@ -17,29 +17,29 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
   const total = jobs.length;
   const rows: {
     label: string;
-    status: "PASSING" | "FLAKY" | "FAILING";
+    status: "HEALTHY" | "FLAKY" | "UNRELIABLE";
     count: number;
     color: Extract<SoftColor, "success" | "warning" | "error">;
     description: string;
   }[] = [
     {
-      label: "Passing",
-      status: "PASSING",
-      count: jobs.filter((job) => job.overall_status === "PASSING").length,
+      label: reliabilityLabels.HEALTHY,
+      status: "HEALTHY",
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "HEALTHY")).length,
       color: "success",
       description: "Jobs with at least a 90% pass rate across up to the last 10 published runs.",
     },
     {
-      label: "Flaky",
+      label: reliabilityLabels.FLAKY,
       status: "FLAKY",
-      count: jobs.filter((job) => job.overall_status === "FLAKY").length,
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "FLAKY")).length,
       color: "warning",
       description: "Jobs with a mix of passing and failing results across up to the last 10 published runs.",
     },
     {
-      label: "Failing",
-      status: "FAILING",
-      count: jobs.filter((job) => job.overall_status === "FAILING").length,
+      label: reliabilityLabels.UNRELIABLE,
+      status: "UNRELIABLE",
+      count: jobs.filter((job) => jobMatchesStatusFilter(job, "UNRELIABLE")).length,
       color: "error",
       description: "Jobs with a pass rate of 30% or less across up to the last 10 published runs.",
     },
@@ -96,9 +96,15 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
               minWidth: 0,
               minHeight: 70,
               display: "grid",
-              gridTemplateColumns: "auto minmax(0, 1fr) auto",
+              gridTemplateColumns: { xs: "minmax(0, 1fr) auto", sm: "auto minmax(0, 1fr) auto" },
+              // On phones the label takes the full row, so the count moves
+              // beside the percentage, and the dot gives up its column.
+              gridTemplateAreas: {
+                xs: '"label label" "percent count"',
+                sm: '"dot label count" "dot percent count"',
+              },
               alignItems: "center",
-              gap: 1,
+              columnGap: 1,
               px: { xs: 1, sm: 1.5 },
               py: 1,
               border: 0,
@@ -117,19 +123,18 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
               },
             }}
           >
-            <Box aria-hidden="true" sx={{ width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
-            <Box sx={{ minWidth: 0 }}>
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                <Typography variant="body2" component="span" sx={{ fontWeight: 600, ...overviewTypography.primaryBody }}>
-                  {row.label}
-                </Typography>
-                {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
-              </Box>
-              <Typography variant="data" component="span" color="textSecondary" sx={overviewTypography.data}>
-                {percentage}% of jobs
+            <Box aria-hidden="true" sx={{ gridArea: "dot", display: { xs: "none", sm: "block" }, width: 8, height: 8, borderRadius: "2px", bgcolor: `${row.color}.main` }} />
+            <Box sx={{ gridArea: "label", minWidth: 0, display: "flex", alignItems: "center", gap: 0.5 }}>
+              <Typography variant="body2" component="span" sx={{ fontWeight: 600, ...overviewTypography.primaryBody }}>
+                {row.label}
               </Typography>
+              {active && <Check aria-hidden="true" sx={{ fontSize: 15, color: "primary.main" }} />}
             </Box>
-            <Typography variant="stat" component="span" sx={{ fontSize: "19px", color: `${row.color}.main` }}>
+            <Typography variant="data" component="span" color="textSecondary" sx={{ gridArea: "percent", ...overviewTypography.data }}>
+              {percentage}%
+              <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}> of jobs</Box>
+            </Typography>
+            <Typography variant="stat" component="span" sx={{ gridArea: "count", fontSize: "19px", color: `${row.color}.main` }}>
               {row.count}
             </Typography>
           </ButtonBase>

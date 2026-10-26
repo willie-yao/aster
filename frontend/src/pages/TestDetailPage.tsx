@@ -49,7 +49,7 @@ import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { RunMetadata } from "../components/RunMetadata";
 import { RuntimeTrend } from "../components/RuntimeTrend";
-import { AnalysisBriefing } from "../components/AnalysisBriefing";
+import { AnalysisBriefing, NextStepPreview } from "../components/AnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { stickyRailSx } from "../theme/helpers";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
@@ -472,6 +472,11 @@ export function TestDetailPage() {
           Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
         </Alert>
       ) : undefined}
+      mobileNextStep={selectedTestCase.ai_analysis.suggested_fix.trim() ? (
+        <NextStepPreview>
+          <RichText text={selectedTestCase.ai_analysis.suggested_fix} steps fileCtx={selectedFileContext} />
+        </NextStepPreview>
+      ) : undefined}
       summary={(
         <RichText
           text={
@@ -806,11 +811,6 @@ export function TestDetailPage() {
         </Box>
       </Box>
 
-      <TechnicalIdentity
-        summary={technicalSummary}
-        items={technicalItems}
-      />
-
       <MetricStrip items={metricItems} label="Test metrics" />
 
       <Box
@@ -974,6 +974,11 @@ export function TestDetailPage() {
           {runMetadata}
         </Stack>
       </Box>
+
+      <TechnicalIdentity
+        summary={technicalSummary}
+        items={technicalItems}
+      />
     </Stack>
   );
 }

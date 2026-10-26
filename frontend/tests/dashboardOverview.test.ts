@@ -19,10 +19,13 @@ import {
   patternRecurrenceLabel,
   rankRecurringPatterns,
   overviewBranchFromParam,
+  jobMatchesStatusFilter,
   overviewStatusFromParam,
+  runStatusLabel,
   readOverviewHistoryState,
   withOverviewFilters,
 } from "../src/lib/dashboardOverview.js";
+import { splitForMiddleTruncation } from "../src/lib/middleTruncate.js";
 import type { BuildResult, FlakinessReport, JobSummary, PatternAnalysis, PatternRefreshStatus, TestFlakiness } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 
@@ -218,13 +221,33 @@ test("health summary exposes counts and pressed filter state", () => {
 
   assert.match(html, /Reliability over the last 10 runs/);
   assert.match(html, /3 jobs/);
-  assert.match(html, /aria-label="Passing: 1 job, 33% of jobs\./);
+  assert.match(html, /aria-label="Healthy: 1 job, 33% of jobs\./);
   assert.match(html, /aria-label="Flaky: 1 job, 33% of jobs\./);
   assert.match(html, /mix of passing and failing results/);
   assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /aria-label="Failing: 1 job, 33% of jobs\./);
-  assert.match(html, />33% of jobs</);
+  assert.match(html, /aria-label="Unreliable: 1 job, 33% of jobs\./);
+  assert.match(html, /33%.{0,400}> of jobs<\/span>/);
   assert.match(html, /inset 0 -3px 0/);
+});
+
+test("reliability buckets and latest-run failures are separate filters", () => {
+  const latestFailedButReliable = job({ job_id: "a", current_status: "FAILING", overall_status: "PASSING" });
+  const unreliableButPassing = job({ job_id: "b", current_status: "PASSING", overall_status: "FAILING" });
+  assert.equal(jobMatchesStatusFilter(latestFailedButReliable, "HEALTHY"), true);
+  assert.equal(jobMatchesStatusFilter(latestFailedButReliable, "LATEST_FAILED"), true);
+  assert.equal(jobMatchesStatusFilter(latestFailedButReliable, "UNRELIABLE"), false);
+  assert.equal(jobMatchesStatusFilter(unreliableButPassing, "UNRELIABLE"), true);
+  assert.equal(jobMatchesStatusFilter(unreliableButPassing, "LATEST_FAILED"), false);
+  assert.equal(runStatusLabel("FAILING"), "Failed");
+  assert.equal(runStatusLabel("PASSING"), "Passed");
+});
+
+test("job names truncate in the middle so the suffix stays visible", () => {
+  assert.deepEqual(splitForMiddleTruncation("main"), { head: "main", tail: "" });
+  const name = "capz-periodic-e2e-v1beta1-release-1-26";
+  const { head, tail } = splitForMiddleTruncation(name);
+  assert.equal(head + tail, name);
+  assert.match(tail, /release-1-26$/);
 });
 
 test("job health ledger keeps job and run links separate", () => {
@@ -236,8 +259,9 @@ test("job health ledger keeps job and run links separate", () => {
   assert.match(html, /href="\/job\/capz-periodic-e2e-main\?run=123"/);
   assert.match(html, /aria-label="Run 123, passed, Aug 5, 2026"/);
   assert.match(html, />Last 10 pass</);
-  assert.match(html, />Current</);
-  assert.match(html, />Passing</);
+  assert.match(html, />Latest run</);
+  assert.match(html, />Passed</);
+  assert.doesNotMatch(html, />Current</);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
 });
 
@@ -489,7 +513,7 @@ test("featured pattern combines passing recurrence and recovery above its eviden
   }));
   assert.match(html, /aria-label="Passing · recurred Oct 19 · 1 of 3 passes to clear"/);
   const content = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
-  assert.match(content, />Passing · <a[^>]*href="\/job\/main\?run=oct-19"[^>]*>recurred Oct 19<\/a> · 1\/3 passes<\/div>/);
+  assert.match(content, />Passing · <a[^>]*href="\/job\/main\?run=oct-19"[^>]*>recurred Oct 19<\/a> · 1\/3 passes to clear<\/div>/);
   assert.match(html, />2 of 3 failures · as of Sep 28</);
   assert.doesNotMatch(html, /high confidence|earlier window|Last successful refresh|Passing now/);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
@@ -500,8 +524,8 @@ test("recovery progress follows the active lifecycle below the recovery threshol
   const row = (value: PatternAnalysis, currentJob: JobSummary | undefined = job()) =>
     render(createElement(FeaturedPatternRow, { pattern: value, rank: 1, prefix: "", job: currentJob }));
   assert.match(row(pattern), /aria-label="Passing · 2 of 3 passes to clear"/);
-  assert.match(row(pattern), />Passing · 2\/3 passes</);
-  assert.match(row(pattern, job({ current_status: "RUNNING" })), />Running · 2\/3 passes</);
+  assert.match(row(pattern), />Passing · 2\/3 passes to clear</);
+  assert.match(row(pattern, job({ current_status: "RUNNING" })), />Running · 2\/3 passes to clear</);
   assert.doesNotMatch(row(recurringPattern("main", 3, ["2", "1"], 0)), /passes to clear|\/3 passes/);
   assert.doesNotMatch(row(recurringPattern("main", 3, ["2", "1"], 3)), /passes to clear|\/3 passes/);
   assert.doesNotMatch(row({ ...pattern, lifecycle: { state: "recovered", reason: "", recovery_streak: 3 } }), /passes to clear|\/3 passes/);
@@ -758,16 +782,19 @@ test("featured analysis link precedes separate recent-run links", () => {
 test("overview filters use canonical query parameters", () => {
   assert.equal(overviewStatusFromParam("flaky"), "FLAKY");
   assert.equal(overviewStatusFromParam("unknown"), "ALL");
+  assert.equal(overviewStatusFromParam("passing"), "ALL");
+  assert.equal(overviewStatusFromParam("latest-failed"), "LATEST_FAILED");
   assert.equal(overviewBranchFromParam("main", ["main", "release-1.26"]), "main");
   assert.equal(overviewBranchFromParam("release-1.25", ["main"]), "ALL");
 
   const filtered = withOverviewFilters(
-    new URLSearchParams("trace=1&status=passing&branch=release-1.24"),
+    new URLSearchParams("trace=1&status=healthy&branch=release-1.24"),
     "FLAKY",
     "main",
   );
   assert.equal(filtered.toString(), "trace=1&status=flaky&branch=main");
   assert.equal(withOverviewFilters(filtered, "ALL", "ALL").toString(), "trace=1");
+  assert.equal(withOverviewFilters(filtered, "LATEST_FAILED", "main").toString(), "trace=1&status=latest-failed&branch=main");
 });
 
 test("overview history state preserves disclosures and scroll per entry", () => {
@@ -860,16 +887,16 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.doesNotMatch(attention, /fontSize: lead \? "24px" : "16px"/);
   assert.match(filters, /minHeight: 44/);
   assert.doesNotMatch(filters, />\s*Reliability\s*</);
-  assert.match(filters, /aria-label="Reliability over the last 10 runs"/);
+  assert.match(filters, /aria-label="Job status filter"/);
   assert.match(filters, /height: 44/);
   assert.match(filters, /boxShadow: "inset 0 -3px 0/);
   assert.match(filters, /color: "text.primary"/);
   assert.match(filters, /borderRadius: "0 !important"/);
-  assert.match(filters, /borderRadius: "4px 0 0 4px !important"/);
-  assert.match(filters, /borderRadius: "0 4px 4px 0 !important"/);
+  assert.match(filters, /sm: "4px 0 0 4px !important"/);
+  assert.match(filters, /sm: "0 4px 4px 0 !important"/);
   assert.match(health, /onFilterClick\?\.\(active \? "ALL" : row\.status\)/);
   assert.match(health, /borderLeft: "1px solid"/);
-  assert.match(health, /% of jobs/);
+  assert.match(health, /% of jobs|> of jobs</);
   assert.match(health, /mix of passing and failing results/);
   assert.doesNotMatch(health, /borderRight:/);
   assert.match(search, /width: 44[\s\S]*height: 44[\s\S]*p: 0/);

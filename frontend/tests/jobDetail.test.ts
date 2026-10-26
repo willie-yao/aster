@@ -122,7 +122,7 @@ test("job detail separates current observation from rolling reliability", () => 
 
 test("job header keeps status on the right above mobile widths", () => {
   const page = source("src/pages/JobDetailPage.tsx");
-  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<TechnicalIdentity"));
+  const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<MetricStrip"));
 
   assert.match(header, /gridTemplateColumns: \{\s*xs: "minmax\(0, 1fr\)",\s*sm: "minmax\(0, 1fr\) auto",\s*\}/);
   assert.match(header, /role="status"/);
@@ -142,7 +142,7 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
   assert.match(page, /<TechnicalIdentity[\s\S]*Canonical job ID[\s\S]*Copy canonical job ID/);
   assert.match(page, /<MetricStrip items=\{metricItems\} label="Job metrics"/);
-  assert.match(page, /label: "Current"/);
+  assert.match(page, /label: "Latest run"/);
   assert.match(page, /label: "Last 10 runs"/);
   assert.match(page, /label: "Recovery streak"/);
   assert.match(page, /label: "Median duration"/);

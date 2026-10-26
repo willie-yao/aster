@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { runStatusLabel } from "../lib/dashboardOverview";
 import { jobRunPath } from "../lib/routes";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
@@ -68,13 +69,13 @@ function passRateColor(
 function statusPresentation(status: "UNKNOWN" | "RUNNING" | "PASSING" | "FAILING") {
   switch (status) {
     case "PASSING":
-      return { label: "Passing", color: "success.main" } as const;
+      return { label: runStatusLabel("PASSING"), color: "success.main" } as const;
     case "RUNNING":
-      return { label: "Running", color: "warning.main" } as const;
+      return { label: runStatusLabel("RUNNING"), color: "warning.main" } as const;
     case "FAILING":
-      return { label: "Failing", color: "error.main" } as const;
+      return { label: runStatusLabel("FAILING"), color: "error.main" } as const;
     case "UNKNOWN":
-      return { label: "Unknown", color: "text.primary" } as const;
+      return { label: runStatusLabel("UNKNOWN"), color: "text.primary" } as const;
   }
 }
 
@@ -285,7 +286,7 @@ export function JobDetailPage() {
   const recoveryStreak = pattern?.lifecycle?.recovery_streak;
   const metricItems: MetricStripItem[] = [
     {
-      label: "Current",
+      label: "Latest run",
       value: currentStatusView.label,
       color: currentStatusView.color,
     },
@@ -549,18 +550,6 @@ export function JobDetailPage() {
         )}
       </Box>
 
-      <TechnicalIdentity
-        desktopInline
-        summary="Canonical job ID"
-        items={[
-          {
-            label: "Canonical job ID",
-            value: canonicalJobID,
-            copyLabel: "Copy canonical job ID",
-          },
-        ]}
-      />
-
       <MetricStrip items={metricItems} label="Job metrics" />
 
       {!hasRuns ? (
@@ -702,6 +691,18 @@ export function JobDetailPage() {
           ) : null}
         </>
       )}
+
+      <TechnicalIdentity
+        desktopInline
+        summary="Canonical job ID"
+        items={[
+          {
+            label: "Canonical job ID",
+            value: canonicalJobID,
+            copyLabel: "Copy canonical job ID",
+          },
+        ]}
+      />
     </Box>
   );
 }
