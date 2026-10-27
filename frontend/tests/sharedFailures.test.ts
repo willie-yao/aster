@@ -202,10 +202,8 @@ test("the base-branch case is the failing test in the named run, preferring an a
 test("the shared failure view reuses the test analysis panel for the base-branch run", () => {
   const page = source("src/pages/SharedFailurePage.tsx");
 
-  assert.match(page, /failure\.base_branch_failures\?\.map\(\(base\) =>/);
-  assert.match(page, /useJobDetail\(base\.job_id\)/);
-  assert.match(page, /<AnalysisBriefing/);
-  assert.match(page, /<AiAnalysisPanel/);
+  assert.match(page, /useJobDetail\(base\?\.job_id\)/);
+  assert.match(page, /<TestAnalysisBriefing/);
   assert.match(page, /chatRef=\{\{/);
   assert.match(page, /to=\{runPath\}/);
 });

@@ -338,12 +338,14 @@ test("the chat wears the page's section band instead of its own chat styling", (
 
 test("severity suppression callers keep the signal in desktop and mobile headers", () => {
   const testDetail = source("src/pages/TestDetailPage.tsx");
+  const testBriefing = source("src/components/TestAnalysisBriefing.tsx");
   const table = source("src/components/TestCaseTable.tsx");
   const buildFailure = source("src/components/BuildFailurePanel.tsx");
 
   // The test detail band always leads with the severity, so it always opts out.
   assert.match(testDetail, /severity\} severity ·/);
-  assert.match(testDetail, /severityInHeader/);
+  assert.match(testDetail, /<TestAnalysisBriefing/);
+  assert.match(testBriefing, /severityInHeader/);
 
   // The build failure band states severity only once an analysis has landed,
   // so it opts out conditionally, and carries the severity on BOTH breakpoints

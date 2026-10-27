@@ -32,6 +32,8 @@ interface EscalationPanelProps {
   disclaimer: string;
   /** Rendered only when the deploy advertises the capability. */
   enabled: boolean;
+  title?: string;
+  startLabel?: string;
 }
 
 // EscalationPanel offers on-demand analysis for a failure the deterministic
@@ -52,6 +54,8 @@ function EscalationPanelForSubject({
   start,
   disclaimer,
   enabled,
+  title = "Deeper analysis",
+  startLabel = "Investigate",
 }: EscalationPanelProps) {
   const auth = useAuth();
   const authenticated = auth.status === "authenticated";
@@ -219,7 +223,7 @@ function EscalationPanelForSubject({
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
         <Typography component="span" color="textSecondary" sx={overviewTypography.tableHeading}>
-          Deeper analysis
+          {title}
         </Typography>
         {(state === "not_started" || state === "failed") && (
           // aria-disabled rather than disabled: a disabled button drops the
@@ -232,7 +236,7 @@ function EscalationPanelForSubject({
             aria-disabled={starting || undefined}
             sx={starting ? { opacity: 0.6 } : undefined}
           >
-            {starting ? "Starting..." : state === "failed" ? "Retry" : "Investigate"}
+            {starting ? "Starting..." : state === "failed" ? "Retry" : startLabel}
           </Button>
         )}
         {/* One region for the whole lifecycle. It never unmounts, so the focus

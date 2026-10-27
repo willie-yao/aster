@@ -69,7 +69,7 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   assert.match(source, /const multiBuildScope = patternScope \|\| causeScope/);
   assert.match(source, /exactFailureAnalysis = !multiBuildScope/);
   assert.match(source, /fixEligible=\{exactFixEnabled \|\| \(patternScope && Boolean\(features\.chat_fix\) && Boolean\(fixPatterns\.length\)\)/);
-  assert.match(source, /chatTitle = causeScope \? "Investigate cause"/);
+  assert.match(source, /chatTitle = title \?\? \(causeScope \? "Investigate cause"/);
   assert.ok(causeSuggestedQuestions().includes("Has this cause been resolved in the latest completed run?"));
   assert.ok(causeSuggestedQuestions().includes("What evidence supports this cause across its builds?"));
   assert.ok(causeSuggestedQuestions().includes("What concrete change follows from this cause?"));
