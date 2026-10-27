@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -34,7 +33,6 @@ import {
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
 import {
-  firstSentence,
   fixPatternsForRun,
   summarizeTestHistory,
   testRunFileContext,
@@ -42,14 +40,14 @@ import {
 import { RichText } from "../components/RichText";
 import { RunHistory } from "../components/RunHistory";
 import { DetailSectionBand } from "../components/DetailSectionBand";
-import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
 import { RunMetadata } from "../components/RunMetadata";
 import { RuntimeTrend } from "../components/RuntimeTrend";
-import { AnalysisBriefing, NextStepPreview } from "../components/AnalysisBriefing";
+import { AnalysisBriefing } from "../components/AnalysisBriefing";
+import { TestAnalysisBriefing } from "../components/TestAnalysisBriefing";
 import { overviewTypography } from "../theme/overview";
 import { stickyRailSx } from "../theme/helpers";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
@@ -463,49 +461,23 @@ export function TestDetailPage() {
   );
 
   const analysisBriefing = selectedTestCase?.ai_analysis ? (
-    <AnalysisBriefing
-      title="Analysis briefing"
-      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
+    <TestAnalysisBriefing
+      analysis={selectedTestCase.ai_analysis}
+      summary={selectedTestCase.ai_summary?.summary}
+      fileCtx={selectedFileContext}
+      buildWebURL={selectedRun?.web_url}
+      traceRef={traceRef}
+      fixPatterns={fixPatterns}
       metadata={`${selectedTestCase.ai_analysis.severity} severity · ${matchingFailures} ${matchingFailures === 1 ? "matching failure" : "matching failures"}`}
-      mobileNotice={selectedTestCase.ai_analysis.disposition !== "citations_verified" ? (
-        <Alert severity="warning" variant="outlined">
-          Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
-        </Alert>
-      ) : undefined}
-      mobileNextStep={selectedTestCase.ai_analysis.suggested_fix.trim() ? (
-        <NextStepPreview>
-          <RichText text={selectedTestCase.ai_analysis.suggested_fix} steps fileCtx={selectedFileContext} />
-        </NextStepPreview>
-      ) : undefined}
-      summary={(
-        <RichText
-          text={
-            selectedTestCase.ai_summary?.summary ??
-            firstSentence(selectedTestCase.ai_analysis.root_cause)
-          }
-          fileCtx={selectedFileContext}
-        />
-      )}
-      details={(
-        <AiAnalysisPanel
-          analysis={selectedTestCase.ai_analysis}
-          fileCtx={selectedFileContext}
-          buildWebURL={selectedRun?.web_url}
-          traceRef={traceRef}
-          fixPatterns={fixPatterns}
-          chatRef={{
-            job_id: canonicalJobID,
-            build_id: selectedRun?.build_id ?? "",
-            test_name: selectedTestCase.name,
-            suite_name: selectedTestCase.suite_name,
-            class_name: selectedTestCase.class_name,
-            junit_file: selectedTestCase.junit_file,
-            analysis_generated_at: selectedTestCase.ai_analysis.generated_at,
-          }}
-          appearance="detail"
-          severityInHeader
-        />
-      )}
+      chatRef={{
+        job_id: canonicalJobID,
+        build_id: selectedRun?.build_id ?? "",
+        test_name: selectedTestCase.name,
+        suite_name: selectedTestCase.suite_name,
+        class_name: selectedTestCase.class_name,
+        junit_file: selectedTestCase.junit_file,
+        analysis_generated_at: selectedTestCase.ai_analysis.generated_at,
+      }}
     />
   ) : selectedTestCase?.ai_summary ? (
     <AnalysisBriefing

@@ -17,12 +17,14 @@ export interface RunMetadataLink {
 }
 
 export function RunMetadata({
+  title = "Run metadata",
   items,
   links,
   status,
   statusColor = "text.secondary",
   stacked = false,
 }: {
+  title?: string;
   items: RunMetadataItem[];
   links: RunMetadataLink[];
   status: string;
@@ -32,7 +34,7 @@ export function RunMetadata({
   return (
     <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
       <DetailSectionBand
-        title="Run metadata"
+        title={title}
         metadata={<Box component="span" sx={{ color: statusColor }}>{status}</Box>}
       />
       <Box

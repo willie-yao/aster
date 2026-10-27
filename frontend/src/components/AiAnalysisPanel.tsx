@@ -35,6 +35,7 @@ export function AiAnalysisPanel({
   buildWebURL,
   traceRef,
   chatRef,
+  chatTitle,
   chatFixable = true,
   fixPatterns = [],
   appearance = "default",
@@ -47,6 +48,7 @@ export function AiAnalysisPanel({
   buildWebURL?: string;
   traceRef?: AnalysisTraceReference;
   chatRef?: AnalysisChatReference;
+  chatTitle?: string;
   chatFixable?: boolean;
   fixPatterns?: PatternAnalysis[];
   appearance?: "default" | "detail";
@@ -205,6 +207,7 @@ export function AiAnalysisPanel({
       analysisRef={chatRef}
       fileCtx={fileCtx}
       fixPatterns={fixPatterns}
+      title={chatTitle}
       appearance={detailAppearance ? "detail" : "default"}
     />
   ) : null;

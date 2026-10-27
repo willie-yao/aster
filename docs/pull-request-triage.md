@@ -90,7 +90,9 @@ A shared failure:
 
 Clustering uses no model calls and is published by both deployment paths.
 
-When the base branch already fails the test, the shared failure page shows that base-branch run's published analysis with the same panel, chat, and fix path as the test page. A `pre_existing` verdict on a pull request page links to the same run. The overview's Needs attention section lists every shared failure, widest first.
+The shared failure page leads with the grouping evidence and lists the affected pull requests beside the analysis. Matching test names do not establish matching causes or independent changes.
+
+When the base branch also fails the test, the page shows that run's published analysis with the same panel, chat, and fix path as the test page. Investigation and fixes apply to the selected base-branch run. If several base jobs fail, select a job to inspect its analysis. A representative PR-build investigation is available separately when escalation is enabled. A `pre_existing` verdict on a pull request page links to the base-branch run. The overview's Needs attention section lists every shared failure, widest first.
 
 ## Optional bot comment
 

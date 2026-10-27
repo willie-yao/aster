@@ -628,6 +628,7 @@ export function AnalysisChat({
   fixTarget,
   baselineBuildID,
   fixable = true,
+  title,
   appearance = "default",
   preparedFinding = false,
   onPreparedResolved,
@@ -638,6 +639,7 @@ export function AnalysisChat({
   fixTarget?: CausalGroupFixTarget;
   baselineBuildID?: string;
   fixable?: boolean;
+  title?: string;
   appearance?: "default" | "detail";
   // A prepared finding is waiting for this cause. Resolved read-only by the
   // caller, because the only path that opens one creates a shared session.
@@ -701,7 +703,7 @@ export function AnalysisChat({
   const patternScope = analysisRef.scope === "pattern";
   const causeScope = analysisRef.scope === "cause";
   const multiBuildScope = patternScope || causeScope;
-  const chatTitle = causeScope ? "Investigate cause" : "Investigate and fix";
+  const chatTitle = title ?? (causeScope ? "Investigate cause" : "Investigate and fix");
   const chatToggleLabel = `${expanded ? "Collapse" : "Expand"} ${chatTitle.toLowerCase()}`;
   const history = useMemo(() => session ? analysisChatHistory(session) : [], [session]);
   const recordProgress = useCallback((progress: AnalysisChatProgress) => {

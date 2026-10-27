@@ -1,31 +1,30 @@
-import AutoAwesome from "@mui/icons-material/AutoAwesome";
 import OpenInNew from "@mui/icons-material/OpenInNew";
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Breadcrumbs from "@mui/material/Breadcrumbs";
 import Link from "@mui/material/Link";
+import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import { useState } from "react";
 import { Link as RouterLink, useParams } from "react-router-dom";
-import { AiAnalysisPanel } from "../components/AiAnalysisPanel";
-import { AnalysisBriefing } from "../components/AnalysisBriefing";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { ErrorState } from "../components/ErrorState";
 import { EscalationPanel } from "../components/EscalationPanel";
 import { LoadingState } from "../components/LoadingState";
-import { RichText } from "../components/RichText";
 import { RunMetadata } from "../components/RunMetadata";
+import { TechnicalIdentity } from "../components/TechnicalIdentity";
+import { TestAnalysisBriefing } from "../components/TestAnalysisBriefing";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useJobDetail, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import { attributionLabel } from "../lib/pullRequests";
+import { parseTestDisplayName } from "../lib/detailTitles";
 import { jobPath, pullRequestPath, pullRequestsPath, testRunPath } from "../lib/routes";
 import {
   baseBranchCase,
-  baseBranchNote,
   evidenceMember,
   findSharedFailure,
-  sharedFailureAnalyzable,
   sharedFailureBlockedReason,
   sharedFailureScope,
   sharedFailureSubject,
@@ -34,11 +33,10 @@ import {
   getSharedFailureEscalation,
   startSharedFailureEscalation,
 } from "../lib/sharedFailureEscalation";
-import { firstSentence, fixPatternsForRun, testRunFileContext } from "../lib/testDetail";
+import { fixPatternsForRun, testRunFileContext } from "../lib/testDetail";
 import { shortJobName } from "../lib/utils";
 import { overviewTypography } from "../theme/overview";
 import type {
-  BaseBranchFailure,
   SharedFailure,
   SharedFailureMember,
 } from "../types/pullRequests";
@@ -62,7 +60,7 @@ function MemberRow({
       sx={{
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "minmax(0, 1fr) auto" },
+        gridTemplateColumns: "minmax(0, 1fr)",
         alignItems: "center",
         columnGap: 1.5,
         rowGap: 0.5,
@@ -95,17 +93,17 @@ function MemberRow({
           build {member.build_id}
           {member.verdict ? ` · ${attributionLabel(member.verdict)}` : ""}
           {member.stale ? " · tested an older head" : ""}
-          {wouldSupplyEvidence ? " · newest usable build" : ""}
+          {wouldSupplyEvidence ? " · representative build" : ""}
         </Typography>
       </Box>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap", justifySelf: { xs: "start", sm: "end" } }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         {member.web_url && (
           <Link
             href={member.web_url}
             target="_blank"
             rel="noopener noreferrer"
             underline="none"
-            sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap", ...overviewTypography.description }}
+            sx={{ display: "inline-flex", alignItems: "center", minHeight: { xs: 44, sm: 36 }, gap: 0.5, whiteSpace: "nowrap", ...overviewTypography.description }}
           >
             Artifacts
             <OpenInNew sx={{ fontSize: 13 }} />
@@ -117,7 +115,7 @@ function MemberRow({
             target="_blank"
             rel="noopener noreferrer"
             underline="none"
-            sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap", ...overviewTypography.description }}
+            sx={{ display: "inline-flex", alignItems: "center", minHeight: { xs: 44, sm: 36 }, gap: 0.5, whiteSpace: "nowrap", ...overviewTypography.description }}
           >
             GitHub
             <OpenInNew sx={{ fontSize: 13 }} />
@@ -128,115 +126,131 @@ function MemberRow({
   );
 }
 
-function SharedFailureEscalation({ failure, enabled }: { failure: SharedFailure; enabled: boolean }) {
+function SharedFailureEscalation({ failure, enabled, hasBaseAnalysis }: {
+  failure: SharedFailure;
+  enabled: boolean;
+  hasBaseAnalysis: boolean;
+}) {
   // Without the capability there is no analysis to offer, so explaining why one
   // is unavailable would describe a control this deploy never had.
   if (!enabled) return null;
   const blocked = sharedFailureBlockedReason(failure);
-  if (blocked) {
-    return (
-      <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
-        {blocked}
-      </Typography>
-    );
-  }
+  const member = evidenceMember(failure);
   return (
-    <EscalationPanel
-      enabled={enabled}
-      subjectKey={failure.id}
-      load={() => getSharedFailureEscalation(failure.id)}
-      start={(key) => startSharedFailureEscalation(failure.id, key)}
-      disclaimer="This analysis explains the failure from one build's artifacts. It does not establish that any pull request caused it."
-    />
+    <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
+      <DetailSectionBand title={hasBaseAnalysis ? "Check a pull request build" : "Pull request analysis"} metadata="Read-only investigation" />
+      <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5 }}>
+        {blocked ? (
+          <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>{blocked}</Typography>
+        ) : (
+          <>
+            <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
+              {hasBaseAnalysis
+                ? "Analyze a representative PR build to compare its evidence with the base-branch diagnosis."
+                : "Analyze a representative pull request build to investigate this failure."}
+              {member && ` The current representative is the newest usable build, ${member.build_id} on #${member.number}. Completed results name the build they read.`}
+            </Typography>
+            <EscalationPanel
+              enabled={enabled}
+              subjectKey={failure.id}
+              title="Representative PR build"
+              startLabel="Analyze PR build"
+              load={() => getSharedFailureEscalation(failure.id)}
+              start={(key) => startSharedFailureEscalation(failure.id, key)}
+              disclaimer="This analysis reads one pull request build. It does not verify a shared cause or establish that any pull request caused it."
+            />
+          </>
+        )}
+      </Box>
+    </Box>
   );
 }
 
-// BaseBranchAnalysis shows the base-branch run that also fails the shared test,
-// with the same analysis panel, chat, and fix path the test page offers. A run
-// with no published analysis is linked instead.
-function BaseBranchAnalysis({
-  base,
+function SharedFailureAnalysis({
   failure,
-  escalationOffered,
+  escalationEnabled,
 }: {
-  base: BaseBranchFailure;
   failure: SharedFailure;
-  escalationOffered: boolean;
+  escalationEnabled: boolean;
 }) {
   const manifest = useManifest();
-  const jobName = shortJobName(base.job_name, manifest.short_name_prefix ?? "");
-  const { data, loading, error } = useJobDetail(base.job_id);
-  const found = baseBranchCase(data, base, failure.test_name);
-  const runPath = testRunPath(base.job_id, failure.test_name, base.build_id);
-  const runLink = (
+  const [selectedJobID, setSelectedJobID] = useState("");
+  const bases = failure.base_branch_failures ?? [];
+  const base = bases.find((candidate) => candidate.job_id === selectedJobID) ?? bases[0];
+  const prefix = manifest.short_name_prefix ?? "";
+  const jobName = base ? shortJobName(base.job_name, prefix) : "";
+  const { data, loading, error } = useJobDetail(base?.job_id);
+  const found = base ? baseBranchCase(data, base, failure.test_name) : undefined;
+  const runPath = base ? testRunPath(base.job_id, failure.test_name, base.build_id) : "";
+  const runLink = base ? (
     <Link component={RouterLink} to={runPath} underline="none">
       {jobName} build {base.build_id}
     </Link>
-  );
+  ) : null;
   const analysis = found?.testCase.ai_analysis;
-
-  if (!found || !analysis) {
-    const message = loading
-      ? "Loading the base-branch run."
-      : error
-        ? "The base-branch run could not be loaded."
-        : "No analysis is published for this run.";
-    return (
-      <Box component="section" sx={{ bgcolor: "surface.container", borderBottom: "1px solid", borderColor: "divider" }}>
-        <DetailSectionBand title="Base branch run" metadata={jobName} />
-        <Typography color="textSecondary" sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, ...overviewTypography.secondaryBody }}>
-          The newest run of {runLink} on {failure.base_ref} also fails this test. {message}
-        </Typography>
-      </Box>
-    );
-  }
-
-  const { run, testCase } = found;
-  const fileCtx = testRunFileContext(run, testCase);
-  const jobID = data?.job_id ?? base.job_id;
   return (
-    <AnalysisBriefing
-      title="Base branch analysis"
-      icon={<AutoAwesome aria-hidden sx={{ fontSize: 18, color: "primary.main" }} />}
-      metadata={`${analysis.severity} severity · ${jobName}`}
-      mobileNotice={analysis.disposition !== "citations_verified" ? (
-        <Alert severity="warning" variant="outlined">
-          Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
-        </Alert>
-      ) : undefined}
-      summary={(
-        <RichText
-          text={testCase.ai_summary?.summary ?? firstSentence(analysis.root_cause)}
-          fileCtx={fileCtx}
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
+      {bases.length > 1 && (
+        <TextField
+          select
+          label="Base-branch job"
+          size="small"
+          value={base.job_id}
+          onChange={(event) => setSelectedJobID(event.target.value)}
+          fullWidth
+        >
+          {bases.map((candidate) => (
+            <MenuItem key={candidate.job_id} value={candidate.job_id} sx={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
+              {shortJobName(candidate.job_name, prefix)}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
+      {base && found && analysis ? (
+        <TestAnalysisBriefing
+          key={`${base.job_id}/${base.build_id}`}
+          analysis={analysis}
+          summary={found.testCase.ai_summary?.summary}
+          metadata={`${analysis.severity} severity · Base branch run`}
+          context={(
+            <Typography color="textSecondary" sx={overviewTypography.description}>
+              From {runLink} on {failure.base_ref}. Investigation and fixes here apply to this base-branch run.
+            </Typography>
+          )}
+          fileCtx={testRunFileContext(found.run, found.testCase)}
+          buildWebURL={found.run.web_url}
+          traceRef={{ job_id: data?.job_id ?? base.job_id, build_id: found.run.build_id, test_name: found.testCase.name }}
+          fixPatterns={fixPatternsForRun(data?.pattern_analyses, found.run.build_id)}
+          chatTitle="Investigate base-branch failure"
+          chatRef={{
+            job_id: data?.job_id ?? base.job_id,
+            build_id: found.run.build_id,
+            test_name: found.testCase.name,
+            suite_name: found.testCase.suite_name,
+            class_name: found.testCase.class_name,
+            junit_file: found.testCase.junit_file,
+            analysis_generated_at: analysis.generated_at,
+          }}
         />
-      )}
-      details={(
-        <>
-          <Typography color="textSecondary" sx={overviewTypography.description}>
-            Read from {runLink}, the newest run on {failure.base_ref}. Confirm the pull request failures match it before relying on it.
-            {escalationOffered && " Investigate a pull request build below only if its failure looks different."}
+      ) : base ? (
+        <Box component="section" sx={{ bgcolor: "surface.container" }}>
+          <DetailSectionBand title="Base branch run" metadata={jobName} />
+          <Typography color="textSecondary" sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, ...overviewTypography.secondaryBody }}>
+            The same test also fails in {runLink} on {failure.base_ref}.{" "}
+            {loading ? "Loading the published analysis." : error ? "The base-branch run could not be loaded." : "No analysis is published for this run."}
           </Typography>
-          <AiAnalysisPanel
-            analysis={analysis}
-            fileCtx={fileCtx}
-            buildWebURL={run.web_url}
-            traceRef={{ job_id: jobID, build_id: run.build_id, test_name: testCase.name }}
-            fixPatterns={fixPatternsForRun(data?.pattern_analyses, run.build_id)}
-            chatRef={{
-              job_id: jobID,
-              build_id: run.build_id,
-              test_name: testCase.name,
-              suite_name: testCase.suite_name,
-              class_name: testCase.class_name,
-              junit_file: testCase.junit_file,
-              analysis_generated_at: analysis.generated_at,
-            }}
-            appearance="detail"
-            severityInHeader
-          />
-        </>
+        </Box>
+      ) : null}
+      {!base && !escalationEnabled && (
+        <Box component="section" sx={{ bgcolor: "surface.container" }}>
+          <DetailSectionBand title="Analysis briefing" metadata="Unavailable" />
+          <Typography color="textSecondary" sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, ...overviewTypography.secondaryBody }}>
+            No base-branch analysis is published for this group. Review the affected pull requests and their artifacts for failure evidence.
+          </Typography>
+        </Box>
       )}
-    />
+      <SharedFailureEscalation failure={failure} enabled={escalationEnabled} hasBaseAnalysis={Boolean(analysis)} />
+    </Stack>
   );
 }
 
@@ -310,8 +324,9 @@ export function SharedFailurePage() {
 
   const evidence = evidenceMember(failure);
   const prefix = manifest.short_name_prefix ?? "";
-  const baseNote = baseBranchNote(failure, (jobName) => shortJobName(jobName, prefix));
-  const escalationOffered = escalationEnabled && failure.escalatable;
+  const jobName = shortJobName(failure.job_name, prefix);
+  const title = failure.build_level ? jobName : parseTestDisplayName(failure.test_name).displayName;
+  const bases = failure.base_branch_failures ?? [];
 
   return (
     <Stack spacing={{ xs: 2.5, sm: 3.5 }} sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}>
@@ -320,6 +335,7 @@ export function SharedFailurePage() {
       <Box sx={{ minWidth: 0 }}>
         <Typography
           component="h1"
+          title={sharedFailureSubject(failure)}
           sx={{
             ...overviewTypography.pageHeadline,
             fontSize: { xs: "26px", sm: "30px" },
@@ -329,84 +345,80 @@ export function SharedFailurePage() {
             overflowWrap: "anywhere",
           }}
         >
-          {sharedFailureSubject(failure)}
+          {title}
         </Typography>
         <Typography component="p" color="textSecondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
           Failing on {sharedFailureScope(failure)}
           {" · "}
           {linkToJob ? (
             <Link component={RouterLink} to={jobPath(failure.job_id)} underline="none">
-              {failure.job_name}
+              {jobName}
             </Link>
           ) : (
-            failure.job_name
+            jobName
           )}
         </Typography>
       </Box>
 
-      <RunMetadata
-        status={`${failure.pull_requests.length} pull requests`}
-        statusColor="error.main"
-        items={[
-          { label: "Job", value: failure.job_name },
-          { label: "Base branch", value: failure.base_ref || "Not available" },
-          { label: "Oldest build seen", value: formatTimestamp(failure.oldest_build_started) },
-          { label: "Newest build seen", value: formatTimestamp(failure.newest_build_started) },
-        ]}
-        links={[]}
-      />
-
-      {failure.base_branch_failures?.map((base) => (
-        <BaseBranchAnalysis
-          key={base.job_id}
-          base={base}
-          failure={failure}
-          escalationOffered={escalationEnabled && sharedFailureAnalyzable(failure)}
-        />
-      ))}
-
-      <Box component="section" sx={{ minWidth: 0 }}>
-        <DetailSectionBand
-          title="Why this is shared"
-          metadata={escalationOffered ? "One analysis for every affected pull request" : undefined}
-        />
+      <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
+        <DetailSectionBand title="Why these failures are grouped" />
         <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
-          <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
-            The same failure on several open pull requests usually has a cause
-            they share rather than a cause in any one change. These pull
-            requests were correlated only by base branch, job, and test, so they
-            are not established to be independent: one may be stacked on
-            another. The build window above covers only the builds this pass
-            observed, so it is not when the failure started.
+          <Typography sx={overviewTypography.secondaryBody}>
+            These {failure.pull_requests.length} pull requests failed {failure.build_level ? "the same job" : "the same test in this presubmit job"} while targeting {failure.base_ref || "the same base branch"}.
+            {bases.length > 0 && ` The same test also fails on ${failure.base_ref}.`}
           </Typography>
-          {baseNote && (
-            <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.secondaryBody }}>
-              {baseNote}, so these pull requests did not introduce it.
-            </Typography>
-          )}
-          <SharedFailureEscalation failure={failure} enabled={escalationEnabled} />
+          <Typography color="textSecondary" sx={{ mt: 0.75, ...overviewTypography.secondaryBody }}>
+            Matching causes have not been verified. These changes are not established to be independent; one may be stacked on another.
+          </Typography>
         </Box>
       </Box>
 
-      <Box component="section" sx={{ minWidth: 0 }}>
-        <DetailSectionBand
-          title="Affected pull requests"
-          metadata={
-            evidence
-              ? `${failure.pull_requests.length} observed · #${evidence.number} has the newest usable build`
-              : `${failure.pull_requests.length} observed`
-          }
+      <Box
+        sx={{
+          display: "grid",
+          minWidth: 0,
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1.5fr) minmax(360px, 0.85fr)" },
+          gap: 2,
+          alignItems: "start",
+        }}
+      >
+        <SharedFailureAnalysis
+          key={failure.id}
+          failure={failure}
+          escalationEnabled={escalationEnabled}
         />
-        <Box sx={{ bgcolor: "surface.container", border: "1px solid", borderColor: "divider", borderRadius: "4px", mt: 1.5 }}>
-          {failure.pull_requests.map((member) => (
-            <MemberRow
-              key={member.number}
-              member={member}
-              wouldSupplyEvidence={evidence?.number === member.number}
+        <Stack spacing={2} sx={{ minWidth: 0 }}>
+          <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
+            <DetailSectionBand title="Affected pull requests" metadata={`${failure.pull_requests.length} observed`} />
+            {failure.pull_requests.map((member) => (
+              <MemberRow
+                key={member.number}
+                member={member}
+                wouldSupplyEvidence={escalationEnabled && failure.escalatable && evidence?.number === member.number}
+              />
+            ))}
+          </Box>
+          <Box>
+            <RunMetadata
+              title="Observed builds"
+              status="Current pass"
+              stacked
+              items={[
+                { label: "Oldest build seen", value: formatTimestamp(failure.oldest_build_started) },
+                { label: "Newest build seen", value: formatTimestamp(failure.newest_build_started) },
+              ]}
+              links={[]}
             />
-          ))}
-        </Box>
+            <Typography color="textSecondary" sx={{ px: 1.5, py: 1, ...overviewTypography.description }}>
+              This window covers the builds observed in the current pass, not when the failure started.
+            </Typography>
+          </Box>
+        </Stack>
       </Box>
+      <TechnicalIdentity items={[
+        { label: "Job", value: failure.job_name, copyLabel: "Copy job name" },
+        ...(!failure.build_level ? [{ label: "Test", value: failure.test_name, copyLabel: "Copy test name" }] : []),
+      ]} />
     </Stack>
   );
 }
