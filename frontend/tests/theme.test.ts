@@ -115,6 +115,28 @@ test("chips square to the shape token instead of rendering as pills", () => {
   assert.equal(resolved.borderRadius, defaultTheme.shape.borderRadius);
 });
 
+// MUI's defaults animate height, width, and max-width, which relayouts the
+// page on every frame. Disclosure and floating labels change size at once.
+test("theme does not animate layout properties", () => {
+  const components = defaultTheme.components;
+  const collapse = components?.MuiCollapse?.styleOverrides?.root as Record<string, unknown>;
+  assert.equal(collapse.transition, "none");
+  const animated = components?.MuiInputLabel?.styleOverrides?.animated as (p: { theme: Theme }) => { transition: string };
+  const label = animated({ theme: defaultTheme }).transition;
+  assert.match(label, /transform/);
+  assert.doesNotMatch(label, /width|height/);
+  const notched = components?.MuiOutlinedInput?.styleOverrides?.notchedOutline as Record<string, { transition: string }>;
+  assert.equal(notched["& legend"].transition, "none");
+});
+
+test("informational color follows the brand ramp instead of MUI cyan", () => {
+  for (const scheme of ["light", "dark"] as const) {
+    const palette = defaultTheme.colorSchemes[scheme].palette;
+    assert.equal(palette.info.main, palette.primary.main);
+    assert.equal(palette.info.dark, palette.primary.dark);
+  }
+});
+
 function assistantTintOpacity(): number {
   const file = ts.createSourceFile(
     "AnalysisChat.tsx", readFileSync(resolve(process.cwd(), "src/components/AnalysisChat.tsx"), "utf8"),
