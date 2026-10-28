@@ -183,29 +183,34 @@ export function DisclosureButton({
 function RunChangeCaption({ runs, jobID }: { runs: RunSummary[]; jobID: string }) {
   const change = runChange(runs);
   if (!change) return null;
+  // Dates sit in monospace slots wide enough for "Sep 30", so a caption keeps
+  // its width whatever the day.
+  const slot = { ...overviewTypography.data, display: "inline-block", width: "6ch", textAlign: "right" as const };
+  const text = { ...overviewTypography.description, color: "text.secondary", whiteSpace: "nowrap" as const };
   const runLink = (run: RunSummary, role: string) => (
     <Link
       component={RouterLink}
       to={jobRunPath(jobID, run.build_id)}
       aria-label={`${role}, run ${run.build_id}, ${formatAccessibleDate(run.timestamp)}`}
+      sx={slot}
     >
       {runDateLabel(run)}
     </Link>
   );
+  if ("since" in change) {
+    return (
+      <Typography component="span" sx={text}>
+        {change.kind === "noPass" ? "No pass since" : "No failure since"}{" "}
+        <Box component="span" sx={slot}>{runDateLabel(change.since)}</Box>
+      </Typography>
+    );
+  }
+  const broke = change.kind === "broke";
+  const newer = { label: broke ? "Broke" : "Recovered", date: runLink(change.changed, broke ? "First failing run" : "First passing run") };
+  const older = { label: broke ? "last pass" : "last failure", date: runLink(change.before, broke ? "Last passing run" : "Last failing run") };
   return (
-    <Typography
-      component="span"
-      color="textSecondary"
-      sx={{ ...overviewTypography.description, maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-    >
-      {change.kind === "broke" && (
-        <>Broke {runLink(change.changed, "First failing run")} · last pass {runLink(change.before, "Last passing run")}</>
-      )}
-      {change.kind === "recovered" && (
-        <>Recovered {runLink(change.changed, "First passing run")} · last failure {runLink(change.before, "Last failing run")}</>
-      )}
-      {change.kind === "noPass" && `No pass since ${runDateLabel(change.since)}`}
-      {change.kind === "noFailure" && `No failure since ${runDateLabel(change.since)}`}
+    <Typography component="span" sx={text}>
+      {newer.label} {newer.date} · {older.label} {older.date}
     </Typography>
   );
 }
