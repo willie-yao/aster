@@ -10,7 +10,7 @@ import { dotColorFor } from "../theme";
 // Most run dots the overview renders. The backend keeps up to 20 recent runs,
 // but the ledger and attention columns reserve a fixed width per dot, so the
 // oldest runs are dropped rather than shrinking the targets.
-const maxRuns = 12;
+export const sparklineMaxRuns = 12;
 
 // Each dot is a link to its run, so keep targets 24px apart per WCAG 2.5.8.
 const desktopCell = 24;
@@ -25,7 +25,7 @@ interface SparklineProps {
 }
 
 export function Sparkline({ runs, jobID }: SparklineProps) {
-  const recent = runs.slice(0, maxRuns).reverse();
+  const recent = runs.slice(0, sparklineMaxRuns).reverse();
   const columns = Math.max(recent.length, 1);
   const links = useRef<(HTMLAnchorElement | null)[]>([]);
   const [focused, setFocused] = useState(0);
@@ -61,7 +61,7 @@ export function Sparkline({ runs, jobID }: SparklineProps) {
         width: "100%",
         alignItems: "center",
         gap: 0,
-        // The columns reserve maxRuns * desktopCell, so fixed-width cells keep
+        // The columns reserve sparklineMaxRuns * desktopCell, so fixed-width cells keep
         // every run link at its full target size whatever depth is configured.
         "@media (min-width: 1024px)": {
           gridTemplateColumns: `repeat(${columns}, ${desktopCell}px)`,

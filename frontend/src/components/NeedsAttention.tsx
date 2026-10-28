@@ -25,6 +25,8 @@ import {
   persistOverviewHistoryState,
   rankRecurringPatterns,
   readOverviewHistoryState,
+  runChange,
+  runDateLabel,
   patternFullyResolved,
   unlistedCauseResolutions,
   unlistedPatternResolutions,
@@ -33,7 +35,7 @@ import {
 import { jobPath, jobRunPath, sharedFailurePath, testPath, testRunPath } from "../lib/routes";
 import { baseBranchNote, orderSharedFailures, sharedFailureScope } from "../lib/sharedFailures";
 import { patternLifecycleActive } from "../lib/actionEligibility";
-import { shortJobName, shortTestName } from "../lib/utils";
+import { formatAccessibleDate, shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
 import type {
   FlakinessReport,
@@ -42,13 +44,14 @@ import type {
   PatternAnalysis,
   PatternRefreshStatus,
   ResolvedEntry,
+  RunSummary,
   TestFlakiness,
 } from "../types/dashboard";
 import type { SharedFailure } from "../types/pullRequests";
 import { FailureActions } from "./FailureActions";
 import { CauseResolution } from "./CauseResolution";
 import type { ResolutionScope } from "../lib/resolution";
-import { Sparkline } from "./Sparkline";
+import { Sparkline, sparklineMaxRuns } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const FEATURED_PATTERNS = 3;
@@ -172,6 +175,38 @@ export function DisclosureButton({
         }}
       />
     </Box>
+  );
+}
+
+// RunChangeCaption names when the job last changed outcome. It links the first
+// run of the current streak and the run before it, the pair to compare.
+function RunChangeCaption({ runs, jobID }: { runs: RunSummary[]; jobID: string }) {
+  const change = runChange(runs);
+  if (!change) return null;
+  const runLink = (run: RunSummary, role: string) => (
+    <Link
+      component={RouterLink}
+      to={jobRunPath(jobID, run.build_id)}
+      aria-label={`${role}, run ${run.build_id}, ${formatAccessibleDate(run.timestamp)}`}
+    >
+      {runDateLabel(run)}
+    </Link>
+  );
+  return (
+    <Typography
+      component="span"
+      color="textSecondary"
+      sx={{ ...overviewTypography.description, maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+    >
+      {change.kind === "broke" && (
+        <>Broke {runLink(change.changed, "First failing run")} · last pass {runLink(change.before, "Last passing run")}</>
+      )}
+      {change.kind === "recovered" && (
+        <>Recovered {runLink(change.changed, "First passing run")} · last failure {runLink(change.before, "Last failing run")}</>
+      )}
+      {change.kind === "noPass" && `No pass since ${runDateLabel(change.since)}`}
+      {change.kind === "noFailure" && `No failure since ${runDateLabel(change.since)}`}
+    </Typography>
   );
 }
 
@@ -415,13 +450,17 @@ export function FeaturedPatternRow({
             sx={{
               mt: 0.75,
               display: compactOnMobile ? "none" : "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 0.5,
               [attentionDesktopBreakpoint]: {
                 display: "flex",
-                justifyContent: "flex-end",
+                alignItems: "flex-end",
               },
             }}
           >
             <Sparkline runs={job.recent_runs} jobID={job.job_id} />
+            <RunChangeCaption runs={job.recent_runs.slice(0, sparklineMaxRuns)} jobID={job.job_id} />
           </Box>
         )}
       </Box>

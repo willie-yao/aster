@@ -6,6 +6,7 @@ import type {
   PatternRefreshStatus,
   ResolvedEntry,
   ResolvedState,
+  RunSummary,
   TestFlakiness,
 } from "../types/dashboard";
 import { patternLifecycleActive } from "./actionEligibility.js";
@@ -274,6 +275,29 @@ export function patternEvidenceLabel(
       : "earlier refresh");
   }
   return parts.join(" · ");
+}
+
+export type RunChange =
+  | { kind: "broke" | "recovered"; changed: RunSummary; before: RunSummary }
+  | { kind: "noPass" | "noFailure"; since: RunSummary };
+
+// runChange finds where the newest streak of finished runs began and the run
+// just before it, which has the opposite outcome. Runs are newest first, and
+// a run still in progress has no outcome yet.
+export function runChange(runs: RunSummary[]): RunChange | null {
+  const settled = runs.filter((run) => run.result !== "PENDING");
+  if (settled.length === 0) return null;
+  const failing = !settled[0].passed;
+  const boundary = settled.findIndex((run) => run.passed === failing);
+  if (boundary === -1) return { kind: failing ? "noPass" : "noFailure", since: settled[settled.length - 1] };
+  return { kind: failing ? "broke" : "recovered", changed: settled[boundary - 1], before: settled[boundary] };
+}
+
+export function runDateLabel(run: RunSummary): string {
+  const date = new Date(run.timestamp);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+    : `run ${run.build_id}`;
 }
 
 export function patternRecurrenceLabel(

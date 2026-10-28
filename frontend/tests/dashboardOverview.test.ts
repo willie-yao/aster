@@ -22,6 +22,8 @@ import {
   jobMatchesStatusFilter,
   overviewStatusFromParam,
   runStatusLabel,
+  runChange,
+  runDateLabel,
   readOverviewHistoryState,
   withOverviewFilters,
 } from "../src/lib/dashboardOverview.js";
@@ -366,7 +368,7 @@ test("overview columns reserve a full-size target for every run the sparkline ca
   const attention = source("src/components/NeedsAttention.tsx");
   const number = (pattern: RegExp, text: string) => Number(pattern.exec(text)?.[1]);
 
-  const maxRuns = number(/const maxRuns = (\d+)/, sparkline);
+  const maxRuns = number(/export const sparklineMaxRuns = (\d+)/, sparkline);
   const cell = number(/const desktopCell = (\d+)/, sparkline);
   assert.ok(maxRuns >= 10, "projects configure at least 10 builds");
   // Each dot is its own link, and they sit edge to edge, so the cell width is
@@ -777,9 +779,13 @@ test("featured analysis link precedes separate recent-run links", () => {
   const destinations = [...html.matchAll(/<a\b[^>]*href="([^"]+)"/g)].map((match) => match[1]);
 
   assert.equal(destinations[0], "/job/capz-periodic-e2e-main");
+  // The run strip, oldest first, then the caption's first failing run and
+  // last passing run.
   assert.deepEqual(destinations.slice(1), [
     "/job/capz-periodic-e2e-main?run=122",
     "/job/capz-periodic-e2e-main?run=123",
+    "/job/capz-periodic-e2e-main?run=123",
+    "/job/capz-periodic-e2e-main?run=122",
   ]);
   assert.match(html, /aria-label="View analysis for capz-periodic-e2e-main"/);
   assert.match(html, />View analysis →</);
@@ -948,4 +954,45 @@ test("status filter tiles carry a label, a tone, and an optional count", () => {
   }));
   assert.match(labelsOnly, />Failing</);
   assert.doesNotMatch(labelsOnly, />29<|>6</);
+});
+
+test("run change names where the current streak began and the run before it", () => {
+  const run = (build_id: string, passed: boolean, day: number, result = passed ? "SUCCESS" : "FAILURE") =>
+    ({ build_id, passed, result, timestamp: `2026-10-${String(day).padStart(2, "0")}T12:00:00Z` });
+  // Newest first, as the dashboard publishes them.
+  const broke = runChange([run("f3", false, 9), run("f2", false, 6), run("p1", true, 3)]);
+  assert.deepEqual(broke && broke.kind === "broke" && [broke.changed.build_id, broke.before.build_id], ["f2", "p1"]);
+  const recovered = runChange([run("p2", true, 9), run("f1", false, 6)]);
+  assert.deepEqual(recovered && recovered.kind === "recovered" && [recovered.changed.build_id, recovered.before.build_id], ["p2", "f1"]);
+  const noPass = runChange([run("f2", false, 6), run("f1", false, 3)]);
+  assert.deepEqual(noPass && noPass.kind === "noPass" && noPass.since.build_id, "f1");
+  // A run still in progress has no outcome, so the streak is read from the
+  // newest finished run.
+  const pending = runChange([run("r", false, 10, "PENDING"), run("f1", false, 6), run("p1", true, 3)]);
+  assert.deepEqual(pending && pending.kind === "broke" && [pending.changed.build_id, pending.before.build_id], ["f1", "p1"]);
+  assert.equal(runChange([run("r", false, 10, "PENDING")]), null);
+  assert.equal(runChange([]), null);
+
+  assert.equal(runDateLabel(run("f2", false, 6)), "Oct 6");
+  assert.equal(runDateLabel({ build_id: "42", passed: false, timestamp: "invalid" }), "run 42");
+});
+
+test("featured pattern captions when the job broke with links to both runs", () => {
+  const html = render(createElement(FeaturedPatternRow, {
+    pattern: recurringPattern("main", 3, ["f2", "f1"], 0),
+    rank: 1,
+    prefix: "",
+    job: job({
+      job_id: "main",
+      current_status: "FAILING",
+      recent_runs: [
+        { build_id: "f2", passed: false, result: "FAILURE", timestamp: "2026-10-09T12:00:00Z" },
+        { build_id: "f1", passed: false, result: "FAILURE", timestamp: "2026-10-06T12:00:00Z" },
+        { build_id: "p1", passed: true, result: "SUCCESS", timestamp: "2026-10-03T12:00:00Z" },
+      ],
+    }),
+  }));
+  const content = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
+  assert.match(content, /Broke <a[^>]*href="\/job\/main\?run=f1"[^>]*>Oct 6<\/a> · last pass <a[^>]*href="\/job\/main\?run=p1"[^>]*>Oct 3<\/a>/);
+  assert.match(html, /aria-label="First failing run, run f1, Oct 6, 2026"/);
 });
