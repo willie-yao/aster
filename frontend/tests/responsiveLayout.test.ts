@@ -20,7 +20,7 @@ test("mobile branding link keeps an accessible home name", () => {
   // Layout mounts one nav per breakpoint, but both components must carry the
   // full destination name as a description. The visible label stays the
   // accessible name so speech control can target what it reads (WCAG 2.5.3).
-  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
+  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 2);
   assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
   assert.match(navigation, /title: "Failure Trends"/);
   assert.match(navigation, /title: "Analysis Health"/);
@@ -98,10 +98,22 @@ test("the rail keeps every destination reachable on a short viewport", () => {
   // brand and footer stay put.
   assert.match(rail, /height: "100vh"/);
   assert.match(rail, /overflow: "hidden"/);
-  assert.match(rail, /flex: 1, minHeight: 0, overflowY: "auto"/);
+  assert.match(rail, /flex: 1,\s*minHeight: 0,\s*overflowY: "auto"/);
   // The rail root, brand, search, and footer must not shrink or the list would
   // not be the element that scrolls.
   assert.equal(rail.match(/flexShrink: 0/g)?.length, 4);
+});
+
+test("the rail's active pill glides on transform only and never flies in on load", () => {
+  const rail = source("src/components/NavRail.tsx");
+
+  // Moving the pill must not animate a layout property.
+  assert.match(rail, /const glide = \(seconds: number\) => `transform \$\{seconds\}s \$\{glideEase\}`;/);
+  // Transitions stay off until the first placement, so a page load does not
+  // animate the pill from the top of the list.
+  assert.match(rail, /transition: placed \? glide\(0\.45\) : "none"/);
+  assert.match(rail, /requestAnimationFrame\(\(\) => setPlaced\(true\)\)/);
+  assert.match(rail, /"@media \(prefers-reduced-motion: reduce\)": \{\s*"&, & \*": \{ transition: "none !important" \}/);
 });
 
 test("the deployment title identifies the instance without a kicker on the home page", () => {
