@@ -251,7 +251,8 @@ export function FeaturedPatternRow({
     recurrenceLabel,
     recovering ? `${recoveryStreak} of ${MIN_OBSERVED_RECOVERY_PASSES} passes to clear` : null,
   ].filter(Boolean).join(" · ");
-  const evidence = patternEvidenceLabel(pattern, refreshStatus);
+  const recentRuns = job?.recent_runs.slice(0, sparklineMaxRuns) ?? [];
+  const evidence = patternEvidenceLabel(pattern, recentRuns, refreshStatus);
   const jobName = shortJobName(pattern.subject, prefix);
 
   return (
@@ -444,11 +445,17 @@ export function FeaturedPatternRow({
         <Typography
           variant="caption"
           noWrap
-          color="textSecondary"
-          title={evidence}
-          sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
+          title={evidence.detail}
+          sx={{
+            display: "block",
+            mt: 0.25,
+            ...overviewTypography.description,
+            // Failures the analysis has not seen may have another cause.
+            color: evidence.unanalyzed > 0 ? "warning.main" : "text.secondary",
+            fontWeight: evidence.unanalyzed > 0 ? 600 : undefined,
+          }}
         >
-          {evidence}
+          {evidence.text}
         </Typography>
         {job && (
           <Box
@@ -465,7 +472,7 @@ export function FeaturedPatternRow({
             }}
           >
             <Sparkline runs={job.recent_runs} jobID={job.job_id} />
-            <RunChangeCaption runs={job.recent_runs.slice(0, sparklineMaxRuns)} jobID={job.job_id} />
+            <RunChangeCaption runs={recentRuns} jobID={job.job_id} />
           </Box>
         )}
       </Box>

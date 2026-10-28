@@ -257,24 +257,58 @@ export function rankRecurringPatterns(
   });
 }
 
+// PatternEvidence is the overview's one-line account of a pattern's cause:
+// short text for the row, plus detail with the confidence and analysis date.
+export interface PatternEvidence {
+  text: string;
+  detail: string;
+  // Failures in the given runs newer than every run the analysis saw.
+  unanalyzed: number;
+}
+
+// patternEvidenceLabel says how many of the failures a pattern analyzed share
+// its cause. When the job has failed since the newest run the analysis saw, it
+// says that instead, because the cause may not explain those failures.
+// recentRuns are newest first.
 export function patternEvidenceLabel(
-  pattern: Pick<PatternAnalysis, "builds_analyzed" | "causal_groups" | "shared_builds" | "confidence">,
+  pattern: Pick<PatternAnalysis, "builds_analyzed" | "causal_groups" | "shared_builds" | "unclassified_builds" | "confidence">,
+  recentRuns: RunSummary[] = [],
   refreshStatus?: PatternRefreshStatus,
-): string {
+): PatternEvidence {
   const recurringBuilds = patternRecurringBuildCount(pattern);
-  const parts = [
-    recurringBuilds > 0
-      ? `${recurringBuilds} of ${countLabel(pattern.builds_analyzed, "failure")}`
-      : countLabel(pattern.builds_analyzed, "analyzed failure"),
-  ];
-  if (pattern.confidence !== "high") parts.push(`${pattern.confidence} confidence`);
+  const analyzed = pattern.builds_analyzed;
+  const share = recurringBuilds === 0
+    ? `${countLabel(analyzed, "failed run")} analyzed`
+    : recurringBuilds === analyzed && analyzed > 1
+      ? `Same cause in all ${countLabel(analyzed, "failed run")}`
+      : `This cause in ${recurringBuilds} of ${countLabel(analyzed, "failed run")}`;
+  const confidence = pattern.confidence !== "high" ? ` · ${pattern.confidence} confidence` : "";
+
+  // Unclassified builds were analyzed without a cause. With none of the
+  // analyzed runs in view, every failure in view came after them.
+  const seen = new Set([
+    ...(pattern.causal_groups ?? []).flatMap((group) => group.builds),
+    ...(pattern.shared_builds ?? []),
+    ...(pattern.unclassified_builds ?? []),
+  ]);
+  const newestSeen = recentRuns.findIndex((run) => seen.has(run.build_id));
+  const unanalyzed = recentRuns
+    .slice(0, newestSeen === -1 ? recentRuns.length : newestSeen)
+    .filter((run) => run.result !== "PENDING" && !run.passed).length;
+
+  let analyzedOn = "";
   if (refreshStatus && refreshStatus.state !== "current") {
     const refreshed = new Date(refreshStatus.last_successful_at ?? "");
-    parts.push(Number.isFinite(refreshed.getTime())
-      ? `as of ${refreshed.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`
-      : "earlier refresh");
+    analyzedOn = Number.isFinite(refreshed.getTime())
+      ? ` · analyzed ${refreshed.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`
+      : " · from an earlier refresh";
   }
-  return parts.join(" · ");
+  const detail = `${share}${confidence}${analyzedOn}`;
+  if (unanalyzed > 0) {
+    const text = `${countLabel(unanalyzed, "recent failure")} not analyzed`;
+    return { text, detail: `${text}. ${detail}`, unanalyzed };
+  }
+  return { text: `${share}${confidence}`, detail, unanalyzed };
 }
 
 export type RunChange =

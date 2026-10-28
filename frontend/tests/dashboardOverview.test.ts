@@ -28,7 +28,7 @@ import {
   withOverviewFilters,
 } from "../src/lib/dashboardOverview.js";
 import { splitForMiddleTruncation } from "../src/lib/middleTruncate.js";
-import type { BuildResult, FlakinessReport, JobSummary, PatternAnalysis, PatternRefreshStatus, TestFlakiness } from "../src/types/dashboard.js";
+import type { BuildResult, FlakinessReport, JobSummary, PatternAnalysis, PatternRefreshStatus, RunSummary, TestFlakiness } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 
 const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, StatusFilterTiles, defaultTheme } = await withSSR(async (vite) => {
@@ -474,30 +474,55 @@ test("missing recovery metadata does not imply a recovered pattern", () => {
   );
 });
 
-test("recurring pattern evidence distinguishes matching failures from analyzed failures", () => {
+test("recurring pattern evidence says how many analyzed failures share the cause", () => {
   const partial = recurringPattern("partial", 5, ["2", "1"], 0);
   const active = recurringPattern("active", 3, ["3", "2", "1"], 0);
+  const text = (pattern: Parameters<typeof patternEvidenceLabel>[0]) => patternEvidenceLabel(pattern).text;
 
-  assert.equal(patternEvidenceLabel(partial), "2 of 5 failures");
-  assert.equal(patternEvidenceLabel(active), "3 of 3 failures");
-  assert.equal(patternEvidenceLabel({ ...partial, shared_builds: [], causal_groups: [] }), "5 analyzed failures");
-  assert.equal(patternEvidenceLabel({ ...partial, builds_analyzed: 1, shared_builds: ["1"], causal_groups: [] }), "1 of 1 failure");
-  assert.equal(patternEvidenceLabel({ ...partial, builds_analyzed: 1, shared_builds: [], causal_groups: [] }), "1 analyzed failure");
-  assert.equal(patternEvidenceLabel({ ...partial, confidence: "medium" }), "2 of 5 failures · medium confidence");
-  assert.equal(patternEvidenceLabel({ ...partial, confidence: "low" }), "2 of 5 failures · low confidence");
+  assert.equal(text(partial), "This cause in 2 of 5 failed runs");
+  assert.equal(text(active), "Same cause in all 3 failed runs");
+  assert.equal(text({ ...partial, shared_builds: [], causal_groups: [] }), "5 failed runs analyzed");
+  assert.equal(text({ ...partial, builds_analyzed: 1, shared_builds: ["1"], causal_groups: [] }), "This cause in 1 of 1 failed run");
+  assert.equal(text({ ...partial, builds_analyzed: 1, shared_builds: [], causal_groups: [] }), "1 failed run analyzed");
+  assert.equal(text({ ...partial, confidence: "medium" }), "This cause in 2 of 5 failed runs · medium confidence");
+  assert.equal(text({ ...partial, confidence: "low" }), "This cause in 2 of 5 failed runs · low confidence");
 });
 
-test("overview evidence uses one stale marker from the last successful refresh", () => {
+test("recurring pattern evidence flags failures newer than the analysis", () => {
+  const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 1);
+  const run = (build_id: string, passed: boolean, result = passed ? "SUCCESS" : "FAILURE") =>
+    ({ build_id, passed, result, timestamp: "2026-10-01T00:00:00Z" }) as RunSummary;
+
+  // The newest failure is one the analysis saw, so the cause covers it.
+  const covered = patternEvidenceLabel(pattern, [run("old-2", false), run("pass", true), run("old-1", false)]);
+  assert.deepEqual([covered.text, covered.unanalyzed], ["This cause in 2 of 3 failed runs", 0]);
+
+  // Failures after the newest analyzed run are counted; older ones and pending runs are not.
+  const newer = patternEvidenceLabel(pattern, [run("pending", false, "PENDING"), run("new", false), run("old-2", false), run("older", false)]);
+  assert.deepEqual([newer.text, newer.unanalyzed], ["1 recent failure not analyzed", 1]);
+
+  // An unclassified build was analyzed even though no cause was assigned to it.
+  const unclassified = patternEvidenceLabel({ ...pattern, unclassified_builds: ["unsure"] }, [run("unsure", false), run("old-2", false)]);
+  assert.deepEqual([unclassified.text, unclassified.unanalyzed], ["This cause in 2 of 3 failed runs", 0]);
+
+  // With none of the analyzed runs in view, every failure in view came after them.
+  const retained = patternEvidenceLabel(pattern, [run("b", false), run("a", false), run("p", true)]);
+  assert.deepEqual([retained.text, retained.unanalyzed], ["2 recent failures not analyzed", 2]);
+  assert.match(retained.detail, /^2 recent failures not analyzed\. This cause in 2 of 3 failed runs/);
+});
+
+test("recurring pattern evidence dates a retained analysis in its detail", () => {
   const pattern = recurringPattern("main", 3, ["old-2", "old-1"], 1);
   const refresh: PatternRefreshStatus = {
     state: "retained", evidence_available: false, last_successful_at: "2026-09-28T23:30:00Z",
   };
-  assert.equal(patternEvidenceLabel(pattern, refresh), "2 of 3 failures · as of Sep 28");
-  assert.equal(patternEvidenceLabel({ ...pattern, confidence: "medium" }, refresh), "2 of 3 failures · medium confidence · as of Sep 28");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, state: "current" }), "2 of 3 failures");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, evidence_available: true }), "2 of 3 failures · as of Sep 28");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: undefined }), "2 of 3 failures · earlier refresh");
-  assert.equal(patternEvidenceLabel(pattern, { ...refresh, last_successful_at: "invalid" }), "2 of 3 failures · earlier refresh");
+  const detail = (status: PatternRefreshStatus, p = pattern) => patternEvidenceLabel(p, [], status).detail;
+  assert.equal(patternEvidenceLabel(pattern, [], refresh).text, "This cause in 2 of 3 failed runs");
+  assert.equal(detail(refresh), "This cause in 2 of 3 failed runs · analyzed Sep 28");
+  assert.equal(detail(refresh, { ...pattern, confidence: "medium" }), "This cause in 2 of 3 failed runs · medium confidence · analyzed Sep 28");
+  assert.equal(detail({ ...refresh, state: "current" }), "This cause in 2 of 3 failed runs");
+  assert.equal(detail({ ...refresh, last_successful_at: undefined }), "This cause in 2 of 3 failed runs · from an earlier refresh");
+  assert.equal(detail({ ...refresh, last_successful_at: "invalid" }), "This cause in 2 of 3 failed runs · from an earlier refresh");
 });
 
 test("latest recurrence label tolerates missing timestamps without inventing a date", () => {
@@ -524,7 +549,9 @@ test("featured pattern combines passing recurrence and recovery above its eviden
   assert.match(html, /aria-label="Passing · recurred Oct 19 · 1 of 3 passes to clear"/);
   const content = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
   assert.match(content, />Passing · <a[^>]*href="\/job\/main\?run=oct-19"[^>]*>recurred Oct 19<\/a> · 1\/3 passes to clear<\/div>/);
-  assert.match(html, />2 of 3 failures · as of Sep 28</);
+  // The fixture's failed run 122 is not one the pattern analyzed.
+  assert.match(content, />1 recent failure not analyzed</);
+  assert.match(html, /title="1 recent failure not analyzed\. This cause in 2 of 3 failed runs · analyzed Sep 28"/);
   assert.doesNotMatch(html, /high confidence|earlier window|Last successful refresh|Passing now/);
   assert.doesNotMatch(html, /<a\b[^>]*>(?:(?!<\/a>)[\s\S])*<a\b/);
 });
@@ -695,7 +722,7 @@ test("featured recurring pattern exposes a current same-cause streak", () => {
   }));
 
   assert.match(html, />Failing · 3 in a row</);
-  assert.match(html, />3 of 3 failures</);
+  assert.match(html, />Same cause in all 3 failed runs</);
   assert.doesNotMatch(html, /high confidence/);
   assert.doesNotMatch(html, />Flaky</);
 
@@ -744,7 +771,7 @@ test("featured recurring pattern keeps current failure separate from causal grou
     job: failingJob,
   }));
   assert.match(failing, />Failing</);
-  assert.match(failing, />3 of 4 failures</);
+  assert.match(failing, />This cause in 3 of 4 failed runs</);
   assert.doesNotMatch(failing, /in a row/);
   assert.doesNotMatch(failing, />Flaky</);
 
