@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
+import Link from "@mui/material/Link";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useDashboard, useFlakinessReport, useSharedFailures } from "../hooks/useData";
@@ -175,33 +176,60 @@ export function DashboardPage() {
       }))
     : [{ id: "all-jobs", jobs: filtered }];
   const jobsByID = Object.fromEntries(data.jobs.map((job) => [job.job_id, job]));
+  const latestFailed = data.jobs.filter((job) => job.current_status === "FAILING").length;
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, sm: overviewLayout.majorSectionGap } }}>
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "minmax(0, 1fr) auto" },
+          gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1fr) auto" },
           alignItems: "end",
           gap: 1,
         }}
       >
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            variant="label"
-            component="p"
-            color="textSecondary"
-            sx={{ mb: 0.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-          >
-            {manifest.branding.title}
-          </Typography>
-          <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
-            Test Health Overview
-          </Typography>
-        </Box>
-        <Typography variant="data" color="textSecondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
-          Updated {timeAgo(data.generated_at)}
+        <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
+          Test Health Overview
         </Typography>
+        <Box
+          component="ul"
+          aria-label="Overview vitals"
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            m: 0,
+            p: 0,
+            listStyle: "none",
+            justifySelf: { xs: "start", md: "end" },
+            ...overviewTypography.data,
+            color: "text.secondary",
+            "& > li": { px: 1.5, borderLeft: "1px solid", borderColor: "divider" },
+            "& > li:first-of-type": { pl: 0, borderLeft: 0 },
+          }}
+        >
+          <li>
+            {latestFailed > 0 ? (
+              // The count spans every branch, so the filter it applies does too.
+              <Link
+                component="button"
+                type="button"
+                underline="hover"
+                onClick={() => updateFilters("LATEST_FAILED", "ALL")}
+                sx={{
+                  ...overviewTypography.data,
+                  verticalAlign: "baseline",
+                  color: "error.main",
+                  "--Link-underlineColor": "currentColor",
+                }}
+              >
+                {latestFailed} {latestFailed === 1 ? "latest run" : "latest runs"} failed
+              </Link>
+            ) : (
+              "No latest runs failed"
+            )}
+          </li>
+          <li>Updated {timeAgo(data.generated_at)}</li>
+        </Box>
       </Box>
 
       <OverviewSectionNav />
