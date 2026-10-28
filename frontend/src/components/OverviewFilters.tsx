@@ -2,12 +2,10 @@ import Box from "@mui/material/Box";
 import FormControl from "@mui/material/FormControl";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
-import ToggleButton from "@mui/material/ToggleButton";
-import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
-import { soft } from "../theme";
 import type { OverviewStatusFilter } from "../lib/dashboardOverview";
 import { overviewTypography } from "../theme/overview";
+import { StatusFilterTiles } from "./StatusFilterTiles";
 
 const statusFilters: { label: string; value: OverviewStatusFilter }[] = [
   { label: "All", value: "ALL" },
@@ -16,6 +14,15 @@ const statusFilters: { label: string; value: OverviewStatusFilter }[] = [
   { label: "Unreliable", value: "UNRELIABLE" },
   { label: "Latest run failed", value: "LATEST_FAILED" },
 ];
+
+// Status tone for each filter; the label always names the state.
+const statusTone: Record<OverviewStatusFilter, string> = {
+  ALL: "var(--mui-palette-text-primary)",
+  HEALTHY: "var(--mui-palette-success-main)",
+  FLAKY: "var(--mui-palette-warning-main)",
+  UNRELIABLE: "var(--mui-palette-error-main)",
+  LATEST_FAILED: "var(--mui-palette-error-main)",
+};
 
 interface OverviewFiltersProps {
   statusFilter: OverviewStatusFilter;
@@ -40,69 +47,26 @@ export function OverviewFilters({
       aria-label="Overview filters"
       sx={{
         display: "grid",
-        gridTemplateColumns: { xs: "1fr", sm: "auto minmax(180px, 220px) 1fr" },
+        gridTemplateColumns: {
+          xs: "1fr",
+          sm: "minmax(180px, 220px) 1fr",
+          md: "minmax(0, 1fr) minmax(180px, 220px) auto",
+        },
         alignItems: "center",
-        gap: { xs: 1.5, sm: 2 },
+        gap: { xs: 1.5, md: 2 },
         py: 1.5,
         borderBlock: "1px solid",
         borderColor: "divider",
       }}
     >
-      <ToggleButtonGroup
-        exclusive
-        value={statusFilter}
-        onChange={(_, value: OverviewStatusFilter | null) => {
-          if (value) onStatusChange(value);
-        }}
-        aria-label="Job status filter"
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "repeat(4, minmax(0, 1fr))", sm: "repeat(4, auto) auto" },
-          "& .MuiToggleButtonGroup-grouped": {
-            minWidth: 0,
-            minHeight: 44,
-            px: 1.25,
-            py: 0.5,
-            border: "1px solid !important",
-            borderColor: "divider !important",
-            borderRadius: "0 !important",
-            color: "text.secondary",
-            textTransform: "none",
-            ...overviewTypography.tableHeading,
-            "&:first-of-type": { borderRadius: { xs: "4px 0 0 0 !important", sm: "4px 0 0 4px !important" } },
-            "&:nth-of-type(4)": { borderRadius: { xs: "0 4px 0 0 !important", sm: "0 !important" } },
-            "&:not(:first-of-type)": { ml: "-1px" },
-            // The long label takes its own row on phones.
-            "&:last-of-type": {
-              borderRadius: { xs: "0 0 4px 4px !important", sm: "0 4px 4px 0 !important" },
-              gridColumn: { xs: "1 / -1", sm: "auto" },
-              ml: { xs: 0, sm: "-1px" },
-              mt: { xs: "-1px", sm: 0 },
-            },
-            "&:hover": { bgcolor: "surface.containerHigh", color: "text.primary" },
-            "&.Mui-selected": {
-              position: "relative",
-              zIndex: 1,
-              color: "text.primary",
-              borderColor: "primary.main !important",
-              bgcolor: (theme) => soft(theme, "primary", 0.12),
-              boxShadow: "inset 0 -3px 0 var(--mui-palette-primary-main)",
-              "&:hover": { bgcolor: (theme) => soft(theme, "primary", 0.16) },
-            },
-            "&.Mui-focusVisible": {
-              outline: "2px solid",
-              outlineColor: "primary.main",
-              outlineOffset: 1,
-            },
-          },
-        }}
-      >
-        {statusFilters.map((filter) => (
-          <ToggleButton key={filter.value} value={filter.value}>
-            {filter.label}
-          </ToggleButton>
-        ))}
-      </ToggleButtonGroup>
+      <Box sx={{ gridColumn: { sm: "1 / -1", md: "auto" }, minWidth: 0 }}>
+        <StatusFilterTiles
+          label="Job status filter"
+          value={statusFilter}
+          onChange={onStatusChange}
+          options={statusFilters.map((filter) => ({ ...filter, tone: statusTone[filter.value] }))}
+        />
+      </Box>
 
       <FormControl size="small" fullWidth>
         <Select
@@ -141,7 +105,7 @@ export function OverviewFilters({
       <Typography
         variant="data"
         color="textSecondary"
-        sx={{ justifySelf: { xs: "start", sm: "end" }, ...overviewTypography.data }}
+        sx={{ justifySelf: { xs: "start", md: "end" }, ...overviewTypography.data }}
       >
         {matchingJobs} {matchingJobs === 1 ? "job" : "jobs"}
       </Typography>

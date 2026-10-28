@@ -29,7 +29,7 @@ import { splitForMiddleTruncation } from "../src/lib/middleTruncate.js";
 import type { BuildResult, FlakinessReport, JobSummary, PatternAnalysis, PatternRefreshStatus, TestFlakiness } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 
-const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, defaultTheme } = await withSSR(async (vite) => {
+const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, StatusFilterTiles, defaultTheme } = await withSSR(async (vite) => {
   const { HealthPanel } = (await vite.ssrLoadModule("/src/components/HealthPanel.tsx")) as {
     HealthPanel: (props: {
       jobs: JobSummary[];
@@ -87,10 +87,18 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
       onSelect: (buildId: string) => void;
     }) => ReturnType<typeof createElement>;
   };
+  const { StatusFilterTiles } = (await vite.ssrLoadModule("/src/components/StatusFilterTiles.tsx")) as {
+    StatusFilterTiles: (props: {
+      label: string;
+      value: string;
+      options: { value: string; label: string; tone: string; count?: number }[];
+      onChange: (value: string) => void;
+    }) => ReturnType<typeof createElement>;
+  };
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
     defaultTheme: Theme;
   };
-  return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, defaultTheme };
+  return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, StatusFilterTiles, defaultTheme };
 });
 
 function job(overrides: Partial<JobSummary> = {}): JobSummary {
@@ -887,13 +895,8 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.doesNotMatch(attention, /fontSize: lead \? "24px" : "16px"/);
   assert.match(filters, /minHeight: 44/);
   assert.doesNotMatch(filters, />\s*Reliability\s*</);
-  assert.match(filters, /aria-label="Job status filter"/);
+  assert.match(filters, /<StatusFilterTiles\s+label="Job status filter"/);
   assert.match(filters, /height: 44/);
-  assert.match(filters, /boxShadow: "inset 0 -3px 0/);
-  assert.match(filters, /color: "text.primary"/);
-  assert.match(filters, /borderRadius: "0 !important"/);
-  assert.match(filters, /sm: "4px 0 0 4px !important"/);
-  assert.match(filters, /sm: "0 4px 4px 0 !important"/);
   assert.match(health, /onFilterClick\?\.\(active \? "ALL" : row\.status\)/);
   assert.match(health, /borderLeft: "1px solid"/);
   assert.match(health, /% of jobs|> of jobs</);
@@ -923,4 +926,26 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(overviewTheme, /mobileFeaturedBody/);
   assert.match(overviewTheme, /subsectionHeading/);
   assert.doesNotMatch(ledger, /position:\s*"sticky"/);
+});
+
+// Overview and Pulls share one tile filter, so the status word, its tone, and
+// the optional count render the same way on both pages.
+test("status filter tiles carry a label, a tone, and an optional count", () => {
+  const options = [
+    { value: "ALL", label: "All", tone: "var(--mui-palette-text-primary)", count: 29 },
+    { value: "FAILING", label: "Failing", tone: "var(--mui-palette-error-main)", count: 6 },
+  ];
+  const counted = render(createElement(StatusFilterTiles, { label: "Presubmit state", value: "FAILING", options, onChange: () => {} }));
+  assert.match(counted, /role="group"[^>]*aria-label="Presubmit state"/);
+  assert.match(counted, /aria-pressed="true"[^>]*>(?:(?!<\/button>).)*>6<(?:(?!<\/button>).)*Failing/s);
+  assert.match(counted, /--tone:var\(--mui-palette-error-main\)/);
+
+  const labelsOnly = render(createElement(StatusFilterTiles, {
+    label: "Job status filter",
+    value: "ALL",
+    options: options.map(({ value, label, tone }) => ({ value, label, tone })),
+    onChange: () => {},
+  }));
+  assert.match(labelsOnly, />Failing</);
+  assert.doesNotMatch(labelsOnly, />29<|>6</);
 });
