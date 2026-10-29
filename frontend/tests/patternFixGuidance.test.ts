@@ -340,11 +340,13 @@ test("build representatives use the build page's first build failure, not a same
 
 test("causal build links keep exact IDs and expose clear accessible names", () => {
   const banner = source("src/components/PatternBanner.tsx");
+  const ledger = source("src/components/AffectedBuildsLedger.tsx");
 
   assert.match(banner, /Affected \{group\.builds\.length === 1 \? "build" : "builds"\}/);
-  assert.match(banner, /aria-label=\{`Open affected build \$\{buildID\}`\}/);
-  assert.match(banner, />\s*\{buildID\}\s*<\/Link>/);
-  assert.match(banner, /to=\{jobID \? jobRunPath\(jobID, buildID\) : "#"\}/);
+  assert.match(banner, /<AffectedBuildsLedger builds=\{group\.builds\} runs=\{runs\} jobID=\{jobID\} \/>/);
+  assert.match(ledger, /aria-label=\{`Open affected build \$\{buildID\}\$\{description\}`\}/);
+  assert.match(ledger, /title=\{buildID\}[\s\S]*?>\s*\{buildID\}\s*<\/Typography>/);
+  assert.match(ledger, /to=\{jobID \? jobRunPath\(jobID, buildID\) : "#"\}/);
 });
 
 test("causal actions stay blocked while pattern chat and exact-JUnit Fix remain unchanged", () => {

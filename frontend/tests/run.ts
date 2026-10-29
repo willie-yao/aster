@@ -7,6 +7,7 @@ import "./fixReview.test.js";
 import "./aiUsage.test.js";
 import "./patternChat.test.js";
 import "./patternFixGuidance.test.js";
+import "./affectedBuilds.test.js";
 import "./causalFixRouting.test.js";
 import "./causalNextStep.test.js";
 import "./preparedFinding.test.js";
