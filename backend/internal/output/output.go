@@ -170,23 +170,18 @@ func WriteManifest(dir string, cfg *project.Config) error {
 	return writeJSON(filepath.Join(dir, "manifest.json"), cfg)
 }
 
-// WriteAll writes dashboard.json, all job detail files, flakiness.json,
-// search-index.json, and manifest.json. Independent failures are aggregated.
+// WriteAll publishes dashboard.json after all supporting writes succeed, then
+// prunes stale job files. Supporting failures are aggregated. Files are replaced
+// independently, so a failed pass can leave mixed generations.
 func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, details []models.JobDetail, flakiness models.FlakinessReport, searchIndex models.SearchIndex) error {
 	var errs []error
 	if err := WriteManifest(dir, cfg); err != nil {
 		errs = append(errs, fmt.Errorf("write manifest: %w", err))
 	}
-	if err := WriteDashboard(dir, dashboard); err != nil {
-		errs = append(errs, fmt.Errorf("write dashboard: %w", err))
-	}
 	for _, d := range details {
 		if err := WriteJobDetail(dir, d); err != nil {
 			errs = append(errs, fmt.Errorf("write job detail %s: %w", d.JobID, err))
 		}
-	}
-	if err := pruneJobDetails(dir, details); err != nil {
-		errs = append(errs, fmt.Errorf("prune job details: %w", err))
 	}
 	if err := WriteFlakinessReport(dir, flakiness); err != nil {
 		errs = append(errs, fmt.Errorf("write flakiness report: %w", err))
@@ -194,7 +189,18 @@ func WriteAll(dir string, cfg *project.Config, dashboard models.Dashboard, detai
 	if err := WriteSearchIndex(dir, searchIndex); err != nil {
 		errs = append(errs, fmt.Errorf("write search index: %w", err))
 	}
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+
+	if err := WriteDashboard(dir, dashboard); err != nil {
+		return fmt.Errorf("write dashboard: %w", err)
+	}
+
+	if err := pruneJobDetails(dir, details); err != nil {
+		return fmt.Errorf("prune job details: %w", err)
+	}
+	return nil
 }
 
 func pruneJobDetails(dir string, details []models.JobDetail) error {
