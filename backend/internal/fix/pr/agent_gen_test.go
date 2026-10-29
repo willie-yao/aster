@@ -80,7 +80,14 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 		Diff:  "--- a/templates/cluster.yaml\n+++ b/templates/cluster.yaml\n",
 	}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
-	gp := agentGenParams(&AgentConfig{Runtime: fa, SharedModelEndpoint: true, Model: "m", Endpoint: "e", ModelToken: "t", MaxFiles: 3, OutputLimitBytes: 131072, ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"), AllowBash: true, NetworkDomains: []string{"registry.example.test:443"}, CommandPolicy: runtime.CommandPolicy{Commands: []runtime.ExecutionCommand{{Argv: []string{"go", "test", "./..."}}}}, ExecutionID: "request-1", WorkObserver: observer})
+	gp := agentGenParams(&AgentConfig{
+		Runtime: fa, MaxTurns: 5, MaxFiles: 3, Timeout: time.Minute, GitToken: "git-token",
+		OutputLimitBytes: 131072,
+		ModelProvider:    testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"),
+		AllowBash:        true,
+		CommandPolicy:    runtime.CommandPolicy{Commands: []runtime.ExecutionCommand{{Argv: []string{"go", "test", "./..."}}}},
+		ExecutionID:      "request-1", WorkObserver: observer,
+	})
 
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err != nil {
@@ -96,31 +103,25 @@ func TestGenerateWithAgent_HappyPath(t *testing.T) {
 	if !strings.Contains(fa.spec.Instruction, "etcd disk too slow") {
 		t.Errorf("instruction missing root cause: %q", fa.spec.Instruction)
 	}
-	if fa.spec.Repo.Owner != "o" || fa.spec.Repo.Ref != "ref" {
+	if fa.spec.Repo.Owner != "o" || fa.spec.Repo.Name != "r" || fa.spec.Repo.Ref != "ref" || fa.spec.Repo.Token != "git-token" {
 		t.Errorf("repo not passed: %+v", fa.spec.Repo)
-	}
-	if fa.spec.Model != "m" || fa.spec.Endpoint != "e" || fa.spec.Token != "t" {
-		t.Errorf("model config not passed: %+v", fa.spec)
-	}
-	if len(fa.spec.NetworkDomains) != 1 || fa.spec.NetworkDomains[0] != "registry.example.test:443" {
-		t.Errorf("network domains not passed: %+v", fa.spec.NetworkDomains)
 	}
 	if fa.spec.ExecutionID != "request-1" || fa.spec.WorkObserver == nil {
 		t.Errorf("runtime work identity not passed: %+v", fa.spec)
 	}
-	if fa.spec.ExpectedBaseSHA != "ref" || fa.spec.MaxSteps != fa.spec.MaxTurns || fa.spec.MaxFiles != 3 || fa.spec.OutputLimitBytes != 131072 || fa.spec.ModelProvider.Model != "fixture" || !fa.spec.CommandPolicy.AllowShell || len(fa.spec.CommandPolicy.Commands) != 1 {
+	if fa.spec.ExpectedBaseSHA != "ref" || fa.spec.MaxTurns != 5 || fa.spec.MaxSteps != 5 || fa.spec.MaxFiles != 3 || fa.spec.Timeout != time.Minute || fa.spec.OutputLimitBytes != 131072 || fa.spec.ModelProvider != gp.agent.ModelProvider || !fa.spec.AllowBash || !fa.spec.CommandPolicy.AllowShell || len(fa.spec.CommandPolicy.Commands) != 1 {
 		t.Errorf("provider-neutral execution policy not passed: %+v", fa.spec)
 	}
 }
 
-func TestAgentRuntimeSpecOmitsProviderPolicyForAgentOwnedEndpoint(t *testing.T) {
+func TestAgentRuntimeSpecOmitsSharedEndpointConfiguration(t *testing.T) {
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
 	spec := agentRuntimeSpec(&AgentConfig{
-		Model: "model", Endpoint: "https://model.example.test/v1", ModelToken: "secret",
-		NetworkDomains: []string{"model.example.test:443"}, ExecutionID: "request-1", WorkObserver: observer,
+		ModelProvider: testGatewayProvider("https://gateway.example.internal/v1/chat/completions", "fixture"),
+		ExecutionID:   "request-1", WorkObserver: observer,
 	}, runtime.RepoRef{Owner: "o", Name: "r", Ref: "ref", Token: "git-token"}, "fix")
 	if spec.Model != "" || spec.Endpoint != "" || spec.Token != "" || len(spec.NetworkDomains) != 0 {
-		t.Fatalf("agent-owned provider policy leaked into runtime spec: %+v", spec)
+		t.Fatalf("shared endpoint configuration leaked into runtime spec: %+v", spec)
 	}
 	if spec.Repo.Token != "git-token" || spec.ExecutionID != "request-1" || spec.WorkObserver == nil {
 		t.Fatalf("repository and work identity were not preserved: %+v", spec)

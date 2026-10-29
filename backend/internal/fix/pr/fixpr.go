@@ -96,13 +96,6 @@ type Options struct {
 type AgentConfig struct {
 	// Runtime runs the coding agent against a clone of the source repo.
 	Runtime runtime.AgentRuntime
-	// Model, Endpoint, and ModelToken point the agent at the model. Empty Model
-	// uses the CLI default.
-	API                 string
-	SharedModelEndpoint bool
-	Model               string
-	Endpoint            string
-	ModelToken          string
 	// MaxTurns bounds the agent loop; zero uses the CLI default.
 	MaxTurns int
 	// MaxFiles bounds the changed-file result.
@@ -114,8 +107,6 @@ type AgentConfig struct {
 	// AllowBash lets runtimes that support it run commands during generation.
 	// Agent Sandbox requires false and runs exact validators afterward.
 	AllowBash bool
-	// NetworkDomains are additional dependency registry destinations.
-	NetworkDomains []string
 	// CommandPolicy is the exact provider-neutral command policy.
 	CommandPolicy runtime.CommandPolicy
 	// RequireCommandResults makes the runtime's complete ordered validator

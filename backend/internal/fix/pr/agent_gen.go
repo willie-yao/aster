@@ -27,7 +27,7 @@ func generateWithAgent(ctx context.Context, gp genParams, p models.PatternAnalys
 func agentRuntimeSpec(a *AgentConfig, repo runtime.RepoRef, instruction string) runtime.GenerateSpec {
 	policy := a.CommandPolicy
 	policy.AllowShell = a.AllowBash
-	spec := runtime.GenerateSpec{
+	return runtime.GenerateSpec{
 		Repo: repo, Instruction: instruction,
 		MaxTurns: a.MaxTurns, MaxSteps: a.MaxTurns, MaxFiles: a.MaxFiles, AllowBash: a.AllowBash, Timeout: a.Timeout,
 		ExpectedBaseSHA:  repo.Ref,
@@ -36,13 +36,6 @@ func agentRuntimeSpec(a *AgentConfig, repo runtime.RepoRef, instruction string) 
 		OutputLimitBytes: a.OutputLimitBytes,
 		ExecutionID:      a.ExecutionID, WorkObserver: a.WorkObserver,
 	}
-	if a.SharedModelEndpoint {
-		spec.Model = a.Model
-		spec.Endpoint = a.Endpoint
-		spec.Token = a.ModelToken
-		spec.NetworkDomains = a.NetworkDomains
-	}
-	return spec
 }
 
 // critiqueAgentFix asks a reviewer model whether the agent's change has concrete
