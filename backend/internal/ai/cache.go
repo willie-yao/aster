@@ -2,11 +2,9 @@ package ai
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -121,45 +119,6 @@ func (c *Cache) Delete(key string) bool {
 	return true
 }
 
-// Entries returns copies of selected unexpired cache entries.
-func (c *Cache) Entries(keys ...string) map[string]CacheEntry {
-	out := map[string]CacheEntry{}
-	if c == nil {
-		return out
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	for _, key := range keys {
-		entry, ok := c.entries[key]
-		if !ok || !validCacheEntryTime(now, entry.CreatedAt) {
-			continue
-		}
-		entry.Data = append(json.RawMessage(nil), entry.Data...)
-		out[key] = entry
-	}
-	return out
-}
-
-// EntriesWithPrefix returns copies of unexpired entries whose key has prefix.
-func (c *Cache) EntriesWithPrefix(prefix string) map[string]CacheEntry {
-	out := map[string]CacheEntry{}
-	if c == nil || prefix == "" {
-		return out
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	for key, entry := range c.entries {
-		if !strings.HasPrefix(key, prefix) || !validCacheEntryTime(now, entry.CreatedAt) {
-			continue
-		}
-		entry.Data = append(json.RawMessage(nil), entry.Data...)
-		out[key] = entry
-	}
-	return out
-}
-
 // LoadLinkVerification returns a persisted file-existence answer. A recorded
 // absence is trusted only for linkAbsenceTTL so a spurious 404 self-heals.
 func (c *Cache) LoadLinkVerification(key string) (bool, bool) {
@@ -192,46 +151,6 @@ func (c *Cache) StoreLinkVerification(key string, present bool) {
 	if err := c.Set(key, linkVerificationRecord{Present: present}); err != nil {
 		log.Printf("Warning: failed to persist link verification %s: %v", key, err)
 	}
-}
-
-// Merge adds newer valid entries and reports whether the cache changed.
-func (c *Cache) Merge(entries map[string]CacheEntry) bool {
-	if c == nil || len(entries) == 0 {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	changed := false
-	for key, entry := range entries {
-		if key == "" || entry.Key != key || !validCacheEntryTime(now, entry.CreatedAt) || !json.Valid(entry.Data) {
-			continue
-		}
-		current, ok := c.entries[key]
-		if ok && !entry.CreatedAt.After(current.CreatedAt) {
-			continue
-		}
-		entry.Data = append(json.RawMessage(nil), entry.Data...)
-		c.entries[key] = entry
-		changed = true
-	}
-	if changed {
-		c.dirty = true
-	}
-	return changed
-}
-
-// StoreEntry replaces one validated cache entry exactly.
-func (c *Cache) StoreEntry(entry CacheEntry) error {
-	if c == nil || entry.Key == "" || !validCacheEntryTime(time.Now(), entry.CreatedAt) || !json.Valid(entry.Data) {
-		return fmt.Errorf("invalid cache entry")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry.Data = append(json.RawMessage(nil), entry.Data...)
-	c.entries[entry.Key] = entry
-	c.dirty = true
-	return nil
 }
 
 // Save writes the cache to dir/ai_cache.json.
