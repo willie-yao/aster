@@ -16,7 +16,7 @@ import (
 const maxRecentRuns = 20
 
 const (
-	passRateRecentRuns = 10  // number of recent runs the pass rate covers
+	passRateRecentRuns = 10  // number of published runs the pass-rate window covers
 	passingThreshold   = 0.9 // recent pass rate at/above this is PASSING
 	failingThreshold   = 0.3 // recent pass rate at/below this is FAILING
 )
@@ -70,6 +70,7 @@ func ComputeJobSummary(job models.ProwJob, runs []models.BuildResult) models.Job
 	summary := models.JobSummary{
 		ProwJob:       job,
 		CurrentStatus: CurrentJobStatus(runs),
+		OverallStatus: "UNKNOWN",
 		RecentRuns:    []models.RunSummary{},
 	}
 
@@ -110,42 +111,49 @@ func CurrentJobStatus(runs []models.BuildResult) models.JobCurrentStatus {
 	return models.JobCurrentFailing
 }
 
-// computeOverallStatus classifies a job from its most recent runs using the
-// pass rate over the last passRateRecentRuns runs:
+// computeOverallStatus classifies completed outcomes within the last
+// passRateRecentRuns published runs:
 //   - PASSING when the recent pass rate is at least passingThreshold
 //   - FAILING when it is at or below failingThreshold
 //   - FLAKY otherwise
+//   - UNKNOWN when the window has no completed outcomes
 func computeOverallStatus(runs []models.BuildResult) string {
-	if len(runs) == 0 {
-		return "FLAKY"
-	}
 	rate := recentPassRate(runs, passRateRecentRuns)
 	switch {
-	case rate >= passingThreshold:
+	case rate == nil:
+		return "UNKNOWN"
+	case *rate >= passingThreshold:
 		return "PASSING"
-	case rate <= failingThreshold:
+	case *rate <= failingThreshold:
 		return "FAILING"
 	default:
 		return "FLAKY"
 	}
 }
 
-// recentPassRate calculates the fraction of passing runs among the most recent
-// n runs. Runs are expected newest-first. Returns 0 when there are no runs.
-func recentPassRate(runs []models.BuildResult, n int) float64 {
-	if len(runs) == 0 {
-		return 0
+// recentPassRate calculates the passing fraction among completed outcomes in
+// the newest n published runs. Nil means the window has no completed outcomes.
+func recentPassRate(runs []models.BuildResult, n int) *float64 {
+	if n <= 0 {
+		return nil
 	}
 	if n > len(runs) {
 		n = len(runs)
 	}
-	passed := 0
+	passed, completed := 0, 0
 	for i := 0; i < n; i++ {
+		if runs[i].Result == "" || runs[i].Result == "PENDING" || runs[i].Result == "UNKNOWN" {
+			continue
+		}
+		completed++
 		if runs[i].Passed {
 			passed++
 		}
 	}
-	return float64(passed) / float64(n)
+	if completed == 0 {
+		return nil
+	}
+	return new(float64(passed) / float64(completed))
 }
 
 // BuildRunSummary converts a BuildResult into a compact RunSummary.

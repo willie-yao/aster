@@ -211,11 +211,10 @@ export function JobDetailPage() {
     ? emptyTestResultsPresentation(selectedRun, selectedIsRetained)
     : null;
 
-  // A pass rate over an empty analysis window is unknown, not zero. Retained
-  // history can still plot dots here, so this must not read as 0% failing.
+  // An explicit null means no completed outcomes, not a missing published rate.
   const passRateRecent = useMemo(
-    () => (runs.length === 0 ? null : data?.pass_rate_recent ?? recentJobPassRate(runs)),
-    [data?.pass_rate_recent, runs],
+    () => data?.pass_rate_recent === undefined ? recentJobPassRate(runs) : data.pass_rate_recent,
+    [data, runs],
   );
 
   const runtimeSummary = useMemo(
@@ -292,7 +291,7 @@ export function JobDetailPage() {
     },
     {
       label: "Last 10 runs",
-      value: passRateRecent !== null ? formatPercent(passRateRecent) : "Not available",
+      value: passRateRecent !== null ? formatPercent(passRateRecent) : "No completed runs",
       color: passRateRecent !== null ? passRateColor(passRateRecent) : "text.primary",
     },
     ...(recoveryStreak !== undefined

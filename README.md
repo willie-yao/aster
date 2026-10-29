@@ -18,6 +18,8 @@ See the [public CAPZ dashboard](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01
 
 [![Aster showing a CAPZ test failure, its analysis, and artifact evidence](docs/assets/aster-dashboard-preview.png)](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01.azurefd.net/)
 
+Job reliability counts completed outcomes within the newest 10 published runs; pending and unknown results do not count as failures. A window with no completed outcomes shows "No completed runs" and belongs to no reliability bucket. The latest-run status and run history still show running jobs.
+
 ## Before you start
 
 - Have Go installed and a Git checkout of the repository whose jobs you want to monitor. Go can download the required toolchain automatically.

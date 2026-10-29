@@ -27,21 +27,21 @@ export function HealthPanel({ jobs, onFilterClick, activeFilter }: HealthPanelPr
       status: "HEALTHY",
       count: jobs.filter((job) => jobMatchesStatusFilter(job, "HEALTHY")).length,
       color: "success",
-      description: "Jobs with at least a 90% pass rate across up to the last 10 published runs.",
+      description: "Jobs with at least a 90% pass rate among completed outcomes in the last 10 published runs.",
     },
     {
       label: reliabilityLabels.FLAKY,
       status: "FLAKY",
       count: jobs.filter((job) => jobMatchesStatusFilter(job, "FLAKY")).length,
       color: "warning",
-      description: "Jobs with a mix of passing and failing results across up to the last 10 published runs.",
+      description: "Jobs with a mix of passing and failing results among completed outcomes in the last 10 published runs.",
     },
     {
       label: reliabilityLabels.UNRELIABLE,
       status: "UNRELIABLE",
       count: jobs.filter((job) => jobMatchesStatusFilter(job, "UNRELIABLE")).length,
       color: "error",
-      description: "Jobs with a pass rate of 30% or less across up to the last 10 published runs.",
+      description: "Jobs with a pass rate of 30% or less among completed outcomes in the last 10 published runs.",
     },
   ];
 

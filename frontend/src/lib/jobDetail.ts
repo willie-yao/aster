@@ -105,7 +105,10 @@ export function currentJobStatus(
 }
 
 export function recentJobPassRate(runs: BuildResult[], limit = 10): number | null {
-  if (runs.length === 0) return null;
-  const recent = runs.slice(0, limit);
+  if (limit <= 0) return null;
+  const recent = runs.slice(0, limit).filter(
+    (run) => run.result !== "" && run.result !== "PENDING" && run.result !== "UNKNOWN",
+  );
+  if (recent.length === 0) return null;
   return recent.filter((run) => run.passed).length / recent.length;
 }

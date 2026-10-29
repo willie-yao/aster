@@ -120,6 +120,39 @@ test("job detail separates current observation from rolling reliability", () => 
   assert.equal(currentJobStatus("FAILING", runs), "FAILING");
 });
 
+test("job reliability counts completed outcomes within the published-run window", async (t) => {
+  const pending = Array<string>(10).fill("PENDING");
+  const cases: { name: string; results: string[]; rate: number | null }[] = [
+    { name: "pending with passes", results: ["PENDING", "SUCCESS", "PENDING", "SUCCESS"], rate: 1 },
+    { name: "pending with mixed outcomes", results: ["PENDING", "SUCCESS", "FAILURE", "PENDING"], rate: 0.5 },
+    { name: "pending with failures", results: ["PENDING", "FAILURE", "PENDING", "FAILURE"], rate: 0 },
+    { name: "unknown outcomes ignored", results: ["PENDING", "", "UNKNOWN", "SUCCESS", "FAILURE"], rate: 0.5 },
+    { name: "all pending", results: pending, rate: null },
+    { name: "all unknown", results: ["", "UNKNOWN", ""], rate: null },
+    { name: "empty", results: [], rate: null },
+    { name: "completed pass outside window", results: [...pending, "SUCCESS"], rate: null },
+    { name: "completed failure outside window", results: [...pending, "FAILURE"], rate: null },
+    { name: "pass at window boundary", results: [...pending.slice(0, 9), "SUCCESS", "FAILURE"], rate: 1 },
+    { name: "failure at window boundary", results: [...pending.slice(0, 9), "FAILURE", "SUCCESS"], rate: 0 },
+  ];
+  for (const { name, results, rate } of cases) {
+    await t.test(name, () => {
+      const runs = results.map((result, index) => ({ ...build(String(index), result === "SUCCESS"), result }));
+      assert.equal(recentJobPassRate(runs), rate);
+      if (results[0] === "PENDING") assert.equal(currentJobStatus(undefined, runs), "RUNNING");
+    });
+  }
+  assert.equal(recentJobPassRate([build("1", true)], 0), null);
+  assert.equal(recentJobPassRate([build("1", true)], -1), null);
+});
+
+test("job detail preserves a published null rate and displays no completed runs", () => {
+  const page = source("src/pages/JobDetailPage.tsx");
+  assert.match(page, /data\?\.pass_rate_recent === undefined \? recentJobPassRate\(runs\) : data\.pass_rate_recent/);
+  assert.match(page, /value: passRateRecent !== null \? formatPercent\(passRateRecent\) : "No completed runs"/);
+  assert.match(page, /color: passRateRecent !== null \? passRateColor\(passRateRecent\) : "text.primary"/);
+});
+
 test("job header keeps status on the right above mobile widths", () => {
   const page = source("src/pages/JobDetailPage.tsx");
   const header = page.slice(page.indexOf("</Breadcrumbs>"), page.indexOf("<MetricStrip"));
