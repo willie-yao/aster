@@ -470,6 +470,16 @@ func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	if err != nil || secondAttempt == firstAttempt {
 		t.Fatalf("second attempt = %q err=%v", secondAttempt, err)
 	}
+	noWriteErr := errors.Join(errPreviewNoWrite, errors.New("search unavailable"))
+	if err := first.finishConfirm("owner-token", token, firstAttempt, "", noWriteErr); !errors.Is(err, ErrPreviewSuperseded) {
+		t.Fatalf("stale retryable completion error = %v", err)
+	}
+	if err := second.finishConfirm("another-owner", token, secondAttempt, "", noWriteErr); !errors.Is(err, ErrPreviewNotFound) {
+		t.Fatalf("cross-owner retryable completion error = %v", err)
+	}
+	if _, _, _, _, err := first.beginConfirm("owner-token", token, time.Hour); !errors.Is(err, ErrPreviewPending) {
+		t.Fatalf("rejected completion released the active lease: %v", err)
+	}
 	if err := first.finishConfirm("owner-token", token, firstAttempt, "https://github.com/o/r/issues/old", nil); !errors.Is(err, ErrPreviewSuperseded) {
 		t.Fatalf("stale completion error = %v", err)
 	}
@@ -1110,6 +1120,7 @@ type fakeIssuePreviewManager struct {
 	url          string
 	findURL      string
 	saveErr      error
+	findErr      error
 	reconcileErr error
 	started      chan struct{}
 	release      chan struct{}
@@ -1127,13 +1138,186 @@ func (f *fakeIssuePreviewManager) File(_ context.Context, specs []issues.IssueSp
 }
 func (f *fakeIssuePreviewManager) TrackedURL(string) (string, bool) { return f.url, f.url != "" }
 func (f *fakeIssuePreviewManager) FindOpen(context.Context, string) (string, bool, error) {
-	return f.url, f.url != "", nil
+	return f.url, f.url != "", f.findErr
 }
 func (f *fakeIssuePreviewManager) FindAny(context.Context, string) (string, bool, error) {
-	return f.findURL, f.findURL != "", nil
+	return f.findURL, f.findURL != "", f.findErr
 }
 func (f *fakeIssuePreviewManager) Forget(key string) { f.forgot = append(f.forgot, key) }
 func (f *fakeIssuePreviewManager) SaveState() error  { f.saved = true; return f.saveErr }
+
+func readyIssuePreviewForConfirmation(t *testing.T) (*Service, *fakeIssuePreviewManager, PreviewResult) {
+	t.Helper()
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	manager := &fakeIssuePreviewManager{url: "https://github.com/o/r/issues/7"}
+	service.issueManagerFactory = func(string, string, string) issuePreviewManager { return manager }
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, manager, preview
+}
+
+func persistedConfirmationPreview(t *testing.T, service *Service, token string) *persistedPreview {
+	t.Helper()
+	state, _, err := service.previewStore.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := state.Previews[tokenHash(token)]
+	if record == nil {
+		t.Fatal("confirmation preview missing from disk")
+	}
+	if record.AttemptID != "" || record.AttemptMode != "" || record.LeaseExpires != "" {
+		t.Fatalf("finished confirmation retained its lease: %+v", record)
+	}
+	return record
+}
+
+func TestConfirmKnownNoWriteFailureCanRetryAcrossServices(t *testing.T) {
+	for _, phase := range []string{"search", "file", "state lock"} {
+		t.Run(phase, func(t *testing.T) {
+			service, manager, preview := readyIssuePreviewForConfirmation(t)
+			failure := errors.New("GitHub unavailable before issue creation")
+			lockPath := filepath.Join(service.dataDir, "issue_state.json.lock")
+			wantFileCalls := 0
+			switch phase {
+			case "search":
+				manager.findErr = failure
+			case "file":
+				manager.reconcileErr = failure
+				wantFileCalls = 1
+			case "state lock":
+				if err := os.Mkdir(lockPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			url, err := service.Confirm(t.Context(), preview.Token, "alice", "token")
+			if url != "" || err == nil || errors.Is(err, ErrPreviewOutcomeUnknown) {
+				t.Fatalf("pre-write confirmation url=%q err=%v", url, err)
+			}
+			if phase != "state lock" && !errors.Is(err, failure) {
+				t.Fatalf("pre-write error lost its cause: %v", err)
+			}
+			if record := persistedConfirmationPreview(t, service, preview.Token); record.Status != previewStatusReady {
+				t.Fatalf("pre-write status = %s", record.Status)
+			}
+			if len(manager.specs) != wantFileCalls {
+				t.Fatalf("file calls = %d, want %d", len(manager.specs), wantFileCalls)
+			}
+			if _, err := service.PreviewIssue(t.Context(), BuildFailureID(analyzedBuildDetail(false).JobID, "123"), "alice", "token", ""); err != nil {
+				t.Fatalf("known failure blocked regeneration: %v", err)
+			}
+
+			manager.findErr, manager.reconcileErr = nil, nil
+			if phase == "state lock" {
+				if err := os.Remove(lockPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+			restarted := NewService(service.cfg, service.dataDir, AIConfig{})
+			restarted.issueManagerFactory = service.issueManagerFactory
+			url, err = restarted.Confirm(t.Context(), preview.Token, "alice", "token")
+			if err != nil || url != manager.url || len(manager.specs) != wantFileCalls+1 {
+				t.Fatalf("retry url=%q err=%v file calls=%d", url, err, len(manager.specs))
+			}
+			if manager.specs[len(manager.specs)-1].Body != preview.Body {
+				t.Fatal("retry changed the reviewed draft")
+			}
+			if record := persistedConfirmationPreview(t, restarted, preview.Token); record.Status != previewStatusDone || record.ResultURL != url {
+				t.Fatalf("retry record = %+v", record)
+			}
+		})
+	}
+}
+
+func TestConfirmAmbiguousWriteReconcilesWithoutSecondWrite(t *testing.T) {
+	for _, outcome := range []string{"lost response", "missing URL"} {
+		t.Run(outcome, func(t *testing.T) {
+			service, manager, preview := readyIssuePreviewForConfirmation(t)
+			manager.url = ""
+			if outcome == "lost response" {
+				manager.reconcileErr = fmt.Errorf("%w: connection reset after create", issues.ErrWriteOutcomeUnknown)
+			}
+			if url, err := service.Confirm(t.Context(), preview.Token, "alice", "token"); url != "" || !errors.Is(err, ErrPreviewOutcomeUnknown) {
+				t.Fatalf("ambiguous confirmation url=%q err=%v", url, err)
+			}
+			if record := persistedConfirmationPreview(t, service, preview.Token); record.Status != previewStatusUnknown {
+				t.Fatalf("ambiguous status = %s", record.Status)
+			}
+			if _, err := service.PreviewIssue(t.Context(), BuildFailureID(analyzedBuildDetail(false).JobID, "123"), "alice", "token", ""); !errors.Is(err, ErrPreviewPending) {
+				t.Fatalf("ambiguous write allowed regeneration: %v", err)
+			}
+			restarted := NewService(service.cfg, service.dataDir, AIConfig{})
+			restarted.issueManagerFactory = service.issueManagerFactory
+			for _, reconcileErr := range []error{nil, errors.New("search unavailable"), errAnalysisSourceUnavailable} {
+				manager.findErr = reconcileErr
+				wantErr := reconcileErr
+				if wantErr == nil {
+					wantErr = ErrPreviewOutcomeUnknown
+				}
+				if _, err := restarted.Confirm(t.Context(), preview.Token, "alice", "token"); !errors.Is(err, wantErr) {
+					t.Fatalf("reconcile error = %v, want %v", err, wantErr)
+				}
+				if record := persistedConfirmationPreview(t, restarted, preview.Token); record.Status != previewStatusUnknown {
+					t.Fatalf("failed reconciliation status = %s", record.Status)
+				}
+				if len(manager.specs) != 1 {
+					t.Fatalf("failed reconciliation repeated write: %d file calls", len(manager.specs))
+				}
+			}
+			manager.findErr = nil
+			manager.findURL = "https://github.com/o/r/issues/7"
+			url, err := restarted.Confirm(t.Context(), preview.Token, "alice", "token")
+			if err != nil || url != manager.findURL || len(manager.specs) != 1 {
+				t.Fatalf("reconciled url=%q err=%v file calls=%d", url, err, len(manager.specs))
+			}
+			if record := persistedConfirmationPreview(t, restarted, preview.Token); record.Status != previewStatusDone {
+				t.Fatalf("reconciled status = %s", record.Status)
+			}
+			audit, err := newBotWriteAuditStore(service.dataDir).load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record := audit.Records[tokenHash(preview.Token)]; record.Outcome != botWriteReconciled || record.ResultURL != url {
+				t.Fatalf("reconciled audit = %+v", record)
+			}
+		})
+	}
+}
+
+func TestConfirmAuditFailureStaysUnknownUntilReconciled(t *testing.T) {
+	service, manager, preview := readyIssuePreviewForConfirmation(t)
+	auditErr := errors.New("audit unavailable")
+	service.writeAudit = func(botWriteAuditRecord) error { return auditErr }
+	url, err := service.Confirm(t.Context(), preview.Token, "alice", "token")
+	if url != manager.url || !errors.Is(err, auditErr) {
+		t.Fatalf("unaudited confirmation url=%q err=%v", url, err)
+	}
+	if record := persistedConfirmationPreview(t, service, preview.Token); record.Status != previewStatusUnknown {
+		t.Fatalf("unaudited status = %s", record.Status)
+	}
+	manager.findURL = url
+	if _, err := service.Confirm(t.Context(), preview.Token, "alice", "token"); !errors.Is(err, auditErr) {
+		t.Fatalf("unaudited reconciliation error = %v", err)
+	}
+	if record := persistedConfirmationPreview(t, service, preview.Token); record.Status != previewStatusUnknown {
+		t.Fatalf("unaudited reconciliation status = %s", record.Status)
+	}
+	restarted := NewService(service.cfg, service.dataDir, AIConfig{})
+	restarted.issueManagerFactory = service.issueManagerFactory
+	reconciled, err := restarted.Confirm(t.Context(), preview.Token, "alice", "token")
+	if err != nil || reconciled != url || len(manager.specs) != 1 {
+		t.Fatalf("reconciled url=%q err=%v file calls=%d", reconciled, err, len(manager.specs))
+	}
+	if record := persistedConfirmationPreview(t, restarted, preview.Token); record.Status != previewStatusDone {
+		t.Fatalf("audited status = %s", record.Status)
+	}
+}
 
 func TestBuildIssuePreviewToConfirmWritesReviewedDraft(t *testing.T) {
 	dataDir := t.TempDir()

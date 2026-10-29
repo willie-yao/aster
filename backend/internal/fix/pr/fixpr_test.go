@@ -41,6 +41,7 @@ type fakePR struct {
 	opened          []ghpr.Request
 	openErr         error
 	openURL         string
+	omitOpenURL     bool
 	searchURL       string
 	searchFound     bool
 	searchAnyCalls  int
@@ -60,6 +61,9 @@ func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
 	f.opened = append(f.opened, req)
 	if f.openErr != nil {
 		return f.openURL, f.openErr
+	}
+	if f.omitOpenURL {
+		return "", nil
 	}
 	return "https://github.com/up/stream/pull/5", nil
 }
@@ -297,6 +301,18 @@ func TestOpenFromPreview_PartialSuccessStillTracks(t *testing.T) {
 	}
 	if _, tracked := m.state.Tracked[KeyFor(p)]; !tracked {
 		t.Errorf("partial-success PR should be tracked")
+	}
+}
+
+func TestOpenFromPreview_MissingURLKeepsOutcomeUnknown(t *testing.T) {
+	client := &fakePR{omitOpenURL: true}
+	manager := newManager(t, client, goodAgent(), Options{})
+	generated, err := manager.GeneratePreview(t.Context(), systemicPattern("etcd"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url, err := manager.OpenFromPreview(t.Context(), generated); url != "" || !errors.Is(err, ErrWriteOutcomeUnknown) {
+		t.Fatalf("missing PR URL = %q, err=%v", url, err)
 	}
 }
 

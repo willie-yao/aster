@@ -578,7 +578,7 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 		if err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("opening the pull request failed")
+		return "", fmt.Errorf("%w: opening the pull request returned no URL", ErrWriteOutcomeUnknown)
 	}
 	if err != nil {
 		// PR opened but a follow-up (e.g. labeling) failed; still track it.
