@@ -64,6 +64,8 @@ See [Pull request triage](pull-request-triage.md#optional-ai-escalation) for esc
 
 Interactive features are independently gated. Analysis chat can be enabled without GitHub writes. File Issue can be enabled without Fix. A server may expose read-only trace and status views while every action flag remains false.
 
+At startup, the server constructs the configured production Fix runtime using local deployment settings and in-cluster Kubernetes configuration. Missing or invalid settings disable only Fix actions and chat-to-Fix controls, with a startup diagnostic; issue actions, chat, and reads remain available. This is a configuration check, not a live cluster-health probe. Correct the settings and restart the server to enable Fix. Mock mode keeps its fabricated Fix capabilities; development authentication does not bypass production runtime requirements.
+
 The server sends same-origin security headers, denies framing and MIME sniffing, limits referrer and device capabilities, and keeps scripts and connections on the dashboard origin. MUI runtime styles require inline styles; scripts remain strictly external.
 
 ## Authentication and origin protection

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
@@ -175,7 +175,7 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			Backend:             p.backend,
 			ConsecutiveFailures: consecutiveMap,
 			TraceStore:          traceStore,
-			GitHubReadToken:     githubReadToken(),
+			GitHubReadToken:     credentialenv.GitHubReadToken(),
 		})
 		if err != nil {
 			log.Printf("⚠ AI service setup failed: %v", err)
@@ -345,7 +345,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 		return p.aiRuntime, nil
 	}
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
-		Token: p.aiToken, GitHubReadToken: githubReadToken(), DataDir: p.opts.OutDir, Project: p.aiProject,
+		Token: p.aiToken, GitHubReadToken: credentialenv.GitHubReadToken(), DataDir: p.opts.OutDir, Project: p.aiProject,
 		UsageRecorder: p.usageRecorder, UsageOrigin: aiusage.OriginFetcher,
 		MaxOutputTokens: p.opts.AIMaxOutputTokens,
 	})
@@ -371,17 +371,4 @@ func gatherPatternFailures(d *models.JobDetail) []ai.PatternFailure {
 
 func failureLocationFile(loc string) string {
 	return patterns.FailureLocationFile(loc)
-}
-
-// githubReadToken returns the token for read-only GitHub source access.
-// GITHUB_READ_TOKEN is preferred; GITHUB_TOKEN is reused as a fallback so a
-// deploy that already has the Actions-provided token enables authenticated
-// reads without extra configuration.
-func githubReadToken() string {
-	for _, name := range []string{"GITHUB_READ_TOKEN", "GITHUB_TOKEN"} {
-		if t := os.Getenv(name); t != "" {
-			return t
-		}
-	}
-	return ""
 }

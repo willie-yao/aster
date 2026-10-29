@@ -264,7 +264,7 @@ func TestActionTimeoutsFromEnv(t *testing.T) {
 					Type: "agent-sandbox", Timeout: testCase.agentTimeout,
 				},
 			}}}
-			action, generation, err := actionTimeoutsFromEnv(cfg)
+			action, generation, err := actionTimeoutsFromEnv(cfg.EffectiveFixPRs())
 			if testCase.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
 					t.Fatalf("action=%s generation=%s error=%v; want %q", action, generation, err, testCase.wantError)

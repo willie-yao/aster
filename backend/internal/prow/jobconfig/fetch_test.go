@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -131,19 +130,53 @@ func setURLs(t *testing.T, raw, api string) {
 
 func setToken(t *testing.T, token string) {
 	t.Helper()
-	prev, hadPrev := os.LookupEnv("GITHUB_TOKEN")
-	if token == "" {
-		_ = os.Unsetenv("GITHUB_TOKEN")
-	} else {
-		t.Setenv("GITHUB_TOKEN", token)
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", token)
+}
+
+func TestDiscoveryRequestsUseGitHubReadToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, read, generic, want string
+	}{
+		{name: "read preferred", read: "read-token", generic: "generic-token", want: "Bearer read-token"},
+		{name: "read only", read: "read-token", want: "Bearer read-token"},
+		{name: "generic fallback", generic: "generic-token", want: "Bearer generic-token"},
+		{name: "anonymous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_READ_TOKEN", tc.read)
+			t.Setenv("GITHUB_TOKEN", tc.generic)
+			t.Setenv("BOT_TOKEN", "server-only-token")
+			var calls atomic.Int64
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Header.Get("Authorization") != tc.want {
+					t.Error("discovery request used the wrong GitHub credential")
+				}
+				switch r.URL.Path {
+				case "/commits/master":
+					_, _ = w.Write([]byte(fakeSHA))
+				case "/git/trees/" + fakeSHA:
+					_, _ = w.Write([]byte(`{"tree":[]}`))
+				default:
+					t.Errorf("unexpected discovery path: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer upstream.Close()
+			setURLs(t, upstream.URL+"/raw/", upstream.URL+"/")
+			sha, err := resolveMasterSHA(t.Context(), upstream.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := listConfigJobsYAMLs(t.Context(), upstream.Client(), sha); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("discovery requests = %d, want 2", calls.Load())
+			}
+		})
 	}
-	t.Cleanup(func() {
-		if hadPrev {
-			_ = os.Setenv("GITHUB_TOKEN", prev)
-		} else {
-			_ = os.Unsetenv("GITHUB_TOKEN")
-		}
-	})
 }
 
 func periodicJob(name, dashboard string) string {

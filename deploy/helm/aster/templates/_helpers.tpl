@@ -341,6 +341,11 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 {{/* Validate the disabled-by-default consumer-installed Agent Sandbox runtime. */}}
 {{- define "aster.validateAgentSandboxFixRuntime" -}}
 {{- $cfg := .Values.agentSandbox.fixRuntime -}}
+{{- if and (not .Values.project.existingConfigMap) (not $cfg.enabled) -}}
+  {{- $project := fromYaml (default "" .Values.project.config) -}}
+  {{- $fix := get (get $project "ai" | default dict) "fix_prs" | default dict -}}
+  {{- if get $fix "enabled" -}}{{- fail "project ai.fix_prs.enabled=true requires agentSandbox.fixRuntime.enabled=true" -}}{{- end -}}
+{{- end -}}
 {{- $ca := $cfg.caBundle -}}
 {{- $caCount := add (ternary 1 0 (ne $ca.existingConfigMap "")) (ternary 1 0 (ne $ca.key "")) (ternary 1 0 (ne $ca.sha256 "")) -}}
 {{- if and (not $cfg.enabled) (gt $caCount 0) -}}{{- fail "agentSandbox.fixRuntime.caBundle requires agentSandbox.fixRuntime.enabled=true" -}}{{- end -}}

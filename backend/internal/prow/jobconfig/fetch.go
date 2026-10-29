@@ -8,11 +8,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
@@ -338,11 +338,10 @@ func downloadRaw(ctx context.Context, client *http.Client, sha, file string) ([]
 	return body, nil
 }
 
-// addGitHubAuth attaches the GITHUB_TOKEN when present. The token bumps the
-// API rate limit from 60 per hour anonymous to 5000 per hour authenticated.
-// It is optional so local `make fetch-data-quick` works without setup.
+// addGitHubAuth prefers GITHUB_READ_TOKEN, falling back to GITHUB_TOKEN.
+// Without either token, local discovery remains anonymous.
 func addGitHubAuth(req *http.Request) {
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+	if token := credentialenv.GitHubReadToken(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }
