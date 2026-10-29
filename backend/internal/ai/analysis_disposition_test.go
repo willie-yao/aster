@@ -2,10 +2,57 @@ package ai
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
+
+func TestTryParseAnalysisCanonicalizesSeverityForPublication(t *testing.T) {
+	for _, severity := range []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"} {
+		for _, variant := range []string{severity, strings.ToLower(severity), strings.ToUpper(severity), " \t" + strings.ToLower(severity) + "\n "} {
+			t.Run(severity+"/"+variant, func(t *testing.T) {
+				raw := mustJSON(analysisResponse{
+					RootCause: "the controller rejected the request", Severity: variant,
+					EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 7, LineEnd: 7, Quote: "request rejected"}},
+				})
+				parsed, ok := tryParseAnalysis(string(raw))
+				if !ok || parsed.Severity != severity {
+					t.Fatalf("parsed severity=%q ok=%v, want %q", parsed.Severity, ok, severity)
+				}
+				result := projectFailureAnalysis(analysisRecord{response: parsed})
+				if disposition, _ := AnalysisDisposition(result.Analysis); disposition != models.AnalysisDispositionCitationsVerified {
+					t.Fatalf("disposition=%q, want %q", disposition, models.AnalysisDispositionCitationsVerified)
+				}
+			})
+		}
+	}
+}
+
+func TestTryParseAnalysisDoesNotDefaultSeverityForPublication(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		raw      string
+		severity string
+	}{
+		{name: "unknown", raw: `{"root_cause":"request rejected","severity":" urgent "}`, severity: " urgent "},
+		{name: "partial match", raw: `{"root_cause":"request rejected","severity":"Highly"}`, severity: "Highly"},
+		{name: "empty", raw: `{"root_cause":"request rejected","severity":""}`},
+		{name: "whitespace", raw: `{"root_cause":"request rejected","severity":" \t "}`, severity: " \t "},
+		{name: "missing", raw: `{"root_cause":"request rejected"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed, ok := tryParseAnalysis(test.raw)
+			if !ok || parsed.Severity != test.severity {
+				t.Fatalf("parsed severity=%q ok=%v, want %q", parsed.Severity, ok, test.severity)
+			}
+			result := projectFailureAnalysis(analysisRecord{response: parsed})
+			if disposition, _ := AnalysisDisposition(result.Analysis); disposition != "" {
+				t.Fatalf("invalid severity published with disposition=%q", disposition)
+			}
+		})
+	}
+}
 
 func TestAnalysisDisposition(t *testing.T) {
 	base := func() *models.AIAnalysis {

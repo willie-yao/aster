@@ -2,8 +2,7 @@ package ai
 
 // ResponseFormatFooter is appended to every system prompt and pins the JSON
 // schema the Go code unmarshals. Consumer prompts must not add their own
-// schema; if the model returns anything other than this shape, the fetcher
-// falls back to a Medium-severity placeholder.
+// schema; unusable responses are withheld from publication.
 //
 // The wording stays tool-neutral here. Agentic-specific investigation strategy,
 // including drill-down and anti-punt enforcement, lives in agToolDocs and is

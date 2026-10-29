@@ -239,52 +239,59 @@ func TestAnalyzePatternRepublishesCachedGenerationTimestamp(t *testing.T) {
 	}
 }
 
-// TestAnalyzePatternDatesUntimestampedCacheEntryFromItsAge covers entries written
-// before the verdict timestamp was recorded: they must resolve to when they were
-// cached, so republishing neither moves the timestamp nor renews the entry.
-func TestAnalyzePatternDatesUntimestampedCacheEntryFromItsAge(t *testing.T) {
+func TestAnalyzePatternCacheRequiresCurrentVersion(t *testing.T) {
 	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	srv.push(200, patternToolResponse(sharedPatternResponse()))
-	service := newPatternTestService(t, srv.URL)
-	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
-	service.patternNow = func() time.Time { return now }
-	if _, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3)); err != nil {
-		t.Fatal(err)
-	}
-	// Rewrite the single cached verdict in the pre-timestamp shape.
-	cached := service.client.cache.EntriesWithPrefix("pattern:")
-	if len(cached) != 1 {
-		t.Fatalf("cached entries = %d, want 1", len(cached))
-	}
-	var key string
-	var data patternCacheData
-	for entryKey, entry := range cached {
-		key = entryKey
-		if err := json.Unmarshal(entry.Data, &data); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Cache validity is wall-clock based, so the entry's age must stay relative.
-	entryCreated := time.Now().UTC().Add(-13 * 24 * time.Hour).Truncate(time.Second)
-	if err := service.client.cache.StoreEntry(CacheEntry{
-		Key: key, CreatedAt: entryCreated,
-		Data: mustJSON(patternCacheData{Version: patternCacheVersion, Response: data.Response}),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for attempt := range 2 {
-		now = now.Add(30 * time.Minute)
-		pattern, err := service.AnalyzePattern(t.Context(), "job", "job", patternFailures(3))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if pattern.GeneratedAt != entryCreated.Format(time.RFC3339) {
-			t.Fatalf("attempt %d generated_at = %q, want %q", attempt, pattern.GeneratedAt, entryCreated.Format(time.RFC3339))
-		}
-	}
-	if entry, ok := service.client.cache.Lookup(key); !ok || !entry.CreatedAt.Equal(entryCreated) {
-		t.Fatalf("cache entry age was renewed: %v", entry.CreatedAt)
+	for _, test := range []struct {
+		name    string
+		version int
+		raw     bool
+		hit     bool
+	}{
+		{name: "current", version: patternCacheVersion, hit: true},
+		{name: "older", version: patternCacheVersion - 1},
+		{name: "newer", version: patternCacheVersion + 1},
+		{name: "unversioned"},
+		{name: "raw response", raw: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			fresh := sharedPatternResponse()
+			fresh.Summary = "Fresh provider verdict."
+			srv.push(200, patternToolResponse(fresh))
+			service := newPatternTestService(t, srv.URL)
+			now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+			service.patternNow = func() time.Time { return now }
+			failures := patternFailures(3)
+			input := BuildPatternInput("job", failures)
+			key := patternCacheKey(service.module.Name(), service.cacheGeneration, "job", "job", input.UserPrompt, "causal-groups", service.client.modelFingerprint())
+			recorded := now.Add(-time.Hour).Format(time.RFC3339)
+			var data any = patternCacheData{Version: test.version, GeneratedAt: recorded, Response: sharedPatternResponse()}
+			if test.raw {
+				data = sharedPatternResponse()
+			}
+			if err := service.client.cache.Set(key, data); err != nil {
+				t.Fatal(err)
+			}
+			hits := 0
+			pattern, err := service.AnalyzePatternWithOptions(t.Context(), "job", "job", failures, PatternAnalyzeOptions{
+				OnCacheHit: func() { hits++ },
+			})
+			if err != nil || pattern == nil {
+				t.Fatalf("pattern=%+v error=%v", pattern, err)
+			}
+			wantCalls, wantHits := int32(1), 0
+			wantTimestamp, wantSummary := now.Format(time.RFC3339), fresh.Summary
+			if test.hit {
+				wantCalls, wantHits = 0, 1
+				wantTimestamp, wantSummary = recorded, sharedPatternResponse().Summary
+			}
+			if calls := atomic.LoadInt32(&srv.calls); calls != wantCalls || hits != wantHits {
+				t.Fatalf("calls=%d hits=%d, want calls=%d hits=%d", calls, hits, wantCalls, wantHits)
+			}
+			if pattern.GeneratedAt != wantTimestamp || pattern.Summary != wantSummary {
+				t.Fatalf("generated_at=%q summary=%q, want generated_at=%q summary=%q", pattern.GeneratedAt, pattern.Summary, wantTimestamp, wantSummary)
+			}
+		})
 	}
 }
 

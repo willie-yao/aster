@@ -146,5 +146,11 @@ func tryParseAnalysis(s string) (analysisResponse, bool) {
 	if out.RootCause == "" && out.Summary == "" {
 		return analysisResponse{}, false
 	}
+	for _, severity := range []string{"Critical", "High", "Medium", "Low", "Transient-Ignore"} {
+		if strings.EqualFold(strings.TrimSpace(out.Severity), severity) {
+			out.Severity = severity
+			break
+		}
+	}
 	return out, true
 }
