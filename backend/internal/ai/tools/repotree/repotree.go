@@ -186,11 +186,13 @@ func (*listTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 
 // ReadObservation identifies the complete source lines read_repo_file returned.
 // Lines holds their source text in order, without line terminators.
+// LineEndOffsets holds their exclusive source byte offsets, including terminators.
 type ReadObservation struct {
 	SourceID           string
 	Path               string
 	LineStart, LineEnd int
 	Lines              []string
+	LineEndOffsets     []int
 }
 
 // ReadLineSeparator follows the 1-based line number that prefixes every line
@@ -200,10 +202,11 @@ const ReadLineSeparator = ": "
 // readWindow is the numbered text of the whole lines covering source bytes
 // [start, next), beginning at line first.
 type readWindow struct {
-	numbered    string
-	start, next int
-	first       int
-	lines       []string
+	numbered       string
+	start, next    int
+	first          int
+	lines          []string
+	lineEndOffsets []int
 }
 
 // numberedReadLines returns the whole lines from the start of the line
@@ -235,6 +238,7 @@ func numberedReadLines(content string, offset, limit int) readWindow {
 		numbered.WriteString(text)
 		window.lines = append(window.lines, text)
 		window.next = following
+		window.lineEndOffsets = append(window.lineEndOffsets, following)
 	}
 	window.numbered = numbered.String()
 	return window
@@ -334,7 +338,8 @@ func (*readTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessa
 	return tools.Result{
 		BytesFetched: window.next - window.start, ContentBytes: len(window.numbered), Payload: payload,
 		Observation: ReadObservation{
-			SourceID: selected.ID, Path: args.Path, LineStart: window.first, LineEnd: lineEnd, Lines: window.lines,
+			SourceID: selected.ID, Path: args.Path, LineStart: window.first, LineEnd: lineEnd,
+			Lines: window.lines, LineEndOffsets: window.lineEndOffsets,
 		},
 	}
 }

@@ -24,32 +24,35 @@ const agenticToolBudget = 32 * 1024
 
 // dispatchAgenticTool routes one tool call and returns its model-bound envelope.
 func dispatchAgenticTool(ctx context.Context, s *agentState, tc transport.ToolCall) string {
-	envelope, _ := dispatchAgenticToolWithPayload(ctx, s, tc)
+	envelope, _ := dispatchAgenticToolWithPayload(ctx, s, tc, nil)
 	return envelope
 }
 
-// dispatchAgenticToolWithPayload also returns the uncapped structured payload.
-func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc transport.ToolCall) (string, map[string]any) {
+// dispatchAgenticToolWithPayload admits the bounded payload before recording evidence.
+func dispatchAgenticToolWithPayload(
+	ctx context.Context,
+	s *agentState,
+	tc transport.ToolCall,
+	admitPayload func(map[string]any) string,
+) (string, map[string]any) {
 	s.calls++
 	if !agenticToolEnabled(s.enabledTools, tc.Function.Name) {
 		message := fmt.Sprintf("tool %q is not enabled for this analysis", tc.Function.Name)
-		payload := map[string]any{"error": message}
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "disabled", Grep: undispatchedGrepObservation(tc)})
-		return toolErrJSON(message), payload
+		envelope := toolErrJSON(message)
+		return envelope, modelVisibleToolPayload(envelope)
 	}
 	if s.modelRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "model_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "model byte budget exhausted; produce final JSON now"
-		payload := map[string]any{"error": message}
-		return toolErrJSON(message), payload
+		return toolErrJSON(message), map[string]any{"error": message}
 	}
 	if !isRepoTool(tc.Function.Name) && s.gcsRemaining() <= 0 {
 		s.budgetExhausted = true
 		recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: "gcs_budget_exhausted", Grep: undispatchedGrepObservation(tc)})
 		message := "GCS byte budget exhausted; produce final JSON now"
-		payload := map[string]any{"error": message}
-		return toolErrJSON(message), payload
+		return toolErrJSON(message), map[string]any{"error": message}
 	}
 
 	env := &tools.Env{
@@ -66,7 +69,17 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc trans
 	if result.BudgetExhausted {
 		s.budgetExhausted = true
 	}
-	_, toolFailed := result.Payload["error"]
+	addToolEnvelopeMetadata(s, result.Payload)
+	boundToolResult(tc.Function.Name, &result)
+	envelope := marshalToolPayload(result.Payload)
+	visiblePayload := modelVisibleToolPayload(envelope)
+	if admitPayload != nil {
+		if message := admitPayload(visiblePayload); message != "" {
+			envelope = toolErrJSON(message)
+			visiblePayload = modelVisibleToolPayload(envelope)
+		}
+	}
+	_, toolFailed := visiblePayload["error"]
 	toolOutcome := "success"
 	if toolFailed {
 		toolOutcome = "error"
@@ -77,10 +90,9 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc trans
 	}
 	if grep != nil && toolFailed {
 		grep.Outcome = tools.GrepOutcomeError
+		grep.ReturnedRanges = []tools.GrepRangeObservation{}
 	}
 	recordTrace(ctx, TraceEvent{Kind: "tool_call", Tool: tc.Function.Name, Outcome: toolOutcome, Bytes: result.BytesFetched, Grep: grep})
-	envelope := toolEnvelopeJSON(s, result.Payload)
-	visiblePayload := modelVisibleToolPayload(envelope)
 
 	// Record successful artifact reads so critiqueDraft can flag prose
 	// citations of files the agent never opened. Only content-fetching
@@ -125,16 +137,17 @@ func dispatchAgenticToolWithPayload(ctx context.Context, s *agentState, tc trans
 	// and dropped when it would push the envelope past the per-call budget.
 	if visiblePayload != nil {
 		if unread := s.unreadEvidenceGroupIDs(); len(unread) > 0 {
-			result.Payload["unread_evidence_groups"] = unread
-			if rebuilt := toolEnvelopeJSON(s, result.Payload); len(rebuilt) <= agenticToolBudget {
-				envelope = rebuilt
+			visiblePayload["unread_evidence_groups"] = unread
+			if rebuilt, err := json.Marshal(visiblePayload); err == nil && len(rebuilt) <= agenticToolBudget {
+				envelope = string(rebuilt)
+				visiblePayload = modelVisibleToolPayload(envelope)
 			} else {
-				delete(result.Payload, "unread_evidence_groups")
+				delete(visiblePayload, "unread_evidence_groups")
 			}
 		}
 	}
 
-	return envelope, result.Payload
+	return envelope, visiblePayload
 }
 
 func grepCallObservation(observation any) *tools.GrepCallObservation {
@@ -662,23 +675,32 @@ func readRepoFileLines(content string, read repotree.ReadObservation) ([]string,
 }
 
 func toolEnvelopeJSON(s *agentState, payload map[string]any) string {
+	addToolEnvelopeMetadata(s, payload)
+	return marshalToolPayload(payload)
+}
+
+func addToolEnvelopeMetadata(s *agentState, payload map[string]any) {
 	payload["remaining_model_bytes"] = s.modelRemaining()
 	payload["remaining_gcs_bytes"] = s.gcsRemaining()
 	payload["elapsed_seconds"] = int(time.Since(s.startTime).Seconds())
-	out, _ := json.Marshal(payload)
+}
+
+func marshalToolPayload(payload map[string]any) string {
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return `{"error":"tool result could not be serialized"}`
+	}
 	return capJSON(string(out))
 }
 
 func toolErrJSON(msg string) string {
-	out, _ := json.Marshal(map[string]string{"error": msg})
-	return string(out)
+	return marshalToolPayload(map[string]any{"error": msg})
 }
 
-// capJSON trims a tool result to agenticToolBudget so a single response can't
-// blow the per-call budget. Returned as-is when within budget.
+// capJSON rejects results that cannot be represented within the tool budget.
 func capJSON(s string) string {
-	if len(s) <= agenticToolBudget {
+	if len(s) <= agenticToolBudget && json.Valid([]byte(s)) {
 		return s
 	}
-	return s[:agenticToolBudget] + `..."truncated":true}`
+	return toolPayloadLimitError
 }

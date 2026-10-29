@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -465,19 +466,46 @@ func TestEvidenceOverflowOnlyBlocksLineAwareDrafts(t *testing.T) {
 }
 
 func TestCappedToolPayloadCannotGroundHiddenEvidence(t *testing.T) {
-	state := &agentState{opts: AgenticOptions{ModelByteBudget: 100_000, GCSByteBudget: 100_000}, startTime: time.Now()}
-	payload := map[string]any{
-		"matches": []any{
-			map[string]any{"context": []any{"> 1: " + strings.Repeat("x", agenticToolBudget)}},
-			map[string]any{"context": []any{"> 2494: hidden evidence"}},
-		},
+	state := boundedToolState(t, &fakeBrowser{files: map[string][]byte{
+		"build-log.txt": []byte("MATCH retained failure\n" + strings.Repeat("MATCH "+strings.Repeat("x", 900)+"\n", 98) + "MATCH hidden evidence\n"),
+	}})
+	state.skillSet = loadSkillsForTest(t, map[string]string{"hidden": `
+id: hidden
+triggers: ["failure"]
+required_evidence:
+  - id: hidden
+    any_of: ["build-log\\.txt$"]
+    content_any_of: ["hidden evidence"]
+`})
+	state.initialFailureSignal = "failure"
+	state.initialEvidencePlan = state.skillSet.Plan("failure", []string{"build-log.txt"}, 4)
+	call := transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_artifact", Arguments: `{"path":"build-log.txt","pattern":"MATCH","context_lines":0,"max_matches":100}`,
+	}}
+	envelope, visible := dispatchAgenticToolWithPayload(context.Background(), state, call, nil)
+	assertBoundedToolEnvelope(t, envelope, visible)
+	if visible["truncated"] != true || len(analysisChatEvidenceMatches(visible["matches"])) == 0 {
+		t.Fatal("oversized grep did not retain useful visible matches")
 	}
-	visible := modelVisibleToolPayload(toolEnvelopeJSON(state, payload))
 	evidence := map[string]*analysisChatEvidence{}
-	call := transport.ToolCall{Function: transport.FunctionCall{Name: "grep_artifact", Arguments: `{"path":"build-log.txt"}`}}
 	recordAnalysisChatEvidence(evidence, call, visible, analysisChatEvidenceFallbackMaxBytes)
-	if issue := evidenceCitationIssue(models.EvidenceCitation{Path: "build-log.txt", LineStart: 2494, LineEnd: 2494, Quote: "hidden evidence"}, evidence); issue == "" {
-		t.Fatal("hidden capped evidence was accepted")
+	for _, ledger := range []map[string]*analysisChatEvidence{evidence, state.analysisEvidence} {
+		if issue := evidenceCitationIssue(models.EvidenceCitation{
+			Path: "build-log.txt", LineStart: 1, LineEnd: 1, Quote: "retained failure",
+		}, ledger); issue != "" {
+			t.Fatalf("retained evidence was rejected: %s", issue)
+		}
+		if issue := evidenceCitationIssue(models.EvidenceCitation{
+			Path: "build-log.txt", LineStart: 100, LineEnd: 100, Quote: "hidden evidence",
+		}, ledger); issue == "" {
+			t.Fatal("hidden capped evidence was accepted")
+		}
+	}
+	if strings.Contains(strings.Join(state.evidenceContentByPath["build-log.txt"], "\n"), "hidden evidence") {
+		t.Fatal("hidden grep match entered evidence-plan content")
+	}
+	if state.evidencePlanCovered() || len(state.unreadEvidenceGroupIDs()) != 1 {
+		t.Fatal("hidden grep content satisfied evidence-plan coverage")
 	}
 }
 

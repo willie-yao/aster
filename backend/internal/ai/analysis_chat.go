@@ -516,7 +516,33 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 		dispatch: func(ctx context.Context, toolCall transport.ToolCall) (string, map[string]any, tools.Result) {
 			// agentState owns the model and GCS byte budgets, so the loop sees
 			// no separate tool result to account for.
-			envelope, payload := dispatchAgenticToolWithPayload(ctx, state, toolCall)
+			envelope, payload := dispatchAgenticToolWithPayload(ctx, state, toolCall, func(payload map[string]any) string {
+				before := analysisChatEvidenceBytes(evidence)
+				roomLeft, recorded := recordAnalysisChatEvidence(evidence, toolCall, payload, evidenceBudget)
+				after := analysisChatEvidenceBytes(evidence)
+				if after > before {
+					evidenceRevision++
+				} else if isContentFetchingTool(toolCall.Function.Name) {
+					outcome := "empty"
+					if _, failed := payload["error"]; failed {
+						outcome = "failed"
+					} else if !recorded {
+						outcome = "budget_exhausted"
+					}
+					recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceNoContent, outcome, toolCall.Function.Name, evidenceRevision, after)
+				}
+				if recorded {
+					return ""
+				}
+				state.budgetExhausted = true
+				if roomLeft > 0 {
+					return fmt.Sprintf(
+						"analysis chat evidence budget nearly exhausted; %d bytes remain for this artifact, so read a narrower range or finalize",
+						roomLeft,
+					)
+				}
+				return "analysis chat evidence budget exhausted; stop reading and finalize"
+			})
 			return envelope, payload, tools.Result{}
 		},
 		progress: func(phase toolLoopPhase) {
@@ -601,36 +627,6 @@ func (a *AnalysisChatAgent) Reply(ctx context.Context, turn analysischat.Turn) (
 			return toolLoopStop(analysisChatSafeValidationError(validationErr))
 		},
 		onDispatch: func(dispatched *toolLoopDispatch) {
-			name := dispatched.Call.Function.Name
-			before := analysisChatEvidenceBytes(evidence)
-			roomLeft, recorded := recordAnalysisChatEvidence(
-				evidence, dispatched.Call, dispatched.Payload, evidenceBudget,
-			)
-			if !recorded {
-				state.budgetExhausted = true
-				// Say what is left so the model narrows its next read instead of
-				// stopping, which left it with nothing to cite.
-				if roomLeft > 0 {
-					dispatched.Envelope = toolErrJSON(fmt.Sprintf(
-						"analysis chat evidence budget nearly exhausted; %d bytes remain for this artifact, so read a narrower range or finalize",
-						roomLeft,
-					))
-				} else {
-					dispatched.Envelope = toolErrJSON("analysis chat evidence budget exhausted; stop reading and finalize")
-				}
-			}
-			after := analysisChatEvidenceBytes(evidence)
-			if after > before {
-				evidenceRevision++
-			} else if isContentFetchingTool(name) {
-				outcome := "empty"
-				if _, failed := dispatched.Payload["error"]; failed {
-					outcome = "failed"
-				} else if !recorded {
-					outcome = "budget_exhausted"
-				}
-				recordAnalysisChatEvidenceStatus(loopCtx, analysisChatEvidenceNoContent, outcome, name, evidenceRevision, after)
-			}
 			state.modelBytes += len(dispatched.Envelope)
 		},
 	})
