@@ -18,7 +18,6 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import {
-  ArrowBackOutlined,
   BuildOutlined,
   CheckCircleOutlined,
 } from "@mui/icons-material";
@@ -43,11 +42,23 @@ import { actionRequestIsPollable } from "../lib/actionRequests";
 import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixRequest } from "../lib/chatFixRequestStorage";
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
-import { ActionDraftPreview, WarningLines } from "./ActionDraftPreview";
+import { WarningLines } from "./ActionDraftPreview";
 import { DialogHeader } from "./ActionDialog";
 import { dialogGutter, dialogPaperSx, dialogRegionLabelSx, overviewTypography } from "../theme/overview";
 import { RichText } from "./RichText";
+import { FixReviewWorkspace, type FixReviewProps } from "./FixReviewWorkspace";
 import { alertRole } from "../theme";
+
+// Reviewing a draft needs room for its diff, so the dialog takes nearly the
+// whole viewport for that step.
+const reviewPaperSx = {
+  ...dialogPaperSx,
+  m: { xs: 1, md: 2 },
+  width: { xs: "calc(100% - 16px)", md: "calc(100% - 32px)" },
+  height: { xs: "calc(100% - 16px)", md: "calc(100% - 32px)" },
+  maxWidth: "none",
+  maxHeight: "none",
+} as const;
 
 const regionBlockSx = {
   borderRadius: 1,
@@ -499,6 +510,40 @@ export function ChatFixDialog({
   const caveats = chatFixFindingCaveats(message, request?.warnings);
   const sentInstruction = instruction.trim();
 
+  const review: FixReviewProps | null = preview && !url ? {
+    preview: { ...preview, warnings: mergeActionWarnings(request?.warnings, preview.warnings) },
+    branch: branchChoice ? (branchTarget === "default" ? branchChoice.default : branchChoice.tested) : undefined,
+    instruction,
+    onInstruction: (value: string) => setInstruction(limitChatFixInstruction(value)),
+    instructionBytes: chatFixInstructionBytes(instruction),
+    canRevise: exactAnalysis && !generating,
+    reviseDisabled: busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim(),
+    onRevise: () => void regeneratePreview(),
+    generating,
+    sentInstruction,
+    busy,
+    hasWarnings,
+    error,
+    observation: observationMessage,
+    onBack: () => setPreview(null),
+    onCancel: close,
+    onConfirm: () => void confirm(),
+  } : null;
+
+  if (review) {
+    return (
+      <Dialog
+        open={open}
+        onClose={busy && !(exactAnalysis && busy === "preview") ? undefined : close}
+        maxWidth={false}
+        fullWidth
+        slotProps={{ paper: { sx: reviewPaperSx } }}
+      >
+        <FixReviewWorkspace {...review} />
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog
       open={open}
@@ -688,46 +733,6 @@ export function ChatFixDialog({
             )}
           </Stack>
         )}
-
-        {preview && !url && (
-          <Stack spacing={2.25}>
-            <Button
-              size="small"
-              color="inherit"
-              startIcon={<ArrowBackOutlined />}
-              onClick={() => setPreview(null)}
-              disabled={busy !== null}
-              sx={{ alignSelf: "flex-start" }}
-            >
-              Back to context
-            </Button>
-            <ActionDraftPreview preview={{ ...preview, warnings: mergeActionWarnings(request?.warnings, preview.warnings) }} />
-            {exactAnalysis && generating && sentInstruction && <SentInstruction text={sentInstruction} />}
-            {exactAnalysis && !generating && (
-              <Stack spacing={1.25}>
-                <TextField
-                  label="Maintainer instruction"
-                  placeholder="Describe the revision needed for the next preview"
-                  fullWidth
-                  multiline
-                  minRows={2}
-                  maxRows={5}
-                  value={instruction}
-                  onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
-                  helperText={`${chatFixInstructionBytes(instruction)}/4096 bytes`}
-                />
-                <Button
-                  variant="outlined"
-                  onClick={() => void regeneratePreview()}
-                  disabled={busy !== null || !instruction.trim() || instruction.trim() === submittedInstruction.trim()}
-                  sx={{ alignSelf: "flex-start" }}
-                >
-                  Regenerate with feedback
-                </Button>
-              </Stack>
-            )}
-          </Stack>
-        )}
       </DialogContent>
 
       <DialogActions sx={{ px: dialogGutter, py: 2, flexWrap: generating ? "wrap" : undefined, rowGap: 1.5 }}>
@@ -781,21 +786,6 @@ export function ChatFixDialog({
             disabled={busy !== null}
           >
             Review fix preview
-          </Button>
-        )}
-        {preview && !url && (
-          <Button
-            variant="contained"
-            color="warning"
-            startIcon={busy === "confirm" ? <CircularProgress size={16} color="inherit" /> : <BuildOutlined />}
-            onClick={() => void confirm()}
-            disabled={busy !== null}
-          >
-            {busy === "confirm"
-              ? "Opening draft PR"
-              : hasWarnings
-                ? "Open draft PR with warnings"
-                : "Open draft PR"}
           </Button>
         )}
       </DialogActions>

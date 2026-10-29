@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
 	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
@@ -185,6 +187,91 @@ func TestChatTurnRecordsSucceededAttempt(t *testing.T) {
 	}
 	if view.Attempts[0].RequestID != "req-1" {
 		t.Fatalf("attempt request id = %q, want req-1", view.Attempts[0].RequestID)
+	}
+}
+
+func TestChatPreparedFindingCarriesRequestID(t *testing.T) {
+	chat, _ := newTestChat()
+	ref := analysischat.AnalysisRef{Scope: analysischat.ScopeCause, JobID: "job", PatternID: "pattern", CausalGroupID: "cause"}
+
+	session, err := chat.CreatePrepared(ref, "mock-admin", "")
+	if err != nil {
+		t.Fatalf("CreatePrepared: %v", err)
+	}
+	// The transcript offers an answer to a fix proposal only when it has a
+	// request id, as a real prepared finding does.
+	if len(session.Messages) != 1 || !session.Messages[0].Prepared || !strings.HasPrefix(session.Messages[0].RequestID, "prepared-") {
+		t.Fatalf("prepared transcript = %+v, want one prepared answer with a prepared- request id", session.Messages)
+	}
+}
+
+func TestChatFixRequestIsAnAnalysisFix(t *testing.T) {
+	service, clock := newTestActions(t)
+	dataDir := t.TempDir()
+	writeJobAnalysis(t, dataDir, "job", "build", "test", "The template drops the bootstrap interpreter.", map[string]string{
+		"templates/cluster-template.yaml": "https://github.com/o/r/blob/abc123/templates/cluster-template.yaml",
+	})
+	chat := newChat(Options{DataDir: dataDir, Latency: time.Minute, Now: clock.Now})
+	fix := newChatFix(service, chat)
+	ctx := context.Background()
+	// A cause-scoped session names a pattern rather than a test, so the draft
+	// must come from the analysis the session was opened on.
+	session, err := chat.Create(analysischat.AnalysisRef{Scope: analysischat.ScopeCause, JobID: "job", PatternID: "pattern", CausalGroupID: "cause"}, "mock-admin", "req-0")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first, err := fix.CreateAnalysisFixRequest(ctx, session.ID, "mock-admin", "req-1", "", actions.FixBranchTested, "")
+	if err != nil {
+		t.Fatalf("CreateAnalysisFixRequest: %v", err)
+	}
+	// The chat fix dialog rejects any other kind.
+	if first.Kind != actionAnalysisFix || first.Status != actions.RequestPending {
+		t.Fatalf("new chat fix request = %q/%q, want %s/pending", first.Kind, first.Status, actionAnalysisFix)
+	}
+	second, err := fix.CreateAnalysisFixRequest(ctx, session.ID, "mock-admin", "req-1", "", actions.FixBranchTested, "narrow it", first.ID)
+	if err != nil {
+		t.Fatalf("CreateAnalysisFixRequest superseding: %v", err)
+	}
+	replaced, err := service.GetRequest(first.ID, "mock-admin")
+	if err != nil {
+		t.Fatalf("GetRequest superseded: %v", err)
+	}
+	if replaced.Status != actions.RequestCancelled || replaced.SupersededBy != second.ID {
+		t.Fatalf("superseded request = %q/%q, want cancelled and superseded by %s", replaced.Status, replaced.SupersededBy, second.ID)
+	}
+
+	clock.advance(2 * time.Minute)
+	ready, err := service.GetRequest(second.ID, "mock-admin")
+	if err != nil {
+		t.Fatalf("GetRequest: %v", err)
+	}
+	if ready.Status != actions.RequestReady || ready.Kind != actionAnalysisFix || ready.Preview == nil ||
+		ready.Preview.Kind != "fix" || ready.Preview.Token == "" {
+		t.Fatalf("ready chat fix request = %+v, want a ready analysis-fix with a tokened fix preview", ready)
+	}
+	if !strings.Contains(ready.Preview.Title, "bootstrap interpreter") || !strings.Contains(ready.Preview.Diff, "templates/cluster-template.yaml") {
+		t.Fatalf("chat fix draft = %q with diff %q, want it to quote the session's analysis", ready.Preview.Title, ready.Preview.Diff)
+	}
+}
+
+// writeJobAnalysis publishes one analyzed failed test for the mock to read.
+func writeJobAnalysis(t *testing.T, dataDir, jobID, buildID, testName, rootCause string, links map[string]string) {
+	t.Helper()
+	run := models.BuildResult{TestCases: []models.TestCase{{
+		Name: testName, AIAnalysis: &models.AIAnalysis{RootCause: rootCause, FileLinks: links},
+	}}}
+	run.BuildID = buildID
+	data, err := json.Marshal(models.JobDetail{Runs: []models.BuildResult{run}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(dataDir, "jobs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, models.JobDataFilename(jobID)), data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

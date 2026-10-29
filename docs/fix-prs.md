@@ -74,6 +74,8 @@ Exact-analysis previews tolerate target-branch advances that leave patched files
 
 The ready preview shows the exact source revision, changed files, canonical diff, validator results, pull-request title and body, and engine-generated warnings. Warnings never authorize a write and cannot be hidden by model prose.
 
+The review fills the window with the diff first. **J** and **K** move between diff hunks, **/** focuses the revision instruction, and **Cmd+Enter** (**Ctrl+Enter**) opens the draft PR, or regenerates when pressed in the revision field.
+
 If the reviewer changes the instruction or asks for regeneration, the server creates a replacement request and cancels or supersedes the older active draft. The replacement receives a new identity and must be reviewed from the beginning. The old preview cannot be confirmed after it is superseded.
 
 After a failed, cancelled, or expired exact-analysis request, **Start over** clears that finding's saved request so the maintainer can reselect the target branch, edit the instruction, and generate again in the same dialog. Provider-credential failures also retain **Retry fix preview**. A `no_reviewable_patch` result requires revised feedback to regenerate on the same branch; selecting a different branch starts a fresh request without that feedback requirement.

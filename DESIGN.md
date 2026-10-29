@@ -295,8 +295,10 @@ A segmented row of text buttons under a cause or failure: radius 0, divided by 1
 #### Action dialogs
 Opened by the action bar. The header is the same `sectionBandSx()` band the page uses, so an overlay reads as a section of the page it came from. Body and actions share the `dialogGutter` (2.5), and the paper is squared and flat with a 1px divider border and no background image. One sentence under the title states what the action does and what it does not touch.
 
+The chat fix dialog's review step widens to nearly the full viewport, because the diff is what is being reviewed. The diff leads, the drafted description sits above it and folds when long, a file list appears only for multi-file patches, and revision and confirmation share one bar at the bottom.
+
 #### Draft preview
-Where a generated issue or pull request body is shown before a maintainer sends it. A monospace block at 0.8125rem / 1.65 on `surface.containerLow` inside a 1px divider border, with `white-space: pre-wrap` and `word-break: break-word` so generated markdown keeps its shape. Draft HTML comments are stripped before display. Each region is introduced by an uppercase micro-label.
+Where a generated issue or pull request body is shown before a maintainer sends it. A monospace block at 0.8125rem / 1.65 on `surface.containerLow` inside a 1px divider border, with `white-space: pre-wrap` and `word-break: break-word` so generated markdown keeps its shape. Draft HTML comments are stripped before display. Each region is introduced by an uppercase micro-label. The chat fix review instead renders the drafted pull request body as Markdown, line breaks kept, the way GitHub will show it.
 
 #### Verification badge
 Reports whether a generated remediation verified against pinned source. A bordered row tinted with the semantic accent: `soft(accent, 0.12)` fill inside a `soft(accent, 0.3)` border, with a check or error glyph. It states an outcome, so it never relies on the tint alone to carry pass or fail.
