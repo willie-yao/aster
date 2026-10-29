@@ -58,7 +58,7 @@ backend/                         Go 1.26
     recurrenceledger/            Durable memory of recurring causes across build windows
     pullrequest/
       triage/                    Per-open-pull-request view of presubmit results
-      attribution/               Rules a pull request out of a failure from observed results
+      attribution/               Correlates pull request failures with base and peer results
       escalation/                On-demand AI analysis for unexplained pull request failures
       comment/                   Opt-in bot comment on newly observed pull requests
     output/                      Writes the JSON contract the frontend reads

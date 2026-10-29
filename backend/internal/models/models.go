@@ -725,17 +725,16 @@ type PullRequestSummary struct {
 	FailingTests int `json:"failing_tests"`
 }
 
-// AttributionVerdict explains whether a pull request failure is specific to
-// that pull request. Verdicts are derived from observed results only, so none
-// of them asserts that a pull request caused a failure.
+// AttributionVerdict summarizes observed results for a pull request failure.
+// Matching names do not establish a shared cause or exclude the pull request.
 type AttributionVerdict string
 
 const (
-	// AttributionPreExisting means the same test is failing on the base branch,
-	// so the pull request did not introduce it.
+	// AttributionPreExisting means a test with the same name is failing on the
+	// base branch.
 	AttributionPreExisting AttributionVerdict = "pre_existing"
-	// AttributionWidespread means the same job and test is failing on other open
-	// pull requests at the same time.
+	// AttributionWidespread means the same job and test names are reported as
+	// failing on at least two other open pull requests targeting the same branch.
 	AttributionWidespread AttributionVerdict = "widespread"
 	// AttributionKnownFlake means the test's own history classifies it flaky
 	// independently of this pull request.
@@ -797,7 +796,7 @@ type FailureAttribution struct {
 
 // VerdictNeedsInvestigation reports whether a verdict leaves a failure for a
 // human, which is also what makes it eligible for per-pull-request analysis.
-// A verdict that rules the pull request out answers the question already.
+// Base failures, widespread correlations, and known flakes are not eligible.
 func VerdictNeedsInvestigation(verdict AttributionVerdict) bool {
 	switch verdict {
 	case AttributionUnexplained, AttributionTouchesChangedCode, AttributionInconclusive:

@@ -137,14 +137,14 @@ export function staleCheckCount(checks: PullRequestCheck[]): number {
 }
 
 // attributionLabel is the short chip text for a verdict. The wording avoids
-// asserting that a pull request caused a failure, because the deterministic
-// pass compares observations and cannot establish causation.
+// asserting or excluding causation because the deterministic pass compares
+// observations.
 export function attributionLabel(verdict: AttributionVerdict): string {
   switch (verdict) {
     case "pre_existing":
       return "Already failing on base";
     case "widespread":
-      return "Not this PR";
+      return "Also failing on other PRs";
     case "known_flake":
       return "Known flake";
     case "touches_changed_code":
@@ -157,7 +157,7 @@ export function attributionLabel(verdict: AttributionVerdict): string {
 }
 
 // attributionTone maps a verdict to the palette the dashboard already uses for
-// severity. Verdicts that rule the pull request out are informational.
+// severity. Observed base and peer failures are informational.
 export function attributionTone(
   verdict: AttributionVerdict,
 ): "info" | "warning" | "error" | "default" {
@@ -196,8 +196,7 @@ export function needsInvestigation(failure: PullRequestFailure): boolean {
   );
 }
 
-// unexplainedCount totals the failures across checks that the baseline could
-// not rule out.
+// unexplainedCount totals the failures across checks flagged for investigation.
 export function unexplainedCount(checks: PullRequestCheck[]): number {
   let total = 0;
   for (const check of checks) {

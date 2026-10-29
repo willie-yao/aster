@@ -1,6 +1,6 @@
 # Pull request triage
 
-Aster can publish a view of presubmit results for the open pull requests of `branding.source_repo`. The deterministic pass answers which pull requests have failing checks, what failed, and what observed evidence rules each pull request in or out as the likely source.
+Aster can publish a view of presubmit results for the open pull requests of `branding.source_repo`. The deterministic pass shows which pull requests have failing checks, what failed, and whether matching test names also fail on the base branch or peer pull requests.
 
 Pull request triage is available on GitHub Pages and Kubernetes. Optional bot comments and server-side AI escalation are separate capabilities with separate credentials.
 
@@ -56,14 +56,14 @@ Each failing test receives one attribution based only on observed results:
 
 | Verdict | Meaning |
 | --- | --- |
-| `pre_existing` | The same test is already failing on the base branch. |
-| `widespread` | The same job and test fails on at least two other open pull requests targeting the same base branch. |
+| `pre_existing` | A test with the same name is failing on the base branch. |
+| `widespread` | The same job and test names are reported as failing on at least two other open pull requests targeting the same base branch. |
 | `known_flake` | Base-branch history classifies the test as flaky. |
-| `touches_changed_code` | Nothing else explains the failure and a reported source location overlaps a changed file. |
-| `unexplained` | No observed evidence rules the pull request out. |
+| `touches_changed_code` | No base failure, widespread correlation, or known flakiness applies, and a reported source location overlaps a changed file. |
+| `unexplained` | No base failure, widespread correlation, or known flakiness applies. |
 | `inconclusive` | No comparable base-branch data was available. |
 
-The verdict never claims that a pull request caused a failure. Observations can rule a pull request out, but they cannot prove causation.
+Matching names do not establish a shared cause. These verdicts neither prove nor exclude a pull request's role in a failure.
 
 Important boundaries:
 
@@ -163,7 +163,7 @@ Operation completion does not imply a verified diagnosis. Preliminary results re
 
 A pull request escalation:
 
-- is available only after deterministic evidence did not explain the failure;
+- is available only for `unexplained`, `touches_changed_code`, or `inconclusive` verdicts;
 - rejects stale builds whose tested head differs from the current pull request;
 - provides changed files only as investigation context;
 - instructs the model not to claim that the pull request caused the failure;

@@ -79,7 +79,7 @@ func evidenceKinds(a *models.FailureAttribution) []string {
 	return kinds
 }
 
-func TestBaseBranchFailureRulesOutThePullRequest(t *testing.T) {
+func TestBaseBranchFailureReportsMatchingTestName(t *testing.T) {
 	baseline := observedBaseline(testName)
 	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
 
@@ -87,6 +87,9 @@ func TestBaseBranchFailureRulesOutThePullRequest(t *testing.T) {
 
 	if got.Verdict != models.AttributionPreExisting || got.Confidence != models.AttributionConfidenceHigh {
 		t.Fatalf("attribution = %+v, want high-confidence pre_existing", got)
+	}
+	if want := "A test with the same name is failing on base branch main in " + basePeriodicJob + ". Matching names do not establish a shared cause."; got.Summary != want {
+		t.Errorf("summary = %q, want %q", got.Summary, want)
 	}
 	want := models.AttributionEvidence{
 		Kind:     models.AttributionEvidenceBaseBranch,
@@ -122,6 +125,8 @@ func TestConcurrentFailuresOnOtherPullRequestsAreWidespread(t *testing.T) {
 		detail(3, e2eJob, failure(testName)),
 		detail(4, e2eJob, failure(testName)),
 	}
+	details[0].Checks[0].Failures[0].FailureMessage = "request timed out"
+	details[1].Checks[0].Failures[0].FailureMessage = "permission denied"
 	got := annotateOne(t, observedBaseline(testName), details)
 
 	if got.Verdict != models.AttributionWidespread {
@@ -132,7 +137,18 @@ func TestConcurrentFailuresOnOtherPullRequestsAreWidespread(t *testing.T) {
 		t.Errorf("confidence = %q, want high", got.Confidence)
 	}
 	if len(got.Evidence) != 1 || got.Evidence[0].Kind != models.AttributionEvidenceOtherPulls {
-		t.Errorf("evidence = %+v", got.Evidence)
+		t.Fatalf("evidence = %+v", got.Evidence)
+	}
+	if want := "This test is also reported as failing on pull requests #2, #3, #4 during this pass. Matching names do not establish a shared cause."; got.Summary != want {
+		t.Errorf("summary = %q, want %q", got.Summary, want)
+	}
+	want := models.AttributionEvidence{
+		Kind:     models.AttributionEvidenceOtherPulls,
+		Detail:   "The same job (" + e2eJob + ") and test name (" + testName + ") were reported as failing on pull requests #2, #3, #4 during this pass. Only pull requests targeting main were compared.",
+		TestName: testName,
+	}
+	if !reflect.DeepEqual(got.Evidence[0], want) {
+		t.Errorf("evidence = %+v, want %+v", got.Evidence[0], want)
 	}
 }
 
@@ -159,8 +175,7 @@ func TestWidespreadConfidenceScalesWithPeerCount(t *testing.T) {
 	}
 }
 
-// The base branch outranks concurrent pull request failures: a test broken on
-// main explains every pull request hitting it.
+// A matching base-branch test failure outranks concurrent peer failures.
 func TestBaseBranchOutranksWidespread(t *testing.T) {
 	baseline := observedBaseline(testName)
 	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
@@ -175,8 +190,7 @@ func TestBaseBranchOutranksWidespread(t *testing.T) {
 }
 
 // pre_existing is decided before peers are consulted, so it carries only the
-// base-branch fact. A failure the base branch already explains does not need
-// corroboration from other pull requests.
+// base-branch fact, without peer corroboration.
 func TestPreExistingDoesNotRecordPeers(t *testing.T) {
 	baseline := observedBaseline(testName)
 	baseline.FailingOnBase[testName] = failingOnBase(basePeriodicJob)
@@ -213,6 +227,9 @@ func TestSinglePeerDoesNotPreemptBaseBranchEvidence(t *testing.T) {
 	}
 	if !strings.Contains(got.Summary, "#2") {
 		t.Errorf("summary should name the peer, got %q", got.Summary)
+	}
+	if want := "This test passes on base branch main. It is also failing on pull request #2, below the widespread threshold, so it still needs investigation."; got.Summary != want {
+		t.Errorf("summary = %q, want %q", got.Summary, want)
 	}
 	want := []string{models.AttributionEvidenceBaseBranch, models.AttributionEvidenceOtherPulls}
 	if kinds := evidenceKinds(got); !reflect.DeepEqual(kinds, want) {
@@ -264,8 +281,7 @@ func TestWidespreadEvidenceNamesTheComparedBaseBranch(t *testing.T) {
 	}
 }
 
-// A verdict the base branch already explains must not move because an unrelated
-// pull request's presubmit went green between passes.
+// A peer below the widespread threshold must not change the baseline verdict.
 func TestRemovingAPeerDoesNotChangeAnExplainedVerdict(t *testing.T) {
 	withPeer := annotateOne(t, observedBaseline(testName), []models.PullRequestDetail{
 		detail(1, e2eJob, failure(testName)),
@@ -298,6 +314,9 @@ func TestBuildLevelSummaryDoesNotDenyASinglePeer(t *testing.T) {
 	}
 	if !strings.Contains(got.Summary, "#2") {
 		t.Errorf("summary should name the peer, got %q", got.Summary)
+	}
+	if want := e2eJob + " failed without reporting a failing test, and it also failed on pull request #2, below the widespread threshold. It still needs investigation."; got.Summary != want {
+		t.Errorf("summary = %q, want %q", got.Summary, want)
 	}
 	// The peer is recorded as evidence, so the build log is no longer the only
 	// evidence and the summary must not say it is.
@@ -388,8 +407,8 @@ func TestBuildLevelFailuresCorrelateWithinTheSameJob(t *testing.T) {
 	if got.Verdict != models.AttributionWidespread {
 		t.Fatalf("verdict = %q, want widespread", got.Verdict)
 	}
-	if !strings.Contains(got.Summary, e2eJob) {
-		t.Errorf("summary should name the job, got %q", got.Summary)
+	if want := e2eJob + " is also reported as failing on pull requests #2 and #3 during this pass. Matching names do not establish a shared cause."; got.Summary != want {
+		t.Errorf("summary = %q, want %q", got.Summary, want)
 	}
 }
 

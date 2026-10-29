@@ -1,11 +1,8 @@
-// Package attribution decides whether a pull request's test failure is
-// specific to that pull request, using only observed results: the base
-// branch's own runs, the same failure on other open pull requests, and the
-// test's recorded flakiness history.
+// Package attribution compares a pull request's test failures with base-branch
+// runs, matching job and test names on peers, and recorded flakiness history.
 //
-// No verdict asserts that a pull request caused a failure. Deterministic
-// evidence can rule a pull request out, but it cannot rule one in, so the
-// strongest judgment here is that nothing in the baseline explains the failure.
+// Matching names establish correlation, not a shared cause. No verdict proves
+// or excludes a pull request's role in a failure.
 package attribution
 
 import (
@@ -17,12 +14,12 @@ import (
 )
 
 // widespreadHighConfidencePulls is how many other pull requests must show the
-// same failure before the verdict is reported with high confidence.
+// same failing job and test names before the verdict has high confidence.
 const widespreadHighConfidencePulls = 3
 
-// widespreadVerdictMinPulls is how many other pull requests must show the same
-// failure before it becomes a verdict at all. Two pull requests citing each
-// other is mutual and uncorroborated, and evidence that weak must not preempt
+// widespreadVerdictMinPulls is how many other pull requests must report the same
+// failing job and test names before it becomes a verdict. Two pull requests
+// citing each other is mutual and uncorroborated, and evidence that weak must not preempt
 // base-branch evidence or take the failure out of escalation.
 const widespreadVerdictMinPulls = 2
 
@@ -185,9 +182,8 @@ func Annotate(details []models.PullRequestDetail, baselines map[string]Baseline,
 					baseRef: details[i].BaseRef, jobName: check.JobName, testName: failure.Name,
 				}
 				attribution := attribute(details[i].Number, key, failure.TestCase, baselines[key.baseRef], otherPulls)
-				// Only the residual set benefits from overlap. A failure already
-				// explained by the base branch or by other pull requests is not
-				// made more explicable by touching changed code.
+				// Overlap refines only unexplained verdicts, preserving the
+				// priority of base-branch, peer, and flakiness evidence.
 				if attribution.Verdict == models.AttributionUnexplained {
 					if refined := changedCodeAttribution(attribution, failure.TestCase, repo, pullChanges, check.Stale); refined != nil {
 						attribution = refined
@@ -218,16 +214,14 @@ func pullsByFailure(details []models.PullRequestDetail) map[failureKey][]int {
 	return index
 }
 
-// attribute issues the verdict for one failing case. Evidence that rules the
-// pull request out is checked strongest first. Peers too few to carry a verdict
-// of their own are recorded on the verdict that does apply, except under
-// pre_existing, which returns before peers are consulted because a failure the
-// base branch already explains does not need them.
+// attribute issues the verdict for one failing case, checking base failures
+// before peers. Peers below the widespread threshold are retained as evidence,
+// except under pre_existing, which returns before peers are consulted.
 func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline, otherPulls map[failureKey][]int) *models.FailureAttribution {
 	buildLevel := tc.Source == models.TestCaseSourceBuild
 
-	// The base branch is the strongest signal: the failure exists without this
-	// pull request. Build-level failures are skipped because their generic name
+	// The base branch has priority: it reports the same test name as failed.
+	// Build-level failures are skipped because their generic name
 	// matches every failed job.
 	if !buildLevel {
 		if failing := baseline.FailingOnBase[tc.Name]; len(failing) > 0 {
@@ -246,7 +240,7 @@ func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline
 			return &models.FailureAttribution{
 				Verdict:    models.AttributionPreExisting,
 				Confidence: models.AttributionConfidenceHigh,
-				Summary:    fmt.Sprintf("This test is already failing on the base branch %s in %s, so this pull request did not introduce it.", key.baseRef, humanList(names)),
+				Summary:    fmt.Sprintf("A test with the same name is failing on base branch %s in %s. Matching names do not establish a shared cause.", key.baseRef, humanList(names)),
 				Evidence:   evidence,
 			}
 		}
@@ -257,7 +251,7 @@ func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionWidespread,
 			Confidence: widespreadConfidence(len(others)),
-			Summary:    fmt.Sprintf("%s is failing the same way on %s as of this pass, so it is not specific to this pull request.", subject(buildLevel, key.jobName), pullList(others)),
+			Summary:    fmt.Sprintf("%s is also reported as failing on %s during this pass. Matching names do not establish a shared cause.", subject(buildLevel, key.jobName), pullList(others)),
 			Evidence:   []models.AttributionEvidence{peerEvidence(key, others)},
 		}
 	}
@@ -291,8 +285,8 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 		}
 	}
 
-	// Nothing observed rules the pull request out. Report how complete the
-	// baseline was so the reader can weigh the result.
+	// Report baseline coverage when no base failure, widespread correlation,
+	// or flakiness classification applies.
 	if !baseline.Observed {
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionInconclusive,
@@ -346,7 +340,7 @@ func basePassingSummary(baseRef string, others []int) string {
 	if len(others) == 0 {
 		return fmt.Sprintf("This test passes on base branch %s and is not failing on other open pull requests%s, so it needs investigation on this pull request.", baseRef, baseRefScope(baseRef))
 	}
-	return fmt.Sprintf("This test passes on base branch %s. It is also failing on %s, which is not enough to rule this pull request out, so it needs investigation.", baseRef, pullList(others))
+	return fmt.Sprintf("This test passes on base branch %s. It is also failing on %s, below the widespread threshold, so it still needs investigation.", baseRef, pullList(others))
 }
 
 // buildLevelSummary states the residual verdict for a job that failed without
@@ -356,7 +350,7 @@ func buildLevelSummary(jobName, baseRef string, others []int) string {
 	if len(others) == 0 {
 		return fmt.Sprintf("%s failed without reporting a failing test, and no other open pull request%s hit it. The build log is the only evidence.", jobName, baseRefScope(baseRef))
 	}
-	return fmt.Sprintf("%s failed without reporting a failing test, and it also failed on %s, which is not enough to rule this pull request out.", jobName, pullList(others))
+	return fmt.Sprintf("%s failed without reporting a failing test, and it also failed on %s, below the widespread threshold. It still needs investigation.", jobName, pullList(others))
 }
 
 // baseRefScope qualifies a claim about other pull requests with the base branch
@@ -369,11 +363,11 @@ func baseRefScope(baseRef string) string {
 	return " targeting " + baseRef
 }
 
-// peerEvidence records the other pull requests observed failing the same way.
+// peerEvidence records other pull requests with the same failing job and test names.
 // The base branch bounding the comparison is named when known, so a reader can
 // see the scope of the correlation instead of inferring it.
 func peerEvidence(key failureKey, others []int) models.AttributionEvidence {
-	detail := fmt.Sprintf("The same %s failure was observed on %s during this pass.", key.jobName, pullList(others))
+	detail := fmt.Sprintf("The same job (%s) and test name (%s) were reported as failing on %s during this pass.", key.jobName, key.testName, pullList(others))
 	if key.baseRef != "" {
 		detail += fmt.Sprintf(" Only pull requests targeting %s were compared.", key.baseRef)
 	}
