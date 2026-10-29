@@ -4,6 +4,10 @@ Kubernetes server mode serves the same public `/data/*.json` contract as GitHub 
 
 The server reads data written by the authoritative in-process fetcher or worker. It does not own scheduled failure analysis and does not change the public data schema.
 
+Dashboard publication waits for successful writes of `manifest.json`, all supplied `jobs/*.json`, `flakiness.json`, and `search-index.json`. Supporting failures are aggregated and leave the previous `dashboard.json` and stale job files untouched. Stale job files are pruned only after `dashboard.json` is successfully replaced; a pruning error does not roll back publication.
+
+Each file is replaced independently, not as an atomic snapshot. Supporting files can advance while a failed pass leaves the old dashboard in place, concurrent readers can observe mixed generations, and clients holding an old dashboard can request pruned job paths after a successful pass.
+
 ## Endpoints
 
 | Path | Purpose |
