@@ -465,6 +465,83 @@ func TestHandlerAnalysisChatStreamErrorIsSanitized(t *testing.T) {
 	}
 }
 
+func TestHandlerAnalysisChatErrorContract(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		status  int
+		outcome string
+	}{
+		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "rejected"},
+		{analysischat.ErrTurnLimit, http.StatusTooManyRequests, "rejected"},
+		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "rejected"},
+		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "rejected"},
+		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "rejected"},
+		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "unknown"},
+		{analysischat.ErrSessionBusy, http.StatusConflict, "pending"},
+		{analysischat.ErrRequestPending, http.StatusConflict, "pending"},
+		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, "failed"},
+	} {
+		t.Run(tc.err.Error(), func(t *testing.T) {
+			for _, wrapped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("wrapped=%t", wrapped), func(t *testing.T) {
+					serviceErr := tc.err
+					if wrapped {
+						serviceErr = fmt.Errorf("private operation: %w: token=private-value https://private.example", tc.err)
+					}
+					runner := &fakeAnalysisChatRunner{createErr: serviceErr, sendErr: serviceErr}
+					handler, err := Handler(Options{
+						DataDir: t.TempDir(), Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+						AnalysisChat: runner,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, endpoint := range []struct {
+						path   string
+						body   string
+						stream bool
+					}{
+						{"/api/analysis-chat/sessions", `{"job_id":"job","build_id":"1","test_name":"Test"}`, false},
+						{"/api/analysis-chat/sessions/session-1/messages", `{"message":"question"}`, false},
+						{"/api/analysis-chat/sessions/session-1/messages/stream", `{"message":"question"}`, true},
+					} {
+						t.Run(endpoint.path, func(t *testing.T) {
+							req := httptest.NewRequest(http.MethodPost, endpoint.path, strings.NewReader(endpoint.body))
+							req.Header.Set("Authorization", "ok")
+							req.Header.Set("Content-Type", "application/json")
+							req.Header.Set(analysisChatIdempotencyHeader, "request-1")
+							recorder := httptest.NewRecorder()
+							handler.ServeHTTP(recorder, req)
+							if !endpoint.stream {
+								if recorder.Code != tc.status || recorder.Body.String() != tc.err.Error()+"\n" ||
+									recorder.Header().Get(analysisChatOutcomeHeader) != tc.outcome {
+									t.Fatalf("response = %d %q headers=%v", recorder.Code, recorder.Body.String(), recorder.Header())
+								}
+								return
+							}
+							_, payload, ok := strings.Cut(recorder.Body.String(), "event: error\ndata: ")
+							if recorder.Code != http.StatusOK || !ok {
+								t.Fatalf("stream response = %d %q", recorder.Code, recorder.Body.String())
+							}
+							var got struct {
+								Status  int    `json:"status"`
+								Message string `json:"message"`
+								Outcome string `json:"outcome"`
+							}
+							if err := json.Unmarshal([]byte(strings.TrimSpace(payload)), &got); err != nil {
+								t.Fatal(err)
+							}
+							if got.Status != tc.status || got.Message != tc.err.Error() || got.Outcome != tc.outcome {
+								t.Fatalf("stream error = %+v", got)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestHandlerAnalysisChatReturnsSafeAttemptHistory(t *testing.T) {
 	runner := &fakeAnalysisChatRunner{view: analysischat.SessionView{
 		ID: "session-1", TurnsUsed: 3, MaxTurns: 10,
@@ -539,12 +616,13 @@ func TestWriteAnalysisChatErrorMapping(t *testing.T) {
 		{analysischat.ErrAnalysisChanged, http.StatusConflict, "analysis changed", "rejected"},
 		{analysischat.ErrSessionBusy, http.StatusConflict, "analysis chat session is busy", "pending"},
 		{analysischat.ErrRequestPending, http.StatusConflict, "analysis chat request is pending", "pending"},
-		{analysischat.ErrIdempotencyConflict, http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"},
-		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, "analysis chat outcome is unknown", "unknown"},
+		{analysischat.ErrIdempotencyConflict, http.StatusConflict, analysischat.ErrIdempotencyConflict.Error(), "rejected"},
+		{analysischat.ErrRequestOutcomeUnknown, http.StatusConflict, analysischat.ErrRequestOutcomeUnknown.Error(), "unknown"},
 		{analysischat.ErrInvalidRequest, http.StatusBadRequest, "invalid analysis chat request", "rejected"},
-		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
-		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
-		{analysischat.ErrRateLimit, http.StatusTooManyRequests, "analysis chat limit reached", "rejected"},
+		{analysischat.ErrSessionLimit, http.StatusTooManyRequests, analysischat.ErrSessionLimit.Error(), "rejected"},
+		{analysischat.ErrTurnLimit, http.StatusTooManyRequests, analysischat.ErrTurnLimit.Error(), "rejected"},
+		{analysischat.ErrActiveTurnLimit, http.StatusTooManyRequests, analysischat.ErrActiveTurnLimit.Error(), "rejected"},
+		{analysischat.ErrRateLimit, http.StatusTooManyRequests, analysischat.ErrRateLimit.Error(), "rejected"},
 		{sourceinvestigation.ErrUnavailable, http.StatusBadGateway, "analysis chat source validation failed", "failed"},
 		{analysischat.ErrRequestFailed, http.StatusBadGateway, "analysis chat could not complete the request", "failed"},
 		{analysischat.ErrProviderRequestFailed, http.StatusBadGateway, analysischat.ErrProviderRequestFailed.Error(), "failed"},

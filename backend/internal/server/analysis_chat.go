@@ -366,17 +366,22 @@ func analysisChatErrorDetails(err error) (int, string, string) {
 	case errors.Is(err, analysischat.ErrRequestPending):
 		status, message, outcome = http.StatusConflict, analysischat.ErrRequestPending.Error(), "pending"
 	case errors.Is(err, analysischat.ErrIdempotencyConflict):
-		status, message, outcome = http.StatusConflict, "analysis chat request conflicts with existing input", "rejected"
+		status, message, outcome = http.StatusConflict, analysischat.ErrIdempotencyConflict.Error(), "rejected"
 	case errors.Is(err, analysischat.ErrRequestOutcomeUnknown):
-		status, message, outcome = http.StatusConflict, "analysis chat outcome is unknown", "unknown"
+		status, message, outcome = http.StatusConflict, analysischat.ErrRequestOutcomeUnknown.Error(), "unknown"
 	case errors.Is(err, analysischat.ErrInvalidRequest):
 		status, message, outcome = http.StatusBadRequest, "invalid analysis chat request", "rejected"
 		if code, ok := actions.ReasonCodeFrom(err); ok {
 			message = actions.ReasonMessage(code)
 		}
-	case errors.Is(err, analysischat.ErrSessionLimit), errors.Is(err, analysischat.ErrTurnLimit),
-		errors.Is(err, analysischat.ErrActiveTurnLimit), errors.Is(err, analysischat.ErrRateLimit):
-		status, message, outcome = http.StatusTooManyRequests, "analysis chat limit reached", "rejected"
+	case errors.Is(err, analysischat.ErrSessionLimit):
+		status, message, outcome = http.StatusTooManyRequests, analysischat.ErrSessionLimit.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrTurnLimit):
+		status, message, outcome = http.StatusTooManyRequests, analysischat.ErrTurnLimit.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrActiveTurnLimit):
+		status, message, outcome = http.StatusTooManyRequests, analysischat.ErrActiveTurnLimit.Error(), "rejected"
+	case errors.Is(err, analysischat.ErrRateLimit):
+		status, message, outcome = http.StatusTooManyRequests, analysischat.ErrRateLimit.Error(), "rejected"
 	case errors.Is(err, sourceinvestigation.ErrUnavailable):
 		status, message, outcome = http.StatusBadGateway, "analysis chat source validation failed", "failed"
 	case errors.Is(err, analysischat.ErrRequestFailed):

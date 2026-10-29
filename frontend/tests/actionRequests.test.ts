@@ -342,3 +342,23 @@ test("action errors support structured and legacy server payloads", async () => 
   const legacy = new Response("legacy action error", { status: 422, headers: { "content-type": "text/plain" } });
   assert.equal(await actionErrorMessage(legacy), "legacy action error");
 });
+
+test("action conflicts and admission limits display their public reason rather than generation failure", async () => {
+  for (const entry of [
+    { status: 409, message: "action request is already being processed" },
+    { status: 409, message: "action request was replaced by a newer attempt" },
+    { status: 409, message: "GitHub action outcome is unknown" },
+    { status: 409, message: "action request cannot be changed in its current state" },
+    { status: 429, message: "action request limit reached" },
+  ]) {
+    globalThis.fetch = async () => new Response(`${entry.message}\n`, {
+      status: entry.status, headers: { "Content-Type": "text/plain" },
+    });
+    await assert.rejects(() => cancelActionRequest("/", "request-1"), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, entry.message);
+      assert.doesNotMatch(error.message, /generation/i);
+      return true;
+    });
+  }
+});
