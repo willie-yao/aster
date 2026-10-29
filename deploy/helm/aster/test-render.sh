@@ -383,6 +383,21 @@ VALUES
 
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandbox-render.yaml"
 
+expect_fail agent-sandbox-fix-deployment-disabled 'project ai.fix_prs.enabled=true requires agentSandbox.fixRuntime.enabled=true' \
+  -f "$tmp/agent-sandbox.yaml" --set agentSandbox.fixRuntime.enabled=false
+grep -Fq 'project ai.fix_prs.enabled=true requires agentSandbox.fixRuntime.enabled=true' "$tmp/agent-sandbox-fix-deployment-disabled.out"
+helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
+  --set agentSandbox.fixRuntime.enabled=false \
+  --set project.config='ai: {fix_prs: {enabled: false}}' > "$tmp/agent-sandbox-fix-disabled.yaml"
+if grep -Fq 'name: AGENT_SANDBOX_NAMESPACE' "$tmp/agent-sandbox-fix-disabled.yaml"; then
+  echo 'disabled Fix deployment rendered runtime environment' >&2
+  exit 1
+fi
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set project.existingConfigMap=external-project \
+  --set project.config='ai: {fix_prs: {enabled: true}}' > "$tmp/external-project.yaml"
+grep -Fq 'name: external-project' "$tmp/external-project.yaml"
+
 grep -A1 -F 'name: AGENT_SANDBOX_MEMORY_LIMIT' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "1Gi"'
 grep -A1 -F 'name: AGENT_SANDBOX_MEMORY_REQUEST' "$tmp/agent-sandbox-render.yaml" | grep -Fq 'value: "128Mi"'
 grep -Fq "variables.container.resources.limits['memory'] == \\\"1Gi\\\"" "$tmp/agent-sandbox-render.yaml"

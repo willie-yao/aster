@@ -41,6 +41,16 @@ var Reported = []string{
 	"SESSION_KEY",
 }
 
+// GitHubReadToken prefers the read-only token, falling back to the generic GitHub token.
+func GitHubReadToken() string {
+	for _, name := range []string{"GITHUB_READ_TOKEN", "GITHUB_TOKEN"} {
+		if token := os.Getenv(name); token != "" {
+			return token
+		}
+	}
+	return ""
+}
+
 // Sanitize trims every Trimmed credential that carries surrounding whitespace
 // and returns the names it corrected, then the names it only flagged.
 //

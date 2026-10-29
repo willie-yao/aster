@@ -25,10 +25,9 @@ func fixActionsEnabled(fixConfig project.FixPRs) bool {
 
 const fixActionTimeoutHeadroom = 5 * time.Minute
 
-func actionTimeoutsFromEnv(cfg *project.Config) (actionTimeout, generationTimeout time.Duration, err error) {
+func actionTimeoutsFromEnv(fix project.FixPRs) (actionTimeout, generationTimeout time.Duration, err error) {
 	const defaultGenerationTimeout = 10 * time.Minute
 	generationTimeout = defaultGenerationTimeout
-	fix := cfg.EffectiveFixPRs()
 	minimum := time.Duration(0)
 	if fixActionsEnabled(fix) {
 		minimum = fix.AgentRuntime.ParsedTimeout() + fixActionTimeoutHeadroom
@@ -172,7 +171,7 @@ func positiveIntEnv(name string, fallback int) (int, error) {
 	return parsed, nil
 }
 
-// githubReadTokenFromEnv mirrors the fetcher's token preference order.
+// githubReadTokenFromEnv prefers a read token, then the server's bot token, then the generic token.
 func githubReadTokenFromEnv() string {
 	for _, name := range []string{"GITHUB_READ_TOKEN", "BOT_TOKEN", "GITHUB_TOKEN"} {
 		if token := os.Getenv(name); token != "" {

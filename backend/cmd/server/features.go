@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
 	"github.com/willie-yao/aster/backend/internal/chatfix"
+	fixruntime "github.com/willie-yao/aster/backend/internal/fix/runtime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/notify"
@@ -34,6 +35,8 @@ import (
 
 // The exact-analysis Fix routes are registered only when the bridge satisfies this interface.
 var _ server.ChatFixRequestRunner = (*chatfix.Service)(nil)
+
+var newFixRuntime = fixruntime.New
 
 func formatPricingRate(value string) string {
 	rate, ok := new(big.Rat).SetString(value)
@@ -120,7 +123,16 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 }
 
 func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
-	actionTimeout, generationTimeout, err := actionTimeoutsFromEnv(cfg)
+	fixConfig := cfg.EffectiveFixPRs()
+	if fixConfig.Enabled {
+		if _, err := newFixRuntime(fixConfig.AgentRuntime); err != nil {
+			fixConfig.Enabled = false
+			// Constructor errors can contain raw environment values.
+			log.Println("⚠️ Fix actions disabled: cannot construct the Agent Sandbox runtime; check ai.fix_prs.agent_runtime, AGENT_SANDBOX_* settings, and local in-cluster Kubernetes configuration")
+		}
+	}
+	fixActions := fixActionsEnabled(fixConfig)
+	actionTimeout, generationTimeout, err := actionTimeoutsFromEnv(fixConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +151,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		return nil, err
 	}
 	opts.ActionTimeout = actionTimeout
-	if fixActionsEnabled(cfg.EffectiveFixPRs()) {
+	if fixActions {
 		opts.FixPreviewTimeout = generationTimeout
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
@@ -147,7 +159,6 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
 		UsageRecorder: usageRecorder,
 	})
-	fixActions := fixActionsEnabled(cfg.EffectiveFixPRs())
 	actionService.ConfigureFixActions(fixActions)
 	opts.DisableFixActions = !fixActions
 	opts.Actions = actionService

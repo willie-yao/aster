@@ -124,3 +124,23 @@ func TestCredentialListsAreDisjoint(t *testing.T) {
 		seen[n] = true
 	}
 }
+
+func TestGitHubReadToken(t *testing.T) {
+	for _, tc := range []struct {
+		name, read, generic, want string
+	}{
+		{name: "read token preferred", read: "read-token", generic: "generic-token", want: "read-token"},
+		{name: "read token alone", read: "read-token", want: "read-token"},
+		{name: "generic fallback", generic: "generic-token", want: "generic-token"},
+		{name: "anonymous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_READ_TOKEN", tc.read)
+			t.Setenv("GITHUB_TOKEN", tc.generic)
+			t.Setenv("BOT_TOKEN", "server-only-token")
+			if got := GitHubReadToken(); got != tc.want {
+				t.Fatal("selected the wrong GitHub read credential")
+			}
+		})
+	}
+}

@@ -177,7 +177,7 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 | `ai.reasoningEffort` | Optional provider reasoning effort. Empty uses the provider default. |
 | `ai.contextWindowTokens` | Optional operator-provided provider context window. Set only with endpoint evidence. |
 | `ai.existingSecret`, `ai.tokenSecretKey` | Existing provider token Secret and key. |
-| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for analysis source grounding and pull request triage. Rendered whether or not `ai.enabled` is set. `ai.existingSecret` is not used for GitHub reads. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
+| `ai.githubReadTokenSecretName`, `ai.githubReadTokenSecretKey` | Read-only GitHub token for Prow job discovery, analysis source grounding, and pull request triage, exposed as `GITHUB_READ_TOKEN` ahead of `GITHUB_TOKEN` for scheduled reads. Rendered whether or not `ai.enabled` is set. `ai.existingSecret` is not used for GitHub reads. Required for triage, which otherwise reads GitHub anonymously at 60 requests per hour. |
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
@@ -222,6 +222,8 @@ The shared volume contains public dashboard data and private operational state. 
 ## Agent Sandbox Fix runtime
 
 `agentSandbox.fixRuntime` is disabled by default. It connects Aster to a consumer-installed Agent Sandbox controller and never installs the controller, CRD, execution namespace, secure RuntimeClass, node infrastructure, provider Secret or gateway, or runtime image.
+
+Inline `project.config` with `ai.fix_prs.enabled: true` requires `agentSandbox.fixRuntime.enabled: true`; Helm rejects a mismatch. Helm cannot inspect `project.existingConfigMap` contents at render time. The server independently checks local runtime construction before advertising Fix.
 
 The project owns generation limits and exact validators under `ai.fix_prs.agent_runtime`. Helm owns the runtime namespace, immutable images, ServiceAccounts, network policy, provider Secret reference, CA trust, and platform resources. Those two configurations must agree. The schema rejects stale duplicate execution bounds under `agentSandbox.fixRuntime`.
 
