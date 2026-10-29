@@ -68,13 +68,15 @@ A recurring causal group reports ownership only when every build it covers reach
 
 Before the first provider call, the engine ranks evidence groups from the failure signal, selected diagnostic skills, and the bounded artifact tree. The model may follow that plan or inspect other available evidence. Coverage is factual: a group counts only when a content-bearing operation returns relevant data.
 
-The plan stays visible while the model works. Every tool result that still has outstanding groups returns `unread_evidence_groups`, and a tools-free answer that leaves an available group unread reopens the investigation with the group and its candidate paths named. Groups the draft's own wording newly required are included, so a diagnosis that shifts mid-investigation still gets its evidence read. The reopen is bounded: it stops once the model stops making progress, after a small number of attempts, or when time, context, or byte budgets run short. A group with no candidate in the build is deterministically unavailable and never reopens the loop.
+The plan stays visible while the model works. Tool results with outstanding groups return `unread_evidence_groups` when it fits within the result limit, and a tools-free answer that leaves an available group unread reopens the investigation with the group and its candidate paths named. Groups the draft's own wording newly required are included, so a diagnosis that shifts mid-investigation still gets its evidence read. The reopen is bounded: it stops once the model stops making progress, after a small number of attempts, or when time, context, or byte budgets run short. A group with no candidate in the build is deterministically unavailable and never reopens the loop.
 
 Consumer `skills/*.yaml` can require evidence for a failure class. They extend the engine profile; they do not replace the project prompt or authorize actions. See [Diagnostic skills](skills.md).
 
 ### Context and evidence bounds
 
 The engine obtains the model context limit when the endpoint reports it, reserves completion and protocol headroom, and counts each estimated serialized request byte as one token plus a fixed framing reserve. This provider-neutral bound may compact log, YAML, and JSON histories before a tokenizer-specific limit, but it keeps the hard preflight independent of the endpoint tokenizer. Old tool results may be compacted while retaining call/result pairing, the evidence ledger, and current repair instructions. If a safe request cannot fit, the engine does not send it.
+
+Every tool result is valid JSON within a 32 KiB serialized limit, including metadata. Oversized results retain the newest fitting tail lines, a read prefix, the first fitting complete grep matches, or a listing prefix with directories before files, and report truncation; results that cannot fit return an error. Artifact citations, source evidence, and evidence-plan coverage use only content in the accepted model-visible result. Fetch accounting and full file sizes still describe the backend work, not the trimmed excerpt.
 
 Investigation floors run on the finalize branch:
 
@@ -114,6 +116,8 @@ Aster checks both places that may hold an analysis:
 2. the private agentic cache.
 
 This prevents an old build result from bypassing a newer floor or critique version. Cache hits do not call the provider and record zero new usage.
+
+Preliminary analyses and safe published analyses rejected by cache quality policy share a three-attempt budget per build and failure key. Once spent, otherwise valid published output is reused without provider calls; it is not treated as an accepted private cache entry. Expired, malformed, missing, or unstamped output, a stale critique contract, and a changed cache generation still require reanalysis. Only citation-verified output accepted into the private cache clears the counter.
 
 When a fetch pass reaches its deadline during individual analysis, Aster waits for workers to stop and checkpoints private analysis state and traces. The pass still fails without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow normal disposition, cache acceptance, and bounded preliminary-retry policy, as with per-analysis timeouts. Explicit cancellation keeps the existing rollback behavior.
 

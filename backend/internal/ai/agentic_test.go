@@ -1174,6 +1174,7 @@ func TestAgToolDocs_AntiPuntAnchors(t *testing.T) {
 // failure above repeated timeout and cleanup noise when picking a cause.
 func TestAgToolDocs_CausalPriorityAnchors(t *testing.T) {
 	for _, anchor := range []string{
+		"up to context_lines=5",
 		"compare specific request/list/watch/assertion failures with repeated timeout, readiness, and cleanup noise",
 		"Treat a later successful operation as counterevidence against assigning that component ownership",
 		"keep the remaining boundary unresolved",
@@ -3611,7 +3612,7 @@ func TestDispatchAgenticToolRejectsRegisteredButDisabledTool(t *testing.T) {
 	}
 	envelope, payload := dispatchAgenticToolWithPayload(context.Background(), state, transport.ToolCall{
 		ID: "call", Type: "function", Function: transport.FunctionCall{Name: "read_artifact", Arguments: `{"path":"build-log.txt"}`},
-	})
+	}, nil)
 	if _, ok := payload["error"]; !ok || !strings.Contains(envelope, "not enabled") {
 		t.Fatalf("disabled tool result: envelope=%q payload=%v", envelope, payload)
 	}
@@ -3826,11 +3827,16 @@ func TestTruncatedToolEnvelopeCreatesNoInvisibleEvidence(t *testing.T) {
 	envelope := dispatchAgenticTool(context.Background(), state, transport.ToolCall{
 		ID: "call", Type: "function", Function: transport.FunctionCall{Name: "grep_artifact", Arguments: string(arguments)},
 	})
-	if len(envelope) <= agenticToolBudget || modelVisibleToolPayload(envelope) != nil {
-		t.Fatalf("expected a truncated non-decodable envelope, length=%d", len(envelope))
+	visible := modelVisibleToolPayload(envelope)
+	if len(envelope) > agenticToolBudget || visible == nil || visible["truncated"] != true {
+		t.Fatalf("expected bounded valid truncated JSON, length=%d", len(envelope))
 	}
-	if len(state.evidenceArtifactsFull) != 0 || len(state.evidenceContentByPath) != 0 || len(state.analysisEvidence) != 0 {
-		t.Fatalf("capped evidence tracking = paths:%v content:%v", state.evidenceArtifactsFull, state.evidenceContentByPath)
+	matches := analysisChatEvidenceMatches(visible["matches"])
+	if len(matches) == 0 || len(matches) >= 100 || !state.evidenceArtifactsFull["logs/large.log"] {
+		t.Fatalf("retained evidence: matches=%d paths=%v", len(matches), state.evidenceArtifactsFull)
+	}
+	if got := len(state.evidenceContentByPath["logs/large.log"]); got != 1 {
+		t.Fatalf("unique retained snippets = %d, want 1", got)
 	}
 }
 

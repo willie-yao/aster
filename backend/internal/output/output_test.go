@@ -310,6 +310,19 @@ func TestWriteAll(t *testing.T) {
 		sampleJobDetail("job-alpha"),
 		sampleJobDetail("job-beta"),
 	}
+	stale := filepath.Join(dir, "jobs", "stale.json")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, "dashboard.json"),
+		filepath.Join(dir, "jobs", models.JobDataFilename(details[0].JobID)),
+		stale,
+	} {
+		if err := os.WriteFile(path, []byte(`{"sentinel":"old"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	flakiness := models.FlakinessReport{
 		GeneratedAt: "2025-01-15T12:00:00Z",
 	}
@@ -328,15 +341,16 @@ func TestWriteAll(t *testing.T) {
 		t.Errorf("manifest round-trip mismatch: %+v", gotManifest)
 	}
 
-	// dashboard.json exists
-	if _, err := os.Stat(filepath.Join(dir, "dashboard.json")); err != nil {
-		t.Error("dashboard.json missing")
+	var gotDashboard models.Dashboard
+	readJSON(t, filepath.Join(dir, "dashboard.json"), &gotDashboard)
+	if !gotDashboard.GeneratedAt.Equal(dash.GeneratedAt) || len(gotDashboard.Jobs) != len(dash.Jobs) {
+		t.Errorf("dashboard mismatch: %+v", gotDashboard)
 	}
-	// job files exist
 	for _, d := range details {
-		p := filepath.Join(dir, "jobs", models.JobDataFilename(d.JobID))
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("job file %s missing", p)
+		var got models.JobDetail
+		readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(d.JobID)), &got)
+		if got.JobID != d.JobID || len(got.Runs) != len(d.Runs) {
+			t.Errorf("job detail mismatch: %+v", got)
 		}
 	}
 	// flakiness.json exists
@@ -346,6 +360,92 @@ func TestWriteAll(t *testing.T) {
 	// search-index.json exists
 	if _, err := os.Stat(filepath.Join(dir, "search-index.json")); err != nil {
 		t.Error("search-index.json missing")
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale job file still exists: %v", err)
+	}
+}
+
+func TestWriteAllSupportingFailuresPreserveDashboardAndStaleJobs(t *testing.T) {
+	details := []models.JobDetail{sampleJobDetail("job-alpha"), sampleJobDetail("job-beta")}
+	alphaPath := filepath.Join("jobs", models.JobDataFilename(details[0].JobID))
+	betaPath := filepath.Join("jobs", models.JobDataFilename(details[1].JobID))
+	supporting := []struct {
+		path      string
+		wantError string
+	}{
+		{"manifest.json", "write manifest"},
+		{alphaPath, "write job detail job-alpha"},
+		{betaPath, "write job detail job-beta"},
+		{"flakiness.json", "write flakiness report"},
+		{"search-index.json", "write search index"},
+	}
+	tests := []struct {
+		name    string
+		blocked []string
+	}{
+		{"manifest", []string{"manifest.json"}},
+		{"first job", []string{alphaPath}},
+		{"second job", []string{betaPath}},
+		{"flakiness", []string{"flakiness.json"}},
+		{"search index", []string{"search-index.json"}},
+		{"multiple supporting writes", []string{"manifest.json", alphaPath, "flakiness.json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "jobs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const old = "{\"sentinel\":\"old\"}\n"
+			for _, name := range []string{"dashboard.json", filepath.Join("jobs", "stale.json")} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(old), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			blocked := make(map[string]bool, len(tt.blocked))
+			for _, name := range tt.blocked {
+				blocked[name] = true
+				if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, file := range supporting {
+				if !blocked[file.path] {
+					if err := os.WriteFile(filepath.Join(dir, file.path), []byte(old), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			err := WriteAll(dir, sampleConfig(), sampleDashboard(), details, models.FlakinessReport{}, models.SearchIndex{})
+			if err == nil {
+				t.Fatal("WriteAll returned nil error")
+			}
+			for _, file := range supporting {
+				if strings.Contains(err.Error(), file.wantError) != blocked[file.path] {
+					t.Errorf("error for %s: blocked=%v, got %v", file.path, blocked[file.path], err)
+				}
+				if blocked[file.path] {
+					continue
+				}
+				data, readErr := os.ReadFile(filepath.Join(dir, file.path))
+				if readErr != nil || string(data) == old || !json.Valid(data) {
+					t.Errorf("supporting file %s did not advance: data=%q, error=%v", file.path, data, readErr)
+				}
+			}
+			for _, name := range []string{"dashboard.json", filepath.Join("jobs", "stale.json")} {
+				data, readErr := os.ReadFile(filepath.Join(dir, name))
+				if readErr != nil || string(data) != old {
+					t.Errorf("%s changed after supporting failure: data=%q, error=%v", name, data, readErr)
+				}
+			}
+			for _, skipped := range []string{"write dashboard", "prune job details"} {
+				if strings.Contains(err.Error(), skipped) {
+					t.Errorf("unexpected phase error %q: %v", skipped, err)
+				}
+			}
+		})
 	}
 }
 
@@ -362,17 +462,25 @@ func TestWriteAllAggregatesIndependentProjectionFailures(t *testing.T) {
 		t.Fatal("WriteAll returned nil error")
 	}
 	for _, want := range []string{
-		"write manifest", "write dashboard", "write job detail job-alpha", "write job detail job-beta",
-		"prune job details", "write flakiness report", "write search index",
+		"write manifest", "write job detail job-alpha", "write job detail job-beta",
+		"write flakiness report", "write search index",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("aggregated error missing %q: %v", want, err)
 		}
 	}
+	for _, skipped := range []string{"write dashboard", "prune job details"} {
+		if strings.Contains(err.Error(), skipped) {
+			t.Errorf("unexpected phase error %q: %v", skipped, err)
+		}
+	}
 }
 
-func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
+func TestWriteAllDashboardFailurePreservesStaleJobs(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "dashboard.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	stale := filepath.Join(dir, "jobs", "stale.json")
 	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
 		t.Fatal(err)
@@ -381,11 +489,33 @@ func TestWriteAllPrunesStaleJobFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail := sampleJobDetail("job-alpha")
-	if err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, models.FlakinessReport{}, models.SearchIndex{}); err != nil {
+	err := WriteAll(dir, sampleConfig(), sampleDashboard(), []models.JobDetail{detail}, models.FlakinessReport{}, models.SearchIndex{})
+	if err == nil || !strings.HasPrefix(err.Error(), "write dashboard:") {
+		t.Fatalf("WriteAll error = %v, want dashboard error", err)
+	}
+	for _, name := range []string{"manifest.json", filepath.Join("jobs", models.JobDataFilename(detail.JobID)), "flakiness.json", "search-index.json"} {
+		var got map[string]json.RawMessage
+		readJSON(t, filepath.Join(dir, name), &got)
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != `{}` {
+		t.Fatalf("stale job file changed after dashboard failure: data=%q, error=%v", data, err)
+	}
+}
+
+func TestWriteAllPruneFailureLeavesPublishedDashboard(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "jobs"), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale job file still exists: %v", err)
+	dash := sampleDashboard()
+	err := WriteAll(dir, sampleConfig(), dash, nil, models.FlakinessReport{}, models.SearchIndex{})
+	if err == nil || !strings.HasPrefix(err.Error(), "prune job details:") {
+		t.Fatalf("WriteAll error = %v, want pruning error", err)
+	}
+	var got models.Dashboard
+	readJSON(t, filepath.Join(dir, "dashboard.json"), &got)
+	if !got.GeneratedAt.Equal(dash.GeneratedAt) || len(got.Jobs) != len(dash.Jobs) {
+		t.Fatalf("dashboard not published before pruning failed: %+v", got)
 	}
 }
 

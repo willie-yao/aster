@@ -168,8 +168,8 @@ func (*tailTool) Schema() transport.ToolSchema {
 	}
 }
 
-// tailMaxBytes leaves headroom inside the per-call 32KB tool budget for the
-// envelope overhead.
+// tailMaxBytes bounds the backend tail fetch. Dispatch separately bounds the
+// serialized model-visible envelope.
 const tailMaxBytes = 32*1024 - 256
 
 func (*tailTool) Dispatch(ctx context.Context, env *tools.Env, raw json.RawMessage) tools.Result {
