@@ -178,22 +178,15 @@ jobs:
 
       - name: Resolve project paths and base path
         id: cfg
+        env:
+          PROJECT_DIR: ${{ inputs.project_dir }}
         run: |
-          CONFIG_PATH="$GITHUB_WORKSPACE/consumer/${{ inputs.project_dir }}/project.yaml"
+          CONFIG_PATH="$GITHUB_WORKSPACE/consumer/$PROJECT_DIR/project.yaml"
           if [ ! -f "$CONFIG_PATH" ]; then
             echo "::error::project.yaml not found at $CONFIG_PATH"
             exit 1
           fi
-          # Extract branding.base_path. Strip surrounding quotes.
-          BASE_PATH="$(awk '
-            $1 == "branding:" { in_b=1; next }
-            in_b && $1 == "base_path:" {
-              sub(/^[ \t]*base_path:[ \t]*/, "", $0)
-              gsub(/^["'"'"']|["'"'"']$/, "", $0)
-              print $0
-              exit
-            }
-          ' "$CONFIG_PATH")"
+          BASE_PATH="$(python3 "$GITHUB_WORKSPACE/engine/hack/pages-base-path.py" "$CONFIG_PATH")"
           if [ -z "$BASE_PATH" ]; then
             echo "::error::branding.base_path missing in $CONFIG_PATH"
             exit 1
@@ -204,10 +197,10 @@ jobs:
             *) BASE_PATH="${BASE_PATH}/";;
           esac
           echo "base_path=$BASE_PATH" >> "$GITHUB_OUTPUT"
-          PROJECT_DIR_ABS="$GITHUB_WORKSPACE/consumer/${{ inputs.project_dir }}"
+          PROJECT_DIR_ABS="$GITHUB_WORKSPACE/consumer/$PROJECT_DIR"
           echo "project_dir_abs=$PROJECT_DIR_ABS" >> "$GITHUB_OUTPUT"
           # Stable slug used for cache keys (replace slashes/dots with dashes).
-          SLUG="$(echo "${{ inputs.project_dir }}" | tr '/.' '--' | sed 's/^-*//; s/-*$//')"
+          SLUG="$(printf '%s\n' "$PROJECT_DIR" | tr '/.' '--' | sed 's/^-*//; s/-*$//')"
           [ -z "$SLUG" ] && SLUG="root"
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
           echo "Resolved project_dir=$PROJECT_DIR_ABS base_path=$BASE_PATH slug=$SLUG"
