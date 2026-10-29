@@ -97,9 +97,6 @@ func runAgentFix(
 	review func(files map[string]string, diff string) (string, error),
 ) (*proposedFix, error) {
 	a := gp.agent
-	if a != nil && a.SharedModelEndpoint && a.API == "responses" {
-		return nil, fmt.Errorf("agent fix generation with the local OpenCode runtime requires Chat Completions; use ai.api=chat_completions or select a remote agent runtime")
-	}
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
 	}

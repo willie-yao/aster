@@ -146,7 +146,7 @@ func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options
 	}
 	// Default to fork-and-PR; tests can flip m.opts.Fork for direct mode.
 	opts.Fork = true
-	opts.Agent = &AgentConfig{Runtime: agent, Model: "m", Endpoint: "e", ModelToken: "t", GitToken: "g"}
+	opts.Agent = &AgentConfig{Runtime: agent, GitToken: "g"}
 	// Default to review on with an approving reviewer; tests can override.
 	if opts.Critique == nil {
 		opts.Critique = &fakeCompleter{}

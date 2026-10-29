@@ -819,10 +819,6 @@ func (s *Service) buildFixManagerForRepositoryAccess(
 	gitToken := previewRepositoryToken(ar.Type, userToken, allowRepositoryToken)
 	opts.Agent = &fixpr.AgentConfig{
 		Runtime:               agentRuntime,
-		API:                   s.ai.API,
-		Model:                 s.ai.Model,
-		Endpoint:              s.ai.Endpoint,
-		ModelToken:            s.ai.Token,
 		MaxTurns:              ar.MaxTurns,
 		MaxFiles:              eff.MaxFiles,
 		ModelProvider:         ar.ModelProvider.RuntimeConfig(),
