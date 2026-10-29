@@ -51,6 +51,7 @@ import {
   filterResultTests,
   normalizeResultLedgerFilter,
   recentJobPassRate,
+  selectJobRun,
   sortResultTests,
   summarizeResultTests,
   withJobDetailParam,
@@ -189,11 +190,12 @@ export function JobDetailPage() {
   );
   const displayName = shortenedName || canonicalJobID;
 
-  const selectedBuildId = searchParams.get("run") ?? historyRuns[0]?.build_id;
+  const requestedBuildID = searchParams.get("run");
   const selectedRun = useMemo(
-    () => historyRuns.find((run) => run.build_id === selectedBuildId),
-    [historyRuns, selectedBuildId],
+    () => selectJobRun(historyRuns, requestedBuildID),
+    [historyRuns, requestedBuildID],
   );
+  const selectedBuildId = selectedRun?.build_id;
   const selectedIsRetained = useMemo(
     () => Boolean(selectedRun) && !runs.some((run) => run.build_id === selectedBuildId),
     [runs, selectedBuildId, selectedRun],

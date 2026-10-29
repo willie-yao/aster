@@ -2,6 +2,8 @@
 
 Kubernetes server mode serves the same public `/data/*.json` contract as GitHub Pages and adds authenticated APIs. The frontend probes `/api/capabilities` and enables only the features the server advertises. A static Pages deployment has no capability endpoint and remains read-only.
 
+Network and server errors trigger up to three capability-probe attempts. If discovery still fails, the dashboard keeps server-only features disabled and shows a Retry control. A missing endpoint or successful HTML fallback response selects static mode instead.
+
 The server reads data written by the authoritative in-process fetcher or worker. It does not own scheduled failure analysis and does not change the public data schema.
 
 Dashboard publication waits for successful writes of `manifest.json`, all supplied `jobs/*.json`, `flakiness.json`, and `search-index.json`. Supporting failures are aggregated and leave the previous `dashboard.json` and stale job files untouched. Stale job files are pruned only after `dashboard.json` is successfully replaced; a pruning error does not roll back publication.

@@ -3,6 +3,10 @@ import { junitTestCases } from "./buildFailures.js";
 
 export type ResultLedgerFilter = "failed" | "passed" | "all";
 
+export function selectJobRun(runs: BuildResult[], requestedBuildID: string | null): BuildResult | undefined {
+  return runs.find((run) => run.build_id === requestedBuildID) ?? runs[0];
+}
+
 const setupPatterns =
   /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/iu;
 
