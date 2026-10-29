@@ -1812,9 +1812,14 @@ func clampAnalysisChatText(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
 	}
-	head := maxBytes * 3 / 4
-	tail := maxBytes - head
-	return strings.ToValidUTF8(value[:head], "") + "\n...[content elided]...\n" + strings.ToValidUTF8(value[len(value)-tail:], "")
+	const marker = "\n...[content elided]...\n"
+	if maxBytes <= len(marker) {
+		return strings.ToValidUTF8(value[:maxBytes], "")
+	}
+	contentBytes := maxBytes - len(marker)
+	head := contentBytes * 3 / 4
+	tail := contentBytes - head
+	return strings.ToValidUTF8(value[:head], "") + marker + strings.ToValidUTF8(value[len(value)-tail:], "")
 }
 
 var _ analysischat.Runner = (*AnalysisChatAgent)(nil)
