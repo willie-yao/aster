@@ -1157,6 +1157,48 @@ func TestAnalysisChatContextBoundsPublishedFields(t *testing.T) {
 	}
 }
 
+func TestClampAnalysisChatText(t *testing.T) {
+	const marker = "\n...[content elided]...\n"
+	const longText = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	tests := []struct {
+		name     string
+		value    string
+		maxBytes int
+		want     string
+	}{
+		{name: "empty", value: " \n\t ", maxBytes: 1},
+		{name: "zero limit", value: " \n" + longText + "\t ", want: longText},
+		{name: "negative limit", value: " \n" + longText + "\t ", maxBytes: -1, want: longText},
+		{name: "under limit", value: " short ", maxBytes: 10, want: "short"},
+		{name: "exact limit after trimming", value: " text \n", maxBytes: 4, want: "text"},
+		{name: "one byte", value: longText, maxBytes: 1, want: "a"},
+		{name: "below marker size", value: longText, maxBytes: len(marker) - 1, want: longText[:len(marker)-1]},
+		{name: "marker size", value: longText, maxBytes: len(marker), want: longText[:len(marker)]},
+		{name: "marker plus one", value: longText, maxBytes: len(marker) + 1, want: marker + "9"},
+		{name: "head and tail", value: longText, maxBytes: 32, want: "abcdef" + marker + "89"},
+		{name: "one byte over", value: longText[:33], maxBytes: 32, want: "abcdef" + marker + "FG"},
+		{name: "multibyte exact", value: " \u754c\U0001f600 ", maxBytes: 7, want: "\u754c\U0001f600"},
+		{name: "multibyte too wide", value: "\u754c", maxBytes: 1},
+		{name: "multibyte prefix", value: "a\u754cb", maxBytes: 3, want: "a"},
+		{name: "multibyte head boundary", value: strings.Repeat("\u754c", 20), maxBytes: 35, want: "\u754c\u754c" + marker + "\u754c"},
+		{name: "multibyte tail boundary", value: strings.Repeat("\u754c", 20), maxBytes: 32, want: "\u754c\u754c" + marker},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := clampAnalysisChatText(testCase.value, testCase.maxBytes)
+			if testCase.maxBytes > 0 && len(got) > testCase.maxBytes {
+				t.Errorf("text is %d bytes, limit = %d", len(got), testCase.maxBytes)
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("text is not valid UTF-8: %q", got)
+			}
+			if got != testCase.want {
+				t.Errorf("text = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestAnalysisChatAgentCapsToolCalls(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
@@ -1428,6 +1470,54 @@ func TestBuildAnalysisChatMessagesDropsOldestHistoryWithinBudget(t *testing.T) {
 	}
 	if size := requestSizeEstimate(messages, 1024); size > budget {
 		t.Fatalf("request size = %d, budget = %d", size, budget)
+	}
+}
+
+func TestBuildAnalysisChatMessagesBoundsHistoryFields(t *testing.T) {
+	longText := strings.Repeat("x", 40<<10)
+	history := []analysischat.Message{
+		{Role: "user", Content: longText},
+		{
+			Role: "assistant", Content: longText, Assessment: "challenges",
+			Citations:        []analysischat.Citation{{Path: longText, Quote: longText}},
+			EvidenceWarnings: []string{longText, longText, longText, longText, longText},
+			ProposedRevision: &analysischat.Revision{RootCause: longText, SuggestedFix: longText},
+		},
+	}
+	messages, err := buildAnalysisChatMessages("system", "context", history, "question", 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 5 {
+		t.Fatalf("message count = %d, want 5", len(messages))
+	}
+	var reply analysischat.Reply
+	if err := json.Unmarshal([]byte(*messages[3].Content), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Citations) != 1 || reply.ProposedRevision == nil {
+		t.Fatalf("history omitted structured fields: %+v", reply)
+	}
+	_, note, ok := strings.Cut(reply.Answer, "\n\nEngine evidence note:")
+	if !ok {
+		t.Fatal("history omitted the evidence note")
+	}
+	for _, field := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"question", *messages[2].Content, analysisChatMaxQuestionBytes},
+		{"answer with evidence note", reply.Answer, 12 << 10},
+		{"evidence note", "Engine evidence note:" + note, 2 << 10},
+		{"citation path", reply.Citations[0].Path, 1024},
+		{"citation quote", reply.Citations[0].Quote, 500},
+		{"root cause", reply.ProposedRevision.RootCause, 8 << 10},
+		{"suggested fix", reply.ProposedRevision.SuggestedFix, 4 << 10},
+	} {
+		if len(field.value) > field.limit || !utf8.ValidString(field.value) {
+			t.Errorf("%s is %d bytes (limit %d), valid UTF-8 = %t", field.name, len(field.value), field.limit, utf8.ValidString(field.value))
+		}
 	}
 }
 
@@ -2945,6 +3035,23 @@ func TestSalvageAnalysisChatReply(t *testing.T) {
 			if reply.Answer != testCase.want || !reply.Unverified ||
 				reply.UnverifiedReason != analysischat.UnverifiedFormat || reply.Assessment != "inconclusive" {
 				t.Fatalf("reply = %+v", reply)
+			}
+		})
+	}
+}
+
+func TestSalvageAnalysisChatReplyBoundsAnswer(t *testing.T) {
+	for _, unit := range []string{"x", "\u754c\U0001f600"} {
+		t.Run(unit, func(t *testing.T) {
+			reply, ok := salvageAnalysisChatReply(" \n" + strings.Repeat(unit, analysisChatMaxAnswerBytes+1) + "\t ")
+			if !ok {
+				t.Fatal("oversized answer was not salvaged")
+			}
+			if len(reply.Answer) > analysisChatMaxAnswerBytes || !utf8.ValidString(reply.Answer) {
+				t.Fatalf("answer is %d bytes, valid UTF-8 = %t", len(reply.Answer), utf8.ValidString(reply.Answer))
+			}
+			if !strings.Contains(reply.Answer, "content elided") || !reply.Unverified {
+				t.Fatal("salvaged answer lost its elision marker or unverified status")
 			}
 		})
 	}
