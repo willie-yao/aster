@@ -210,7 +210,7 @@ function alertReport(overrides: Partial<FlakinessReport>): FlakinessReport {
 
 function renderAttention(report: FlakinessReport): string {
   const manifest: Manifest = {
-    id: "example", name: "Example", source: {},
+    id: "example", name: "Example",
     testgrid: { dashboard: "example" }, storage: { provider: "gcs", bucket: "logs" },
     branding: { title: "Example", base_path: "/", site_url: "", source_repo: { owner: "example", name: "example" } },
   };

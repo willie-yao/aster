@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -210,7 +211,7 @@ func TestWriteFlakinessReportPublishesLowPassRateSection(t *testing.T) {
 
 	t.Run("entries flatten the embedded test", func(t *testing.T) {
 		dir := t.TempDir()
-		report := models.FlakinessReport{LowPassRate: []models.LowPassRateEntry{{
+		report := models.FlakinessReport{GeneratedAt: "2026-08-17T10:00:00Z", LowPassRate: []models.LowPassRateEntry{{
 			TestFlakiness: models.TestFlakiness{
 				TestName: "TestA", JobName: "job", JobID: "job",
 				TotalRuns: 10, Failures: 1, Passes: 9, FailRate: 0.1,
@@ -240,6 +241,13 @@ func TestWriteFlakinessReportPublishesLowPassRateSection(t *testing.T) {
 			if entry[key] != want {
 				t.Errorf("entry[%q] = %v, want %v", key, entry[key], want)
 			}
+		}
+		var fixture models.FlakinessReport
+		readJSON(t, "../../../frontend/tests/fixtures/low-pass-rate.json", &fixture)
+		var published models.FlakinessReport
+		readJSON(t, filepath.Join(dir, "flakiness.json"), &published)
+		if !reflect.DeepEqual(published, fixture) {
+			t.Fatalf("published report differs from frontend fixture:\ngot  %+v\nwant %+v", published, fixture)
 		}
 	})
 }

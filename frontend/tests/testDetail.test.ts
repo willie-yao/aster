@@ -142,9 +142,7 @@ test("test detail uses the approved analysis and evidence composition", () => {
   assert.match(page, /Failure location/);
   assert.match(page, /JUnit artifact/);
   assert.match(page, /Provider activity/);
-  assert.match(page, /controllerLogsFallback/);
-  assert.match(page, /artifacts\/clusters\/bootstrap\/logs\//);
-  assert.match(page, /Controller logs/);
+  assert.match(page, /controllerLogEntries\.map/);
   assert.match(page, /Machine logs/);
   assert.match(page, /View in Prow/);
   assert.match(page, /Build log/);

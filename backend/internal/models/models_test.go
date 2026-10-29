@@ -1,9 +1,12 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAIAnalysisPublicJSONOmitsModelAndRetainsConsumedFields(t *testing.T) {
@@ -27,5 +30,39 @@ func TestAIAnalysisPublicJSONOmitsModelAndRetainsConsumedFields(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("public analysis missing %s: %s", want, text)
 		}
+	}
+}
+
+func TestPullRequestFinishedWire(t *testing.T) {
+	started := time.Date(2026, 8, 17, 8, 0, 0, 0, time.UTC)
+	finished := started.Add(30 * time.Minute)
+	payload := struct {
+		Checks  []PullRequestCheck    `json:"checks"`
+		Members []SharedFailureMember `json:"members"`
+	}{
+		Checks: []PullRequestCheck{
+			{JobName: "pull-e2e", JobID: "example/project/pull-e2e", BuildID: "101", Started: started.Add(2 * time.Hour)},
+			{JobName: "pull-e2e", JobID: "example/project/pull-e2e", BuildID: "100", Started: started.Add(time.Hour), Finished: finished.Add(time.Hour)},
+			{JobName: "pull-e2e", JobID: "example/project/pull-e2e", BuildID: "99", Passed: true, Started: started, Finished: finished},
+		},
+		Members: []SharedFailureMember{
+			{Number: 1, BuildID: "101", Started: started.Add(2 * time.Hour)},
+			{Number: 2, BuildID: "100", Started: started.Add(time.Hour), Finished: finished.Add(time.Hour)},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("../../../frontend/tests/fixtures/pull-request-checks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, compact.Bytes()) {
+		t.Fatalf("pull request wire shape differs from frontend fixture:\ngot  %s\nwant %s", data, compact.Bytes())
 	}
 }

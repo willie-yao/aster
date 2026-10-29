@@ -25,6 +25,8 @@ With TestGrid discovery, triage considers applicable presubmits for `branding.so
 
 `discovery.include_presubmits` is not required. Triage resolves presubmits from the job catalog independently. Enable presubmit discovery only when those jobs should also appear in the main job dashboard. Fetch commands do not override this project setting.
 
+Presubmit names link to job details only when `discovery.include_presubmits` is enabled and the job appears in the published dashboard catalog. Unpublished jobs and names awaiting the catalog remain plain text.
+
 Draft pull requests are excluded. Each successful pass writes:
 
 ```text

@@ -16,9 +16,9 @@ import { RunMetadata } from "../components/RunMetadata";
 import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { TestAnalysisBriefing } from "../components/TestAnalysisBriefing";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { useJobDetail, useSharedFailures } from "../hooks/useData";
+import { useDashboard, useJobDetail, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
-import { attributionLabel } from "../lib/pullRequests";
+import { attributionLabel, isPublishedPresubmitJob } from "../lib/pullRequests";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { jobPath, pullRequestPath, pullRequestsPath, testRunPath } from "../lib/routes";
 import {
@@ -258,7 +258,8 @@ export function SharedFailurePage() {
   const { id } = useParams<{ id: string }>();
   const manifest = useManifest();
   const enabled = manifest.pull_requests?.enabled ?? false;
-  const linkToJob = manifest.source?.include_presubmits ?? false;
+  const includePresubmits = manifest.discovery?.include_presubmits ?? false;
+  const { data: dashboard } = useDashboard();
   const { data, loading, error } = useSharedFailures(enabled);
   const { features } = useCapabilities();
   const escalationEnabled = features.shared_failure_escalation ?? false;
@@ -323,6 +324,7 @@ export function SharedFailurePage() {
   }
 
   const evidence = evidenceMember(failure);
+  const linkToJob = isPublishedPresubmitJob(failure.job_id, includePresubmits, dashboard?.jobs);
   const prefix = manifest.short_name_prefix ?? "";
   const jobName = shortJobName(failure.job_name, prefix);
   const title = failure.build_level ? jobName : parseTestDisplayName(failure.test_name).displayName;

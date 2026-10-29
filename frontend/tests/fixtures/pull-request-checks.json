@@ -1,0 +1,40 @@
+{
+  "checks": [
+    {
+      "job_name": "pull-e2e",
+      "job_id": "example/project/pull-e2e",
+      "build_id": "101",
+      "passed": false,
+      "started": "2026-08-17T10:00:00Z"
+    },
+    {
+      "job_name": "pull-e2e",
+      "job_id": "example/project/pull-e2e",
+      "build_id": "100",
+      "passed": false,
+      "started": "2026-08-17T09:00:00Z",
+      "finished": "2026-08-17T09:30:00Z"
+    },
+    {
+      "job_name": "pull-e2e",
+      "job_id": "example/project/pull-e2e",
+      "build_id": "99",
+      "passed": true,
+      "started": "2026-08-17T08:00:00Z",
+      "finished": "2026-08-17T08:30:00Z"
+    }
+  ],
+  "members": [
+    {
+      "number": 1,
+      "build_id": "101",
+      "started": "2026-08-17T10:00:00Z"
+    },
+    {
+      "number": 2,
+      "build_id": "100",
+      "started": "2026-08-17T09:00:00Z",
+      "finished": "2026-08-17T09:30:00Z"
+    }
+  ]
+}

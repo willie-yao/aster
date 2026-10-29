@@ -14,7 +14,7 @@ import { LoadingState } from "../components/LoadingState";
 import { RunMetadata } from "../components/RunMetadata";
 import { StatusChip } from "../components/StatusChip";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { usePullRequestDetail, useSharedFailures } from "../hooks/useData";
+import { useDashboard, usePullRequestDetail, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   attributionLabel,
@@ -23,6 +23,7 @@ import {
   checkState,
   checkStatusLabel,
   checkSummaryLine,
+  isPublishedPresubmitJob,
   needsInvestigation,
   shortSHA,
   staleCheckCount,
@@ -38,6 +39,7 @@ import { jobPath, pullRequestsPath, sharedFailurePath } from "../lib/routes";
 import { formatDuration } from "../lib/utils";
 import { soft, accentLabelSx } from "../theme";
 import { overviewTypography } from "../theme/overview";
+import type { JobSummary } from "../types/dashboard";
 import type {
   FailureAttribution,
   PullRequestCheck,
@@ -355,9 +357,7 @@ function FailureItem({
   );
 }
 
-// JobName links into the job dashboard only when presubmits are published as
-// jobs. Without source.include_presubmits there is no job detail file for a
-// presubmit, so a link would dead-end.
+// JobName links only to jobs in the published dashboard catalog.
 function JobName({ check, linkToJob }: { check: PullRequestCheck; linkToJob: boolean }) {
   if (!linkToJob) {
     return (
@@ -504,12 +504,14 @@ function CheckCard({
 
 function ChecksSection({
   detail,
-  linkToJob,
+  includePresubmits,
+  jobs,
   clusters,
   escalationEnabled,
 }: {
   detail: PullRequestDetail;
-  linkToJob: boolean;
+  includePresubmits: boolean;
+  jobs: JobSummary[] | undefined;
   clusters: SharedFailure[];
   escalationEnabled: boolean;
 }) {
@@ -548,7 +550,7 @@ function ChecksSection({
           <CheckCard
             key={`${check.job_id}-${check.build_id}`}
             check={check}
-            linkToJob={linkToJob}
+            linkToJob={isPublishedPresubmitJob(check.job_id, includePresubmits, jobs)}
             baseRef={detail.base_ref}
             clusters={clusters}
             escalation={{ pullNumber: detail.number, enabled: escalationEnabled }}
@@ -563,7 +565,8 @@ export function PullRequestDetailPage() {
   const { number } = useParams<{ number: string }>();
   const { data, loading, error } = usePullRequestDetail(number);
   const manifest = useManifest();
-  const linkToJob = manifest.source?.include_presubmits ?? false;
+  const includePresubmits = manifest.discovery?.include_presubmits ?? false;
+  const { data: dashboard } = useDashboard();
   const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
   // Shared failures are supporting context, so a missing or failed load simply
   // omits the cluster links rather than blocking the page.
@@ -687,7 +690,8 @@ export function PullRequestDetailPage() {
 
       <ChecksSection
         detail={data}
-        linkToJob={linkToJob}
+        includePresubmits={includePresubmits}
+        jobs={dashboard?.jobs}
         clusters={shared?.failures ?? []}
         escalationEnabled={escalationEnabled}
       />

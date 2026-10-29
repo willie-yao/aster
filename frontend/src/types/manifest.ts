@@ -14,12 +14,9 @@ export interface Branding {
   source_repo: SourceRepo;
 }
 
-export interface Source {
-  include_presubmits?: boolean;
-}
-
 export interface Discovery {
   source?: "testgrid" | "bucket";
+  include_presubmits?: boolean;
 }
 
 export interface TestGrid {
@@ -79,7 +76,6 @@ export interface Manifest {
   id: string;
   name: string;
   short_name?: string;
-  source: Source;
   discovery?: Discovery;
   testgrid: TestGrid;
   storage: Storage;

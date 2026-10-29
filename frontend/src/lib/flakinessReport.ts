@@ -1,6 +1,7 @@
 import type {
   BuildFailureSummary,
   FlakinessReport,
+  LowPassRateEntry,
   PatternAnalysis,
   PatternRefreshReport,
   TestFlakiness,
@@ -11,6 +12,7 @@ export interface FlakinessReportWire {
   most_flaky?: TestFlakiness[] | null;
   persistent_failures?: TestFlakiness[] | null;
   recently_broken?: TestFlakiness[] | null;
+  low_pass_rate?: LowPassRateEntry[] | null;
   build_failures?: BuildFailureSummary[] | null;
   recurring_patterns?: PatternAnalysis[] | null;
   pattern_refresh?: PatternRefreshReport;
@@ -22,6 +24,7 @@ export function normalizeFlakinessReport(report: FlakinessReportWire): Flakiness
     most_flaky: report.most_flaky ?? [],
     persistent_failures: report.persistent_failures ?? [],
     recently_broken: report.recently_broken ?? [],
+    low_pass_rate: report.low_pass_rate ?? [],
     build_failures: report.build_failures ?? [],
     recurring_patterns: report.recurring_patterns ?? [],
     pattern_refresh: report.pattern_refresh,
