@@ -335,7 +335,14 @@ export function PatternBanner({
     </Stack>
   ) : undefined;
 
-  const details = (
+  const hasDetails = Boolean(
+    resolvedEntry || staleNotice || lifecycleNotice || causalGroups.length > 0 ||
+    pattern.unclassified_builds?.length ||
+    (causalGroups.length === 0 && pattern.systemic && (pattern.shared_root_cause || pattern.shared_builds?.length)) ||
+    (!analysisOnly && ((pattern.systemic && pattern.suggested_fix) || pattern.source_ref)) ||
+    pattern.relevant_files?.length || chatAvailability === "stale",
+  );
+  const details = hasDetails ? (
     <>
       {resolvedEntry && (
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
@@ -736,7 +743,7 @@ export function PatternBanner({
         </Alert>
       )}
     </>
-  );
+  ) : undefined;
 
   const actions = showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>

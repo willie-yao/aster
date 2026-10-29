@@ -160,7 +160,7 @@ export function AnalysisBriefing({
     );
   }
 
-  if (!collapseDetailsOnMobile) {
+  if (!collapseDetailsOnMobile || !details) {
     return (
       <Box
         id={id}
@@ -180,6 +180,9 @@ export function AnalysisBriefing({
         />
         {mobileNotice && <Box sx={{ px: 1.5, pt: 1.5 }}>{mobileNotice}</Box>}
         <BriefingBody summary={summary} details={details} />
+        {!details && mobileNextStep && (
+          <Box sx={{ px: 1.5, pb: 1.5, overflowWrap: "anywhere" }}>{mobileNextStep}</Box>
+        )}
         {actions && (
           <Box sx={{ px: 1.5, pb: 1.5, borderTop: "1px solid", borderColor: "divider" }}>
             {actions}

@@ -9,6 +9,7 @@ import {
   hasInlineTestEvidence,
   normalizeResultLedgerFilter,
   recentJobPassRate,
+  selectJobRun,
   withJobDetailParam,
 } from "../src/lib/jobDetail.js";
 import type { BuildResult, TestCase } from "../src/types/dashboard.js";
@@ -46,6 +47,23 @@ function build(buildID: string, passed: boolean): BuildResult {
     tests_skipped: 0,
   };
 }
+
+test("job run selection falls back without changing current or retained history", () => {
+  const current = [build("newest", true), build("current", false)];
+  const retained = [build("retained", false)];
+  const history = [...current, ...retained];
+  for (const requested of [null, "", "expired"]) {
+    assert.equal(selectJobRun(history, requested), current[0]);
+  }
+  assert.equal(selectJobRun(history, "current"), current[1]);
+  assert.equal(selectJobRun(history, "retained"), retained[0]);
+  assert.equal(selectJobRun(retained, "expired"), retained[0]);
+  assert.equal(selectJobRun([], "expired"), undefined);
+  assert.deepEqual(history.map((run) => run.build_id), ["newest", "current", "retained"]);
+  const page = source("src/pages/JobDetailPage.tsx");
+  assert.match(page, /selectJobRun\(historyRuns, requestedBuildID\)/);
+  assert.match(page, /const selectedBuildId = selectedRun\?\.build_id/);
+});
 
 test("job result filters omit skipped and non-failing setup rows", () => {
   const executed = executedResultTests([

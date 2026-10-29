@@ -15,6 +15,7 @@ import { Link as RouterLink, Outlet, useLocation } from "react-router-dom";
 import { SearchBar } from "./SearchBar";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { LoadingState } from "./LoadingState";
+import { CapabilityNotice } from "./CapabilitiesProvider";
 import { ProfileMenu } from "./ProfileMenu";
 import { FetchStatusControl, FetchStatusStrip } from "./FetchStatus";
 import { AsterMark } from "./AsterMark";
@@ -230,6 +231,7 @@ export function Layout() {
           "&:focus": { outline: "none" },
         }}
       >
+        <CapabilityNotice />
         <RouteErrorBoundary resetKey={`${location.pathname}${location.search}`}>
           <Suspense fallback={<Box role="status" aria-label="Loading page"><LoadingState /></Box>}>
             <Outlet />
