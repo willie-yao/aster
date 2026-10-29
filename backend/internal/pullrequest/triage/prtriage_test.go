@@ -1,10 +1,14 @@
 package triage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +31,17 @@ type fakeLister struct {
 	pulls     []ghpr.PullRequest
 	err       error
 	limit     int
+}
+
+type finishedErrorBackend struct {
+	storage.Backend
+}
+
+func (b finishedErrorBackend) Open(ctx context.Context, name string) (io.ReadCloser, int64, error) {
+	if strings.HasSuffix(name, "/finished.json") {
+		return nil, 0, os.ErrPermission
+	}
+	return b.Backend.Open(ctx, name)
 }
 
 func (f *fakeLister) ListOpenPullRequests(_ context.Context, _, _ string, limit int) ([]ghpr.PullRequest, bool, error) {
@@ -180,6 +195,31 @@ func TestCollectReportsFailingChecksAndTests(t *testing.T) {
 	}
 	if first.TestedSHA != headSHA || first.Stale {
 		t.Errorf("tested revision = %q stale=%t", first.TestedSHA, first.Stale)
+	}
+}
+
+func TestCollectLogsAndSkipsUnreadableFinishedMetadata(t *testing.T) {
+	backend := finishedErrorBackend{Backend: writeBucket(t, []buildSpec{
+		{job: "pull-e2e", pullNumber: 7, buildID: "200", passed: true},
+	})}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	index, details := collect(t, backend,
+		&fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}},
+		catalogOf(presubmit("pull-e2e")))
+	if len(details) != 1 || len(details[0].Checks) != 0 {
+		t.Fatalf("details = %+v, want no fabricated pending check", details)
+	}
+	if index.PullRequests[0].CIState != models.PullRequestCIUnknown {
+		t.Fatalf("CI state = %q, want unknown", index.PullRequests[0].CIState)
+	}
+	for _, want := range []string{"pr #7 pull-e2e", "finished.json", os.ErrPermission.Error()} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log = %q, want %q", logs.String(), want)
+		}
 	}
 }
 

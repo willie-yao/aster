@@ -45,7 +45,8 @@ type cloneRecord struct {
 }
 
 // FetchBuildInfo reads started.json and finished.json for the build at loc.
-// Missing or unreadable finished.json returns partial info with Result="PENDING".
+// A missing finished.json returns partial info with Result="PENDING".
+// Other read errors are propagated.
 func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (*models.BuildInfo, error) {
 	buildPath := loc.BuildPath()
 
@@ -75,8 +76,11 @@ func FetchBuildInfo(ctx context.Context, b storage.Backend, loc BuildLocation) (
 	// finished.json is absent while the build is still running.
 	finishedData, err := storage.ReadAll(ctx, b, buildPath+"finished.json")
 	if err != nil {
-		info.Result = "PENDING"
-		return info, nil
+		if errors.Is(err, storage.ErrNotFound) {
+			info.Result = "PENDING"
+			return info, nil
+		}
+		return nil, fmt.Errorf("fetching %sfinished.json: %w", buildPath, err)
 	}
 	var f finishedJSON
 	if err := json.Unmarshal(finishedData, &f); err != nil {

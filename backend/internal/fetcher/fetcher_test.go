@@ -25,14 +25,51 @@ import (
 
 type cloneReadBackend struct {
 	storage.Backend
-	reads int
+	reads      int
+	openErrors map[string]error
 }
 
 func (b *cloneReadBackend) Open(ctx context.Context, name string) (io.ReadCloser, int64, error) {
+	if err := b.openErrors[name]; err != nil {
+		return nil, 0, err
+	}
 	if strings.HasSuffix(name, "/clone-records.json") {
 		b.reads++
 	}
 	return b.Backend.Open(ctx, name)
+}
+
+func TestFetchJobRunsLogsAndSkipsUnreadableFinishedMetadata(t *testing.T) {
+	root := t.TempDir()
+	for _, id := range []string{"1", "2"} {
+		writeFixtureFile(t, root, "logs/job/"+id+"/started.json", `{"timestamp":1000}`)
+		writeFixtureFile(t, root, "logs/job/"+id+"/finished.json", `{"timestamp":1060,"passed":true,"result":"SUCCESS"}`)
+	}
+	local, err := storage.NewLocalBackend(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &cloneReadBackend{Backend: local, openErrors: map[string]error{
+		"logs/job/2/finished.json": os.ErrPermission,
+	}}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	runs, stats, err := fetchJobRunsCachedWithStats(t.Context(), backend, nil,
+		&models.ProwJob{Name: "job", JobType: models.JobTypePeriodic}, 2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].BuildID != "1" || runs[0].Result != "SUCCESS" || stats.fetched != 1 {
+		t.Fatalf("runs=%+v stats=%+v, want only the readable completed build", runs, stats)
+	}
+	for _, want := range []string{"job/2", "finished.json", os.ErrPermission.Error()} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log = %q, want %q", logs.String(), want)
+		}
+	}
 }
 
 func TestFetchJobRunsCachedPinsSourceOnce(t *testing.T) {

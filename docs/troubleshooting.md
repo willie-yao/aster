@@ -98,6 +98,8 @@ A dashboard that loads with zero jobs has a valid frontend and manifest, but the
 
 The `onboard` command validates discovery before generating a scaffold. A later fetch can still publish zero jobs when artifact loading fails for every match.
 
+A missing `finished.json` means a build is pending. Other read failures are logged and skipped for that build or pull request check; on-demand escalation reports unavailable.
+
 
 ## Email notifications are not sent
 
