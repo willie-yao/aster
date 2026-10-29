@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/modules/pullrequest"
+	"github.com/willie-yao/aster/backend/internal/ai/modules/sharedfailure"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -19,6 +23,54 @@ import (
 type resolverFixture struct {
 	dataDir  string
 	buildDir string
+}
+
+type resultAnalyzer struct {
+	analysis *models.AIAnalysis
+}
+
+func (a resultAnalyzer) AnalyzeFailure(_ context.Context, _ *http.Client, request ai.FailureAnalysisRequest) (ai.FailureAnalysisResult, error) {
+	if !request.RetryPreliminary {
+		return ai.FailureAnalysisResult{}, errors.New("escalation did not request an explicit preliminary retry")
+	}
+	return ai.FailureAnalysisResult{Analysis: a.analysis}, nil
+}
+
+func TestRunnersPreserveAnalysisQuality(t *testing.T) {
+	for _, disposition := range []string{models.AnalysisDispositionPreliminary, models.AnalysisDispositionCitationsVerified} {
+		t.Run(disposition, func(t *testing.T) {
+			analysis := &models.AIAnalysis{
+				RootCause: " quota exhausted ", Severity: "High", SuggestedFix: " lower parallelism ",
+				Disposition: disposition, DispositionWarnings: []string{models.AnalysisWarningInvestigation},
+				EvidenceCitations: []models.EvidenceCitation{{Path: "build-log.txt", LineStart: 1, LineEnd: 1, Quote: "quota"}},
+			}
+			pr := &AnalysisRunner{NewAnalyzer: func(pullrequest.Subject) (ai.FailureAnalyzer, error) {
+				return resultAnalyzer{analysis}, nil
+			}}
+			prView, err := pr.Run(t.Context(), Resolved{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := &ClusterAnalysisRunner{NewAnalyzer: func(sharedfailure.Subject) (ai.FailureAnalyzer, error) {
+				return resultAnalyzer{analysis}, nil
+			}}
+			clusterView, err := cluster.Run(t.Context(), ClusterResolved{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, view := range []View[Ref]{prView, {
+				State: clusterView.State, RootCause: clusterView.RootCause, SuggestedFix: clusterView.SuggestedFix,
+				Disposition: clusterView.Disposition, DispositionWarnings: clusterView.DispositionWarnings,
+				Citations: clusterView.Citations,
+			}} {
+				if view.State != StateComplete || view.RootCause != "quota exhausted" || view.SuggestedFix != "lower parallelism" ||
+					view.Disposition != disposition || len(view.DispositionWarnings) != 1 ||
+					view.DispositionWarnings[0] != models.AnalysisWarningInvestigation || len(view.Citations) != 1 {
+					t.Fatalf("quality projection = %+v", view)
+				}
+			}
+		})
+	}
 }
 
 func newResolverFixture(t *testing.T) resolverFixture {

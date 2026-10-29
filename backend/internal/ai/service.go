@@ -165,7 +165,7 @@ func (s *Service) Analyze(ctx context.Context, httpClient *http.Client, jobID, b
 	tc.AIAnalysis = result.Analysis
 }
 
-func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int, prowJob *ProwJobContext, failureCohort *FailureCohortContext) (resultErr error) {
+func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, consecutiveFailures int, prowJob *ProwJobContext, failureCohort *FailureCohortContext, retryPreliminary bool) (resultErr error) {
 	usageOutcome := aiusage.OutcomeSuccess
 	ctx, usageOperation := aiusage.Begin(ctx, s.usageRecorder, aiusage.Metadata{
 		LogicalID: jobID + "\x00" + run.BuildID + "\x00" + tc.Name,
@@ -211,7 +211,7 @@ func (s *Service) analyze(ctx context.Context, httpClient *http.Client, jobID, b
 		usageOutcome = aiusage.OutcomeUnavailable
 		return err
 	}
-	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures, promptHash, sources)
+	summary, analysis, err := s.runAgentic(ctx, jobID, buildPrefix, run, tc, userPrompt, failureSignal, consecutiveFailures, promptHash, sources, retryPreliminary)
 	if err != nil {
 		if errors.Is(err, ErrToolsUnsupported) {
 			s.toolsUnsupported.Store(true)
@@ -290,7 +290,7 @@ func (s *Service) sourceCatalogForBuild(run *models.BuildResult) (*tools.SourceC
 
 // runAgentic does the per-failure agentic call setup. Kept separate so
 // Analyze stays readable.
-func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt, failureSignal string, consecutiveFailures int, promptHash string, sources *tools.SourceCatalog) (*models.AISummary, *models.AIAnalysis, error) {
+func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run *models.BuildResult, tc *models.TestCase, userPrompt, failureSignal string, consecutiveFailures int, promptHash string, sources *tools.SourceCatalog, retryPreliminary bool) (*models.AISummary, *models.AIAnalysis, error) {
 	if s.browserFactory == nil {
 		return nil, nil, fmt.Errorf("agentic mode enabled but no browser factory configured")
 	}
@@ -328,6 +328,7 @@ func (s *Service) runAgentic(ctx context.Context, jobID, buildPrefix string, run
 		DraftSelectionObserver: s.draftSelectionObserver,
 		SourceEvidenceObserver: s.sourceEvidenceObserver,
 		PromptHash:             promptHash,
+		RetryPreliminary:       retryPreliminary,
 	}
 	return s.client.doAnalyzeAgentic(ctx, in, cacheKey, s.systemPrompt, userPrompt)
 }

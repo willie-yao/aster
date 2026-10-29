@@ -88,6 +88,9 @@ type FailureAnalysisRequest struct {
 	FailureCohort       *FailureCohortContext `json:"failure_cohort,omitempty"`
 	ConsecutiveFailures int                   `json:"consecutive_failures,omitempty"`
 	CacheGeneration     string                `json:"cache_generation,omitempty"`
+	// RetryPreliminary bypasses recent preliminary cache reuse for an explicit,
+	// caller-bounded attempt. Ordinary scheduled analysis keeps its cache policy.
+	RetryPreliminary bool `json:"-"`
 }
 
 // FailureAnalysisResult is the dashboard analysis output for one test failure.
@@ -111,7 +114,7 @@ func (s *Service) AnalyzeFailure(ctx context.Context, httpClient *http.Client, r
 	run := models.BuildResult{BuildInfo: cloneBuildInfo(request.Build)}
 	tc := cloneTestCase(request.TestCase)
 	consecutiveFailures := max(1, request.ConsecutiveFailures)
-	err := s.analyze(ctx, httpClient, request.JobID, request.BuildPrefix, &run, &tc, consecutiveFailures, request.ProwJob, request.FailureCohort)
+	err := s.analyze(ctx, httpClient, request.JobID, request.BuildPrefix, &run, &tc, consecutiveFailures, request.ProwJob, request.FailureCohort, request.RetryPreliminary)
 	return FailureAnalysisResult{Summary: tc.AISummary, Analysis: tc.AIAnalysis}, err
 }
 

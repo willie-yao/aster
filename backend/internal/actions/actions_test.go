@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +27,50 @@ import (
 	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
+
+func TestAIClientPreservesServiceTierOnTransport(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	calls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			ServiceTier string `json:"service_tier"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		if r.Host != "api.openai.com" || r.URL.Path != "/v1/responses" || request.ServiceTier != "flex" {
+			t.Errorf("host=%s endpoint=%s service_tier=%q", r.Host, r.URL, request.ServiceTier)
+		}
+		_, _ = w.Write([]byte(`{"id":"fixture","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`))
+	}))
+	defer provider.Close()
+	transport := original.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != "api.openai.com:443" {
+			return nil, fmt.Errorf("external request blocked by action test")
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, provider.Listener.Addr().String())
+	}
+	http.DefaultTransport = transport
+	t.Cleanup(transport.CloseIdleConnections)
+	service := NewService(&project.Config{}, t.TempDir(), AIConfig{
+		Token: "fixture", API: ai.APIResponses, Endpoint: "https://api.openai.com/v1/responses",
+		Model: "fixture-model", ServiceTier: "flex",
+	})
+	client := service.aiClient()
+	if client == nil {
+		t.Fatal("configured action client is nil")
+	}
+	result, err := client.Complete(t.Context(), "system", "user")
+	if err != nil || result != "done" || calls != 1 {
+		t.Fatalf("result=%q calls=%d err=%v", result, calls, err)
+	}
+}
 
 // writeJobDetail writes a jobs/<name>.json fixture under dataDir.
 func writeJobDetail(t *testing.T, dataDir, name string, detail models.JobDetail) {

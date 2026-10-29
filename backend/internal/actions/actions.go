@@ -85,6 +85,7 @@ type AIConfig struct {
 	Endpoint        string
 	Model           string
 	ReasoningEffort ai.ReasoningEffort
+	ServiceTier     string
 	Headers         map[string]string
 	SourceToken     string
 	UsageRecorder   *aiusage.Recorder
@@ -270,6 +271,7 @@ func (s *Service) aiClient() *ai.Client {
 		Endpoint:        s.ai.Endpoint,
 		Model:           s.ai.Model,
 		ReasoningEffort: s.ai.ReasoningEffort,
+		ServiceTier:     s.ai.ServiceTier,
 		ExtraHeaders:    s.ai.Headers,
 	})
 }

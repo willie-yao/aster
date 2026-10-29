@@ -447,6 +447,7 @@ func TestAgentic_CacheHit(t *testing.T) {
 	if _, _, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
+
 	_, a2, err := client.doAnalyzeAgentic(context.Background(), newTestAgenticInputs(t, browser, opts), "agentic:test:cached", "sys", "user")
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -463,6 +464,37 @@ func TestAgentic_CacheHit(t *testing.T) {
 	}
 	if a2.Mode != AgenticMode {
 		t.Errorf("cache-hit mode = %q, want %q", a2.Mode, AgenticMode)
+	}
+}
+
+func TestAgentic_ExplicitPreliminaryRetryBypassesOnlyRecentPreliminaryCache(t *testing.T) {
+	shrinkCallDelay(t)
+	srv := newScriptedChatServer(t)
+	final := `{"summary":"cached","is_transient":false,"root_cause":"configuration mismatch","severity":"Low","suggested_fix":"update the configuration","relevant_files":[]}`
+	for range maxPreliminaryAttempts {
+		srv.push(200, chatRespFinal(final))
+	}
+	client := newAgenticTestClient(t, srv.URL)
+	input := newTestAgenticInputs(t, &fakeBrowser{}, AgenticOptions{
+		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000, Timeout: 30 * time.Second,
+	})
+	const key = "agentic:test:explicit-preliminary"
+	for attempt := 1; attempt <= maxPreliminaryAttempts; attempt++ {
+		input.RetryPreliminary = true
+		_, result, err := client.doAnalyzeAgentic(t.Context(), input, key, "sys", "user")
+		if err != nil || result == nil || result.CacheHit || result.Disposition != models.AnalysisDispositionPreliminary {
+			t.Fatalf("explicit attempt %d = %+v, %v", attempt, result, err)
+		}
+		input.RetryPreliminary = false
+		_, cached, err := client.doAnalyzeAgentic(t.Context(), input, key, "sys", "user")
+		if err != nil || cached == nil || !cached.CacheHit || atomic.LoadInt32(&srv.calls) != int32(attempt) {
+			t.Fatalf("ordinary reuse %d = %+v, %v", attempt, cached, err)
+		}
+	}
+	input.RetryPreliminary = true
+	_, spent, err := client.doAnalyzeAgentic(t.Context(), input, key, "sys", "user")
+	if err != nil || spent == nil || !spent.CacheHit || atomic.LoadInt32(&srv.calls) != maxPreliminaryAttempts {
+		t.Fatalf("spent budget = %+v, %v", spent, err)
 	}
 }
 

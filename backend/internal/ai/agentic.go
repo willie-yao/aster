@@ -646,6 +646,8 @@ type AgenticInputs struct {
 	Cache        *tools.Cache
 	WebURLBase   string
 	Mode         string
+	// RetryPreliminary is set only for an explicitly admitted quality retry.
+	RetryPreliminary bool
 	// PromptHash overrides the system-only fingerprint when the per-failure
 	// module prompt is part of the recorded provenance.
 	PromptHash string
@@ -707,6 +709,9 @@ func (c *Client) cachedAgenticAnalysis(in AgenticInputs, cacheKey string, start 
 		// cached preliminary result once the budget is gone.
 		if attempts >= maxPreliminaryAttempts {
 			return result.Summary, result.Analysis, attempts, true
+		}
+		if in.RetryPreliminary {
+			return nil, nil, attempts, false
 		}
 		generatedAt, err := time.Parse(time.RFC3339, result.Analysis.GeneratedAt)
 		if err != nil || time.Since(generatedAt) > preliminaryCacheTTL {

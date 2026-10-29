@@ -3,6 +3,7 @@ package escalation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -510,8 +511,9 @@ func (stubAnalyzer) AnalyzeFailure(context.Context, *http.Client, ai.FailureAnal
 // countingClusterRunner reports how many analyses actually ran and echoes the
 // evidence the resolver chose, the way the real runner does.
 type countingClusterRunner struct {
-	mu   sync.Mutex
-	runs int
+	mu          sync.Mutex
+	runs        int
+	disposition string
 }
 
 func (c *countingClusterRunner) Run(_ context.Context, resolved ClusterResolved) (ClusterView, error) {
@@ -519,7 +521,7 @@ func (c *countingClusterRunner) Run(_ context.Context, resolved ClusterResolved)
 	c.runs++
 	c.mu.Unlock()
 	evidence := resolved.Evidence
-	return ClusterView{State: StateComplete, RootCause: "read " + evidence.BuildID, Evidence: &evidence}, nil
+	return ClusterView{State: StateComplete, RootCause: "read " + evidence.BuildID, Evidence: &evidence, Disposition: c.disposition}, nil
 }
 
 func (c *countingClusterRunner) count() int {
@@ -616,6 +618,48 @@ func TestClusterAnalysisIsRerunWhenTheEvidenceBuildMoves(t *testing.T) {
 	}
 	if fresh.Evidence == nil || fresh.Evidence.BuildID != "300" {
 		t.Fatalf("evidence = %+v, want the current build recorded", fresh.Evidence)
+	}
+}
+
+func TestClusterPreliminaryBudgetResetsOnlyForChangedEvidence(t *testing.T) {
+	resolver := &movingResolver{buildID: "100"}
+	runner := &countingClusterRunner{disposition: models.AnalysisDispositionPreliminary}
+	opts := Options[ClusterRef]{
+		CurrentEvidence: resolver.current,
+		Store:           FileStore[ClusterRef]{Dir: t.TempDir(), Name: ClusterStateFileName},
+	}
+	service, err := New(t.Context(), resolver, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= maxPreliminaryAttempts; attempt++ {
+		view := completedCluster(t, service, fmt.Sprintf("attempt-%d", attempt))
+		if view.PreliminaryAttempts != attempt || view.Retryable != (attempt < maxPreliminaryAttempts) {
+			t.Fatalf("attempt %d = %+v", attempt, view)
+		}
+	}
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	service, err = New(t.Context(), resolver, runner, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := completedCluster(t, service, "spent")
+	if view.Retryable || runner.count() != maxPreliminaryAttempts {
+		t.Fatalf("same evidence restarted: %+v runs=%d", view, runner.count())
+	}
+	resolver.moveTo("300")
+	for range 3 {
+		view, err = service.Get(ClusterRef{ID: "abc"})
+		if err != nil || view.State != StateNotStarted || runner.count() != maxPreliminaryAttempts {
+			t.Fatalf("stale read started work or served old evidence: %+v, %v", view, err)
+		}
+	}
+	view = completedCluster(t, service, "new-build")
+	if view.Evidence.BuildID != "300" || view.PreliminaryAttempts != 1 || !view.Retryable ||
+		runner.count() != maxPreliminaryAttempts+1 {
+		t.Fatalf("new evidence did not reset budget: %+v", view)
 	}
 }
 
@@ -758,10 +802,11 @@ func TestClusterServiceRequiresCurrentEvidence(t *testing.T) {
 // phasedClusterRunner completes its first analysis and blocks in its second, so
 // a test can hold a record in the running state.
 type phasedClusterRunner struct {
-	mu      sync.Mutex
-	runs    int
-	started chan struct{}
-	release chan struct{}
+	mu          sync.Mutex
+	runs        int
+	started     chan struct{}
+	release     chan struct{}
+	disposition string
 }
 
 func (p *phasedClusterRunner) Run(ctx context.Context, resolved ClusterResolved) (ClusterView, error) {
@@ -770,7 +815,7 @@ func (p *phasedClusterRunner) Run(ctx context.Context, resolved ClusterResolved)
 	n := p.runs
 	p.mu.Unlock()
 	evidence := resolved.Evidence
-	done := ClusterView{State: StateComplete, RootCause: "read " + evidence.BuildID, Evidence: &evidence}
+	done := ClusterView{State: StateComplete, RootCause: "read " + evidence.BuildID, Evidence: &evidence, Disposition: p.disposition}
 	if n == 1 {
 		return done, nil
 	}
@@ -781,6 +826,37 @@ func (p *phasedClusterRunner) Run(ctx context.Context, resolved ClusterResolved)
 		return ClusterView{}, ctx.Err()
 	}
 	return done, nil
+}
+
+func TestLatePreliminaryResultDoesNotAnswerChangedEvidence(t *testing.T) {
+	resolver := &movingResolver{buildID: "100"}
+	runner := &phasedClusterRunner{
+		started: make(chan struct{}, 1), release: make(chan struct{}),
+		disposition: models.AnalysisDispositionPreliminary,
+	}
+	release := sync.OnceFunc(func() { close(runner.release) })
+	defer release()
+	service, err := New(t.Context(), resolver, runner, Options[ClusterRef]{CurrentEvidence: resolver.current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedCluster(t, service, "first")
+	ref := ClusterRef{ID: "abc"}
+	if _, err := service.Start(t.Context(), ref, "admin", "quality-retry"); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	resolver.moveTo("300")
+	release()
+	waitClusterState(t, service, ref.identity(), StateComplete)
+	view, err := service.Get(ref)
+	if err != nil || view.State != StateNotStarted || view.RootCause != "" || view.PreliminaryAttempts != 0 {
+		t.Fatalf("late result leaked into current evidence: %+v, %v", view, err)
+	}
+	fresh := completedCluster(t, service, "new-evidence")
+	if fresh.RootCause != "read 300" || fresh.PreliminaryAttempts != 1 || !fresh.Retryable {
+		t.Fatalf("fresh evidence inherited late quality state: %+v", fresh)
+	}
 }
 
 // The staleness check runs without the lock, so a start can replace the record

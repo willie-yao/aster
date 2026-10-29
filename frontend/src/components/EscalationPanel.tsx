@@ -1,3 +1,4 @@
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -197,6 +198,7 @@ function EscalationPanelForSubject({
   if (!authenticated) return null;
 
   const state = view?.state ?? "not_started";
+  const preliminary = state === "complete" && view?.disposition !== "citations_verified";
   // Failure states speak through the alert below, so they leave this empty.
   const progressLabel =
     state === "queued"
@@ -204,7 +206,7 @@ function EscalationPanelForSubject({
       : state === "running"
         ? "Investigating"
         : state === "complete"
-          ? "Analysis complete"
+          ? preliminary ? "Preliminary analysis complete" : "Analysis complete (citations verified)"
           : "";
 
   return (
@@ -225,7 +227,7 @@ function EscalationPanelForSubject({
         <Typography component="span" color="textSecondary" sx={overviewTypography.tableHeading}>
           {title}
         </Typography>
-        {(state === "not_started" || state === "failed") && (
+        {(state === "not_started" || state === "failed" || (preliminary && view?.retryable)) && (
           // aria-disabled rather than disabled: a disabled button drops the
           // operator's focus to the document body mid-action.
           <Button
@@ -236,7 +238,7 @@ function EscalationPanelForSubject({
             aria-disabled={starting || undefined}
             sx={starting ? { opacity: 0.6 } : undefined}
           >
-            {starting ? "Starting..." : state === "failed" ? "Retry" : startLabel}
+            {starting ? "Starting..." : state === "not_started" ? startLabel : "Retry"}
           </Button>
         )}
         {/* One region for the whole lifecycle. It never unmounts, so the focus
@@ -275,67 +277,83 @@ function EscalationPanelForSubject({
         </Typography>
       )}
 
-      {state === "complete" && view && (
+      {state === "complete" && view && <EscalationResult view={view} disclaimer={disclaimer} />}
+    </Box>
+  );
+}
+
+export function EscalationResult({ view, disclaimer }: { view: EscalationView; disclaimer: string }) {
+  const preliminary = view.disposition !== "citations_verified";
+  return (
+    <Box sx={{ mt: 1 }}>
+      {preliminary && (
+        <Alert severity="warning" variant="outlined" sx={{ mb: 1 }}>
+          Preliminary analysis. Evidence or quality checks remain unresolved. Treat it as a hypothesis during investigation.
+          {!view.retryable && (view.preliminary_attempts ?? 0) >= 3 && " The three-attempt preliminary analysis limit has been reached for this evidence."}
+        </Alert>
+      )}
+      {(view.disposition_warnings?.length ?? 0) > 0 && (
+        <Typography color="textSecondary" sx={{ mb: 1, ...overviewTypography.description }}>
+          Quality warnings: {view.disposition_warnings?.join(", ")}.
+        </Typography>
+      )}
+      {view.root_cause && (
+        <Typography sx={{ whiteSpace: "pre-wrap", ...overviewTypography.secondaryBody }}>
+          {view.root_cause}
+        </Typography>
+      )}
+      {view.suggested_fix && (
+        <Typography color="textSecondary" sx={{ mt: 0.75, whiteSpace: "pre-wrap", ...overviewTypography.description }}>
+          {view.suggested_fix}
+        </Typography>
+      )}
+      {(view.citations?.length ?? 0) > 0 && (
         <Box sx={{ mt: 1 }}>
-          {view.root_cause && (
-            <Typography sx={{ whiteSpace: "pre-wrap", ...overviewTypography.secondaryBody }}>
-              {view.root_cause}
-            </Typography>
-          )}
-          {view.suggested_fix && (
-            <Typography color="textSecondary" sx={{ mt: 0.75, whiteSpace: "pre-wrap", ...overviewTypography.description }}>
-              {view.suggested_fix}
-            </Typography>
-          )}
-          {(view.citations?.length ?? 0) > 0 && (
-            <Box sx={{ mt: 1 }}>
-              <Typography color="textSecondary" sx={overviewTypography.tableHeading}>
-                Evidence
+          <Typography color="textSecondary" sx={overviewTypography.tableHeading}>
+            Evidence
+          </Typography>
+          {view.citations?.map((citation, index) => (
+            <Box
+              key={`${citation.path}-${index}`}
+              sx={{
+                mt: 0.5,
+                p: 1,
+                borderRadius: "4px",
+                bgcolor: (theme) => soft(theme, "primary", 0.06),
+              }}
+            >
+              <Typography sx={overviewTypography.data}>
+                {citation.path}
+                {citation.line_start ? `:${citation.line_start}` : ""}
               </Typography>
-              {view.citations?.map((citation, index) => (
-                <Box
-                  key={`${citation.path}-${index}`}
+              {citation.quote && (
+                <Typography
+                  component="pre"
                   sx={{
-                    mt: 0.5,
-                    p: 1,
-                    borderRadius: "4px",
-                    bgcolor: (theme) => soft(theme, "primary", 0.06),
+                    m: 0,
+                    mt: 0.25,
+                    fontFamily: "monospace",
+                    fontSize: "0.75rem",
+                    whiteSpace: "pre-wrap",
+                    color: "text.secondary",
                   }}
                 >
-                  <Typography sx={overviewTypography.data}>
-                    {citation.path}
-                    {citation.line_start ? `:${citation.line_start}` : ""}
-                  </Typography>
-                  {citation.quote && (
-                    <Typography
-                      component="pre"
-                      sx={{
-                        m: 0,
-                        mt: 0.25,
-                        fontFamily: "monospace",
-                        fontSize: "0.75rem",
-                        whiteSpace: "pre-wrap",
-                        color: "text.secondary",
-                      }}
-                    >
-                      {citation.quote}
-                    </Typography>
-                  )}
-                </Box>
-              ))}
+                  {citation.quote}
+                </Typography>
+              )}
             </Box>
-          )}
-          {view.evidence?.build_id && (
-            <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
-              Read from build {view.evidence.build_id}
-              {view.evidence.pull_number ? ` on pull request #${view.evidence.pull_number}` : ""}.
-            </Typography>
-          )}
-          <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
-            {disclaimer}
-          </Typography>
+          ))}
         </Box>
       )}
+      {view.evidence?.build_id && (
+        <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
+          Read from build {view.evidence.build_id}
+          {view.evidence.pull_number ? ` on pull request #${view.evidence.pull_number}` : ""}.
+        </Typography>
+      )}
+      <Typography color="textSecondary" sx={{ mt: 1, ...overviewTypography.description }}>
+        {disclaimer}
+      </Typography>
     </Box>
   );
 }
