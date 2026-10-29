@@ -93,7 +93,7 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /only if they preserve that base and do not touch patched files/);
   assert.match(dialog, /chatFixFindingCaveats\(message, request\?\.warnings\)/);
   assert.match(dialog, /Generate fix preview/);
-  assert.match(dialog, /Open draft PR with warnings/);
+  assert.match(source("src/components/FixReviewWorkspace.tsx"), /Open draft PR with warnings/);
   assert.match(dialog, /Regenerate with feedback/);
   assert.match(dialog, /request\?\.warnings/);
   assert.match(dialog, /instruction\.trim\(\) !== submittedInstruction\.trim\(\)/);
