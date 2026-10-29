@@ -249,6 +249,12 @@ func TestGitOpsRejectsInvalidConsumerInputs(t *testing.T) {
 	tests := []struct{ name, values, prompt, version, want string }{
 		{"project collision", "project:\n  existingConfigMap: old\n", "", "", "top-level project"},
 		{"inline token", "ai:\n  token: super-secret-provider-token\n", "", "", "credential"},
+		{"inline GitHub read token", "ai:\n  githubReadToken: placeholder-for-test-only\n", "", "", "ai.githubReadToken"},
+		{"inline OAuth client secret", "server:\n  actions:\n    oauth:\n      clientSecret: placeholder-for-test-only\n", "", "", "server.actions.oauth.clientSecret"},
+		{"inline OAuth session key", "server:\n  actions:\n    oauth:\n      sessionKey: placeholder-for-test-only\n", "", "", "server.actions.oauth.sessionKey"},
+		{"inline OAuth bot token", "server:\n  actions:\n    oauth:\n      botToken: placeholder-for-test-only\n", "", "", "server.actions.oauth.botToken"},
+		{"inline proxy bot token", "server:\n  actions:\n    proxy:\n      botToken: placeholder-for-test-only\n", "", "", "server.actions.proxy credential"},
+		{"inline proxy secret", "server:\n  actions:\n    proxy:\n      secret: placeholder-for-test-only\n", "", "", "server.actions.proxy credential"},
 		{"github token", "note: ghp_abcdefghijklmnopqrstuvwxyz123456\n", "", "", "credential-like"},
 		{"pem", "note: |\n  -----BEGIN PRIVATE KEY-----\n  abc\n", "", "", "credential-like"},
 		{"url userinfo", "endpoint: https://user:password@example.test/v1\n", "", "", "URL userinfo"},
@@ -280,6 +286,77 @@ func TestGitOpsRejectsInvalidConsumerInputs(t *testing.T) {
 			err := RenderGitOps(opts, nil)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderGitOpsRejectsInlineExtraEnvWithoutWrites(t *testing.T) {
+	for _, component := range []string{"fetcher", "server"} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", component, existing), func(t *testing.T) {
+				dir := writeGitOpsConsumer(t, "mode: cron\n", "", nil)
+				opts := gitOpsTestOptions(dir)
+				root := filepath.Join(dir, "gitops")
+				var before map[string][]byte
+				if existing {
+					if err := RenderGitOps(opts, nil); err != nil {
+						t.Fatal(err)
+					}
+					before = readGitOpsTree(t, root)
+				}
+				const placeholder = "placeholder-for-test-only"
+				values := fmt.Sprintf("mode: cron\n%s:\n  extraEnv:\n    - name: AI_TOKEN\n      value: %s\n", component, placeholder)
+				if gitOpsCredentialPattern.MatchString(values) {
+					t.Fatal("fixture must exercise the env-name guard, not raw token detection")
+				}
+				writeGitOpsFile(t, filepath.Join(dir, "deploy", "values.yaml"), values)
+				var output bytes.Buffer
+				err := RenderGitOps(opts, &output)
+				want := "inline credential fields are not allowed in GitOps values: " + component + ".extraEnv.AI_TOKEN"
+				if err == nil || err.Error() != want || output.Len() != 0 {
+					t.Fatalf("error = %v, want %q; output = %q", err, want, output.String())
+				}
+				if existing {
+					if after := readGitOpsTree(t, root); !reflect.DeepEqual(before, after) {
+						t.Fatal("rejected render changed existing generated files")
+					}
+				} else if _, err := os.Stat(root); !os.IsNotExist(err) {
+					t.Fatalf("rejected render created output: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRenderGitOpsAllowsExtraEnvSecretReferences(t *testing.T) {
+	for _, component := range []string{"fetcher", "server"} {
+		t.Run(component, func(t *testing.T) {
+			values := fmt.Sprintf(`mode: cron
+%s:
+  extraEnv:
+    - name: AI_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: provider-credentials
+          key: ai-token
+    - name: ASTER_APP_ID
+      value: fixture-app
+`, component)
+			dir := writeGitOpsConsumer(t, values, "", nil)
+			opts := gitOpsTestOptions(dir)
+			if err := RenderGitOps(opts, nil); err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := yaml.Unmarshal([]byte(values), &want); err != nil {
+				t.Fatal(err)
+			}
+			if got := generatedApplicationValues(t, dir)[component]; !reflect.DeepEqual(got, want[component]) {
+				t.Fatalf("generated %s values = %#v, want %#v", component, got, want[component])
+			}
+			if err := CheckGitOps(opts, nil); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
