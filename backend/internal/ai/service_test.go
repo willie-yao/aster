@@ -448,7 +448,7 @@ func TestServiceProviderFailureExcludesResponseBodyFromEverySurface(t *testing.T
 	t.Cleanup(func() { log.SetOutput(previousLogWriter) })
 	run := newRun("j", "1")
 	testCase := newFailedTC("Test private provider failure", "failed")
-	analysisErr := service.analyze(t.Context(), &http.Client{}, "j", "logs/j/1/", run, testCase, 1, nil, nil)
+	analysisErr := service.analyze(t.Context(), &http.Client{}, "j", "logs/j/1/", run, testCase, 1, nil, nil, false)
 	if analysisErr == nil {
 		t.Fatal("provider failure returned nil error")
 	}

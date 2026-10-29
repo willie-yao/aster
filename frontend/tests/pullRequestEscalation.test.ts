@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { withSSR } from "./helpers/ssr.js";
+import type { EscalationView } from "../src/lib/escalation.js";
 
 import {
   escalationActive, getEscalation, startEscalation,
@@ -11,6 +15,51 @@ import {
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
+
+const { EscalationResult } = await withSSR(async (vite) => {
+  return await vite.ssrLoadModule("/src/components/EscalationPanel.tsx") as {
+    EscalationResult: (props: { view: EscalationView; disclaimer: string }) => ReturnType<typeof createElement>;
+  };
+});
+
+for (const disposition of ["preliminary", "citations_verified"] as const) {
+  test(`escalation renders ${disposition} quality and warnings honestly`, () => {
+    const view: EscalationView = {
+      state: "complete", root_cause: "Endpoint mismatch", disposition,
+      disposition_warnings: ["investigation_incomplete"], retryable: true, preliminary_attempts: 1,
+      citations: [{ path: "build-log.txt", quote: "connection refused", line_start: 7 }],
+    };
+    const html = renderToStaticMarkup(createElement(EscalationResult, { view, disclaimer: "Not proof of PR causality." }));
+    assert.match(html, /Endpoint mismatch/);
+    assert.match(html, /investigation_incomplete/);
+    assert.match(html, /build-log\.txt/);
+    assert.match(html, /Not proof of PR causality/);
+    if (disposition === "preliminary") {
+      assert.match(html, /Preliminary analysis/);
+      assert.match(html, /Treat it as a hypothesis/);
+      assert.doesNotMatch(html, /citations verified/);
+    } else {
+      assert.doesNotMatch(html, /Preliminary analysis/);
+    }
+  });
+}
+
+test("spent preliminary results explain why no quality retry remains", () => {
+  const html = renderToStaticMarkup(createElement(EscalationResult, {
+    view: { state: "complete", disposition: "preliminary", preliminary_attempts: 3, retryable: false },
+    disclaimer: "Evidence only.",
+  }));
+  assert.match(html, /three-attempt preliminary analysis limit/);
+});
+
+test("preliminary retry controls use server eligibility and remain explicit", () => {
+  const panel = source("src/components/EscalationPanel.tsx");
+  assert.match(panel, /preliminary && view\?\.retryable/);
+  assert.match(panel, /Preliminary analysis complete/);
+  assert.match(panel, /Analysis complete \(citations verified\)/);
+  assert.match(panel, /onClick=\{\(\) => void onStart\(\)\}/);
+  assert.equal(panel.match(/calls\.current\.start\(key\)/g)?.length, 1);
+});
 
 test("only in-progress escalation states are polled", () => {
   assert.equal(escalationActive("queued"), true);
@@ -42,6 +91,10 @@ for (const method of ["GET", "POST"] as const) {
       severity: "high",
       suggested_fix: "Publish the image.",
       citations: [{ path: "build-log.txt", line_start: 17, quote: "image missing" }],
+      disposition: "preliminary",
+      disposition_warnings: ["artifact_grounding_incomplete"],
+      preliminary_attempts: 2,
+      retryable: true,
     };
     const calls: Array<{ url: unknown; init: RequestInit | undefined }> = [];
     globalThis.fetch = async (url, init) => {
@@ -137,6 +190,7 @@ test("a superseded escalation response cannot overwrite newer state", () => {
   assert.match(panel, /requestKey\.current === key/);
   // Unmounting must stop any in-flight update.
   assert.match(panel, /cancelled\.current = true/);
+  assert.match(panel, /key=\{props\.subjectKey\}/);
 });
 
 test("a slow poll cannot regress state behind a newer start", () => {

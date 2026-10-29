@@ -37,6 +37,10 @@ export interface EscalationView {
   severity?: string;
   suggested_fix?: string;
   citations?: EscalationCitation[];
+  disposition?: "preliminary" | "citations_verified";
+  disposition_warnings?: string[];
+  preliminary_attempts?: number;
+  retryable?: boolean;
   evidence?: EscalationEvidence;
   error?: string;
   started_at?: string;

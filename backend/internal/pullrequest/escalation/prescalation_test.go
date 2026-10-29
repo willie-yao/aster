@@ -971,6 +971,7 @@ func TestIdempotencyIndexIsBounded(t *testing.T) {
 		if _, err := service.Start(context.Background(), ref, "octocat", fmt.Sprintf("req-%d", i)); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
+
 		waitForState(t, service, ref, StateComplete)
 	}
 	service.mu.Lock()
@@ -978,5 +979,164 @@ func TestIdempotencyIndexIsBounded(t *testing.T) {
 	service.mu.Unlock()
 	if keys > 2*maxIdempotencyKeysPerRecord {
 		t.Fatalf("idempotency entries = %d, want the bound respected", keys)
+	}
+}
+
+func TestPreliminaryRetriesAreExplicitBoundedAndPersisted(t *testing.T) {
+	store := FileStore[Ref]{Dir: t.TempDir(), Name: StateFileName}
+	resolver := &fakeResolver{}
+	runner := newFakeRunner()
+	runner.view = View[Ref]{
+		State: StateComplete, RootCause: "hypothesis", Disposition: models.AnalysisDispositionPreliminary,
+		DispositionWarnings: []string{models.AnalysisWarningArtifactGrounding},
+	}
+	close(runner.release)
+	service := newService(t, resolver, runner, Options[Ref]{Store: store})
+	ref := testRef("TestA")
+	for attempt := 1; attempt <= maxPreliminaryAttempts; attempt++ {
+		key := fmt.Sprintf("attempt-%d", attempt)
+		if _, err := service.Start(t.Context(), ref, "admin", key); err != nil {
+			t.Fatal(err)
+		}
+		view := waitForState(t, service, ref, StateComplete)
+		if view.PreliminaryAttempts != attempt || view.Retryable != (attempt < maxPreliminaryAttempts) ||
+			view.Disposition != models.AnalysisDispositionPreliminary || len(view.DispositionWarnings) != 1 {
+			t.Fatalf("attempt %d = %+v", attempt, view)
+		}
+		for range 3 {
+			if _, err := service.Get(ref); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := service.Start(t.Context(), ref, "admin", key)
+			if err != nil || replay.PreliminaryAttempts != attempt || replay.State != StateComplete {
+				t.Fatalf("replay = %+v, %v", replay, err)
+			}
+		}
+		drain(t, service)
+		service = newService(t, resolver, runner, Options[Ref]{Store: store})
+		restored, err := service.Get(ref)
+		if err != nil || restored.Disposition != view.Disposition || restored.PreliminaryAttempts != attempt ||
+			restored.Retryable != view.Retryable || len(restored.DispositionWarnings) != 1 {
+			t.Fatalf("restored quality = %+v, %v", restored, err)
+		}
+	}
+	for range 3 {
+		view, err := service.Start(t.Context(), ref, "admin", "spent-budget")
+		if err != nil || view.PreliminaryAttempts != maxPreliminaryAttempts || view.Retryable {
+			t.Fatalf("spent budget = %+v, %v", view, err)
+		}
+	}
+	if got := len(runner.started); got != maxPreliminaryAttempts || resolver.calls() != maxPreliminaryAttempts {
+		t.Fatalf("runs=%d resolutions=%d, want %d", got, resolver.calls(), maxPreliminaryAttempts)
+	}
+	other := testRef("TestB")
+	if _, err := service.Start(t.Context(), other, "admin", "other-subject"); err != nil {
+		t.Fatal(err)
+	}
+	if view := waitForState(t, service, other, StateComplete); view.PreliminaryAttempts != 1 {
+		t.Fatalf("other subject inherited budget: %+v", view)
+	}
+}
+
+func TestTransportFailurePreservesPreliminaryBudget(t *testing.T) {
+	runner := newFakeRunner()
+	runner.view = View[Ref]{State: StateComplete, Disposition: models.AnalysisDispositionPreliminary}
+	close(runner.release)
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
+	ref := testRef("TestA")
+	if _, err := service.Start(t.Context(), ref, "admin", "first"); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, service, ref, StateComplete)
+	runner.mu.Lock()
+	runner.err = errors.New("provider unavailable")
+	runner.mu.Unlock()
+	if _, err := service.Start(t.Context(), ref, "admin", "transport"); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitForState(t, service, ref, StateFailed)
+	if !failed.Retryable || failed.PreliminaryAttempts != 1 {
+		t.Fatalf("transport failure reset budget: %+v", failed)
+	}
+	runner.mu.Lock()
+	runner.err = nil
+	runner.mu.Unlock()
+	if _, err := service.Start(t.Context(), ref, "admin", "recover"); err != nil {
+		t.Fatal(err)
+	}
+	if view := waitForState(t, service, ref, StateComplete); view.PreliminaryAttempts != 2 {
+		t.Fatalf("recovered budget = %+v", view)
+	}
+}
+
+func TestConcurrentPreliminaryRetryRemainsSingleFlight(t *testing.T) {
+	runner := newFakeRunner()
+	runner.view = View[Ref]{State: StateComplete, Disposition: models.AnalysisDispositionPreliminary}
+	service := newService(t, &fakeResolver{}, runner, Options[Ref]{})
+	ref := testRef("TestA")
+	service.records[ref.identity()] = &record[Ref]{view: View[Ref]{
+		Ref: ref, State: StateComplete, Disposition: models.AnalysisDispositionPreliminary, PreliminaryAttempts: 1,
+	}}
+	var wg sync.WaitGroup
+	for i := range 12 {
+		wg.Go(func() {
+			if _, err := service.Start(t.Context(), ref, "admin", fmt.Sprintf("retry-%d", i)); err != nil && !errors.Is(err, ErrBusy) {
+				t.Errorf("Start: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+	<-runner.started
+	close(runner.release)
+	view := waitForState(t, service, ref, StateComplete)
+	if view.PreliminaryAttempts != 2 || len(runner.started) != 0 {
+		t.Fatalf("concurrent retries ran more than once: %+v", view)
+	}
+}
+
+type delayedFirstResolver struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *delayedFirstResolver) Resolve(ctx context.Context, ref Ref) (Resolved, error) {
+	if r.calls.Add(1) == 1 {
+		close(r.entered)
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return Resolved{}, ctx.Err()
+		}
+	}
+	return Resolved{Ref: ref}, nil
+}
+
+func TestSameKeyReplayAfterConcurrentResolutionDoesNotRetryPreliminary(t *testing.T) {
+	resolver := &delayedFirstResolver{entered: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(resolver.release) })
+	defer release()
+	runner := newFakeRunner()
+	runner.view = View[Ref]{State: StateComplete, Disposition: models.AnalysisDispositionPreliminary}
+	close(runner.release)
+	service := newService(t, resolver, runner, Options[Ref]{})
+	ref := testRef("TestA")
+	first := make(chan error, 1)
+	go func() {
+		_, err := service.Start(t.Context(), ref, "admin", "same-key")
+		first <- err
+	}()
+	<-resolver.entered
+	if _, err := service.Start(t.Context(), ref, "admin", "same-key"); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, service, ref, StateComplete)
+	release()
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	view := waitForState(t, service, ref, StateComplete)
+	if view.PreliminaryAttempts != 1 || len(runner.started) != 1 {
+		t.Fatalf("late replay restarted preliminary work: %+v", view)
 	}
 }

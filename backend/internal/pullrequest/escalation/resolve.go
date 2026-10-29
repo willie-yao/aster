@@ -203,6 +203,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, resolved Resolved) (View[Ref],
 // Both escalation kinds run the ordinary agentic analysis under their own
 // module, so only the subject differs and the projection is shared.
 func analysisView[R any](ctx context.Context, analyzer ai.FailureAnalyzer, request ai.FailureAnalysisRequest) (View[R], error) {
+	request.RetryPreliminary = true
 	result, err := analyzer.AnalyzeFailure(ctx, nil, request)
 	if err != nil {
 		return View[R]{}, err
@@ -211,10 +212,12 @@ func analysisView[R any](ctx context.Context, analyzer ai.FailureAnalyzer, reque
 		return View[R]{State: StateFailed, Error: "the analysis produced no result"}, nil
 	}
 	return View[R]{
-		State:        StateComplete,
-		RootCause:    strings.TrimSpace(result.Analysis.RootCause),
-		Severity:     result.Analysis.Severity,
-		SuggestedFix: strings.TrimSpace(result.Analysis.SuggestedFix),
-		Citations:    result.Analysis.EvidenceCitations,
+		State:               StateComplete,
+		RootCause:           strings.TrimSpace(result.Analysis.RootCause),
+		Severity:            result.Analysis.Severity,
+		SuggestedFix:        strings.TrimSpace(result.Analysis.SuggestedFix),
+		Citations:           result.Analysis.EvidenceCitations,
+		Disposition:         result.Analysis.Disposition,
+		DispositionWarnings: result.Analysis.DispositionWarnings,
 	}, nil
 }

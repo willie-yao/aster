@@ -48,6 +48,9 @@ var (
 // maxIdempotencyKeysPerRecord bounds replay keys retained per retained record.
 const maxIdempotencyKeysPerRecord = 8
 
+// maxPreliminaryAttempts matches the analyzer's three-result quality budget.
+const maxPreliminaryAttempts = 3
+
 // maxGetRevalidations bounds how many times one status read will follow a
 // record replaced while its evidence was being looked up. Replacement requires
 // a concurrent start, so this is never reached in practice; it exists so the
@@ -130,10 +133,15 @@ type View[R any] struct {
 	Ref   R      `json:"ref"`
 	State string `json:"state"`
 	// RootCause, Severity, and Citations mirror the published analysis fields.
-	RootCause    string                    `json:"root_cause,omitempty"`
-	Severity     string                    `json:"severity,omitempty"`
-	SuggestedFix string                    `json:"suggested_fix,omitempty"`
-	Citations    []models.EvidenceCitation `json:"citations,omitempty"`
+	RootCause           string                    `json:"root_cause,omitempty"`
+	Severity            string                    `json:"severity,omitempty"`
+	SuggestedFix        string                    `json:"suggested_fix,omitempty"`
+	Citations           []models.EvidenceCitation `json:"citations,omitempty"`
+	Disposition         string                    `json:"disposition,omitempty"`
+	DispositionWarnings []string                  `json:"disposition_warnings,omitempty"`
+	// PreliminaryAttempts counts completed preliminary results for this evidence.
+	PreliminaryAttempts int  `json:"preliminary_attempts,omitempty"`
+	Retryable           bool `json:"retryable,omitempty"`
 	// Evidence names the build the analysis read, when the service chose it.
 	Evidence *EscalationEvidence `json:"evidence,omitempty"`
 	// Error is a safe message when State is failed.
@@ -307,6 +315,7 @@ func New[R subject[R], W any](ctx context.Context, resolver Resolver[R, W], runn
 			if view.State == StateQueued || view.State == StateRunning {
 				continue
 			}
+			view.Retryable = resultRetryable(view)
 			// Completion time orders the restored set, so pruning it drops the
 			// genuinely oldest results rather than an arbitrary one. A record
 			// from an older state file may carry neither timestamp; unknown age
@@ -331,8 +340,8 @@ func New[R subject[R], W any](ctx context.Context, resolver Resolver[R, W], runn
 	return s, nil
 }
 
-// Start begins one escalation, or returns the existing state for a subject that
-// is already running or already complete.
+// Start begins an explicit attempt, or reuses in-flight work, a replay, or a
+// current result without retry eligibility.
 func (s *Service[R, W]) Start(ctx context.Context, ref R, owner, requestID string) (View[R], error) {
 	ref, err := ref.normalized()
 	if err != nil {
@@ -419,7 +428,16 @@ func (s *Service[R, W]) Start(ctx context.Context, ref R, owner, requestID strin
 	}
 
 	s.mu.Lock()
-	if existing := s.records[identity]; existing != nil && !retryable(existing) && reusable(existing, resolved) {
+	// Another start may have reserved this key while resolution was in flight.
+	previous, replay := s.idempotency[idempotencyKey]
+	if replay && previous != identity {
+		s.mu.Unlock()
+		release()
+		return View[R]{}, ErrIdempotencyConflict
+	}
+	existing := s.records[identity]
+	sameEvidence := existing != nil && reusable(existing, resolved)
+	if existing != nil && (replay || existing.running || (!retryable(existing) && sameEvidence)) {
 		s.idempotency[idempotencyKey] = identity
 		s.pruneIdempotencyLocked()
 		view := existing.view
@@ -432,6 +450,13 @@ func (s *Service[R, W]) Start(ctx context.Context, ref R, owner, requestID strin
 		view:      View[R]{Ref: ref, State: StateQueued, StartedAt: now},
 		running:   true,
 		updatedAt: now,
+	}
+	if sameEvidence {
+		rec.view.PreliminaryAttempts = existing.view.PreliminaryAttempts
+	}
+	if ev, ok := any(resolved).(evidenced); ok {
+		evidence := ev.evidence()
+		rec.view.Evidence = &evidence
 	}
 	s.records[identity] = rec
 	s.idempotency[idempotencyKey] = identity
@@ -459,11 +484,15 @@ func reusable[R any, W any](rec *record[R], work W) bool {
 	return rec.view.Evidence != nil && rec.view.Evidence.sameBuild(ev.evidence())
 }
 
-// retryable reports whether a finished record may be started again. A failure
-// is a transient outcome, not a durable fact: a provider error, a timeout, or a
-// shutdown that interrupted queued work must not pin a subject forever.
+// retryable permits explicit quality retries and transient-failure recovery.
 func retryable[R any](rec *record[R]) bool {
-	return !rec.running && rec.view.State == StateFailed
+	return !rec.running && resultRetryable(rec.view)
+}
+
+func resultRetryable[R any](view View[R]) bool {
+	return view.State == StateFailed ||
+		(view.State == StateComplete && view.Disposition == models.AnalysisDispositionPreliminary &&
+			view.PreliminaryAttempts < maxPreliminaryAttempts)
 }
 
 // Get returns the current state for a subject.
@@ -604,6 +633,14 @@ func (s *Service[R, W]) finish(rec *record[R], view View[R]) {
 	s.mu.Lock()
 	view.StartedAt = rec.view.StartedAt
 	view.CompletedAt = now
+	view.PreliminaryAttempts = rec.view.PreliminaryAttempts
+	if view.State == StateComplete && view.Disposition == models.AnalysisDispositionPreliminary {
+		view.PreliminaryAttempts++
+	}
+	if view.Evidence == nil {
+		view.Evidence = rec.view.Evidence
+	}
+	view.Retryable = resultRetryable(view)
 	rec.view = view
 	rec.running = false
 	rec.updatedAt = now

@@ -159,6 +159,8 @@ The `server.pullRequestEscalation.enabled` chart value requires `ai.enabled`, `p
 
 The server reserves admission before reading GitHub or artifacts, runs one pull request or shared-failure escalation at a time, bounds the queue and total lifetime, and shares a result between authenticated maintainers. Provider errors, timeouts, and interrupted work remain retryable.
 
+Operation completion does not imply a verified diagnosis. Preliminary results retain their quality warnings and are labeled as hypotheses. An authenticated maintainer can explicitly retry, up to three preliminary results per subject and evidence build; transport failures preserve that budget. Reloading, polling, or replaying the same request key never starts analysis. A different evidence build receives a fresh budget. Escalations honor `AI_MAX_OUTPUT_TOKENS` and record provider-reported usage in the private server ledger when usage accounting is enabled.
+
 A pull request escalation:
 
 - is available only after deterministic evidence did not explain the failure;

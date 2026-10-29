@@ -101,7 +101,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		}
 	}
 	if features.PullRequestEscalation {
-		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir); err != nil {
+		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir, usageRecorder); err != nil {
 			return err
 		}
 	}
@@ -156,7 +156,8 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	}
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
-		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
+		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ServiceTier: provider.ServiceTier,
+		Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
 		UsageRecorder: usageRecorder,
 	})
 	actionService.ConfigureFixActions(fixActions)
@@ -187,12 +188,9 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	if err != nil {
 		return nil, fmt.Errorf("loading analysis chat project: %w", err)
 	}
-	maxOutputTokens := 0
-	if raw := strings.TrimSpace(os.Getenv("AI_MAX_OUTPUT_TOKENS")); raw != "" {
-		maxOutputTokens, err = strconv.Atoi(raw)
-		if err != nil || maxOutputTokens < 0 {
-			return nil, fmt.Errorf("AI_MAX_OUTPUT_TOKENS must be a non-negative integer")
-		}
+	maxOutputTokens, err := maxOutputTokensFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
 		Token: token, GitHubReadToken: githubReadTokenFromEnv(), DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
@@ -224,6 +222,18 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 	opts.AnalysisChatTimeout = timeout
 	log.Printf("💬 analysis chat enabled (state=%s ttl=%s)", serviceOpts.StateDir, serviceOpts.SessionTTL)
 	return service, nil
+}
+
+func maxOutputTokensFromEnv() (int, error) {
+	raw := strings.TrimSpace(os.Getenv("AI_MAX_OUTPUT_TOKENS"))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > 131072 {
+		return 0, fmt.Errorf("AI_MAX_OUTPUT_TOKENS must be an integer between 0 and 131072")
+	}
+	return value, nil
 }
 
 func actionRequestNotifier(cfg *project.Config) actions.RequestReadyNotifier {
@@ -272,6 +282,7 @@ func enablePullRequestEscalation(
 	opts *server.Options,
 	cfg *project.Config,
 	projectDir, dataDir string,
+	usageRecorder *aiusage.Recorder,
 ) error {
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
@@ -288,8 +299,13 @@ func enablePullRequestEscalation(
 	if err != nil {
 		return fmt.Errorf("loading pull request escalation project: %w", err)
 	}
+	maxOutputTokens, err := maxOutputTokensFromEnv()
+	if err != nil {
+		return err
+	}
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
-		Token: token, DataDir: dataDir, Project: loaded,
+		Token: token, DataDir: dataDir, Project: loaded, MaxOutputTokens: maxOutputTokens,
+		UsageRecorder: usageRecorder, UsageOrigin: aiusage.OriginServer,
 	})
 	if err != nil {
 		return fmt.Errorf("configuring pull request escalation runtime: %w", err)

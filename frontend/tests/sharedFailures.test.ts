@@ -240,6 +240,10 @@ for (const method of ["GET", "POST"] as const) {
       ref: { id },
       state: "complete",
       root_cause: "The registry is unavailable.",
+      disposition: "preliminary",
+      disposition_warnings: ["investigation_incomplete"],
+      preliminary_attempts: 2,
+      retryable: true,
       evidence: { repo: "org/repo", pull_number: 9, build_id: "42" },
       citations: [{ path: "build-log.txt", line_start: 8, quote: "registry timeout" }],
     };
