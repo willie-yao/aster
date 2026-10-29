@@ -178,7 +178,6 @@ export function highlightStackTrace(body: string): (string | ReactElement)[] {
 
 export interface FileToUrlContext {
   buildLogUrl?: string;
-  clusterArtifacts?: { machines?: { logs: Record<string, string> }[] };
   /**
    * Web URL root for the current build, such as
    * `https://gcsweb.k8s.io/gcs/<bucket>/logs/<job>/<id>/`. Unmatched artifact
@@ -211,31 +210,6 @@ export function fileToUrl(
   if (context) {
     if (/build-log/i.test(lower) && context.buildLogUrl) {
       return context.buildLogUrl;
-    }
-    const machines = context.clusterArtifacts?.machines;
-    if (machines && machines.length > 0) {
-      const logs = machines[0].logs;
-      if (/cloud-init-output/i.test(lower) && logs["cloud-init-output.log"]) {
-        return logs["cloud-init-output.log"];
-      }
-      if (/cloud-init\.log/i.test(lower) && logs["cloud-init.log"]) {
-        return logs["cloud-init.log"];
-      }
-      if (/boot\.log/i.test(lower) && logs["boot.log"]) {
-        return logs["boot.log"];
-      }
-      if (/kubelet\.log/i.test(lower) && logs["kubelet.log"]) {
-        return logs["kubelet.log"];
-      }
-      if (/kube-apiserver/i.test(lower) && logs["kube-apiserver.log"]) {
-        return logs["kube-apiserver.log"];
-      }
-      if (/journal\.log/i.test(lower) && logs["journal.log"]) {
-        return logs["journal.log"];
-      }
-      if (/containerd/i.test(lower) && logs["containerd.log"]) {
-        return logs["containerd.log"];
-      }
     }
   }
 
