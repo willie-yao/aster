@@ -67,7 +67,10 @@ backend/                         Go 1.26
 
     -- analysis (the most active area) --
     ai/                          Model transports + the agentic tool-calling loop
-      agentic.go                 The loop, finalize branch, floor gates
+      agentic.go                 Analysis orchestration, floor policy, and critique repair
+      agent_loop.go              Bounded model/tool loop and finalize decisions
+      finalization.go            Structured finalization and draft parsing
+      draft_selection.go         Candidate ranking and fallback selection
       toolloop.go                Tool dispatch and transcript management
       service.go                 Cache key, staleness, shouldReanalyze
       critique.go                Deterministic judge that gates drafts
@@ -113,7 +116,7 @@ backend/                         Go 1.26
     server/                      HTTP handler for the Kubernetes-native mode
     auth/                        Admin auth seam (dev / proxy / oauth / mock)
     devmock/                     In-memory stand-ins behind `server -mock`
-    runtime/                     Swappable agent-execution abstraction
+    runtime/                     Coding-agent execution contracts for Fix generation
     kubernetesdeploy/            Installs a validated consumer bundle with Helm
     onboard/                     Headless discovery, planning, scaffold apply, guided workflow
       promptauthor/              Source-only prompt authoring contract
@@ -218,7 +221,7 @@ Vite serves `frontend/public/` at the site root, so any JSON the fetcher writes 
 
 - **Main-module tests:** `cd backend && go test ./... -count=1` (also `make test`)
 - **Single package:** `cd backend && go test ./internal/ai/... -count=1`
-- **Single test:** `go test ./internal/ai -run TestService_CacheKeyShape -v`
+- **Single test:** `cd backend && go test ./internal/ai -run TestService_CacheKeyShape -v`
 - **Race detector:** `go -C backend test -race -count=1 ./...`.
 - **Vet:** `cd backend && go vet ./...`
 - **Format:** `make fmt-check` (then `make fmt` to fix).
@@ -228,7 +231,7 @@ CI (`.github/workflows/ci.yml`) runs build, race-enabled tests, vet, lint, modul
 
 ### Anchor pin tests
 
-Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by tests (e.g. `TestResponseFormatFooter_L4Step1Anchors`, `TestResponseFormatFooter_L4Step3DepthAnchors`, `TestAgToolDocs_NoToolSpecificLeaks`). Edit the prompt text? Update the anchor test in the same commit, or the test will fail loudly. These exist to prevent unintended drift in carefully tuned prompts.
+Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by tests (e.g. `TestResponseFormatFooter_AntiPuntAnchors`, `TestResponseFormatFooter_DepthAnchors`, `TestAgToolDocs_AntiPuntAnchors`). Edit the prompt text? Update the anchor test in the same commit, or the test will fail loudly. These exist to prevent unintended drift in carefully tuned prompts.
 
 ### Cache invariance
 
@@ -248,7 +251,7 @@ The AI cache is on-disk JSON keyed by mode + hash. Changing the agentic cache sc
 If you're touching anything under `backend/internal/ai/`, read [`docs/agentic.md`](docs/agentic.md) and [`docs/skills.md`](docs/skills.md) first. Quick map:
 
 - **Single path:** every failure is analyzed by the agentic loop (cache `mode: "agentic"`). There is no mode selection and no tools-free fallback; an endpoint without function-calling marks failures unavailable.
-- **Agentic loop:** `agentic.go` runs up to `MaxIters` rounds (default 15). Each round: send conversation → model returns tool calls → engine runs tools → results appended → repeat until model returns a final `analysisResponse` JSON or budget exhausted.
+- **Agentic loop:** `agent_loop.go` runs up to `MaxIters` rounds (default 15). Each round: send conversation → model returns tool calls → engine runs tools → results appended → repeat until model returns a final `analysisResponse` JSON or budget exhausted.
 - **Quality floors:** `min_tool_calls`, `min_gcs_bytes`, model byte budget, critique pass, and critique version are enforced by the centralized cache policy. A cache hit that fails a current floor is re-analyzed.
 - **Critique gate** (`critique.go`): deterministic regex judge runs after every draft. Catches investigation-as-remediation, hallucinated artifact paths, fabricated import paths, etc. Re-prompts the model with feedback; caches the result with the critique version it passed under. Skill recipes extend this gate when present.
 - **Skills** (`skills/`): consumer-owned recipe registry. Each recipe pairs a failure signal with required evidence the model must read before claiming that class of failure. The loaded skill hash is retained as provenance and changes affect new analyses only.
