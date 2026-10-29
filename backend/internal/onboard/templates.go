@@ -175,7 +175,8 @@ ai:
   githubReadTokenSecretName: {{if .AIEnabled}}"<existing-github-read-secret>"{{else}}""{{end}}
 
 fetcher:
-  # Intentionally longer than the chart default for first-run artifact discovery.
+  # Intentionally longer than the chart default for the first pass, including
+  # discovery, artifact fetching, and AI analysis.
   timeout: 120m
   # Keep CronJob starts disabled while the chart-default watch worker is active.
   suspend: true

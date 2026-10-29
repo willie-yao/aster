@@ -181,7 +181,7 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 | `fetcher.schedule` | Cron schedule. Used only in cron mode. |
 | `fetcher.suspend` | Suspend CronJob starts. Keep true when preserving a safe cron rollback from watch mode. |
 | `fetcher.watchInterval`, `fetcher.reconcileInterval` | Watch refresh and full reconciliation cadence. |
-| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth, concurrency, and discovery or artifact budget. Fetch depth also sets the window every aggregation, correlation, and AI pass reads. The run history strip plots a longer arc than this: builds that age out of the window are kept for display, without their test results, up to 40 runs per job. |
+| `fetcher.buildsPerJob`, `fetcher.workers`, `fetcher.timeout` | Fetch depth, concurrency, and pass budget including discovery, artifacts, and analysis. Fetch depth also sets the window every aggregation, correlation, and AI pass reads. The run history strip plots a longer arc than this: builds that age out of the window are kept for display, without their test results, up to 40 runs per job. |
 | `fetcher.extraEnv` | Additional environment variables, preferably through `secretKeyRef`. Carries `ISSUE_TOKEN` for issue recovery and `ASTER_APP_ID` / `ASTER_APP_PRIVATE_KEY` for the optional bot comment on new pull requests. |
 | `server.replicaCount` | Server replicas. Actions or pull request/shared-failure escalation require one server process per data directory, so the chart rejects values above `1` for either feature. Read-only and chat-only servers may use more than one replica. |
 | `server.chat.*` | Authenticated analysis conversation settings. Each model turn defaults to `10m`; `server.chat.timeout` accepts values up to `30m`. `sessionTTL` defaults to `2h`; `historyRetention` retains operator conversations for `4320h` (180 days) after activity. |
@@ -197,6 +197,8 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 | `podSecurityContext`, `securityContext` | Chart-owned non-root and restricted container defaults. |
 
 Use the full chart values that match the installed chart version before adding a field not present in the generated consumer file.
+
+If `fetcher.timeout` expires during individual analysis, private analysis state and traces are checkpointed for the next pass without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow the normal cache acceptance and bounded preliminary-retry policy. Explicit cancellation still rolls back uncommitted analysis state.
 
 Interactive server upgrades use a `Recreate` rollout. For non-Helm deployments, stop old server processes before starting replacements. Chat-only replicas require advisory locking, atomic rename, and file and directory synchronization on the shared filesystem.
 

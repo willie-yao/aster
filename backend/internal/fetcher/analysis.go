@@ -246,17 +246,20 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 	wg.Wait()
 	p.cancelQueuedProgressAnalyses()
 	p.completeProgressPhase()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
-	if err := p.persistIndividualAnalysisCheckpoint(runtime, traceStore); err != nil {
+	if err := ctx.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
+	if err := p.persistIndividualAnalysisCheckpoint(runtime, traceStore); err != nil {
+		return errors.Join(ctx.Err(), err)
+	}
 	if err := p.commitAnalysisCheckpoint(); err != nil {
-		return fmt.Errorf("committing completed analysis checkpoint: %w", err)
+		return errors.Join(ctx.Err(), fmt.Errorf("committing completed analysis checkpoint: %w", err))
 	}
 	p.markProgressAnalysisCheckpoint()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	log.Printf("🤖 AI analysis complete (%d transient skipped)", transientSkipped.Load())
 	p.startProgressPhase(fetchprogress.PhasePatterns)
 
 	patternOptions := patterns.AnalyzeOptions{
