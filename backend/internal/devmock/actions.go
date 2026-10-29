@@ -18,15 +18,17 @@ import (
 const requestTTL = time.Hour
 
 // The action names the request routes address, which are distinct from the
-// "issue" and "fix" kinds a preview result reports.
+// "issue" and "fix" kinds a preview result reports. A fix drafted from one chat
+// answer is its own kind, which the chat fix dialog requires.
 const (
-	actionIssue = "create-issue"
-	actionFix   = "propose-fix"
+	actionIssue       = "create-issue"
+	actionFix         = "propose-fix"
+	actionAnalysisFix = "analysis-fix"
 )
 
 // previewKind maps a request action to the kind its draft reports.
 func previewKind(action string) string {
-	if action == actionFix {
+	if action == actionFix || action == actionAnalysisFix {
 		return "fix"
 	}
 	return "issue"
@@ -56,6 +58,7 @@ type pendingPreview struct {
 // time it was made and nothing has to be cancelled on shutdown.
 type mockRequest struct {
 	view         actions.ActionRequestView
+	analysis     publishedAnalysis
 	readyAt      time.Time
 	terminal     bool
 	previewToken string
@@ -72,22 +75,22 @@ func newActions(cfg *project.Config, opts Options) *Actions {
 
 // PreviewIssue drafts an issue for a failure after a simulated model call.
 func (a *Actions) PreviewIssue(ctx context.Context, failureID, _, _, instruction string) (actions.PreviewResult, error) {
-	return a.preview(ctx, "issue", failureID, instruction)
+	return a.preview(ctx, "issue", failureID, instruction, a.analysisForFailure(failureID))
 }
 
 // PreviewFix drafts a fix for a failure after a simulated model call.
 func (a *Actions) PreviewFix(ctx context.Context, failureID, _, _, instruction string) (actions.PreviewResult, error) {
-	return a.preview(ctx, "fix", failureID, instruction)
+	return a.preview(ctx, "fix", failureID, instruction, a.analysisForFailure(failureID))
 }
 
-func (a *Actions) preview(ctx context.Context, kind, failureID, instruction string) (actions.PreviewResult, error) {
+func (a *Actions) preview(ctx context.Context, kind, failureID, instruction string, analysis publishedAnalysis) (actions.PreviewResult, error) {
 	if strings.TrimSpace(failureID) == "" {
 		return actions.PreviewResult{}, actions.ErrNotFound
 	}
 	if err := a.simulate(ctx); err != nil {
 		return actions.PreviewResult{}, err
 	}
-	result := previewFor(kind, failureID, instruction, a.analysisForFailure(failureID))
+	result := previewFor(kind, failureID, instruction, analysis)
 	result.Token = newID()
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -132,6 +135,12 @@ func (a *Actions) CreateRequest(failureID, kind, login, _, instruction, supersed
 	if kind != actionIssue && kind != actionFix {
 		return actions.ActionRequestView{}, fmt.Errorf("unsupported action %q", kind)
 	}
+	return a.createRequest(failureID, kind, login, instruction, supersedesID, a.analysisForFailure(failureID)), nil
+}
+
+// createRequest records a pending draft of any kind that quotes analysis,
+// cancelling the request it supersedes.
+func (a *Actions) createRequest(failureID, kind, login, instruction, supersedesID string, analysis publishedAnalysis) actions.ActionRequestView {
 	now := a.opts.now()
 	request := &mockRequest{
 		view: actions.ActionRequestView{
@@ -139,7 +148,8 @@ func (a *Actions) CreateRequest(failureID, kind, login, _, instruction, supersed
 			CreatedAt: timestamp(now), UpdatedAt: timestamp(now),
 			ExpiresAt: timestamp(now.Add(requestTTL)),
 		},
-		readyAt: now.Add(a.opts.latency()),
+		analysis: analysis,
+		readyAt:  now.Add(a.opts.latency()),
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -152,7 +162,7 @@ func (a *Actions) CreateRequest(failureID, kind, login, _, instruction, supersed
 	}
 	a.instruction(request, instruction)
 	a.requests[request.view.ID] = request
-	return a.viewLocked(request, now), nil
+	return a.viewLocked(request, now)
 }
 
 // instruction records the maintainer's refinement on the draft the request will
@@ -224,12 +234,15 @@ func (a *Actions) CancelRequest(_ context.Context, id, login string) (actions.Ac
 }
 
 // createAnalysisFixRequest starts an asynchronous fix draft from a chat answer.
-func (a *Actions) createAnalysisFixRequest(failureID, login, instruction string, replaces ...string) (actions.ActionRequestView, error) {
+func (a *Actions) createAnalysisFixRequest(failureID, login, instruction string, analysis publishedAnalysis, replaces ...string) (actions.ActionRequestView, error) {
+	if strings.TrimSpace(failureID) == "" {
+		return actions.ActionRequestView{}, actions.ErrNotFound
+	}
 	supersedes := ""
 	if len(replaces) > 0 {
 		supersedes = replaces[0]
 	}
-	return a.CreateRequest(failureID, actionFix, login, "", instruction, supersedes)
+	return a.createRequest(failureID, actionAnalysisFix, login, instruction, supersedes, analysis), nil
 }
 
 // ownedLocked resolves a request the caller owns.
@@ -264,14 +277,14 @@ func (a *Actions) viewLocked(request *mockRequest, now time.Time) actions.Action
 	if now.Before(request.readyAt) {
 		request.view.Status = actions.RequestPending
 		request.view.Stage = actions.RequestStageDrafting
-		if request.view.Kind == actionFix && now.After(request.readyAt.Add(-a.opts.latency()/2)) {
+		if previewKind(request.view.Kind) == "fix" && now.After(request.readyAt.Add(-a.opts.latency()/2)) {
 			request.view.Stage = actions.RequestStageVerifying
 		}
 		return request.view
 	}
 
 	kind := previewKind(request.view.Kind)
-	preview := previewFor(kind, request.view.FailureID, instructionFrom(request.view), a.analysisForFailure(request.view.FailureID))
+	preview := previewFor(kind, request.view.FailureID, instructionFrom(request.view), request.analysis)
 	preview.Token = newID()
 	a.previews[preview.Token] = pendingPreview{result: preview}
 	request.previewToken = preview.Token

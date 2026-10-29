@@ -24,11 +24,11 @@ func (f *ChatFix) PreviewChatFix(
 	ctx context.Context,
 	sessionID, login, _, _, _, _, instruction string,
 ) (actions.PreviewResult, error) {
-	failureID, err := f.failureID(sessionID, login)
+	failureID, analysis, err := f.source(sessionID, login)
 	if err != nil {
 		return actions.PreviewResult{}, err
 	}
-	return f.actions.PreviewFix(ctx, failureID, login, "", instruction)
+	return f.actions.preview(ctx, "fix", failureID, instruction, analysis)
 }
 
 // CreateAnalysisFixRequest starts an asynchronous fix draft from one chat answer.
@@ -36,31 +36,33 @@ func (f *ChatFix) CreateAnalysisFixRequest(
 	_ context.Context,
 	sessionID, login, _, _ string, _ actions.FixBranchTarget, instruction string, replaces ...string,
 ) (actions.ActionRequestView, error) {
-	failureID, err := f.failureID(sessionID, login)
+	failureID, analysis, err := f.source(sessionID, login)
 	if err != nil {
 		return actions.ActionRequestView{}, err
 	}
-	return f.actions.createAnalysisFixRequest(failureID, login, instruction, replaces...)
+	return f.actions.createAnalysisFixRequest(failureID, login, instruction, analysis, replaces...)
 }
 
 // AnalysisFixBranches reports differing branches so the dialog shows its target choice.
 func (f *ChatFix) AnalysisFixBranches(_ context.Context, sessionID, login, _ string) (actions.AnalysisFixBranches, error) {
-	if _, err := f.failureID(sessionID, login); err != nil {
+	if _, _, err := f.source(sessionID, login); err != nil {
 		return actions.AnalysisFixBranches{}, err
 	}
 	return actions.AnalysisFixBranches{Tested: "release-1.0", Default: "main"}, nil
 }
 
-// failureID resolves the analysis a session is about into the failure id the
-// action service addresses.
-func (f *ChatFix) failureID(sessionID, login string) (string, error) {
-	session, err := f.chat.Get(sessionID, login)
+// source resolves the analysis a session is about into the failure id the
+// action service addresses, plus the published analysis the draft quotes. A
+// pattern id names no single test, so the draft comes from the session's
+// analysis rather than a lookup by id.
+func (f *ChatFix) source(sessionID, login string) (string, publishedAnalysis, error) {
+	session, analysis, err := f.chat.sessionAnalysis(sessionID, login)
 	if err != nil {
-		return "", err
+		return "", publishedAnalysis{}, err
 	}
 	ref := session.Analysis
 	if ref.PatternID != "" {
-		return ref.PatternID, nil
+		return ref.PatternID, analysis, nil
 	}
-	return strings.Join([]string{ref.JobID, ref.BuildID, ref.TestName}, "/"), nil
+	return strings.Join([]string{ref.JobID, ref.BuildID, ref.TestName}, "/"), analysis, nil
 }

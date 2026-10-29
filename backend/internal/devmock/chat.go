@@ -94,6 +94,9 @@ func (c *Chat) create(ref analysischat.AnalysisRef, login string, prepared bool)
 	if prepared {
 		message := c.reply(analysis, "", now)
 		message.Prepared = true
+		// The real service gives a prepared answer a request id too, and the
+		// transcript offers only answers with one to a fix proposal.
+		message.RequestID = "prepared-" + session.view.ID
 		message.Content = "The published conclusion for this failure is reproduced below. " +
 			"Ask a follow-up question to probe it.\n\n" + message.Content
 		session.view.Messages = append(session.view.Messages, message)
@@ -126,6 +129,18 @@ func (c *Chat) Get(id, login string) (analysischat.SessionView, error) {
 		return analysischat.SessionView{}, err
 	}
 	return session.view, nil
+}
+
+// sessionAnalysis returns one conversation the caller owns with the published
+// analysis it was opened on.
+func (c *Chat) sessionAnalysis(id, login string) (analysischat.SessionView, publishedAnalysis, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	session, err := c.ownedLocked(id, login)
+	if err != nil {
+		return analysischat.SessionView{}, publishedAnalysis{}, err
+	}
+	return session.view, session.analysis, nil
 }
 
 // Delete discards one conversation the caller owns.
