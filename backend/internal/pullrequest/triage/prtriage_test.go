@@ -66,6 +66,7 @@ type buildSpec struct {
 	aborted    bool
 	testedSHA  string
 	failures   []string
+	junit      string
 }
 
 // writeBucket materializes a local artifact tree matching Prow's presubmit
@@ -96,14 +97,18 @@ func writeBucket(t *testing.T, specs []buildSpec) storage.Backend {
 			finished := fmt.Sprintf(`{"timestamp":1700000600,"passed":%t,"result":%q}`, spec.passed, result)
 			writeFile(t, filepath.Join(dir, "finished.json"), finished)
 		}
-		if len(spec.failures) == 0 {
+		if len(spec.failures) == 0 && spec.junit == "" {
 			continue
 		}
 		artifacts := filepath.Join(dir, "artifacts")
 		if err := os.MkdirAll(artifacts, 0o755); err != nil {
 			t.Fatalf("mkdir artifacts: %v", err)
 		}
-		writeFile(t, filepath.Join(artifacts, "junit_01.xml"), junitXML(spec.failures))
+		data := spec.junit
+		if data == "" {
+			data = junitXML(spec.failures)
+		}
+		writeFile(t, filepath.Join(artifacts, "junit_01.xml"), data)
 	}
 	backend, err := storage.NewLocalBackend(root, "")
 	if err != nil {
@@ -175,6 +180,41 @@ func TestCollectReportsFailingChecksAndTests(t *testing.T) {
 	}
 	if first.TestedSHA != headSHA || first.Stale {
 		t.Errorf("tested revision = %q stale=%t", first.TestedSHA, first.Stale)
+	}
+}
+
+func TestCollectReportsJUnitErrorsAsFailures(t *testing.T) {
+	backend := writeBucket(t, []buildSpec{
+		{
+			job: "pull-e2e", pullNumber: 7, buildID: "200",
+			junit: `<testsuite name="e2e" tests="2" errors="1">
+  <testcase name="TestPasses" classname="pkg"/>
+  <testcase name="TestPanics" classname="pkg">
+    <error message="Test Panicked" type="panicked">panic body</error>
+  </testcase>
+</testsuite>`,
+		},
+	})
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	index, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e")))
+
+	summary := index.PullRequests[0]
+	if summary.CIState != models.PullRequestCIFailing || summary.ChecksFailing != 1 || summary.FailingTests != 1 {
+		t.Errorf("summary = %+v, want one failing test", summary)
+	}
+	check := details[0].Checks[0]
+	if check.TestsFailed != 1 || len(check.Failures) != 1 || check.FailuresTruncated {
+		t.Fatalf("check = %+v, want one reported failure", check)
+	}
+	failure := check.Failures[0]
+	if failure.Name != "TestPanics" || failure.Status != "failed" || failure.Source == models.TestCaseSourceBuild {
+		t.Errorf("failure = %+v, want the named JUnit error, not a build-level stand-in", failure)
+	}
+	if failure.JUnitFile != "junit_01.xml" || failure.SuiteName != "e2e" || failure.ClassName != "pkg" {
+		t.Errorf("error case provenance = %+v", failure)
+	}
+	if failure.FailureMessage != "Test Panicked" || failure.FailureBody != "panic body" {
+		t.Errorf("error case details = %+v", failure)
 	}
 }
 

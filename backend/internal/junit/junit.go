@@ -33,6 +33,7 @@ type xmlTestCase struct {
 	Status    string      `xml:"status,attr"`
 	Time      string      `xml:"time,attr"`
 	Failure   *xmlFailure `xml:"failure"`
+	Error     *xmlFailure `xml:"error"`
 	Skipped   *xmlSkipped `xml:"skipped"`
 }
 
@@ -112,11 +113,16 @@ func convertTestCase(suiteName string, tc xmlTestCase) models.TestCase {
 		DurationSeconds: parseFloat(tc.Time),
 	}
 
+	failure := tc.Failure
+	if failure == nil {
+		failure = tc.Error
+	}
+
 	switch {
-	case tc.Failure != nil:
+	case failure != nil:
 		m.Status = "failed"
-		m.FailureMessage = tc.Failure.Message
-		m.FailureBody = strings.TrimSpace(tc.Failure.Body)
+		m.FailureMessage = failure.Message
+		m.FailureBody = strings.TrimSpace(failure.Body)
 		loc, url := ExtractFailureLocation(m.FailureBody)
 		m.FailureLocation = loc
 		m.FailureLocURL = url
