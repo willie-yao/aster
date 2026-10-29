@@ -100,6 +100,61 @@ func TestPrepareContextRequest_CompactsBefore128KProviderCall(t *testing.T) {
 	}
 }
 
+func TestFinalizeRoundCompactionPreservesRepairTranscript(t *testing.T) {
+	for _, apiMode := range []string{APIChatCompletions, APIResponses} {
+		t.Run(apiMode, func(t *testing.T) {
+			messages := make([]transport.Message, 4, 8)
+			copy(messages, conversation(1, 12<<10))
+			if apiMode == APIResponses {
+				messages[2].ProviderItems = []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 12<<10) + `"}`)}
+			}
+			before, err := json.Marshal(messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := requestSizeEstimate(messages, 0)
+			response := &transport.Response{HasMessage: true, Message: transport.Message{Content: new(cleanFinalJSON)}}
+			provider := &scriptedTransport{results: []scriptedTransportResult{{response: response}, {response: response}}}
+			client := &Client{model: "model", apiMode: apiMode, transport: provider}
+			headroom := contextHeadroomFor(AgenticOptions{ContextWindowTokens: 128_000, RequestTokenBudget: 10_000})
+			content, items, safe := client.runFinalizeRound(t.Context(), messages, headroom)
+			if !safe || content != cleanFinalJSON || len(provider.requests) != 1 {
+				t.Fatalf("finalization: safe=%v content=%q requests=%d", safe, content, len(provider.requests))
+			}
+			compacted := provider.requests[0].Messages
+			if requestSizeEstimate(compacted, 0) >= size {
+				t.Fatal("finalization did not compact the over-budget transcript")
+			}
+			after, err := json.Marshal(messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("finalization corrupted the retained repair transcript")
+			}
+
+			repairMessages := append(messages,
+				transport.Message{Role: "assistant", Content: new(content), ProviderItems: items},
+				transport.Message{Role: "user", Content: new("revise the draft")},
+			)
+			headroom = contextHeadroomFor(AgenticOptions{ContextWindowTokens: 128_000})
+			if _, _, safe := client.runFinalizeRound(t.Context(), repairMessages, headroom); !safe {
+				t.Fatal("repair finalization exceeded the context budget")
+			}
+			if len(provider.requests) != 2 {
+				t.Fatalf("provider requests=%d, want 2", len(provider.requests))
+			}
+			retained, err := json.Marshal(provider.requests[1].Messages[:len(messages)])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(retained) != string(before) {
+				t.Fatal("repair request lost the original evidence or tool pairing")
+			}
+		})
+	}
+}
+
 func TestAgentic_ContextHeadroomCompactsLongToolHistory(t *testing.T) {
 	shrinkCallDelay(t)
 	srv := newScriptedChatServer(t)
