@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -74,9 +76,31 @@ func (f resolverFixture) resolver(t *testing.T) *DataResolver {
 	}
 }
 
-// A build with no finished.json reads as pending, which also happens when the
-// read is cut off by a timeout inside the storage client. Analyzing either one
-// would describe a build state nobody can vouch for.
+type finishedErrorBackend struct {
+	storage.Backend
+}
+
+func (b finishedErrorBackend) Open(ctx context.Context, name string) (io.ReadCloser, int64, error) {
+	if strings.HasSuffix(name, "/finished.json") {
+		return nil, 0, context.DeadlineExceeded
+	}
+	return b.Backend.Open(ctx, name)
+}
+
+func TestResolveRefusesUnreadableFinishedMetadata(t *testing.T) {
+	fixture := newResolverFixture(t)
+	resolver := fixture.resolver(t)
+	resolver.Backend = finishedErrorBackend{Backend: resolver.Backend}
+
+	resolved, err := resolver.Resolve(t.Context(), testRef("TestA"))
+	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "build metadata unavailable") {
+		t.Fatalf("err = %v, want unavailable build metadata", err)
+	}
+	if resolved.Request.Build.Result != "" {
+		t.Fatalf("unavailable build = %+v", resolved.Request.Build)
+	}
+}
+
 func TestResolveRefusesABuildWithNoFinishedMetadata(t *testing.T) {
 	fixture := newResolverFixture(t)
 	resolver := fixture.resolver(t)

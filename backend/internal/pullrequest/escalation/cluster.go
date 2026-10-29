@@ -109,8 +109,7 @@ func (r *ClusterResolver) Resolve(ctx context.Context, ref ClusterRef) (ClusterR
 		return ClusterResolved{}, fmt.Errorf("%w: build metadata unavailable", ErrUnavailable)
 	}
 	if info.Result == "PENDING" {
-		// finished.json was absent or unreadable, so the analysis would
-		// describe a build state nobody can vouch for.
+		// Without finished.json, the evidence build has no outcome to analyze yet.
 		return ClusterResolved{}, fmt.Errorf("%w: the evidence build has no finished metadata", ErrUnavailable)
 	}
 
