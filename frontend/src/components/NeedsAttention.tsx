@@ -25,6 +25,8 @@ import {
   persistOverviewHistoryState,
   rankRecurringPatterns,
   readOverviewHistoryState,
+  runChange,
+  runDateLabel,
   patternFullyResolved,
   unlistedCauseResolutions,
   unlistedPatternResolutions,
@@ -33,7 +35,7 @@ import {
 import { jobPath, jobRunPath, sharedFailurePath, testPath, testRunPath } from "../lib/routes";
 import { baseBranchNote, orderSharedFailures, sharedFailureScope } from "../lib/sharedFailures";
 import { patternLifecycleActive } from "../lib/actionEligibility";
-import { shortJobName, shortTestName } from "../lib/utils";
+import { formatAccessibleDate, shortJobName, shortTestName } from "../lib/utils";
 import { statusToMuiColor } from "../theme";
 import type {
   FlakinessReport,
@@ -42,13 +44,14 @@ import type {
   PatternAnalysis,
   PatternRefreshStatus,
   ResolvedEntry,
+  RunSummary,
   TestFlakiness,
 } from "../types/dashboard";
 import type { SharedFailure } from "../types/pullRequests";
 import { FailureActions } from "./FailureActions";
 import { CauseResolution } from "./CauseResolution";
 import type { ResolutionScope } from "../lib/resolution";
-import { Sparkline } from "./Sparkline";
+import { Sparkline, sparklineMaxRuns } from "./Sparkline";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const FEATURED_PATTERNS = 3;
@@ -175,6 +178,43 @@ export function DisclosureButton({
   );
 }
 
+// RunChangeCaption names when the job last changed outcome. It links the first
+// run of the current streak and the run before it, the pair to compare.
+function RunChangeCaption({ runs, jobID }: { runs: RunSummary[]; jobID: string }) {
+  const change = runChange(runs);
+  if (!change) return null;
+  // Dates sit in monospace slots wide enough for "Sep 30", so a caption keeps
+  // its width whatever the day.
+  const slot = { ...overviewTypography.data, display: "inline-block", width: "6ch", textAlign: "right" as const };
+  const text = { ...overviewTypography.description, color: "text.secondary", whiteSpace: "nowrap" as const };
+  const runLink = (run: RunSummary, role: string) => (
+    <Link
+      component={RouterLink}
+      to={jobRunPath(jobID, run.build_id)}
+      aria-label={`${role}, run ${run.build_id}, ${formatAccessibleDate(run.timestamp)}`}
+      sx={slot}
+    >
+      {runDateLabel(run)}
+    </Link>
+  );
+  if ("since" in change) {
+    return (
+      <Typography component="span" sx={text}>
+        {change.kind === "noPass" ? "No pass since" : "No failure since"}{" "}
+        <Box component="span" sx={slot}>{runDateLabel(change.since)}</Box>
+      </Typography>
+    );
+  }
+  const broke = change.kind === "broke";
+  const newer = { label: broke ? "Broke" : "Recovered", date: runLink(change.changed, broke ? "First failing run" : "First passing run") };
+  const older = { label: broke ? "last pass" : "last failure", date: runLink(change.before, broke ? "Last passing run" : "Last failing run") };
+  return (
+    <Typography component="span" sx={text}>
+      {newer.label} {newer.date} · {older.label} {older.date}
+    </Typography>
+  );
+}
+
 export function FeaturedPatternRow({
   pattern,
   rank,
@@ -211,7 +251,8 @@ export function FeaturedPatternRow({
     recurrenceLabel,
     recovering ? `${recoveryStreak} of ${MIN_OBSERVED_RECOVERY_PASSES} passes to clear` : null,
   ].filter(Boolean).join(" · ");
-  const evidence = patternEvidenceLabel(pattern, refreshStatus);
+  const recentRuns = job?.recent_runs.slice(0, sparklineMaxRuns) ?? [];
+  const evidence = patternEvidenceLabel(pattern, recentRuns, refreshStatus);
   const jobName = shortJobName(pattern.subject, prefix);
 
   return (
@@ -404,24 +445,34 @@ export function FeaturedPatternRow({
         <Typography
           variant="caption"
           noWrap
-          color="textSecondary"
-          title={evidence}
-          sx={{ display: "block", mt: 0.25, ...overviewTypography.description }}
+          title={evidence.detail}
+          sx={{
+            display: "block",
+            mt: 0.25,
+            ...overviewTypography.description,
+            // Failures the analysis has not seen may have another cause.
+            color: evidence.unanalyzed > 0 ? "warning.main" : "text.secondary",
+            fontWeight: evidence.unanalyzed > 0 ? 600 : undefined,
+          }}
         >
-          {evidence}
+          {evidence.text}
         </Typography>
         {job && (
           <Box
             sx={{
               mt: 0.75,
               display: compactOnMobile ? "none" : "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 0.5,
               [attentionDesktopBreakpoint]: {
                 display: "flex",
-                justifyContent: "flex-end",
+                alignItems: "flex-end",
               },
             }}
           >
             <Sparkline runs={job.recent_runs} jobID={job.job_id} />
+            <RunChangeCaption runs={recentRuns} jobID={job.job_id} />
           </Box>
         )}
       </Box>

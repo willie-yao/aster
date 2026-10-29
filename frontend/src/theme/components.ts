@@ -1,4 +1,14 @@
-import type { Components, Theme } from "@mui/material/styles";
+import { collapseClasses } from "@mui/material/Collapse";
+import { keyframes, type Components, type Theme } from "@mui/material/styles";
+
+// Disclosed content eases in by opacity and transform, which the compositor
+// handles without relayout.
+const disclose = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+`;
 
 // Global component defaults that encode the dashboard look once. Shared
 // primitives own component-specific surfaces such as the glass panel.
@@ -64,6 +74,39 @@ export function buildComponents(): Components<Theme> {
     },
     MuiTooltip: {
       defaultProps: { arrow: true },
+    },
+    // MUI animates layout properties by default, which relayouts the page on
+    // every frame. Panels and labels change size at once instead.
+    MuiCollapse: {
+      styleOverrides: {
+        // The panel snaps to its height; its content fades in while entering.
+        root: {
+          transition: "none",
+          [`&:not(.${collapseClasses.entered}):not(.${collapseClasses.hidden}) > .${collapseClasses.wrapper} > .${collapseClasses.wrapperInner}`]: {
+            animation: `${disclose} 180ms cubic-bezier(0.16, 1, 0.3, 1)`,
+          },
+          "@media (prefers-reduced-motion: reduce)": {
+            [`& .${collapseClasses.wrapperInner}`]: { animation: "none" },
+          },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        // The floating label still moves by transform; its max-width snaps.
+        animated: ({ theme }) => ({
+          transition: theme.transitions.create(["color", "transform"], {
+            duration: theme.transitions.duration.shorter,
+            easing: theme.transitions.easing.easeOut,
+          }),
+        }),
+      },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        // The notch opens at once rather than animating the legend's width.
+        notchedOutline: { "& legend": { transition: "none" } },
+      },
     },
     MuiTypography: {
       defaultProps: {

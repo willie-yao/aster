@@ -20,7 +20,7 @@ test("mobile branding link keeps an accessible home name", () => {
   // Layout mounts one nav per breakpoint, but both components must carry the
   // full destination name as a description. The visible label stays the
   // accessible name so speech control can target what it reads (WCAG 2.5.3).
-  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 3);
+  assert.equal(rail.match(/title=\{d\.title\}/g)?.length, 2);
   assert.doesNotMatch(rail, /aria-label=\{d\.title\}/);
   assert.match(navigation, /title: "Failure Trends"/);
   assert.match(navigation, /title: "Analysis Health"/);
@@ -98,22 +98,34 @@ test("the rail keeps every destination reachable on a short viewport", () => {
   // brand and footer stay put.
   assert.match(rail, /height: "100vh"/);
   assert.match(rail, /overflow: "hidden"/);
-  assert.match(rail, /flex: 1, minHeight: 0, overflowY: "auto"/);
+  assert.match(rail, /flex: 1,\s*minHeight: 0,\s*overflowY: "auto"/);
   // The rail root, brand, search, and footer must not shrink or the list would
   // not be the element that scrolls.
   assert.equal(rail.match(/flexShrink: 0/g)?.length, 4);
 });
 
-test("the deployment title identifies the instance on its home page", () => {
+test("the rail's active pill glides on transform only and never flies in on load", () => {
+  const rail = source("src/components/NavRail.tsx");
+
+  // Moving the pill must not animate a layout property.
+  assert.match(rail, /const glide = \(seconds: number\) => `transform \$\{seconds\}s \$\{glideEase\}`;/);
+  // Transitions stay off until the first placement, so a page load does not
+  // animate the pill from the top of the list.
+  assert.match(rail, /transition: placed \? glide\(0\.45\) : "none"/);
+  assert.match(rail, /requestAnimationFrame\(\(\) => setPlaced\(true\)\)/);
+  assert.match(rail, /"@media \(prefers-reduced-motion: reduce\)": \{\s*"&, & \*": \{ transition: "none !important" \}/);
+});
+
+test("the deployment title identifies the instance without a kicker on the home page", () => {
   const dashboard = source("src/pages/DashboardPage.tsx");
   const layout = source("src/components/Layout.tsx");
   const rail = source("src/components/NavRail.tsx");
 
-  // The rail only has room for the short name, so the full title lives in the
-  // overview header. It is a sibling of the h1, not a competing heading.
-  assert.match(dashboard, /component="p"[\s\S]*?\{manifest\.branding\.title\}/);
+  // The rail shows the short name and the tab title carries the full title, so
+  // the overview header is its h1 alone, with no label stacked above it.
+  assert.match(layout, /usePageDocumentTitle\(location\.pathname, manifest\.branding\.title\)/);
   assert.match(dashboard, /component="h1"[\s\S]*?Test Health Overview/);
-  assert.doesNotMatch(dashboard, /component="h1"[^>]*>\s*\{manifest\.branding\.title\}/);
+  assert.doesNotMatch(dashboard, /manifest\.branding\.title/);
   // short_name is optional, so the rail always has something to show.
   assert.match(layout, /brandLabel=\{manifest\.short_name \?\? manifest\.name\}/);
   // The accessible name must contain the visible short name (WCAG 2.5.3).

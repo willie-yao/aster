@@ -107,14 +107,9 @@ export function PullRequestsPage() {
           gap: 1,
         }}
       >
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
-            Pull Request Triage
-          </Typography>
-          <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: "74ch", ...overviewTypography.secondaryBody }}>
-            Presubmit results for open pull requests in {data.repo}
-          </Typography>
-        </Box>
+        <Typography variant="h4" component="h1" sx={overviewTypography.pageHeadline}>
+          Pull Request Triage
+        </Typography>
         <Typography variant="data" color="textSecondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
           Updated {timeAgo(data.generated_at)}
         </Typography>

@@ -23,12 +23,7 @@ function HistoryFrame({ children }: { children: ReactNode }) {
   const auth = useAuth();
   return (
     <Stack spacing={2.5} sx={{ maxWidth: 1040, mx: "auto" }}>
-      <Box>
-        <Typography component="h1" sx={overviewTypography.pageHeadline}>Investigation history</Typography>
-        <Typography color="textSecondary" sx={{ mt: 0.75, maxWidth: "75ch", ...overviewTypography.primaryBody }}>
-          Saved conversations and their original evidence. New analysis does not replace earlier findings.
-        </Typography>
-      </Box>
+      <Typography component="h1" sx={overviewTypography.pageHeadline}>Investigation history</Typography>
       {!features.analysis_chat ? <Alert severity="info">Investigation history is not available in this deployment.</Alert>
         : auth.status === "loading" ? <CircularProgress size={24} aria-label="Checking authentication" />
         : auth.status !== "authenticated" ? <Alert severity="info" action={auth.status === "anonymous" ? <Button color="inherit" onClick={auth.signIn}>Sign in</Button> : undefined}>Sign in as a dashboard operator to view private conversation history.</Alert>

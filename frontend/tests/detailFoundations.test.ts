@@ -865,6 +865,35 @@ test("test result navigation names include status duration and source context", 
   assert.doesNotMatch(analysis[1], /<a|<button/);
 });
 
+test("test result summaries pair the cause with the first sentence of the next step", () => {
+  const summarized = (suggestedFix: string): TestCase => ({
+    name: "[It] fails cluster",
+    status: "failed",
+    duration_seconds: 5,
+    ai_summary: { generated_at: "2026-10-28T00:00:00Z", summary: "Bootstrap was denied.", is_transient: false },
+    ai_analysis: {
+      generated_at: "2026-10-28T00:00:00Z",
+      root_cause: "Bootstrap was denied.",
+      severity: "High",
+      suggested_fix: suggestedFix,
+    },
+  });
+  const table = (testCase: TestCase) => render(
+    createElement(
+      MemoryRouter,
+      { initialEntries: ["/"] },
+      createElement(TestCaseTable, { testCases: [testCase], jobID: "job-main", buildId: "123" }),
+    ),
+  );
+
+  const html = table(summarized("Upgrade the bootstrap provider. Alternatively patch the drop-in."));
+  assert.match(html, /Bootstrap was denied\./);
+  assert.match(html, /Next step/);
+  assert.match(html, /Upgrade the bootstrap provider\./);
+  assert.doesNotMatch(html, /Alternatively patch the drop-in/);
+  assert.doesNotMatch(table(summarized("  ")), /Next step/);
+});
+
 test("expanded evidence source links keep context and a 44px target", () => {
   const html = render(createElement(EvidenceSourceLink, {
     href: "https://github.com/example/repo/blob/main/test.go#L10",

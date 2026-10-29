@@ -33,6 +33,14 @@ function paletteFromTokens(t: ColorTokens): PaletteOptions {
       light: t.errorContainer,
       contrastText: t.onError,
     },
+    // Informational notices share the brand violet instead of MUI's default
+    // cyan, so the console carries one accent hue.
+    info: {
+      main: t.primary,
+      dark: t.primaryDim,
+      light: t.primaryContainer,
+      contrastText: t.onPrimary,
+    },
     background: {
       default: t.background,
       paper: t.surfaceContainer,

@@ -27,6 +27,7 @@ import { AiAnalysisPanel } from "./AiAnalysisPanel";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { overviewTypography } from "../theme/overview";
 import { hasInlineTestEvidence } from "../lib/jobDetail";
+import { firstSentence } from "../lib/testDetail";
 
 interface TestCaseTableProps {
   testCases: TestCase[];
@@ -160,6 +161,8 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             webUrl,
             fileLinks: tc.ai_analysis?.file_links,
           };
+          const suggestedFix = tc.ai_analysis?.suggested_fix?.trim();
+          const nextStep = suggestedFix ? firstSentence(suggestedFix) : "";
 
           return (
             <Fragment key={idx}>
@@ -371,41 +374,60 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
               </Box>
 
               {tc.ai_summary && (
+                // The cause and the next step share the row, so each failed
+                // test says what broke and what to do without leaving the ledger.
                 <Box
                   sx={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 1,
-                    px: 1.5,
-                    py: 0.75,
+                    display: "grid",
+                    gridTemplateColumns: {
+                      xs: "minmax(0, 1fr)",
+                      md: nextStep ? "minmax(0, 1fr) minmax(0, 1fr)" : "minmax(0, 1fr)",
+                    },
                     bgcolor: stripeBg,
                     borderBottom: "1px solid",
                     borderColor: "divider",
                   }}
                 >
-                  <AutoAwesome sx={{ fontSize: 16, flexShrink: 0, color: "primary.main" }} />
-                  <Typography
-                    component="div"
-                    sx={{
-                      color: "text.primary",
-                      // Analysis prose in a full-width results ledger, so it
-                      // is held to the same measure as the rest of the page.
-                      maxWidth: "74ch",
-                      fontSize: "13.5px",
-                      lineHeight: "20px",
-                      fontWeight: 450,
-                    }}
-                  >
-                    <RichText text={tc.ai_summary.summary} fileCtx={aiFileCtx} />
-                    {tc.ai_summary.is_transient && (
-                      <Box
-                        component="span"
-                        sx={{ ml: 0.75, color: "text.secondary", fontSize: "13px" }}
-                      >
-                        · Likely transient
+                  <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, px: 1.5, py: 1, minWidth: 0 }}>
+                    <AutoAwesome aria-hidden sx={{ fontSize: 16, flexShrink: 0, mt: "2px", color: "primary.main" }} />
+                    <Typography
+                      component="div"
+                      sx={{
+                        minWidth: 0,
+                        maxWidth: "74ch",
+                        color: "text.primary",
+                        ...overviewTypography.secondaryBody,
+                      }}
+                    >
+                      <RichText text={tc.ai_summary.summary} fileCtx={aiFileCtx} />
+                      {tc.ai_summary.is_transient && (
+                        <Box component="span" sx={{ ml: 0.75, color: "text.secondary" }}>
+                          · Likely transient
+                        </Box>
+                      )}
+                    </Typography>
+                  </Box>
+                  {nextStep && (
+                    <Typography
+                      component="div"
+                      sx={{
+                        minWidth: 0,
+                        maxWidth: { md: "74ch" },
+                        px: 1.5,
+                        py: 1,
+                        color: "text.secondary",
+                        borderTop: { xs: "1px solid", md: 0 },
+                        borderLeft: { md: "1px solid" },
+                        borderColor: "divider",
+                        ...overviewTypography.description,
+                      }}
+                    >
+                      <Box component="span" sx={{ mr: 0.75, fontWeight: 700, color: "text.primary" }}>
+                        Next step
                       </Box>
-                    )}
-                  </Typography>
+                      <RichText text={nextStep} fileCtx={aiFileCtx} />
+                    </Typography>
+                  )}
                 </Box>
               )}
 

@@ -279,7 +279,7 @@ A row of status squares, one per run, 18px dot in a 24x28px cell on desktop and 
 44px minimum height, 4px radius, `background.default` fill, divider border, violet border on focus. 16px text on mobile, 14px from `sm` up.
 
 ### Navigation rail
-76px wide, `surface.container`, 1px right rule. Each destination is an icon over a Micro Label, with the active one taking a violet tint and a 3px leading bar. `aria-current="page"` marks only an exact URL match; a section that stays highlighted for its nested pages reports `aria-current="true"`.
+76px wide, `surface.container`, 1px right rule. Each destination is an icon over a Micro Label in a 52px item, 6px apart. The active one sits on a solid violet pill with `onPrimary` text, and the pill glides to the new destination on navigation. A `surface.containerHighest` pill follows the pointer on hover. Both move with transform only and stop moving under reduced motion. `aria-current="page"` marks only an exact URL match; a section that stays highlighted for its nested pages reports `aria-current="true"`.
 
 ### Operator surfaces (signed in)
 

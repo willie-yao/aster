@@ -10,7 +10,8 @@ import MonitorHeart from "@mui/icons-material/MonitorHeartOutlined";
 import Paid from "@mui/icons-material/PaidOutlined";
 import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
-import type { ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
 import { AsterMark } from "./AsterMark";
 import type { NavDestination } from "../lib/navigation";
@@ -44,12 +45,12 @@ function itemSx(active: boolean) {
     justifyContent: "center",
     gap: 0.375,
     color: active ? "primary.main" : "text.secondary",
-    bgcolor: active ? "var(--nav-active-bg)" : "transparent",
+    bgcolor: "transparent",
     transition: "color 140ms ease, background-color 140ms ease",
     "@media (prefers-reduced-motion: reduce)": { transition: "none" },
     "&:hover": {
       color: "text.primary",
-      bgcolor: active ? "var(--nav-active-bg)" : "surface.containerHigh",
+      bgcolor: active ? "transparent" : "surface.containerHigh",
     },
     "&.Mui-focusVisible": {
       outline: "2px solid",
@@ -70,6 +71,65 @@ function NavLabel({ children }: { children: string }) {
   );
 }
 
+const glideEase = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+type ItemBox = { top: number; height: number };
+
+function boxOf(item: HTMLElement): ItemBox {
+  return { top: item.offsetTop, height: item.offsetHeight };
+}
+
+/**
+ * Tracks where the current and hovered items sit in the rail list so the
+ * indicator pills can glide between them. `layoutKey` changes whenever the
+ * active destination or the destination set does.
+ */
+function useGlideTargets(layoutKey: string) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [current, setCurrent] = useState<ItemBox | null>(null);
+  const [hovered, setHovered] = useState<ItemBox | null>(null);
+  const [placed, setPlaced] = useState(false);
+
+  // Measure before paint so the pill never shows in a stale spot, and again on
+  // resize, such as zoom or a late font swap.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const update = () => {
+      const item = list.querySelector<HTMLElement>("[aria-current]");
+      setCurrent(item ? boxOf(item) : null);
+    };
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(list);
+    return () => observer?.disconnect();
+  }, [layoutKey]);
+
+  // Enable transitions only after the first placement, so the pill does not fly in on load.
+  useEffect(() => {
+    if (!current || placed) return;
+    const frame = requestAnimationFrame(() => setPlaced(true));
+    return () => cancelAnimationFrame(frame);
+  }, [current, placed]);
+
+  const onPointerOver = (event: PointerEvent) => {
+    const item = (event.target as HTMLElement).closest<HTMLElement>("[data-rail-item]");
+    if (item) setHovered(boxOf(item));
+  };
+  const onPointerLeave = () => setHovered(null);
+
+  return { listRef, current, hovered, placed, onPointerOver, onPointerLeave };
+}
+
+const pillSx = {
+  position: "absolute",
+  top: 0,
+  left: 6,
+  right: 6,
+  borderRadius: 1.5,
+  pointerEvents: "none",
+} as const;
+
 /** Vertical navigation rail. Layout mounts it from `md` up; below that it mounts NavBottomBar instead. */
 export function NavRail({
   destinations,
@@ -87,6 +147,39 @@ export function NavRail({
   const signal = destinations.filter((d) => d.scope === "signal");
   const operator = destinations.filter((d) => d.scope === "operator");
   const { pathname } = useLocation();
+  const layoutKey = destinations.map((d) => `${d.id}:${d.active}`).join();
+  const { listRef, current, hovered, placed, onPointerOver, onPointerLeave } = useGlideTargets(layoutKey);
+  const glide = (seconds: number) => `transform ${seconds}s ${glideEase}`;
+  // The hover pill rests under the current item while the pointer is elsewhere.
+  const ghost = hovered ?? current;
+
+  const item = (d: NavDestination) => (
+    <ButtonBase
+      key={d.id}
+      data-rail-item
+      component={RouterLink}
+      to={d.to}
+      title={d.title}
+      aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
+      sx={{
+        ...itemSx(d.active),
+        zIndex: 1,
+        height: 52,
+        width: "calc(100% - 12px)",
+        mx: 0.75,
+        borderRadius: 1.5,
+        color: d.active ? "primary.contrastText" : "text.secondary",
+        transition: `color 260ms ${glideEase}`,
+        "& .MuiTypography-root": { fontWeight: d.active ? 700 : 600 },
+        "&:hover": { color: d.active ? "primary.contrastText" : "text.primary", bgcolor: "transparent" },
+        // Outside the pill, so the ring stays visible on the primary fill.
+        "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 },
+      }}
+    >
+      <NavIcon id={d.id} />
+      <NavLabel>{d.label}</NavLabel>
+    </ButtonBase>
+  );
 
   return (
     <Box
@@ -105,7 +198,6 @@ export function NavRail({
         bgcolor: (theme) => (theme.vars ?? theme).palette.surface.container,
         borderRight: "1px solid",
         borderColor: "divider",
-        "--nav-active-bg": "color-mix(in srgb, var(--mui-palette-primary-main) 14%, transparent)",
       }}
     >
       <MuiLink
@@ -157,39 +249,52 @@ export function NavRail({
       )}
 
       {/* The destination list scrolls so a short viewport cannot trap an item. */}
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", scrollbarWidth: "thin" }}>
-        {signal.map((d) => (
-          <ButtonBase
-            key={d.id}
-            component={RouterLink}
-            to={d.to}
-            title={d.title}
-            aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
-            sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
-          >
-            {d.active && <ActiveBar />}
-            <NavIcon id={d.id} />
-            <NavLabel>{d.label}</NavLabel>
-          </ButtonBase>
-        ))}
-
+      <Box
+        ref={listRef}
+        onPointerOver={onPointerOver}
+        onPointerLeave={onPointerLeave}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          scrollbarWidth: "thin",
+          position: "relative",
+          display: "grid",
+          alignContent: "start",
+          rowGap: 0.75,
+          py: 0.5,
+          "@media (prefers-reduced-motion: reduce)": {
+            "&, & *": { transition: "none !important" },
+          },
+        }}
+      >
+        <Box
+          aria-hidden="true"
+          sx={{
+            ...pillSx,
+            bgcolor: "surface.containerHighest",
+            height: ghost?.height ?? 0,
+            transform: `translateY(${ghost?.top ?? 0}px)`,
+            opacity: hovered ? 1 : 0,
+            transition: placed ? `${glide(0.27)}, opacity 180ms ease` : "none",
+          }}
+        />
+        <Box
+          aria-hidden="true"
+          sx={{
+            ...pillSx,
+            bgcolor: "primary.main",
+            height: current?.height ?? 0,
+            transform: `translateY(${current?.top ?? 0}px)`,
+            opacity: current ? 1 : 0,
+            transition: placed ? glide(0.45) : "none",
+          }}
+        />
+        {signal.map(item)}
         {operator.length > 0 && (
           <>
-            <Divider sx={{ mx: 1.75, my: 1 }} />
-            {operator.map((d) => (
-              <ButtonBase
-                key={d.id}
-                component={RouterLink}
-                to={d.to}
-                title={d.title}
-                aria-current={d.active ? (pathname === d.to ? "page" : "true") : undefined}
-                sx={{ ...itemSx(d.active), height: 54, width: "100%" }}
-              >
-                {d.active && <ActiveBar />}
-                <NavIcon id={d.id} />
-                <NavLabel>{d.label}</NavLabel>
-              </ButtonBase>
-            ))}
+            <Divider sx={{ mx: 1.75, my: 0.5 }} />
+            {operator.map(item)}
           </>
         )}
       </Box>
@@ -211,23 +316,6 @@ export function NavRail({
         </Box>
       )}
     </Box>
-  );
-}
-
-function ActiveBar() {
-  return (
-    <Box
-      aria-hidden="true"
-      sx={{
-        position: "absolute",
-        left: 0,
-        top: 6,
-        bottom: 6,
-        width: 3,
-        borderRadius: "0 3px 3px 0",
-        bgcolor: "primary.main",
-      }}
-    />
   );
 }
 
@@ -253,7 +341,6 @@ export function NavBottomBar({ destinations }: { destinations: NavDestination[] 
         borderTop: "1px solid",
         borderColor: "divider",
         pb: "env(safe-area-inset-bottom)",
-        "--nav-active-bg": "transparent",
       }}
     >
       {destinations.map((d) => (
