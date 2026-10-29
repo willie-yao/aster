@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -226,11 +227,12 @@ func requestSizeEstimate(messages []transport.Message, schemaBytes int) int {
 // reasoning so the estimated request stays under budgetBytes. Disabled when
 // budgetBytes <= 0. Preserves the system prompt, task, message order, and
 // tool_call_id wiring so OpenAI tool-call pairing stays valid. Returns the
-// slice and the number of messages elided this call.
+// compacted slice and elision count without modifying the input messages.
 func compactMessages(messages []transport.Message, schemaBytes, budgetBytes int) ([]transport.Message, int) {
 	if budgetBytes <= 0 || requestSizeEstimate(messages, schemaBytes) <= budgetBytes {
 		return messages, 0
 	}
+	messages = slices.Clone(messages)
 	target := int(float64(budgetBytes) * compactionTargetRatio)
 	elided := 0
 

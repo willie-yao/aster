@@ -68,6 +68,50 @@ func TestCompactMessages_NoopUnderBudget(t *testing.T) {
 	}
 }
 
+func TestCompactMessages_DoesNotMutateInput(t *testing.T) {
+	reasoning := conversation(1, 1000)
+	reasoning[2].Content = new(strings.Repeat("reasoning ", 1000))
+	tests := []struct {
+		name     string
+		messages []transport.Message
+		budget   int
+	}{
+		{name: "tool results", messages: conversation(8, 2000), budget: 8000},
+		{name: "assistant reasoning", messages: reasoning, budget: 1500},
+		{
+			name: "Responses state and phase",
+			messages: append(sysAndTask(),
+				transport.Message{
+					Role: "assistant", Content: new("draft"),
+					ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","phase":"analysis","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)},
+				},
+				transport.Message{Role: "user", Content: new("revise")},
+			),
+			budget: 600,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, err := json.Marshal(tt.messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := requestSizeEstimate(tt.messages, 0)
+			got, elided := compactMessages(tt.messages, 0, tt.budget)
+			if elided == 0 || requestSizeEstimate(got, 0) >= size {
+				t.Fatal("expected a smaller compacted transcript")
+			}
+			after, err := json.Marshal(tt.messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatal("compaction mutated the caller's messages")
+			}
+		})
+	}
+}
+
 func TestCompactMessages_ElidesOldestKeepsRecentAndPreamble(t *testing.T) {
 	msgs := conversation(8, 2000) // 8 tool results @2KB
 	budget := 8000
@@ -190,15 +234,30 @@ func TestRequestSizeEstimateCountsProviderItems(t *testing.T) {
 func TestCompactMessagesRemovesResponsesRoundAtomically(t *testing.T) {
 	messages := []transport.Message{
 		{Role: "system", Content: new("system")}, {Role: "user", Content: new("user")},
-		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
+		{Role: "assistant", ToolCalls: []transport.ToolCall{{ID: "call-1"}, {ID: "call-2"}}, ProviderItems: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + strings.Repeat("x", 2000) + `"}`)}},
 		{Role: "tool", ToolCallID: "call-1", Content: new(strings.Repeat("y", 1000))},
+		{Role: "tool", ToolCallID: "call-2", Content: new(strings.Repeat("z", 1000))},
 		{Role: "user", Content: new("continue")},
 	}
-	got, _ := compactMessages(messages, 0, 300)
+	before, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, elided := compactMessages(messages, 0, 300)
+	if elided == 0 || len(got) != 3 || got[0].Role != "system" || got[1].Role != "user" || got[2].Content == nil || *got[2].Content != "continue" {
+		t.Fatalf("compacted messages = %+v, elided=%d", got, elided)
+	}
 	for _, message := range got {
-		if message.ToolCallID == "call-1" || (message.Role == "assistant" && len(message.ProviderItems) > 0) {
+		if message.ToolCallID == "call-1" || message.ToolCallID == "call-2" || (message.Role == "assistant" && len(message.ProviderItems) > 0) {
 			t.Fatalf("orphaned Responses round: %+v", got)
 		}
+	}
+	after, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("removing a Responses round mutated the caller's transcript")
 	}
 }
 
