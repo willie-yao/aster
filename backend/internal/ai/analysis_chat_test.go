@@ -1752,16 +1752,16 @@ func TestAnalysisChatEvidenceRequiresContiguousSegmentsAndLines(t *testing.T) {
 	}
 }
 
-func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
+func TestAnalysisChatEvidenceUsesOnlyVisibleCappedEnvelope(t *testing.T) {
 	shrinkCallDelay(t)
 	server := newScriptedChatServer(t)
 	server.push(200, chatRespToolCall("call-1", "grep_artifact", map[string]any{
 		"path": "build-log.txt", "pattern": "match", "max_matches": 100,
 	}))
 	server.push(200, chatRespFinal(`{
-		"answer":"The last matching line confirms the failure.",
+		"answer":"The first matching line confirms the failure.",
 		"assessment":"supports",
-		"citations":[{"path":"build-log.txt","line_start":100,"line_end":100,"quote":"match-099-marker"}],
+		"citations":[{"path":"build-log.txt","line_start":1,"line_end":1,"quote":"match-000-marker"}],
 		"proposed_revision":null
 	}`))
 	var lines []string
@@ -1774,8 +1774,29 @@ func TestAnalysisChatEvidenceSurvivesCappedModelEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reply.Citations) != 1 || reply.Citations[0].LineStart != 100 {
+	if reply.Unverified || len(reply.Citations) != 1 || reply.Citations[0].LineStart != 1 {
 		t.Fatalf("reply = %+v", reply)
+	}
+	var request struct {
+		Messages []transport.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(server.requests[1], &request); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range request.Messages {
+		if message.Role != "tool" || message.Content == nil {
+			continue
+		}
+		found = true
+		envelope := *message.Content
+		assertBoundedToolEnvelope(t, envelope, modelVisibleToolPayload(envelope))
+		if !strings.Contains(envelope, "match-000-marker") || strings.Contains(envelope, "match-099-marker") {
+			t.Fatal("model-visible grep content does not match the retained evidence")
+		}
+	}
+	if !found {
+		t.Fatal("chat request omitted the tool result")
 	}
 }
 
