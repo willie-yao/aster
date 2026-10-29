@@ -110,6 +110,8 @@ func acceptAgenticCacheRecord(entry CacheEntry, expectedKey string, policy Agent
 
 // AgenticResultRejection evaluates the reusable quality contract for an analysis.
 func AgenticResultRejection(result FailureAnalysisResult, policy AgenticCachePolicy) CacheRejectionReason {
+	// Reject malformed or expired output before quality reasons so spent-budget
+	// quality forgiveness cannot retain invalid output.
 	if result.Summary == nil || result.Analysis == nil || result.Analysis.Mode != AgenticMode {
 		return CacheRejectedMalformed
 	}

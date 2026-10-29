@@ -26,10 +26,8 @@ const AgenticMode = "agentic"
 
 const preliminaryCacheTTL = 5 * time.Minute
 
-// maxPreliminaryAttempts bounds how many times one build and failure may be
-// re-analyzed to a preliminary result. Build artifacts are immutable, so past
-// this budget a retry re-reads identical evidence and the cached preliminary
-// result is served instead. A new build gets its own cache key and budget.
+// maxPreliminaryAttempts bounds retries for preliminary or cache-rejected
+// analyses of immutable build artifacts. A new build gets its own key and budget.
 const maxPreliminaryAttempts = 3
 
 // preliminaryAttemptsData is the retry budget spent on one analysis key.
@@ -61,14 +59,14 @@ func (c *Client) preliminaryAttempts(cacheKey string) int {
 	return data.Attempts
 }
 
-// recordPreliminaryAttempt advances the retry budget for a preliminary result
-// and clears it once an analysis reaches a citation-verified disposition.
-func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, priorAttempts int) {
+// recordPreliminaryAttempt advances the budget for preliminary or uncached
+// output and clears it only for persisted citation-verified output.
+func (c *Client) recordPreliminaryAttempt(cacheKey, disposition string, cachePersistenceAccepted bool, priorAttempts int) {
 	if c == nil || c.cache == nil || cacheKey == "" {
 		return
 	}
 	key := preliminaryAttemptsKey(cacheKey)
-	if disposition != models.AnalysisDispositionPreliminary {
+	if disposition == models.AnalysisDispositionCitationsVerified && cachePersistenceAccepted {
 		c.cache.Delete(key)
 		return
 	}
@@ -831,8 +829,8 @@ func (c *Client) doAnalyzeAgentic(
 	} else {
 		recordTrace(loopCtx, TraceEvent{Kind: "publication", Outcome: "citations_verified"})
 	}
-	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.priorPreliminaryAttempts)
 	c.cacheAcceptedAnalysis(loopCtx, cacheKey, record, state, in.Opts)
+	c.recordPreliminaryAttempt(cacheKey, record.disposition, state.cachePersistenceAccepted, state.priorPreliminaryAttempts)
 
 	record = analysisRecordFromState(parsed, c, state, in.Mode, generatedAt, int(time.Since(start)/time.Millisecond))
 	record, ok = stampRecordDisposition(record)

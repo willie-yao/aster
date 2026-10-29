@@ -444,13 +444,11 @@ func (s *Service) shouldReanalyze(tc *models.TestCase) bool {
 }
 
 // reanalysisRequired reports whether a cached analysis must be discarded.
-// preliminaryBudgetSpent keeps a preliminary analysis whose bounded retry
-// budget is gone, because re-reading immutable build artifacts cannot improve
-// it. A spent budget forgives only the quality floors that made the analysis
-// preliminary; contract version, generation, and entry validity still force
-// reanalysis.
+// preliminaryBudgetSpent retains safe preliminary or quality-rejected output
+// once its bounded retry budget is gone. Contract version, generation, and
+// output validity still force reanalysis.
 func (s *Service) reanalysisRequired(tc *models.TestCase, preliminaryBudgetSpent bool) bool {
-	if tc.AIAnalysis.Mode != AgenticMode {
+	if tc == nil || tc.AIAnalysis == nil || tc.AIAnalysis.Mode != AgenticMode {
 		return true
 	}
 	disposition := tc.AIAnalysis.Disposition
@@ -464,21 +462,20 @@ func (s *Service) reanalysisRequired(tc *models.TestCase, preliminaryBudgetSpent
 	if reason == CacheAccepted {
 		return preliminary && !preliminaryBudgetSpent
 	}
-	if preliminary && preliminaryBudgetSpent &&
+	if preliminaryBudgetSpent &&
 		tc.AIAnalysis.CritiqueVersion >= currentCritiqueVersion &&
 		tc.AIAnalysis.CacheGeneration == s.cacheGeneration &&
 		forgivableForSpentPreliminaryBudget(reason) {
-		return false
+		disposition, _ := AnalysisDisposition(tc.AIAnalysis)
+		return disposition == ""
 	}
 	return true
 }
 
 // forgivableForSpentPreliminaryBudget reports whether a spent retry budget may
-// keep an analysis rejected for this reason. These are the quality floors that
-// make an analysis preliminary in the first place, so retrying immutable
-// artifacts cannot clear them. Callers must confirm the critique version and
-// cache generation are current first: rejection reporting stops at the first
-// failure, so a quality reason can otherwise mask a staler invalidation.
+// keep safe output rejected for this quality reason. Callers must also confirm
+// output validity and current critique version and cache generation, because
+// rejection reporting stops at the first failure.
 func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
 	switch reason {
 	case CacheRejectedToolFloor, CacheRejectedEvidenceFloor,
@@ -490,7 +487,7 @@ func forgivableForSpentPreliminaryBudget(reason CacheRejectionReason) bool {
 }
 
 // preliminaryBudgetSpent reports whether one failure has used its bounded
-// preliminary retry budget with nothing better to fall back on. An accepted
+// quality retry budget with nothing better to fall back on. An accepted
 // private entry is always preferred, because serving it costs no model call
 // and may carry a citation-verified result a concurrent analysis of the same key wrote.
 func (s *Service) preliminaryBudgetSpent(tc *models.TestCase, cacheKey string) bool {
