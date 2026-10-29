@@ -27,7 +27,12 @@ expect_fail() {
     echo "invalid render accepted: $name" >&2
     exit 1
   fi
-  grep -Fq "$expected" "$tmp/$name.out" || grep -Fq "values don't meet the specifications of the schema" "$tmp/$name.out"
+  if ! grep -Fq -- "$expected" "$tmp/$name.out"; then
+    echo "render rejection mismatch: $name" >&2
+    echo "expected diagnostic: $expected" >&2
+    cat "$tmp/$name.out" >&2
+    exit 1
+  fi
 }
 
 cat > "$tmp/values.yaml" <<'VALUES'
