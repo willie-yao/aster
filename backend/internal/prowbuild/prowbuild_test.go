@@ -2,6 +2,7 @@ package prowbuild
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -26,11 +28,15 @@ type fakeBackend struct {
 	listCalls   []string
 	listErrors  map[string]error
 	openErrors  map[string]error
+	readErrors  map[string]error
 }
 
 func (f *fakeBackend) Open(_ context.Context, path string) (io.ReadCloser, int64, error) {
 	if err := f.openErrors[path]; err != nil {
 		return nil, 0, err
+	}
+	if err := f.readErrors[path]; err != nil {
+		return io.NopCloser(iotest.ErrReader(err)), -1, nil
 	}
 	body, ok := f.objects[path]
 	if !ok {
@@ -217,6 +223,79 @@ func TestFetchBuildInfo_RunningAndFinished(t *testing.T) {
 	}
 	if info.Result != "PENDING" {
 		t.Errorf("running build Result = %q, want PENDING", info.Result)
+	}
+}
+
+func TestFetchBuildInfoFinishedReadErrors(t *testing.T) {
+	const finishedPath = "logs/job/100/finished.json"
+	for _, tc := range []struct {
+		name    string
+		err     error
+		pending bool
+	}{
+		{name: "missing", err: storage.ErrNotFound, pending: true},
+		{name: "wrapped missing", err: fmt.Errorf("open artifact: %w", storage.ErrNotFound), pending: true},
+		{name: "permission", err: os.ErrPermission},
+		{name: "transport", err: io.ErrUnexpectedEOF},
+		{name: "cancelled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+	} {
+		for _, stage := range []string{"open", "read"} {
+			t.Run(tc.name+"/"+stage, func(t *testing.T) {
+				b := &fakeBackend{objects: map[string]string{
+					"logs/job/100/started.json": `{"timestamp":1000,"repo-commit":"abc"}`,
+				}}
+				wrapped := fmt.Errorf("storage read: %w", tc.err)
+				if stage == "open" {
+					b.openErrors = map[string]error{finishedPath: wrapped}
+				} else {
+					b.readErrors = map[string]error{finishedPath: wrapped}
+				}
+				loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "100"}
+				info, err := FetchBuildInfo(t.Context(), b, loc)
+				if tc.pending {
+					if err != nil || info == nil || info.Result != "PENDING" || info.Commit != "abc" || !info.Finished.IsZero() {
+						t.Fatalf("missing finished.json: info=%+v err=%v", info, err)
+					}
+					return
+				}
+				if info != nil || !errors.Is(err, tc.err) {
+					t.Fatalf("finished.json read failure: info=%+v err=%v, want %v", info, err, tc.err)
+				}
+				if !strings.Contains(err.Error(), "fetching "+finishedPath) {
+					t.Fatalf("error lacks artifact context: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestFetchBuildInfoStartedReadError(t *testing.T) {
+	b := &fakeBackend{openErrors: map[string]error{
+		"logs/job/100/started.json": fmt.Errorf("open artifact: %w", storage.ErrNotFound),
+	}}
+	loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "100"}
+	info, err := FetchBuildInfo(t.Context(), b, loc)
+	if info != nil || !errors.Is(err, storage.ErrNotFound) || !strings.Contains(err.Error(), "fetching started.json") {
+		t.Fatalf("missing started.json: info=%+v err=%v", info, err)
+	}
+}
+
+func TestFetchBuildInfoMalformedMetadata(t *testing.T) {
+	for _, artifact := range []string{"started.json", "finished.json"} {
+		t.Run(artifact, func(t *testing.T) {
+			b := &fakeBackend{objects: map[string]string{
+				"logs/job/100/started.json":  `{"timestamp":1000}`,
+				"logs/job/100/finished.json": `{"timestamp":1060,"passed":true,"result":"SUCCESS"}`,
+			}}
+			b.objects["logs/job/100/"+artifact] = "{"
+			loc := BuildLocation{JobLocation: JobLocation{JobType: models.JobTypePeriodic}, JobName: "job", BuildID: "100"}
+			info, err := FetchBuildInfo(t.Context(), b, loc)
+			var syntaxErr *json.SyntaxError
+			if info != nil || !errors.As(err, &syntaxErr) || !strings.Contains(err.Error(), "parsing "+artifact) {
+				t.Fatalf("malformed %s: info=%+v err=%v", artifact, info, err)
+			}
+		})
 	}
 }
 

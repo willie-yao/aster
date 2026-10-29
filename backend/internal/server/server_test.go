@@ -1309,9 +1309,13 @@ type fakeAsyncRunner struct {
 	request      actions.ActionRequestView
 	supersedesID string
 	cancelStatus string
+	requestErr   error
 }
 
 func (f *fakeAsyncRunner) CreateRequest(failureID, kind, login, userToken, instruction, supersedesID string) (actions.ActionRequestView, error) {
+	if f.requestErr != nil {
+		return actions.ActionRequestView{}, f.requestErr
+	}
 	if failureID == "missing" {
 		return actions.ActionRequestView{}, actions.ErrNotFound
 	}
@@ -1327,6 +1331,9 @@ func (f *fakeAsyncRunner) GetRequest(id, login string) (actions.ActionRequestVie
 	return f.request, nil
 }
 func (f *fakeAsyncRunner) ConfirmRequest(_ context.Context, id, login, token string) (string, error) {
+	if f.requestErr != nil {
+		return "", f.requestErr
+	}
 	if id != f.request.ID || login != f.request.Owner {
 		return "", actions.ErrRequestNotFound
 	}
@@ -1334,6 +1341,9 @@ func (f *fakeAsyncRunner) ConfirmRequest(_ context.Context, id, login, token str
 	return "https://github.com/o/r/issues/1", nil
 }
 func (f *fakeAsyncRunner) CancelRequest(_ context.Context, id, login string) (actions.ActionRequestView, error) {
+	if f.requestErr != nil {
+		return actions.ActionRequestView{}, f.requestErr
+	}
 	if id != f.request.ID || login != f.request.Owner {
 		return actions.ActionRequestView{}, actions.ErrRequestNotFound
 	}
@@ -1454,6 +1464,72 @@ func TestWriteActionErrorMapsPendingConfirmation(t *testing.T) {
 	}
 }
 
+func TestHandlerActionRequestErrorContract(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		status  int
+		message string
+	}{
+		{"pending", actions.ErrPreviewPending, http.StatusConflict, "action request is already being processed"},
+		{"superseded", actions.ErrPreviewSuperseded, http.StatusConflict, "action request was replaced by a newer attempt"},
+		{"unknown", actions.ErrPreviewOutcomeUnknown, http.StatusConflict, "GitHub action outcome is unknown"},
+		{"limit", actions.ErrRequestLimit, http.StatusTooManyRequests, "action request limit reached"},
+		{"terminal state", actions.ErrRequestStateConflict, http.StatusConflict, "action request cannot be changed in its current state"},
+		{"generation", errors.New("generation failed"), http.StatusUnprocessableEntity, actions.ReasonMessage(actions.ReasonGenerationFailed)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, wrapped := range []bool{false, true} {
+				t.Run(fmt.Sprintf("wrapped=%t", wrapped), func(t *testing.T) {
+					serviceErr := tc.err
+					if wrapped {
+						serviceErr = fmt.Errorf("private operation: %w: token=private-value https://private.example", tc.err)
+					}
+					runner := &fakeAsyncRunner{requestErr: serviceErr}
+					capabilities := DefaultCapabilities()
+					capabilities.Features.JUnitChatFix = true
+					handler, err := Handler(Options{
+						DataDir: t.TempDir(), Capabilities: capabilities, Auth: fakeAuth{}, Actions: runner, AuthMode: "dev",
+						AnalysisChat: &fakeAnalysisChatRunner{}, ChatFix: &fakeChatFixRunner{err: serviceErr},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, path := range []string{
+						"/api/failures/pattern-1/create-issue/requests",
+						"/api/action-requests/request-1/confirm",
+						"/api/action-requests/request-1/cancel",
+						"/api/analysis-chat/sessions/session-1/requests/chat-1/fix/requests",
+					} {
+						req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+						req.Header.Set("Authorization", "ok")
+						req.Header.Set("Content-Type", "application/json")
+						recorder := httptest.NewRecorder()
+						handler.ServeHTTP(recorder, req)
+						if recorder.Code != tc.status {
+							t.Fatalf("%s status=%d body=%q", path, recorder.Code, recorder.Body.String())
+						}
+						if tc.name == "generation" {
+							var response actionReasonResponse
+							if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+								t.Fatal(err)
+							}
+							if response.Code != actions.ReasonGenerationFailed || response.Message != tc.message {
+								t.Fatalf("generation response = %+v", response)
+							}
+						} else if recorder.Body.String() != tc.message+"\n" {
+							t.Fatalf("%s body=%q", path, recorder.Body.String())
+						}
+						if strings.Contains(recorder.Body.String(), "private") {
+							t.Fatalf("internal context leaked: %q", recorder.Body.String())
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestWriteActionErrorHidesInternalDetails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeActionError(recorder, "request", "alice", errors.New("provider secret https://private.example/v1\nsecond line"))
@@ -1502,6 +1578,8 @@ func TestWriteActionErrorLogsEveryConfirmFailure(t *testing.T) {
 		{name: "pending", err: actions.ErrPreviewPending},
 		{name: "superseded", err: actions.ErrPreviewSuperseded},
 		{name: "unknown outcome", err: actions.ErrPreviewOutcomeUnknown},
+		{name: "request limit", err: fmt.Errorf("%w: too many pending action requests", actions.ErrRequestLimit)},
+		{name: "terminal request", err: fmt.Errorf("%w: action request is confirmed", actions.ErrRequestStateConflict)},
 		{name: "rejected draft", err: actions.ErrPreviewRejected},
 		{name: "GitHub failure", err: errors.New("creating branch refs/heads/ai-fix-1 in forker/r: 404 Not Found; token=private-token https://private.example\nnext")},
 	} {

@@ -1147,7 +1147,7 @@ func TestCreateRequestRejectsDifferentFailureSupersede(t *testing.T) {
 	service.requests.Requests[created.ID].FailureID = "another-failure"
 	service.rmu.Unlock()
 
-	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID); err == nil || !strings.Contains(err.Error(), "does not match failure") {
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", created.ID); !errors.Is(err, ErrPreviewTargetChanged) || !strings.Contains(err.Error(), "does not match failure") {
 		t.Fatalf("CreateRequest() err=%v", err)
 	}
 	view, err := service.GetRequest(created.ID, "alice")
@@ -1437,7 +1437,7 @@ func TestCancelRequestRejectsConfirmationInProgress(t *testing.T) {
 	}}
 	service.requestConfirms["request-ready"] = struct{}{}
 
-	if _, err := service.CancelRequest(context.Background(), "request-ready", "alice"); err == nil || !strings.Contains(err.Error(), "being confirmed") {
+	if _, err := service.CancelRequest(context.Background(), "request-ready", "alice"); !errors.Is(err, ErrPreviewPending) || !strings.Contains(err.Error(), "being confirmed") {
 		t.Fatalf("CancelRequest() err=%v", err)
 	}
 	view, err := service.GetRequest("request-ready", "alice")
@@ -1488,8 +1488,154 @@ func TestCreateRequestReusesOwnerUnknownAndRejectsOtherOwner(t *testing.T) {
 	if err != nil || view.ID != "unknown" {
 		t.Fatalf("owner reuse view=%+v err=%v", view, err)
 	}
-	if _, err := service.CreateRequest(pattern.ID, "create-issue", "bob", "token", "", ""); err == nil || !strings.Contains(err.Error(), "unknown GitHub outcome") {
+	if _, err := service.CreateRequest(pattern.ID, "create-issue", "bob", "token", "", ""); !errors.Is(err, ErrPreviewOutcomeUnknown) || !strings.Contains(err.Error(), "unknown GitHub outcome") {
 		t.Fatalf("other owner error = %v", err)
+	}
+}
+
+func TestActionRequestConflictsPreserveState(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		operation    string
+		status       string
+		supersededBy string
+		confirming   bool
+		want         error
+	}{
+		{name: "confirm pending", operation: "confirm", status: RequestPending, want: ErrPreviewPending},
+		{name: "confirm cancelling", operation: "confirm", status: RequestCancelling, want: ErrPreviewPending},
+		{name: "confirm superseded", operation: "confirm", status: RequestCancelled, supersededBy: "replacement", want: ErrPreviewSuperseded},
+		{name: "confirm confirming", operation: "confirm", status: RequestReady, confirming: true, want: ErrPreviewPending},
+		{name: "replace confirming", operation: "replace", status: RequestReady, confirming: true, want: ErrPreviewPending},
+		{name: "cancel confirming", operation: "cancel", status: RequestReady, confirming: true, want: ErrPreviewPending},
+		{name: "replace superseded cancelling", operation: "replace", status: RequestCancelling, supersededBy: "replacement", want: ErrPreviewSuperseded},
+		{name: "replace superseded cancelled", operation: "replace", status: RequestCancelled, supersededBy: "replacement", want: ErrPreviewSuperseded},
+		{name: "replace unknown", operation: "replace", status: RequestUnknown, want: ErrPreviewOutcomeUnknown},
+		{name: "cancel unknown", operation: "cancel", status: RequestUnknown, want: ErrPreviewOutcomeUnknown},
+		{name: "confirm expired", operation: "confirm", status: RequestExpired, want: ErrRequestStateConflict},
+		{name: "confirm cancelled", operation: "confirm", status: RequestCancelled, want: ErrRequestStateConflict},
+		{name: "cancel confirmed", operation: "cancel", status: RequestConfirmed, want: ErrRequestStateConflict},
+		{name: "cancel expired", operation: "cancel", status: RequestExpired, want: ErrRequestStateConflict},
+		{name: "replace confirmed", operation: "replace", status: RequestConfirmed, want: ErrRequestStateConflict},
+		{name: "replace cancelled", operation: "replace", status: RequestCancelled, want: ErrRequestStateConflict},
+		{name: "replace expired", operation: "replace", status: RequestExpired, want: ErrRequestStateConflict},
+		{name: "confirm failed", operation: "confirm", status: RequestFailed},
+		{name: "replace failed", operation: "replace", status: RequestFailed},
+		{name: "cancel failed", operation: "cancel", status: RequestFailed},
+		{name: "confirm missing draft", operation: "confirm", status: RequestReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, pattern := requestTestService(t)
+			now := time.Now().UTC()
+			service.requests.Requests["request"] = &actionRequest{ActionRequestView: ActionRequestView{
+				ID: "request", FailureID: pattern.ID, Kind: "create-issue", Owner: "alice",
+				Status: tc.status, SupersededBy: tc.supersededBy,
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			}}
+			if tc.confirming {
+				service.requestConfirms["request"] = struct{}{}
+			}
+			var err error
+			switch tc.operation {
+			case "confirm":
+				_, err = service.ConfirmRequest(t.Context(), "request", "alice", "token")
+			case "replace":
+				_, err = service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "replacement", "request")
+			case "cancel":
+				_, err = service.CancelRequest(t.Context(), "request", "alice")
+			}
+			if err == nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			if tc.want == nil {
+				for _, conflict := range []error{ErrPreviewPending, ErrPreviewSuperseded, ErrPreviewOutcomeUnknown, ErrRequestLimit, ErrRequestStateConflict} {
+					if errors.Is(err, conflict) {
+						t.Fatalf("generation failure classified as %v", conflict)
+					}
+				}
+				if ReasonCodeOf(err) != ReasonGenerationFailed {
+					t.Fatalf("generation failure reason = %s", ReasonCodeOf(err))
+				}
+			}
+			view, getErr := service.GetRequest("request", "alice")
+			if getErr != nil || view.Status != tc.status || view.SupersededBy != tc.supersededBy || len(service.requests.Requests) != 1 {
+				t.Fatalf("rejected operation changed state: view=%+v err=%v requests=%d", view, getErr, len(service.requests.Requests))
+			}
+		})
+	}
+}
+
+func TestActionRequestTerminalOperationsRemainIdempotent(t *testing.T) {
+	for _, status := range []string{RequestConfirmed, RequestCancelled} {
+		t.Run(status, func(t *testing.T) {
+			service, _ := requestTestService(t)
+			now := time.Now().UTC()
+			service.requests.Requests["request"] = &actionRequest{ActionRequestView: ActionRequestView{
+				ID: "request", Owner: "alice", Kind: "create-issue", Status: status,
+				ResultURL: "https://github.com/o/r/issues/1",
+				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+			}}
+			if status == RequestConfirmed {
+				url, err := service.ConfirmRequest(t.Context(), "request", "alice", "token")
+				if err != nil || url != "https://github.com/o/r/issues/1" {
+					t.Fatalf("repeated confirmation url=%q err=%v", url, err)
+				}
+			} else {
+				view, err := service.CancelRequest(t.Context(), "request", "alice")
+				if err != nil || view.Status != RequestCancelled {
+					t.Fatalf("repeated cancellation view=%+v err=%v", view, err)
+				}
+			}
+		})
+	}
+}
+
+func TestActionRequestAdmissionLimits(t *testing.T) {
+	for _, analysisFix := range []bool{false, true} {
+		t.Run(fmt.Sprintf("analysisFix=%t", analysisFix), func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				status string
+				count  int
+				owner  string
+				reason string
+			}{
+				{"pending per owner", RequestPending, maxPendingPerOwner, "alice", "too many pending action requests"},
+				{"cancelling per owner", RequestCancelling, maxPendingPerOwner, "alice", "too many pending action requests"},
+				{"active ready", RequestReady, maxActiveRequests, "bob", "too many active action requests"},
+				{"active unknown", RequestUnknown, maxActiveRequests, "bob", "too many active action requests"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var service *Service
+					var pattern models.PatternAnalysis
+					if analysisFix {
+						service, pattern = analysisRequestTestService(t)
+					} else {
+						service, pattern = requestTestService(t)
+					}
+					now := time.Now().UTC()
+					for i := range tc.count {
+						id := fmt.Sprintf("existing-%d", i)
+						service.requests.Requests[id] = &actionRequest{ActionRequestView: ActionRequestView{
+							ID: id, FailureID: id, Kind: "create-issue", Owner: tc.owner, Status: tc.status,
+							CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
+						}}
+					}
+					var err error
+					if analysisFix {
+						_, err = service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "token", "")
+					} else {
+						_, err = service.CreateRequest(pattern.ID, "create-issue", "alice", "token", "", "")
+					}
+					if !errors.Is(err, ErrRequestLimit) || !strings.Contains(err.Error(), tc.reason) {
+						t.Fatalf("admission error = %v", err)
+					}
+					if len(service.requests.Requests) != tc.count {
+						t.Fatalf("limit admitted another request: %d", len(service.requests.Requests))
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -43,6 +43,12 @@ const draftRefinementWarning = "The revised draft could not be generated or did 
 
 var ErrRequestNotFound = errors.New("action request not found")
 
+// ErrRequestLimit means the owner or deployment cannot admit another request.
+var ErrRequestLimit = errors.New("action request limit reached")
+
+// ErrRequestStateConflict means the request state does not allow the operation.
+var ErrRequestStateConflict = errors.New("action request cannot be changed in its current state")
+
 // WarningCode identifies a warning by meaning rather than wording.
 type WarningCode string
 
@@ -221,16 +227,16 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		}
 		if superseded.FailureID != failureID {
 			s.rmu.Unlock()
-			return ActionRequestView{}, fmt.Errorf("superseded action request does not match failure")
+			return ActionRequestView{}, fmt.Errorf("%w: superseded action request does not match failure", ErrPreviewTargetChanged)
 		}
 		if _, confirming := s.requestConfirms[supersedesID]; confirming {
 			s.rmu.Unlock()
-			return ActionRequestView{}, fmt.Errorf("action request is being confirmed")
+			return ActionRequestView{}, fmt.Errorf("%w: action request is being confirmed", ErrPreviewPending)
 		}
 		if superseded.Status != RequestPending && superseded.Status != RequestReady {
-			status := superseded.Status
+			err := requestStatusError(superseded)
 			s.rmu.Unlock()
-			return ActionRequestView{}, fmt.Errorf("action request is %s", status)
+			return ActionRequestView{}, err
 		}
 	}
 	if supersedesID == "" {
@@ -258,7 +264,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			return view, nil
 		}
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("an existing action for this failure has an unknown GitHub outcome")
+		return ActionRequestView{}, fmt.Errorf("%w: an existing action for this failure has an unknown GitHub outcome", ErrPreviewOutcomeUnknown)
 	}
 	pending := 0
 	active := 0
@@ -275,11 +281,11 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 	}
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many pending action requests")
+		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
 	}
 	if active >= maxActiveRequests {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many active action requests")
+		return ActionRequestView{}, fmt.Errorf("%w: too many active action requests", ErrRequestLimit)
 	}
 	if superseded != nil {
 		if request.Instruction != "" && kind == "create-issue" && superseded.Kind == kind && superseded.Status == RequestReady && superseded.Issue != nil {
@@ -444,11 +450,11 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 	}
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many pending action requests")
+		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
 	}
 	if active >= maxActiveRequests {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("too many active action requests")
+		return ActionRequestView{}, fmt.Errorf("%w: too many active action requests", ErrRequestLimit)
 	}
 	if err := ctx.Err(); err != nil {
 		s.rmu.Unlock()
@@ -523,14 +529,14 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 		return url, nil
 	}
 	if request.Status != RequestReady && request.Status != RequestUnknown {
-		status := request.Status
+		err := requestStatusError(request)
 		s.rmu.Unlock()
-		return "", fmt.Errorf("action request is %s", status)
+		return "", err
 	}
 	reconcileOnly := request.Status == RequestUnknown
 	if _, confirming := s.requestConfirms[id]; confirming {
 		s.rmu.Unlock()
-		return "", fmt.Errorf("action request is being confirmed")
+		return "", fmt.Errorf("%w: action request is being confirmed", ErrPreviewPending)
 	}
 	entryKind := ""
 	if request.Preview != nil {
@@ -686,7 +692,7 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 	}
 	if _, confirming := s.requestConfirms[id]; confirming {
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("action request is being confirmed")
+		return ActionRequestView{}, fmt.Errorf("%w: action request is being confirmed", ErrPreviewPending)
 	}
 	if request.Status == RequestCancelled || request.Status == RequestCancelling {
 		view := request.ActionRequestView
@@ -697,9 +703,9 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		return s.cleanupCancellingRequest(ctx, id)
 	}
 	if request.Status != RequestPending && request.Status != RequestReady {
-		status := request.Status
+		err := requestStatusError(request)
 		s.rmu.Unlock()
-		return ActionRequestView{}, fmt.Errorf("action request is %s", status)
+		return ActionRequestView{}, err
 	}
 	analysisToken := ""
 	requestStatus := request.Status
@@ -728,4 +734,19 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		}
 	}
 	return s.cleanupCancellingRequest(ctx, id)
+}
+
+func requestStatusError(request *actionRequest) error {
+	switch {
+	case request.SupersededBy != "":
+		return fmt.Errorf("%w: action request is %s", ErrPreviewSuperseded, request.Status)
+	case request.Status == RequestPending || request.Status == RequestCancelling:
+		return fmt.Errorf("%w: action request is %s", ErrPreviewPending, request.Status)
+	case request.Status == RequestUnknown:
+		return fmt.Errorf("%w: action request is %s", ErrPreviewOutcomeUnknown, request.Status)
+	case request.Status == RequestConfirmed || request.Status == RequestCancelled || request.Status == RequestExpired:
+		return fmt.Errorf("%w: action request is %s", ErrRequestStateConflict, request.Status)
+	default:
+		return fmt.Errorf("action request is %s", request.Status)
+	}
 }

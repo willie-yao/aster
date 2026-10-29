@@ -14,6 +14,13 @@ import {
   analysisChatHistory,
   analysisChatMarker,
   analysisChatProviderFailureMessage,
+  analysisChatActiveTurnLimitMessage,
+  analysisChatIdempotencyConflictMessage,
+  analysisChatRateLimitMessage,
+  analysisChatRequestOutcomeUnknownMessage,
+  analysisChatRequestPendingMessage,
+  analysisChatSessionBusyMessage,
+  analysisChatTurnLimitMessage,
   analysisChatRequestState,
   analysisChatResponseValidationMessage,
   analysisChatUnusableAnswerMessage,
@@ -23,9 +30,11 @@ import {
   analysisChatTurnLimitReached,
   analysisChatTurnUsage,
   clearAnalysisChatPendingIntent,
+  createAnalysisChatSession,
   deleteAnalysisChatSession,
   findAnalysisChatSession,
   isAnalysisChatOAuthExpired,
+  isAmbiguousAnalysisChatFailure,
   loadAnalysisChatPendingIntent,
   lookupPreparedAnalysisChatFindings,
   markAnalysisChatTurnLimitReached,
@@ -87,6 +96,68 @@ const session: AnalysisChatSession = {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("chat HTTP and stream errors preserve the messages and outcomes used by the UI", async () => {
+  const cases = [
+    { message: "analysis chat turn limit reached", expected: analysisChatTurnLimitMessage, status: 429, outcome: "rejected" },
+    { message: "analysis chat active turn limit reached", expected: analysisChatActiveTurnLimitMessage, status: 429, outcome: "rejected" },
+    { message: "analysis chat rate limit reached", expected: analysisChatRateLimitMessage, status: 429, outcome: "rejected" },
+    { message: "analysis chat idempotency key conflict", expected: analysisChatIdempotencyConflictMessage, status: 409, outcome: "rejected" },
+    { message: "analysis chat request outcome unknown", expected: analysisChatRequestOutcomeUnknownMessage, status: 409, outcome: "unknown" },
+    { message: "analysis chat request is pending", expected: analysisChatRequestPendingMessage, status: 409, outcome: "pending" },
+    { message: "analysis chat session is busy", expected: analysisChatSessionBusyMessage, status: 409, outcome: "pending" },
+    { message: "analysis chat provider request failed", expected: analysisChatProviderFailureMessage, status: 502, outcome: "failed" },
+  ];
+  for (const transport of ["http", "stream"]) {
+    for (const entry of cases) {
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls++;
+        if (transport === "http") {
+          return new Response(`${entry.message}\n`, {
+            status: entry.status,
+            headers: { "Content-Type": "text/plain", "X-Analysis-Chat-Outcome": entry.outcome },
+          });
+        }
+        return new Response(`event: error\ndata: ${JSON.stringify(entry)}\n\n`, {
+          status: 200, headers: { "Content-Type": "text/event-stream" },
+        });
+      };
+      await assert.rejects(
+        () => transport === "http"
+          ? sendAnalysisChatMessage(session.id, "question", "request-1")
+          : streamAnalysisChatMessage(session.id, "question", "request-1", () => {}),
+        (error: unknown) => {
+          assert.ok(error instanceof AnalysisChatAPIError);
+          assert.equal(error.status, entry.status);
+          assert.equal(error.message, entry.expected);
+          assert.equal(error.outcome, entry.outcome);
+          assert.equal(isAmbiguousAnalysisChatFailure(error), false);
+          if (error.message === analysisChatTurnLimitMessage) {
+            const exhausted = markAnalysisChatTurnLimitReached(session);
+            assert.equal(analysisChatTurnLimitReached(exhausted, false, false), true);
+          }
+          return true;
+        },
+      );
+      assert.equal(calls, 1, `${transport}: ${entry.message} must not be blindly retried`);
+    }
+  }
+});
+
+test("a session admission limit reaches the client as a rejected capacity error", async () => {
+  globalThis.fetch = async () => new Response("analysis chat session limit reached\n", {
+    status: 429, headers: { "X-Analysis-Chat-Outcome": "rejected" },
+  });
+  await assert.rejects(() => createAnalysisChatSession(analysis, "request-1"), (error: unknown) => {
+    assert.ok(error instanceof AnalysisChatAPIError);
+    assert.equal(error.status, 429);
+    assert.equal(error.message, "analysis chat session limit reached");
+    assert.equal(error.outcome, "rejected");
+    assert.equal(isAmbiguousAnalysisChatFailure(error), false);
+    return true;
+  });
 });
 
 test("reload and remount restore the latest server session", async () => {

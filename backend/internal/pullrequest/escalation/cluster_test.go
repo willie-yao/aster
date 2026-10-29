@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,6 +180,21 @@ func TestClusterResolveReportsAMissingIndexAsUnavailable(t *testing.T) {
 	_, err := f.resolver(t).Resolve(context.Background(), f.ref())
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+}
+
+func TestClusterResolveRefusesUnreadableFinishedMetadata(t *testing.T) {
+	fixture := newClusterFixture(t)
+	fixture.write(t)
+	resolver := fixture.resolver(t)
+	resolver.Backend = finishedErrorBackend{Backend: resolver.Backend}
+
+	resolved, err := resolver.Resolve(t.Context(), fixture.ref())
+	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "build metadata unavailable") {
+		t.Fatalf("err = %v, want unavailable build metadata", err)
+	}
+	if resolved.Request.Build.Result != "" {
+		t.Fatalf("unavailable build = %+v", resolved.Request.Build)
 	}
 }
 

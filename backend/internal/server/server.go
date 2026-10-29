@@ -602,6 +602,14 @@ func writeActionError(w http.ResponseWriter, id, login string, err error) {
 		http.Error(w, "GitHub action outcome is unknown", http.StatusConflict)
 		return
 	}
+	if errors.Is(err, actions.ErrRequestLimit) {
+		http.Error(w, actions.ErrRequestLimit.Error(), http.StatusTooManyRequests)
+		return
+	}
+	if errors.Is(err, actions.ErrRequestStateConflict) {
+		http.Error(w, actions.ErrRequestStateConflict.Error(), http.StatusConflict)
+		return
+	}
 	switch code {
 	case actions.ReasonAlreadyPresent, actions.ReasonRecovered, actions.ReasonObserving, actions.ReasonVerifiedFixed,
 		actions.ReasonEvidenceUnavailable, actions.ReasonSourceVerificationInconclusive:
