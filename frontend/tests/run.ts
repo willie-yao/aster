@@ -39,6 +39,7 @@ import "./detailReadability.test.js";
 import "./dashboardOverview.test.js";
 import "./patternBuildCount.test.js";
 import "./attentionGroups.test.js";
+import "./dashboardWire.test.js";
 import "./pullRequests.test.js";
 import "./pullRequestEscalation.test.js";
 import "./sharedFailures.test.js";

@@ -1,13 +1,15 @@
-import { createServer, type ViteDevServer } from "vite";
+import { createServer, type Plugin, type ViteDevServer } from "vite";
 
 export async function withSSR<T>(
   load: (vite: Pick<ViteDevServer, "ssrLoadModule">) => Promise<T>,
+  plugins: Plugin[] = [],
 ): Promise<T> {
   const vite = await createServer({
     root: process.cwd(),
     server: { middlewareMode: true },
     appType: "custom",
     logLevel: "silent",
+    plugins,
     ssr: { noExternal: [/^@mui\//, /^react-transition-group/] },
   });
   try {

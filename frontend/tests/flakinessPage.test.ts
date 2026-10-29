@@ -175,6 +175,7 @@ test("nullable production collections normalize before page rendering", () => {
     most_flaky: null,
     persistent_failures: null,
     recently_broken: null,
+    low_pass_rate: null,
     build_failures: null,
     recurring_patterns: null,
   });
@@ -182,6 +183,7 @@ test("nullable production collections normalize before page rendering", () => {
   assert.deepEqual(report.most_flaky, []);
   assert.deepEqual(report.persistent_failures, []);
   assert.deepEqual(report.recently_broken, []);
+  assert.deepEqual(report.low_pass_rate, []);
   assert.deepEqual(report.build_failures, []);
   assert.deepEqual(report.recurring_patterns, []);
 });

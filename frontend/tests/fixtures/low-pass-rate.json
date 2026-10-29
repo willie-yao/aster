@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-08-17T10:00:00Z",
+  "most_flaky": null,
+  "persistent_failures": null,
+  "recently_broken": null,
+  "low_pass_rate": [
+    {
+      "test_name": "TestA",
+      "job_name": "job",
+      "job_id": "job",
+      "total_runs": 10,
+      "failures": 1,
+      "passes": 9,
+      "flip_rate": 0,
+      "fail_rate": 0.1,
+      "consecutive_failures": 0,
+      "classification": "one-off",
+      "window_runs": 6,
+      "pass_rate": 0.5
+    }
+  ],
+  "build_failures": [],
+  "pattern_refresh": {
+    "current": 0,
+    "retained": 0,
+    "failed": 0,
+    "unavailable": 0,
+    "not_applicable": 0
+  }
+}

@@ -1,4 +1,5 @@
 import { testRunPath } from "./routes.js";
+import type { JobSummary } from "../types/dashboard";
 import type {
   AttributionEvidence,
   AttributionVerdict,
@@ -22,6 +23,14 @@ const stateFilters: PullRequestStateFilter[] = [
 // Display state of one check. Derived rather than stored so a build that has
 // not finished is never presented as a pass.
 export type CheckState = "FAILING" | "RUNNING" | "PASSING";
+
+export function isPublishedPresubmitJob(
+  jobID: string,
+  includePresubmits: boolean,
+  jobs: JobSummary[] | undefined,
+): boolean {
+  return includePresubmits && (jobs?.some((job) => job.job_id === jobID) ?? false);
+}
 
 export function pullRequestStateFromParam(raw: string | null): PullRequestStateFilter {
   const candidate = (raw ?? "").toUpperCase();

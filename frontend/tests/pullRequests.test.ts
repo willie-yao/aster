@@ -12,6 +12,7 @@ import {
   checkStatusLabel,
   checkSummaryLine,
   filterPullRequests,
+  isPublishedPresubmitJob,
   orderPullRequests,
   pullRequestStateCounts,
   pullRequestStateFromParam,
@@ -30,6 +31,7 @@ import type {
   PullRequestFailure,
   PullRequestSummary,
 } from "../src/types/pullRequests.js";
+import type { JobSummary } from "../src/types/dashboard.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -249,14 +251,13 @@ test("pull request pages reuse the shared loading, error, and detail chrome", ()
 });
 
 test("presubmit job links are gated on presubmits being published as jobs", () => {
-  const detail = source("src/pages/PullRequestDetailPage.tsx");
-
-  // Without source.include_presubmits there is no job detail file for a
-  // presubmit, so the job name must render as plain text instead of a dead link.
-  assert.match(detail, /manifest\.source\?\.include_presubmits \?\? false/);
-  assert.match(detail, /if \(!linkToJob\) \{/);
-  assert.match(detail, /linkToJob=\{linkToJob\}/);
-  assert.equal(detail.match(/to=\{jobPath\(check\.job_id\)\}/g)?.length, 1);
+  const id = "example/project/pull-e2e";
+  const jobs = [{ job_id: id }] as JobSummary[];
+  assert.equal(isPublishedPresubmitJob(id, true, jobs), true);
+  assert.equal(isPublishedPresubmitJob(id, false, jobs), false);
+  assert.equal(isPublishedPresubmitJob("unpublished", true, jobs), false);
+  assert.equal(isPublishedPresubmitJob(id, true, []), false);
+  assert.equal(isPublishedPresubmitJob(id, true, undefined), false);
 });
 
 test("failing counts name their units instead of an ambiguous ratio", () => {

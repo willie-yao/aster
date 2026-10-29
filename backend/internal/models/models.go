@@ -835,7 +835,7 @@ type PullRequestCheck struct {
 	Passed   bool      `json:"passed"`
 	Result   string    `json:"result,omitempty"`
 	Started  time.Time `json:"started"`
-	Finished time.Time `json:"finished,omitempty"`
+	Finished time.Time `json:"finished,omitzero"`
 	// TestedSHA is the pull request head this build checked out. Stale reports
 	// that it differs from the pull request's current head, so the result
 	// describes an older revision.
@@ -901,7 +901,7 @@ type SharedFailureMember struct {
 	BuildID string `json:"build_id"`
 	// Started is the member build's start time. Finished is zero while it runs.
 	Started  time.Time `json:"started"`
-	Finished time.Time `json:"finished,omitempty"`
+	Finished time.Time `json:"finished,omitzero"`
 	WebURL   string    `json:"web_url,omitempty"`
 	// Stale marks a build that tested an older head than the pull request's
 	// current one, so it cannot serve as evidence.

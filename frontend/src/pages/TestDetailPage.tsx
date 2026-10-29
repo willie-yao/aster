@@ -511,10 +511,6 @@ export function TestDetailPage() {
   const controllerLogEntries = Object.entries(
     selectedRun?.controller_log_urls ?? {},
   );
-  const controllerLogsFallback =
-    selectedRun?.web_url && controllerLogEntries.length === 0
-      ? `${selectedRun.web_url.replace(/\/+$/u, "")}/artifacts/clusters/bootstrap/logs/`
-      : null;
   const evidenceLinkCount = [
     selectedTestCase?.failure_location_url,
     selectedRun?.web_url,
@@ -523,7 +519,6 @@ export function TestDetailPage() {
     clusterArtifacts?.bootstrap_resources_url,
     ...Object.values(clusterArtifacts?.pod_log_dirs ?? {}),
     ...controllerLogEntries.map(([, url]) => url),
-    controllerLogsFallback,
     ...((clusterArtifacts?.machines ?? []).flatMap((machine) =>
       Object.values(machine.logs),
     )),
@@ -606,16 +601,6 @@ export function TestDetailPage() {
                 <Dns sx={{ fontSize: 15 }} /> {controller} <OpenInNew sx={{ fontSize: 14 }} />
               </Link>
             ),
-          )}
-          {controllerLogsFallback && (
-            <Link
-              href={controllerLogsFallback}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={evidenceLinkSx}
-            >
-              <Dns sx={{ fontSize: 15 }} /> Controller logs <OpenInNew sx={{ fontSize: 14 }} />
-            </Link>
           )}
         </Box>
         {clusterArtifacts?.machines && clusterArtifacts.machines.length > 0 && (

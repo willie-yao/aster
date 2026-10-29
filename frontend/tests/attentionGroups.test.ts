@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
+import { normalizeFlakinessReport, type FlakinessReportWire } from "../src/lib/flakinessReport.js";
 import {
   attentionGroupNoun,
   attentionGroups,
@@ -44,7 +47,6 @@ function manifest(threshold?: number): Manifest {
   return {
     id: "example",
     name: "Example",
-    source: {},
     testgrid: { dashboard: "sig-foo" },
     storage: { provider: "gcs", bucket: "logs" },
     branding: {
@@ -141,6 +143,31 @@ test("pass-rate group is absent unless the report carries the section", () => {
   const groups = attentionGroups(report({ low_pass_rate: [lowPassRateEntry("TestOnce", 0.9)] }), 1);
   assert.deepEqual(labels(groups), ["Below 100% pass rate"]);
   assert.deepEqual(groups[0].items.map((item) => item.test_name), ["TestOnce"]);
+});
+
+test("the published pass-rate report survives normalization into attention", () => {
+  const wire: FlakinessReportWire = JSON.parse(
+    readFileSync(resolve(process.cwd(), "tests/fixtures/low-pass-rate.json"), "utf8"),
+  );
+  const normalized = normalizeFlakinessReport(wire);
+  const groups = attentionGroups(normalized, 0.8);
+  assert.deepEqual(labels(groups), ["Below 80% pass rate"]);
+  assert.deepEqual(groups[0].items, wire.low_pass_rate);
+  const html = renderAttention(normalized, 0.8);
+  assert.match(html, /Below 80% pass rate/);
+  assert.match(html, /TestA/);
+  assert.match(html, /50% pass rate over 6 runs/);
+
+  for (const empty of [
+    { generated_at: wire.generated_at },
+    { ...wire, low_pass_rate: null },
+    { ...wire, low_pass_rate: [] },
+  ]) {
+    const report = normalizeFlakinessReport(empty);
+    assert.deepEqual(report.low_pass_rate, []);
+    assert.deepEqual(attentionGroups(report, 0.8), []);
+    assert.doesNotMatch(renderAttention(report, 0.8), /Below 80% pass rate/);
+  }
 });
 
 test("pass-rate group label reports the configured cutoff", () => {
