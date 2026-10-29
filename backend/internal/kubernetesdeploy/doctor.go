@@ -358,10 +358,17 @@ func inlineCredentialFields(values kubernetesDoctorValues) []string {
 	if strings.TrimSpace(values.Server.Actions.Proxy.BotToken) != "" || strings.TrimSpace(values.Server.Actions.Proxy.Secret) != "" {
 		inline = append(inline, "server.actions.proxy credential")
 	}
-	for _, env := range values.Server.ExtraEnv {
-		name := strings.ToUpper(strings.TrimSpace(env.Name))
-		if strings.TrimSpace(env.Value) != "" && (strings.Contains(name, "TOKEN") || strings.Contains(name, "SECRET") || strings.Contains(name, "PASSWORD") || strings.Contains(name, "KEY")) {
-			inline = append(inline, "server.extraEnv."+env.Name)
+	for path, entries := range map[string][]doctorEnvValues{
+		"fetcher.extraEnv": values.Fetcher.ExtraEnv,
+		"server.extraEnv":  values.Server.ExtraEnv,
+	} {
+		for _, env := range entries {
+			name := strings.ToUpper(strings.TrimSpace(env.Name))
+			credentialName := strings.Contains(name, "TOKEN") || strings.Contains(name, "SECRET") ||
+				strings.Contains(name, "PASSWORD") || strings.Contains(name, "KEY")
+			if strings.TrimSpace(env.Value) != "" && credentialName {
+				inline = append(inline, path+"."+env.Name)
+			}
 		}
 	}
 	sort.Strings(inline)
@@ -2649,6 +2656,11 @@ type doctorFixRuntimeValues struct {
 	} `yaml:"caBundle"`
 }
 
+type doctorEnvValues struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
 type kubernetesDoctorValues struct {
 	Global struct {
 		ImageTag string `yaml:"imageTag"`
@@ -2669,11 +2681,11 @@ type kubernetesDoctorValues struct {
 	AgentSandbox struct {
 		FixRuntime doctorFixRuntimeValues `yaml:"fixRuntime"`
 	} `yaml:"agentSandbox"`
+	Fetcher struct {
+		ExtraEnv []doctorEnvValues `yaml:"extraEnv"`
+	} `yaml:"fetcher"`
 	Server struct {
-		ExtraEnv []struct {
-			Name  string `yaml:"name"`
-			Value string `yaml:"value"`
-		} `yaml:"extraEnv"`
+		ExtraEnv []doctorEnvValues `yaml:"extraEnv"`
 		Security struct {
 			HSTS struct {
 				Enabled *bool `yaml:"enabled"`

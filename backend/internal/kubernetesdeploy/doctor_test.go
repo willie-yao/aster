@@ -16,11 +16,13 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/onboard"
+	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -189,6 +191,113 @@ func TestKubernetesDoctorValidBaselineAndReadOnlyCommands(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "kubernetes_doctor=pass") || !strings.Contains(output.String(), "unverified_assumptions=") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestInlineCredentialFieldsExtraEnv(t *testing.T) {
+	tests := []struct {
+		name, envName, fields string
+		wantInline            bool
+	}{
+		{"token", "AI_TOKEN", "      value: placeholder-for-test-only\n", true},
+		{"lowercase secret", "client_secret", "      value: placeholder-for-test-only\n", true},
+		{"mixed case password", "Email_Password", "      value: placeholder-for-test-only\n", true},
+		{"padded lowercase key", "  private_key  ", "      value: placeholder-for-test-only\n", true},
+		{"non-secret", "ASTER_APP_ID", "      value: fixture-app\n", false},
+		{"empty", "AI_TOKEN", "      value: \"\"\n", false},
+		{"whitespace", "AI_TOKEN", "      value: \"  \"\n", false},
+		{"secret reference", "AI_TOKEN", "      valueFrom:\n        secretKeyRef:\n          name: provider-credentials\n          key: ai-token\n", false},
+	}
+	for _, component := range []string{"fetcher", "server"} {
+		t.Run(component, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					raw := fmt.Sprintf("%s:\n  extraEnv:\n    - name: %q\n%s", component, tt.envName, tt.fields)
+					var values kubernetesDoctorValues
+					if err := yaml.Unmarshal([]byte(raw), &values); err != nil {
+						t.Fatal(err)
+					}
+					var want []string
+					if tt.wantInline {
+						want = []string{component + ".extraEnv." + tt.envName}
+					}
+					if got := inlineCredentialFields(values); !slices.Equal(got, want) {
+						t.Fatalf("inline credential paths = %q, want %q", got, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestInlineCredentialFieldsSortedPaths(t *testing.T) {
+	const raw = `ai:
+  token: placeholder-for-test-only
+  githubReadToken: placeholder-for-test-only
+server:
+  extraEnv:
+    - name: SMTP_PASSWORD
+      value: placeholder-for-test-only
+    - name: AI_TOKEN
+      value: placeholder-for-test-only
+  actions:
+    oauth:
+      clientSecret: placeholder-for-test-only
+      sessionKey: placeholder-for-test-only
+      botToken: placeholder-for-test-only
+    proxy:
+      botToken: placeholder-for-test-only
+      secret: placeholder-for-test-only
+fetcher:
+  extraEnv:
+    - name: SMTP_PASSWORD
+      value: placeholder-for-test-only
+    - name: AI_TOKEN
+      value: placeholder-for-test-only
+`
+	var values kubernetesDoctorValues
+	if err := yaml.Unmarshal([]byte(raw), &values); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"ai.githubReadToken",
+		"ai.token",
+		"fetcher.extraEnv.AI_TOKEN",
+		"fetcher.extraEnv.SMTP_PASSWORD",
+		"server.actions.oauth.botToken",
+		"server.actions.oauth.clientSecret",
+		"server.actions.oauth.sessionKey",
+		"server.actions.proxy credential",
+		"server.extraEnv.AI_TOKEN",
+		"server.extraEnv.SMTP_PASSWORD",
+	}
+	if got := inlineCredentialFields(values); !slices.Equal(got, want) {
+		t.Fatalf("inline credential paths = %q, want %q", got, want)
+	}
+}
+
+func TestKubernetesDoctorRejectsInlineExtraEnvCredentials(t *testing.T) {
+	for _, component := range []string{"fetcher", "server"} {
+		t.Run(component, func(t *testing.T) {
+			const placeholder = "placeholder-for-test-only"
+			env := "  extraEnv:\n    - name: AI_TOKEN\n      value: " + placeholder + "\n"
+			values := baselineValues(false)
+			if component == "server" {
+				values = strings.Replace(values, "server:\n", "server:\n"+env, 1)
+			} else {
+				values += component + ":\n" + env
+			}
+			dir := writeDoctorBundle(t, values)
+			report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), baselineCluster(false))
+			assertDoctorCheck(t, report, "credential references", KubernetesDoctorFail)
+			var output bytes.Buffer
+			if err := WriteKubernetesDoctorReport(&output, report); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), component+".extraEnv.AI_TOKEN") || strings.Contains(output.String(), placeholder) {
+				t.Fatalf("output must identify only the credential path: %q", output.String())
+			}
+		})
 	}
 }
 
