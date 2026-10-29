@@ -6,16 +6,11 @@ import Collapse from "@mui/material/Collapse";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import Accordion from "@mui/material/Accordion";
-import AccordionDetails from "@mui/material/AccordionDetails";
-import AccordionSummary from "@mui/material/AccordionSummary";
 import { useTheme } from "@mui/material/styles";
 import {
   Assignment,
   AutoAwesome,
   ChevronRight,
-  Cloud,
-  Dns,
   Inventory2,
   OpenInNew,
   Place,
@@ -507,21 +502,10 @@ export function TestDetailPage() {
   const stackLineCount = selectedTestCase?.failure_body
     ? selectedTestCase.failure_body.split("\n").length
     : 0;
-  const clusterArtifacts = selectedTestCase?.cluster_artifacts;
-  const controllerLogEntries = Object.entries(
-    selectedRun?.controller_log_urls ?? {},
-  );
   const evidenceLinkCount = [
     selectedTestCase?.failure_location_url,
     selectedRun?.web_url,
     ...(selectedRun?.junit_urls ?? []),
-    clusterArtifacts?.provider_activity_log,
-    clusterArtifacts?.bootstrap_resources_url,
-    ...Object.values(clusterArtifacts?.pod_log_dirs ?? {}),
-    ...controllerLogEntries.map(([, url]) => url),
-    ...((clusterArtifacts?.machines ?? []).flatMap((machine) =>
-      Object.values(machine.logs),
-    )),
   ].filter(Boolean).length;
 
   const evidenceSection =
@@ -569,87 +553,7 @@ export function TestDetailPage() {
               <Assignment sx={{ fontSize: 15 }} /> JUnit artifact {index + 1} <OpenInNew sx={{ fontSize: 14 }} />
             </Link>
           ))}
-          {clusterArtifacts?.provider_activity_log && (
-            <Link
-              href={clusterArtifacts.provider_activity_log}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={evidenceLinkSx}
-            >
-              <Cloud sx={{ fontSize: 15 }} /> Provider activity <OpenInNew sx={{ fontSize: 14 }} />
-            </Link>
-          )}
-          {clusterArtifacts?.bootstrap_resources_url && (
-            <Link
-              href={clusterArtifacts.bootstrap_resources_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              sx={evidenceLinkSx}
-            >
-              <Assignment sx={{ fontSize: 15 }} /> Cluster resources <OpenInNew sx={{ fontSize: 14 }} />
-            </Link>
-          )}
-          {Object.entries(clusterArtifacts?.pod_log_dirs ?? {}).map(
-            ([directory, url]) => (
-              <Link key={directory} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
-                <Inventory2 sx={{ fontSize: 15 }} /> {directory} <OpenInNew sx={{ fontSize: 14 }} />
-              </Link>
-            ),
-          )}
-          {controllerLogEntries.map(([controller, url]) => (
-              <Link key={controller} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
-                <Dns sx={{ fontSize: 15 }} /> {controller} <OpenInNew sx={{ fontSize: 14 }} />
-              </Link>
-            ),
-          )}
         </Box>
-        {clusterArtifacts?.machines && clusterArtifacts.machines.length > 0 && (
-          <Accordion
-            disableGutters
-            elevation={0}
-            square
-            sx={{
-              bgcolor: "transparent",
-              borderTop: "1px solid",
-              borderColor: "divider",
-              "&:before": { display: "none" },
-            }}
-          >
-            <AccordionSummary
-              expandIcon={<ChevronRight sx={{ fontSize: 18 }} />}
-              sx={{
-                minHeight: 44,
-                px: 1.5,
-                "& .MuiAccordionSummary-content": { my: 0.75 },
-                "& .MuiAccordionSummary-expandIconWrapper.Mui-expanded": {
-                  transform: "rotate(90deg)",
-                },
-              }}
-            >
-              <Typography sx={{ ...overviewTypography.secondaryBody, fontWeight: 650 }}>
-                Machine logs ({clusterArtifacts.machines.length} machines)
-              </Typography>
-            </AccordionSummary>
-            <AccordionDetails sx={{ px: 1.5, pt: 0 }}>
-              <Stack spacing={1}>
-                {clusterArtifacts.machines.map((machine) => (
-                  <Box key={machine.name}>
-                    <Typography component="code" color="textSecondary" sx={overviewTypography.data}>
-                      {machine.name}
-                    </Typography>
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, mt: 0.5 }}>
-                      {Object.entries(machine.logs).map(([logType, url]) => (
-                        <Link key={logType} href={url} target="_blank" rel="noopener noreferrer" sx={evidenceLinkSx}>
-                          {logType}
-                        </Link>
-                      ))}
-                    </Box>
-                  </Box>
-                ))}
-              </Stack>
-            </AccordionDetails>
-          </Accordion>
-        )}
       </Box>
     ) : null;
 

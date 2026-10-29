@@ -51,7 +51,6 @@ export interface TestCase {
   failure_location?: string;
   failure_location_url?: string;
   junit_file?: string;
-  cluster_artifacts?: ClusterArtifacts;
   ai_summary?: AISummary;
   ai_analysis?: AIAnalysis;
 }
@@ -120,19 +119,6 @@ export interface AIAnalysis {
   budget_exhausted?: boolean;
 }
 
-export interface ClusterArtifacts {
-  cluster_name: string;
-  provider_activity_log?: string;
-  machines?: MachineArtifacts[];
-  pod_log_dirs?: Record<string, string>;
-  bootstrap_resources_url?: string;
-}
-
-export interface MachineArtifacts {
-  name: string;
-  logs: Record<string, string>;
-}
-
 export interface BuildResult {
   build_id: string;
   job_name: string;
@@ -155,7 +141,6 @@ export interface BuildResult {
   tests_passed: number;
   tests_failed: number;
   tests_skipped: number;
-  controller_log_urls?: Record<string, string>;
 }
 
 export interface TestFlakiness {

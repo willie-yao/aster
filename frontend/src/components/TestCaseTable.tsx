@@ -9,12 +9,8 @@ import ButtonBase from "@mui/material/ButtonBase";
 import Link from "@mui/material/Link";
 import Typography from "@mui/material/Typography";
 import {
-  Assignment,
   AutoAwesome,
   ChevronRight,
-  Cloud,
-  Dns,
-  Inventory2,
   Place,
 } from "@mui/icons-material";
 import { Link as RouterLink } from "react-router-dom";
@@ -86,16 +82,6 @@ export function EvidenceSourceLink({
   );
 }
 
-const externalLinkSx = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 0.5,
-  color: "primary.main",
-  fontSize: "0.75rem",
-  textDecoration: "none",
-  "&:hover": { textDecoration: "underline" },
-};
-
 export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }: TestCaseTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
@@ -157,7 +143,6 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
             : null;
           const aiFileCtx = {
             buildLogUrl,
-            clusterArtifacts: tc.cluster_artifacts,
             webUrl,
             fileLinks: tc.ai_analysis?.file_links,
           };
@@ -524,128 +509,6 @@ export function TestCaseTable({ testCases, jobID, buildId, buildLogUrl, webUrl }
                           <Typography variant="caption" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
                             {tc.failure_location}
                           </Typography>
-                        )}
-                      </Box>
-                    )}
-
-                    {tc.cluster_artifacts && (
-                      <Box
-                        sx={{
-                          pt: 1.5,
-                          borderTop: "1px solid",
-                          borderColor: "divider",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 1,
-                        }}
-                      >
-                        <Typography variant="label" color="textPrimary" sx={{ fontWeight: 700 }}>
-                          Debug artifacts: {tc.cluster_artifacts.cluster_name}
-                        </Typography>
-
-                        <Box sx={{ display: "flex", flexWrap: "wrap", columnGap: 2, rowGap: 0.75 }}>
-                          {tc.cluster_artifacts.provider_activity_log && (
-                            <Link
-                              href={tc.cluster_artifacts.provider_activity_log}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              sx={externalLinkSx}
-                            >
-                              <Cloud sx={{ fontSize: 16 }} /> Provider activity log
-                            </Link>
-                          )}
-                          {tc.cluster_artifacts.bootstrap_resources_url && (
-                            <Link
-                              href={tc.cluster_artifacts.bootstrap_resources_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              sx={externalLinkSx}
-                            >
-                              <Assignment sx={{ fontSize: 16 }} /> Cluster resources
-                            </Link>
-                          )}
-                          {tc.cluster_artifacts.pod_log_dirs &&
-                            Object.entries(tc.cluster_artifacts.pod_log_dirs).map(([dir, url]) => (
-                              <Link
-                                key={dir}
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                sx={externalLinkSx}
-                              >
-                                <Inventory2 sx={{ fontSize: 16 }} /> {dir}
-                              </Link>
-                            ))}
-                          {webUrl && (
-                            <Link
-                              href={`${webUrl}artifacts/clusters/bootstrap/logs/`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              sx={externalLinkSx}
-                            >
-                              <Dns sx={{ fontSize: 16 }} /> Controller logs
-                            </Link>
-                          )}
-                        </Box>
-
-                        {tc.cluster_artifacts.machines && tc.cluster_artifacts.machines.length > 0 && (
-                          <Accordion
-                            disableGutters
-                            elevation={0}
-                            sx={{
-                              bgcolor: "transparent",
-                              boxShadow: "none",
-                              "&:before": { display: "none" },
-                            }}
-                          >
-                            <AccordionSummary
-                              expandIcon={<ChevronRight sx={{ fontSize: 16 }} />}
-                              sx={{
-                                minHeight: 32,
-                                px: 0,
-                                "& .MuiAccordionSummary-content": { my: 0.5 },
-                                "& .MuiAccordionSummary-expandIconWrapper.Mui-expanded": {
-                                  transform: "rotate(90deg)",
-                                },
-                              }}
-                            >
-                              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-                                <Dns sx={{ fontSize: 16, color: "text.secondary" }} />
-                                <Typography variant="label" color="textSecondary">
-                                  Machine logs ({tc.cluster_artifacts.machines.length} machines)
-                                </Typography>
-                              </Box>
-                            </AccordionSummary>
-                            <AccordionDetails sx={{ pt: 0, px: 0 }}>
-                              <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                                {tc.cluster_artifacts.machines.map((m) => (
-                                  <Box key={m.name} sx={{ pl: 2 }}>
-                                    <Typography variant="caption" sx={{ fontFamily: "monospace", color: "text.secondary" }}>
-                                      {m.name}
-                                    </Typography>
-                                    <Box sx={{ mt: 0.5, display: "flex", flexWrap: "wrap", columnGap: 1.5, rowGap: 0.5 }}>
-                                      {Object.entries(m.logs).map(([logType, url]) => (
-                                        <Link
-                                          key={logType}
-                                          href={url}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          onClick={(e) => e.stopPropagation()}
-                                          sx={{ ...externalLinkSx, fontSize: "0.6875rem" }}
-                                        >
-                                          {logType}
-                                        </Link>
-                                      ))}
-                                    </Box>
-                                  </Box>
-                                ))}
-                              </Box>
-                            </AccordionDetails>
-                          </Accordion>
                         )}
                       </Box>
                     )}

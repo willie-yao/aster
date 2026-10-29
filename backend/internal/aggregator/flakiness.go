@@ -24,7 +24,6 @@ type testOutcome struct {
 	message string
 	buildID string
 	started time.Time
-	dur     float64
 }
 
 func outcomesForTest(testName string, runs []models.BuildResult) []testOutcome {
@@ -43,7 +42,6 @@ func outcomesForTest(testName string, runs []models.BuildResult) []testOutcome {
 					message: tc.FailureMessage,
 					buildID: run.BuildID,
 					started: run.Started,
-					dur:     tc.DurationSeconds,
 				})
 			}
 			break
@@ -72,7 +70,6 @@ func collectTestOutcomes(runs []models.BuildResult) map[string][]testOutcome {
 				message: tc.FailureMessage,
 				buildID: run.BuildID,
 				started: run.Started,
-				dur:     tc.DurationSeconds,
 			})
 		}
 	}
@@ -157,14 +154,6 @@ func computeTestFlakiness(testName, jobID, jobName string, outcomes []testOutcom
 		return tf.ErrorPatterns[i].ErrorHash < tf.ErrorPatterns[j].ErrorHash
 	})
 
-	for _, outcome := range outcomes {
-		tf.DurationHistory = append(tf.DurationHistory, models.DurationPoint{
-			BuildID:   outcome.buildID,
-			Timestamp: outcome.started.UTC().Format(time.RFC3339),
-			Duration:  outcome.dur,
-			Passed:    outcome.passed,
-		})
-	}
 	return tf
 }
 

@@ -15,7 +15,6 @@ export function testRunFileContext(
 ): FileToUrlContext {
   return {
     buildLogUrl: run?.build_log_url,
-    clusterArtifacts: testCase.cluster_artifacts,
     webUrl: run?.web_url,
     fileLinks: testCase.ai_analysis?.file_links,
   };

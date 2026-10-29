@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
@@ -136,6 +137,89 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 	if len(got.Runs) != len(detail.Runs) {
 		t.Errorf("len(Runs) = %d, want %d", len(got.Runs), len(detail.Runs))
+	}
+}
+
+func TestWriteAllPreservesRunDurationsWithoutDuplicateHistory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	job := models.ProwJob{Name: "duration-job", JobID: "duration-job", JobType: models.JobTypePeriodic}
+	runs := make([]models.BuildResult, 3)
+	for i := range runs {
+		passed := i == 1
+		status, result := "failed", "FAILURE"
+		if passed {
+			status, result = "passed", "SUCCESS"
+		}
+		duration := float64(3-i) * 100
+		started := now.Add(-time.Duration(i+1) * time.Hour)
+		runs[i] = models.BuildResult{
+			BuildInfo: models.BuildInfo{
+				BuildID:         []string{"3", "2", "1"}[i],
+				JobName:         job.Name,
+				Started:         started,
+				Finished:        started.Add(time.Duration(duration) * time.Second),
+				Passed:          passed,
+				Result:          result,
+				DurationSeconds: duration,
+			},
+			TestCases: []models.TestCase{{
+				Name: "TestDuration", Status: status, DurationSeconds: duration / 10,
+			}},
+		}
+	}
+	summary := aggregator.ComputeJobSummary(job, runs)
+	detail := models.JobDetail{Name: job.Name, JobID: job.JobID, Runs: runs}
+	report := aggregator.ComputeFlakinessReport(
+		map[string][]models.BuildResult{job.JobID: runs},
+		[]models.ProwJob{job},
+		now,
+		aggregator.Settings{},
+	)
+	if err := WriteAll(
+		dir,
+		sampleConfig(),
+		models.Dashboard{GeneratedAt: now, Jobs: []models.JobSummary{summary}},
+		[]models.JobDetail{detail},
+		report,
+		models.SearchIndex{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "flakiness.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"duration_history"`) {
+		t.Fatal("flakiness.json contains duplicate duration_history")
+	}
+	var published models.FlakinessReport
+	readJSON(t, filepath.Join(dir, "flakiness.json"), &published)
+	if len(published.MostFlaky) != 1 {
+		t.Fatalf("most_flaky = %d entries, want 1", len(published.MostFlaky))
+	}
+	flaky := published.MostFlaky[0]
+	if flaky.TotalRuns != 3 || flaky.Failures != 2 || flaky.Passes != 1 ||
+		flaky.FlipRate != 1 || flaky.Classification != models.ClassificationFlaky {
+		t.Fatalf("flakiness = %+v, want 3 runs, 2 failures, 1 pass and flip rate 1", flaky)
+	}
+	var dashboard models.Dashboard
+	readJSON(t, filepath.Join(dir, "dashboard.json"), &dashboard)
+	if len(dashboard.Jobs) != 1 || len(dashboard.Jobs[0].RecentRuns) != len(runs) {
+		t.Fatalf("published summary = %+v", dashboard.Jobs)
+	}
+	for i, run := range dashboard.Jobs[0].RecentRuns {
+		if run.BuildID != runs[i].BuildID || run.DurationSeconds != float64(3-i)*100 {
+			t.Errorf("recent_runs[%d] = %+v, want original build order and duration", i, run)
+		}
+	}
+	if dashboard.Jobs[0].LastRun == nil || dashboard.Jobs[0].LastRun.DurationSeconds != 300 {
+		t.Errorf("last_run = %+v, want duration 300", dashboard.Jobs[0].LastRun)
+	}
+	var written models.JobDetail
+	readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(job.JobID)), &written)
+	if !reflect.DeepEqual(written.Runs, runs) {
+		t.Fatalf("published runs = %+v, want original runs and test durations", written.Runs)
 	}
 }
 

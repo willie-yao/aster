@@ -618,7 +618,6 @@ type TestFlakiness struct {
 	LastFailure         *TestFailureInfo      `json:"last_failure,omitempty"`
 	FirstFailedAt       string                `json:"first_failed_at,omitempty"`
 	ErrorPatterns       []ErrorPattern        `json:"error_patterns,omitempty"`
-	DurationHistory     []DurationPoint       `json:"duration_history,omitempty"`
 }
 
 // LowPassRateEntry is a test selected by the configured pass-rate rule. It
@@ -646,14 +645,6 @@ type ErrorPattern struct {
 	ErrorHash         string `json:"error_hash"`
 	Count             int    `json:"count"`
 	ExampleMessage    string `json:"example_message"`
-}
-
-// DurationPoint is a single data point for duration trend charts.
-type DurationPoint struct {
-	BuildID   string  `json:"build_id"`
-	Timestamp string  `json:"timestamp"`
-	Duration  float64 `json:"duration"`
-	Passed    bool    `json:"passed"`
 }
 
 // SearchEntry represents a searchable job or test case.

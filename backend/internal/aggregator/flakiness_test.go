@@ -134,25 +134,6 @@ func TestComputeTestFlakiness_ErrorPatternGrouping(t *testing.T) {
 	}
 }
 
-func TestComputeTestFlakiness_DurationHistory(t *testing.T) {
-	runs := []models.BuildResult{
-		makeBuild("2", hoursAgo(1), true, []models.TestCase{makeTC("TestF", "passed", 5.5, "")}),
-		makeBuild("1", hoursAgo(2), false, []models.TestCase{makeTC("TestF", "failed", 10.0, "err")}),
-	}
-
-	tf := ComputeTestFlakiness("TestF", "test-job", "test-job", runs, Settings{})
-
-	if len(tf.DurationHistory) != 2 {
-		t.Fatalf("DurationHistory length = %d, want 2", len(tf.DurationHistory))
-	}
-	if tf.DurationHistory[0].BuildID != "2" || tf.DurationHistory[0].Duration != 5.5 || !tf.DurationHistory[0].Passed {
-		t.Errorf("DurationHistory[0] = %+v, unexpected", tf.DurationHistory[0])
-	}
-	if tf.DurationHistory[1].BuildID != "1" || tf.DurationHistory[1].Duration != 10.0 || tf.DurationHistory[1].Passed {
-		t.Errorf("DurationHistory[1] = %+v, unexpected", tf.DurationHistory[1])
-	}
-}
-
 func TestComputeTestFlakiness_LastFailure(t *testing.T) {
 	runs := []models.BuildResult{
 		makeBuild("3", hoursAgo(1), true, []models.TestCase{makeTC("TestG", "passed", 1.0, "")}),

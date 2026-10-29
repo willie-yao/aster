@@ -81,7 +81,6 @@ export function hasInlineTestEvidence(testCase: TestCase): boolean {
     testCase.status === "failed" &&
       (testCase.failure_message ||
         testCase.failure_body ||
-        testCase.cluster_artifacts ||
         testCase.ai_analysis),
   );
 }

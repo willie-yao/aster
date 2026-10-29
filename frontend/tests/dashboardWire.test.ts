@@ -194,49 +194,64 @@ for (const state of ["published", "unpublished", "loading", "disabled"] as const
   });
 }
 
-for (const supplied of [false, true]) {
-  test(`test evidence uses only supplied controller links: ${supplied}`, () => {
-    resetData();
-    const base = "https://artifacts.example.test/build/100";
-    const source = "https://github.com/example/project/blob/abc/test.go#L10";
-    pages.fixture.job = {
-      name: "periodic-example",
-      job_id: "example/periodic-example",
-      job_type: "periodic",
-      repo: "example/project",
-      runs: [{
-        build_id: "100",
-        job_name: "periodic-example",
-        started: "2026-08-17T09:00:00Z",
-        finished: "2026-08-17T09:30:00Z",
-        passed: false,
-        result: "FAILURE",
-        duration_seconds: 1800,
-        commit: "abc",
-        prow_url: `${base}/prow`,
-        web_url: base,
-        build_log_url: `${base}/build-log.txt`,
-        junit_urls: [`${base}/junit.xml`],
-        controller_log_urls: supplied ? { "example-controller": `${base}/controller.log` } : undefined,
-        test_cases: [{
-          name: "TestA",
-          status: "failed",
-          duration_seconds: 30,
-          failure_location_url: source,
-        }],
-        tests_total: 1,
-        tests_passed: 0,
-        tests_failed: 1,
-        tests_skipped: 0,
+test("test evidence preserves published links and controller artifact citations", () => {
+  resetData();
+  const base = "https://artifacts.example.test/build/100";
+  const source = "https://github.com/example/project/blob/abc/test.go#L10";
+  const controllerPath = "artifacts/clusters/management/logs/example-controller.log";
+  pages.fixture.job = {
+    name: "periodic-example",
+    job_id: "example/periodic-example",
+    job_type: "periodic",
+    repo: "example/project",
+    runs: [{
+      build_id: "100",
+      job_name: "periodic-example",
+      started: "2026-08-17T09:00:00Z",
+      finished: "2026-08-17T09:30:00Z",
+      passed: false,
+      result: "FAILURE",
+      duration_seconds: 1800,
+      commit: "abc",
+      prow_url: `${base}/prow`,
+      web_url: base,
+      build_log_url: `${base}/build-log.txt`,
+      junit_urls: [`${base}/junit.xml`],
+      test_cases: [{
+        name: "TestA",
+        status: "failed",
+        duration_seconds: 30,
+        failure_location_url: source,
+        ai_analysis: {
+          generated_at: "2026-08-17T10:00:00Z",
+          root_cause: `Reconciliation failed in \`${controllerPath}\`.`,
+          severity: "High",
+          suggested_fix: "Correct the reconciliation check in `test.go`.",
+          relevant_files: [controllerPath, "test.go"],
+          file_links: { "test.go": source },
+          evidence_citations: [{
+            path: controllerPath,
+            line_start: 10,
+            line_end: 10,
+            quote: "reconciliation failed",
+          }],
+        },
       }],
-    };
-    const html = renderPage(pages.TestDetailPage, "/job/:jobName/test/:testName", "/job/example/test/TestA");
-    for (const url of [base, `${base}/prow`, `${base}/build-log.txt`, `${base}/junit.xml`, source]) {
-      assert.ok(html.includes(`href="${url}"`), url);
-    }
-    assert.equal(html.includes(`href="${base}/controller.log"`), supplied);
-    assert.equal(html.includes("example-controller"), supplied);
-    assert.match(html, supplied ? /4 links/ : /3 links/);
-    assert.doesNotMatch(html, /artifacts\/clusters\/bootstrap\/logs\/|Controller logs/);
-  });
-}
+      tests_total: 1,
+      tests_passed: 0,
+      tests_failed: 1,
+      tests_skipped: 0,
+    }],
+  };
+  const html = renderPage(pages.TestDetailPage, "/job/:jobName/test/:testName", "/job/example/test/TestA");
+  for (const url of [
+    base, `${base}/prow`, `${base}/build-log.txt`, `${base}/junit.xml`, source,
+    `${base}/${controllerPath}`,
+  ]) {
+    assert.ok(html.includes(`href="${url}"`), url);
+  }
+  assert.match(html, /reconciliation failed/);
+  assert.match(html, /1 citation from 1 artifact/);
+  assert.match(html, /3 links/);
+  assert.doesNotMatch(html, /artifacts\/clusters\/bootstrap\/logs\/|Controller logs/);
+});
