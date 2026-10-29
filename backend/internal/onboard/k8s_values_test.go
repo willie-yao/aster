@@ -96,6 +96,7 @@ func TestK8sValuesDocumentsChartFallbacks(t *testing.T) {
 		"defaults from the matching published chart version",
 		"helm show values oci://ghcr.io/willie-yao/charts/aster",
 		"Intentionally longer than the chart default",
+		"discovery, artifact fetching, and AI analysis",
 		"Keep CronJob starts disabled while the chart-default watch worker is active",
 	} {
 		if !strings.Contains(values, want) {

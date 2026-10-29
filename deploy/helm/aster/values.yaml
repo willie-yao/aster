@@ -205,7 +205,8 @@ fetcher:
   reconcileInterval: 1h
   buildsPerJob: 10
   workers: 5
-  # Bounds discovery and artifact fetching. Cron mode also has activeDeadlineSeconds.
+  # Bounds one pass: discovery, artifact fetching, and AI analysis.
+  # Cron mode also has activeDeadlineSeconds.
   timeout: 30m
   # Extra environment variables (e.g. ISSUE_TOKEN for issue recovery,
   # EMAIL_SMTP_PASSWORD). Use Secret references for credentials; inline

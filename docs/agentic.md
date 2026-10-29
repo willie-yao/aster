@@ -119,6 +119,8 @@ This prevents an old build result from bypassing a newer floor or critique versi
 
 Preliminary analyses and safe published analyses rejected by cache quality policy share a three-attempt budget per build and failure key. Once spent, otherwise valid published output is reused without provider calls; it is not treated as an accepted private cache entry. Expired, malformed, missing, or unstamped output, a stale critique contract, and a changed cache generation still require reanalysis. Only citation-verified output accepted into the private cache clears the counter.
 
+When a fetch pass reaches its deadline during individual analysis, Aster waits for workers to stop and checkpoints private analysis state and traces. The pass still fails without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow normal disposition, cache acceptance, and bounded preliminary-retry policy, as with per-analysis timeouts. Explicit cancellation keeps the existing rollback behavior.
+
 Entries retain content-free provenance for the prompt, provider coordinates, model, and loaded skills. Those fingerprints describe how an entry was produced; changing them affects new analyses but does not automatically invalidate an otherwise reusable entry.
 
 Set `AI_CACHE_GENERATION`, the Pages `ai-cache-generation` input, or Helm `analysisCache.generation` to a new non-empty value for an intentional full rebaseline. Returning to a previous value reuses its still-valid entries. Destructive cache clearing is an emergency operation, not the normal response to prompt or provider changes.
