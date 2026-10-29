@@ -24,6 +24,7 @@ import {
   type FileToUrlContext,
 } from "../lib/utils";
 import { RichText } from "./RichText";
+import { AffectedBuildsLedger } from "./AffectedBuildsLedger";
 import { BriefingSection } from "./BriefingSection";
 import { parseTestDisplayName } from "../lib/detailTitles";
 import { FailureActions } from "./FailureActions";
@@ -37,7 +38,7 @@ import { patternActionEligibilityHint, patternResolvable, patternDraftable, patt
 import { jobRunPath } from "../lib/routes";
 import { buildsAnalyzedLabel, patternCountOutdated, patternRecurrenceLabel } from "../lib/dashboardOverview";
 import { AnalysisBriefing, NextStepPreview } from "./AnalysisBriefing";
-import { overviewTypography, touchTargetSx } from "../theme/overview";
+import { overviewTypography } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { CausalGroupFixButton } from "./CausalGroupFixRouting";
 import { CauseResolution } from "./CauseResolution";
@@ -45,7 +46,6 @@ import { causeResolutionAvailable } from "../lib/resolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, causalGroupIsEarlier, causalGroupNextStep, orderCausalGroups, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
 import { describeRecurrence, recurrenceForBuilds } from "../lib/recurrence";
-import { accentLabelSx } from "../theme";
 
 function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
@@ -562,39 +562,11 @@ export function PatternBanner({
                   <Typography
                     component="h5"
                     color="textSecondary"
-                    sx={{ mt: 1.5, ...overviewTypography.eyebrow }}
+                    sx={{ mt: 1.5, mb: 0.75, ...overviewTypography.eyebrow }}
                   >
                     Affected {group.builds.length === 1 ? "build" : "builds"}
                   </Typography>
-                  <Stack direction="row" spacing={0.75} sx={{ mt: 0.5, flexWrap: "wrap", rowGap: 0.75 }}>
-                    {group.builds.map((buildID) => (
-                      <Link
-                        key={buildID}
-                        component={RouterLink}
-                        to={jobID ? jobRunPath(jobID, buildID) : "#"}
-                        aria-label={`Open affected build ${buildID}`}
-                        underline="none"
-                        sx={(theme) => ({
-                          ...touchTargetSx,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          px: 0.75,
-                          borderRadius: "4px",
-                          bgcolor: "action.selected",
-                          ...accentLabelSx(theme, "primary"),
-                          ...overviewTypography.data,
-                          "&:hover": { bgcolor: "surface.containerHigh" },
-                          "&:focus-visible": {
-                            outline: "2px solid",
-                            outlineColor: "primary.main",
-                            outlineOffset: 2,
-                          },
-                        })}
-                      >
-                        {buildID}
-                      </Link>
-                    ))}
-                  </Stack>
+                  <AffectedBuildsLedger builds={group.builds} runs={runs} jobID={jobID} />
                   {causeActionsPresent[index] && (
                     // Both of a cause's actions share one bar, so the card ends
                     // with a single place to act rather than one control buried
@@ -650,7 +622,7 @@ export function PatternBanner({
 
       {pattern.unclassified_builds && pattern.unclassified_builds.length > 0 && (
         <BriefingSection label="Unclassified builds">
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap" }}>
             {pattern.unclassified_builds.map((buildID) => (
               <Link key={buildID} component={RouterLink} to={jobID ? jobRunPath(jobID, buildID) : "#"}>
                 {buildID}
@@ -682,34 +654,7 @@ export function PatternBanner({
 
       {causalGroups.length === 0 && pattern.systemic && pattern.shared_builds && pattern.shared_builds.length > 0 && (
         <BriefingSection label="Affected builds">
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-            {pattern.shared_builds.map((buildID) => (
-              <Link
-                key={buildID}
-                component={RouterLink}
-                to={jobID ? jobRunPath(jobID, buildID) : "#"}
-                underline="none"
-                sx={(theme) => ({
-                  ...touchTargetSx,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  px: 0.75,
-                  borderRadius: "4px",
-                  bgcolor: "action.selected",
-                  ...accentLabelSx(theme, "primary"),
-                  ...overviewTypography.data,
-                  "&:hover": { bgcolor: "surface.containerHigh" },
-                  "&:focus-visible": {
-                    outline: "2px solid",
-                    outlineColor: "primary.main",
-                    outlineOffset: 2,
-                  },
-                })}
-              >
-                {buildID}
-              </Link>
-            ))}
-          </Stack>
+          <AffectedBuildsLedger builds={pattern.shared_builds} runs={runs} jobID={jobID} />
         </BriefingSection>
       )}
 

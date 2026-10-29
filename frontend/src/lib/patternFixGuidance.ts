@@ -69,7 +69,7 @@ export function causalGroupFixTarget(
 }
 
 // compareBuildIDs orders Prow build IDs, which are decimal and grow with time.
-function compareBuildIDs(a: string, b: string): number {
+export function compareBuildIDs(a: string, b: string): number {
   return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 }
 
