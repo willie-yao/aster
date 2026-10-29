@@ -400,19 +400,8 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 				}
 				s.client.cache.Delete(failureKey)
 				usageOutcome = aiusage.OutcomeCacheHit
-				generatedAt := s.cachedPatternGeneratedAt(key, cachedData.GeneratedAt)
-				return buildPatternAnalysis(subject, len(failures), cachedData.Response, failures, generatedAt), nil
+				return buildPatternAnalysis(subject, len(failures), cachedData.Response, failures, cachedData.GeneratedAt), nil
 			}
-		}
-		if cached, stats, err := parsePatternResponseWithStats(string(raw), buildIDs); err == nil {
-			if options.OnCacheHit != nil {
-				options.OnCacheHit()
-			}
-			s.client.cache.Delete(failureKey)
-			usageOutcome = aiusage.OutcomeCacheHit
-			recordPatternParseTrace(ctx, "cache", stats, nil)
-			generatedAt := s.cachedPatternGeneratedAt(key, "")
-			return buildPatternAnalysis(subject, len(failures), cached, failures, generatedAt), nil
 		}
 	}
 
@@ -451,19 +440,6 @@ func (s *Service) AnalyzePatternWithOptions(ctx context.Context, jobID, subject 
 	generatedAt := s.patternGeneratedAt()
 	_ = s.client.cache.Set(key, patternCacheData{Version: patternCacheVersion, GeneratedAt: generatedAt, Response: parsed})
 	return buildPatternAnalysis(subject, len(failures), parsed, failures, generatedAt), nil
-}
-
-// cachedPatternGeneratedAt returns when a cached verdict was generated. Entries
-// written before the timestamp was recorded fall back to when they were cached,
-// which is stable across passes and does not renew the entry's age.
-func (s *Service) cachedPatternGeneratedAt(key, recorded string) string {
-	if recorded = strings.TrimSpace(recorded); recorded != "" {
-		return recorded
-	}
-	if entry, ok := s.client.cache.Lookup(key); ok && !entry.CreatedAt.IsZero() {
-		return entry.CreatedAt.UTC().Format(time.RFC3339)
-	}
-	return s.patternGeneratedAt()
 }
 
 func (s *Service) patternFailureNow() time.Time {
