@@ -392,7 +392,7 @@ func writePrivateJSONLimitWithSync(
 	syncFile func(*os.File) error,
 	syncDir func(*os.File) error,
 ) error {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
