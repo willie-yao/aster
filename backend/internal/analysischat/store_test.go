@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -14,16 +15,99 @@ import (
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 )
 
+func TestWritePrivateJSONLimitCompactRoundTrip(t *testing.T) {
+	store, err := newSessionStore(t.TempDir(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	stamp := now.Format(time.RFC3339)
+	question := "What failed?\n  <node> & \"quoted\" \u03bb"
+	ref := AnalysisRef{Scope: ScopeTest, JobID: "job", BuildID: "123", TestName: "TestCluster"}
+	state := &persistedState{
+		Version: stateVersion,
+		Sessions: map[string]*persistedSession{
+			"session": {
+				Owner: "alice", Turns: 1, ExpiresAt: now.Add(time.Hour),
+				HistoryExpiresAt: now.Add(DefaultHistoryRetention), Archived: true,
+				CreateRequestID: "create", CreateRequestHash: "create-hash",
+				View: SessionView{
+					ID: "session", CreatedBy: "alice", Analysis: ref, CreatedAt: stamp, UpdatedAt: stamp,
+					Messages: []Message{
+						{Role: "user", RequestID: "ask", Content: question, CreatedAt: stamp},
+						{
+							Role: "assistant", RequestID: "ask", Content: "saved answer", CreatedAt: stamp,
+							Citations:        []Citation{{Path: "build-log.txt", LineStart: 5, LineEnd: 6, Quote: "  evidence\n"}},
+							ProposedRevision: &Revision{RootCause: "cause", SuggestedFix: "fix"},
+							EvidenceWarnings: []string{"partial verification"},
+						},
+					},
+				},
+				Resolved: persistedResolvedAnalysis{
+					Ref: ref, AnalysisHash: "analysis-hash", BuildPrefix: "logs/job/123",
+					Build: models.BuildInfo{BuildID: "123", RepoRefs: map[string]string{"example/repo": "main:revision"}},
+					TestCase: models.TestCase{
+						Name: "TestCluster", FailureMessage: question,
+						AIAnalysis: &models.AIAnalysis{RootCause: "cause", SuggestedFix: "fix"},
+					},
+				},
+				Requests: map[string]persistedRequest{
+					"ask": {
+						Actor: "alice", QuestionHash: hashText(question), Question: question,
+						Status: requestSucceeded, Turn: 1, CreatedAt: stamp, UpdatedAt: stamp,
+					},
+				},
+			},
+		},
+		OwnerRequests:     map[string][]time.Time{"alice": {now}},
+		DismissedPrepared: map[string]time.Time{"prepared": now.Add(time.Hour)},
+	}
+	compact, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indented, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indented) <= len(compact) {
+		t.Fatal("fixture does not exceed the compact encoding limit when indented")
+	}
+	if err := writePrivateJSONLimit(store.statePath, state, len(compact)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(compact) {
+		t.Fatalf("persisted encoding = %q, want compact JSON %q", data, compact)
+	}
+	loaded, migrated, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated || !reflect.DeepEqual(loaded, state) {
+		t.Fatalf("round-trip changed state: loaded=%+v migrated=%t", loaded, migrated)
+	}
+}
+
 func TestWritePrivateJSONLimitPreservesReadableState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := writePrivateJSONLimit(path, map[string]string{"value": "old"}, 128); err != nil {
+	replacement := map[string]string{"value": "new\n  <node> & \"quoted\" \u03bb"}
+	encoded, err := json.Marshal(replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := len(encoded) - 1
+	if err := writePrivateJSONLimit(path, map[string]string{"value": "old"}, limit); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writePrivateJSONLimit(path, map[string]string{"value": strings.Repeat("x", 256)}, 128); err == nil {
+	if err := writePrivateJSONLimit(path, replacement, limit); err == nil {
 		t.Fatal("oversized state was accepted")
 	}
 	after, err := os.ReadFile(path)
