@@ -292,7 +292,8 @@ func (s *previewStore) finish(owner, token, attemptID, resultURL string, confirm
 		if confirmErr != nil {
 			record.Status = previewStatusUnknown
 			if !reconciling {
-				if errors.Is(confirmErr, errAnalysisSourceUnavailable) {
+				if !errors.Is(confirmErr, ErrPreviewOutcomeUnknown) &&
+					errors.Is(confirmErr, errPreviewNoWrite) {
 					record.Status = previewStatusReady
 				}
 				record.CreatedAt = now.Format(time.RFC3339Nano)

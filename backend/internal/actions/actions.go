@@ -64,6 +64,8 @@ var ErrPreviewSuperseded = errors.New("preview confirmation was superseded")
 // checks for the marked object without creating another one.
 var ErrPreviewOutcomeUnknown = errors.New("preview confirmation outcome unknown; retry to check GitHub")
 
+var errPreviewNoWrite = errors.New("preview confirmation did not create an issue or pull request")
+
 // ErrPreviewTargetChanged means the configured write repository no longer
 // matches the repository used to generate the preview.
 var ErrPreviewTargetChanged = errors.New("preview target repository changed; generate a new preview")
@@ -1210,7 +1212,7 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 		if err := s.validateAnalysisPreview(ctx, owner, *entry.analysisBinding); err != nil {
 			if errors.Is(err, ErrPreviewTargetChanged) {
 				_ = s.previewStore.discard(owner, token, attemptID)
-			} else if finishErr := s.finishConfirm(owner, token, attemptID, "", err); finishErr != nil {
+			} else if finishErr := s.finishConfirm(owner, token, attemptID, "", errors.Join(errPreviewNoWrite, err)); finishErr != nil {
 				return "", errors.Join(err, finishErr)
 			}
 			return "", err
@@ -1256,6 +1258,9 @@ func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) 
 			return resultURL, err
 		}
 		finishInputErr = nil
+	} else if confirmErr != nil && !errors.Is(confirmErr, ErrPreviewOutcomeUnknown) {
+		// confirmEntry classifies failures that may have created an issue or PR.
+		finishInputErr = errors.Join(errPreviewNoWrite, confirmErr)
 	}
 	finishErr := s.finishConfirm(owner, token, attemptID, resultURL, finishInputErr)
 	if resultURL != "" && finishErr == nil {
@@ -1377,8 +1382,8 @@ func (s *Service) confirmEntryUnlocked(ctx context.Context, entry *previewEntry,
 				return fmt.Errorf("filing issue: %w", err)
 			}
 			filed, ok := mgr.TrackedURL(entry.spec.Key)
-			if !ok {
-				return fmt.Errorf("issue was not filed")
+			if !ok || filed == "" {
+				return fmt.Errorf("%w: issue result URL unavailable", ErrPreviewOutcomeUnknown)
 			}
 			url = filed
 			if strings.HasPrefix(entry.failureID, "build::") || isAnalysisPreview(entry) {
