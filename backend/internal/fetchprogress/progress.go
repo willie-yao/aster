@@ -154,7 +154,7 @@ type FollowUpComponentStatus struct {
 	Summary string              `json:"summary,omitempty"`
 }
 
-// FollowUpProgress reports post-publication component outcomes.
+// FollowUpProgress reports notification and issue-recovery outcomes.
 type FollowUpProgress struct {
 	Notifications   *FollowUpComponentStatus `json:"notifications,omitempty"`
 	AutomaticIssues *FollowUpComponentStatus `json:"automatic_issues,omitempty"`
@@ -909,7 +909,7 @@ func (t *Tracker) SkipPatterns() {
 	t.update(true, func(status *Status) { status.PatternPhase = StageSkipped })
 }
 
-// SkipSideEffects marks side effects skipped.
+// SkipSideEffects marks the notification and issue-recovery phase skipped.
 func (t *Tracker) SkipSideEffects() {
 	t.update(true, func(status *Status) { status.SideEffectPhase = StageSkipped })
 }

@@ -39,7 +39,7 @@ func (s *countingNotifySender) Send(context.Context, notify.Message) error {
 	return nil
 }
 
-func TestWatchPassSkipsSideEffects(t *testing.T) {
+func TestWatchPassSkipsNotifications(t *testing.T) {
 	dataDir, bucketDir := installRefreshLifecycleFixture(t)
 	sender := &countingNotifySender{}
 	oldEmailSender := newEmailSender
