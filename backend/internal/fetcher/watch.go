@@ -56,7 +56,8 @@ func (p *pipeline) watchPass(ctx context.Context, jobs []models.ProwJob) error {
 	return err
 }
 
-// RunWatch runs one pass at a time and keeps lightweight refreshes free of side effects.
+// RunWatch runs one pass at a time. Lightweight refreshes skip notifications and
+// issue recovery, but may post opt-in pull request comments.
 func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterval time.Duration) error {
 	if watchInterval <= 0 || reconcileInterval <= 0 {
 		return fmt.Errorf("watch and reconcile intervals must be positive (got watch=%s reconcile=%s)", watchInterval, reconcileInterval)

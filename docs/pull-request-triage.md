@@ -130,6 +130,8 @@ Supply `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` as repository secrets on Pages
 
 ### Comment selection and deduplication
 
+When enabled, commenting runs after successful triage publication on both lightweight watch refreshes and full passes. It is separate from the fetch progress **Follow-up** phase, which covers notifications and issue recovery.
+
 Aster comments only when the current pass published a page for every open pull request. If `pull_requests.max` truncated the listing, the whole commenting pass is skipped to avoid creating links to pages that may be pruned.
 
 The pass skips:

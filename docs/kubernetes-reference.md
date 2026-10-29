@@ -36,10 +36,12 @@ Set the writer with `mode`.
 
 - Checks known jobs for new builds on `fetcher.watchInterval`.
 - Reuses the cached job list during short refreshes.
-- Rediscovers jobs and runs configured side effects on `fetcher.reconcileInterval`.
+- Rediscovers jobs and runs configured notifications and tracked-issue recovery on startup and `fetcher.reconcileInterval`.
 - Uses a `Recreate` rollout so two writers do not overlap during an update.
 
 Watch mode needs no TestGrid API, Prow ownership, or pub/sub integration. It uses normal artifact-store listing and the on-disk cache.
+
+Opt-in [pull request comments](pull-request-triage.md#comment-selection-and-deduplication) run after successful triage publication on both lightweight and full passes. Fetch progress's `side-effects` / **Follow-up** phase covers notifications and issue recovery, not pull request comments. A skipped phase does not mean all GitHub writes were suppressed; `-skip-side-effects` suppresses notifications, issue recovery, and pull request comments.
 
 ### Cron mode
 

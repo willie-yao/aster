@@ -243,7 +243,7 @@ func TestRunWatchLoopRetriesTransientFailureAfterCompletionInterval(t *testing.T
 	}
 }
 
-func TestRunWatchLoopRetriesInitialFailureWithoutSideEffectsOnWatchPasses(t *testing.T) {
+func TestRunWatchLoopRetriesInitialFailureBeforeLightweightPass(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	clock := &fakeWatchTime{now: time.Unix(0, 0), maxWaits: 2, cancel: cancel}
 	pipeline := &fakeWatchPipeline{fullResults: []error{errors.New("discovery unavailable"), nil}}
