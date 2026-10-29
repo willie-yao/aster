@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -966,6 +967,7 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 	newAnalysis := func(disposition string) *models.AIAnalysis {
 		return &models.AIAnalysis{
 			Mode: AgenticMode, Disposition: disposition,
+			RootCause: "root", Severity: "High",
 			CritiquePassed: true, CritiqueVersion: currentCritiqueVersion,
 			ModelHash: client.modelFingerprint(), PromptHash: promptHash,
 		}
@@ -984,7 +986,17 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 		t.Fatal("citation-verified analysis should be reused")
 	}
 
-	// A spent budget must not resurrect an analysis that fails a current floor.
+	verified.AIAnalysis.CritiquePassed = false
+	verified.AIAnalysis.CritiqueSoftWarnings = []string{string(CritiqueRuleRemediationPunt)}
+	s.agenticOpts.CritiqueCachePolicy = CritiqueCachePolicyStrict
+	if !s.reanalysisRequired(verified, false) {
+		t.Fatal("strict-policy rejection with budget remaining should be re-analyzed")
+	}
+	if s.reanalysisRequired(verified, true) {
+		t.Fatal("safe strict-policy rejection with a spent budget should be reused")
+	}
+
+	// A spent budget must not bypass the current critique contract.
 	stale := newAnalysis(models.AnalysisDispositionPreliminary)
 	stale.CritiqueVersion = currentCritiqueVersion - 1
 	if !s.reanalysisRequired(reusablePublishedTestCase(stale), true) {
@@ -1005,8 +1017,67 @@ func TestPreliminaryRetryBudgetBoundsReanalysis(t *testing.T) {
 	}
 }
 
-// TestPreliminaryAttemptsBudgetLifecycle pins that the retry budget advances on
-// preliminary results and is cleared once an analysis has verified citations.
+func TestSpentRetryBudgetRequiresValidPublishedOutput(t *testing.T) {
+	s := &Service{agenticOpts: AgenticOptions{MinToolCalls: 1, CritiqueCachePolicy: CritiqueCachePolicyStrict}}
+	for _, disposition := range []string{models.AnalysisDispositionPreliminary, models.AnalysisDispositionCitationsVerified} {
+		t.Run(disposition, func(t *testing.T) {
+			for _, test := range []struct {
+				name      string
+				mutate    func(*models.TestCase)
+				wantReuse bool
+			}{
+				{name: "safe quality rejection", wantReuse: true},
+				{name: "missing summary", mutate: func(tc *models.TestCase) { tc.AISummary = nil }},
+				{name: "missing analysis", mutate: func(tc *models.TestCase) { tc.AIAnalysis = nil }},
+				{name: "empty output", mutate: func(tc *models.TestCase) {
+					tc.AISummary.Summary = ""
+					tc.AIAnalysis.RootCause = ""
+				}},
+				{name: "missing root cause", mutate: func(tc *models.TestCase) { tc.AIAnalysis.RootCause = "" }},
+				{name: "invalid severity", mutate: func(tc *models.TestCase) { tc.AIAnalysis.Severity = "unknown" }},
+				{name: "malformed citation", mutate: func(tc *models.TestCase) { tc.AIAnalysis.EvidenceCitations[0].LineStart = 0 }},
+				{name: "unregistered rule", mutate: func(tc *models.TestCase) { tc.AIAnalysis.CritiqueSoftWarnings = []string{"unknown"} }},
+				{name: "unsafe output", mutate: func(tc *models.TestCase) {
+					tc.AIAnalysis.CritiqueHardFailures = []string{string(CritiqueRulePathUnsafe)}
+				}},
+				{name: "missing timestamp", mutate: func(tc *models.TestCase) { tc.AIAnalysis.GeneratedAt = "" }},
+				{name: "malformed timestamp", mutate: func(tc *models.TestCase) { tc.AIAnalysis.GeneratedAt = "invalid" }},
+				{name: "expired output", mutate: func(tc *models.TestCase) {
+					tc.AIAnalysis.GeneratedAt = time.Now().Add(-cacheMaxAge - time.Hour).UTC().Format(time.RFC3339)
+				}},
+				{name: "unstamped disposition", mutate: func(tc *models.TestCase) { tc.AIAnalysis.Disposition = "" }},
+				{name: "unrecognized disposition", mutate: func(tc *models.TestCase) { tc.AIAnalysis.Disposition = "unknown" }},
+				{name: "stale critique contract", mutate: func(tc *models.TestCase) {
+					tc.AIAnalysis.CritiqueVersion = currentCritiqueVersion - 1
+				}},
+				{name: "changed generation", mutate: func(tc *models.TestCase) { tc.AIAnalysis.CacheGeneration = "old" }},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					published := reusablePublishedTestCase(&models.AIAnalysis{
+						Mode: AgenticMode, Disposition: disposition, RootCause: "root", Severity: "High",
+						CritiqueVersion:      currentCritiqueVersion,
+						CritiqueSoftWarnings: []string{string(CritiqueRuleRemediationPunt)},
+						EvidenceCitations: []models.EvidenceCitation{
+							{Path: "build-log.txt", LineStart: 1, LineEnd: 1, Quote: "failure"},
+						},
+					})
+					if test.mutate != nil {
+						test.mutate(published)
+					}
+					if got := s.reanalysisRequired(published, true); got == test.wantReuse {
+						t.Fatalf("reanalysisRequired = %t, want %t", got, !test.wantReuse)
+					}
+				})
+			}
+		})
+	}
+	if !s.reanalysisRequired(nil, true) {
+		t.Fatal("a spent counter without output must not supply an analysis")
+	}
+}
+
+// TestPreliminaryAttemptsBudgetLifecycle pins that only a persisted,
+// citation-verified result clears the retry budget.
 func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	const key = "agentic:kubernetes:job:1:abcd"
@@ -1014,10 +1085,18 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	if got := client.preliminaryAttempts(key); got != 0 {
 		t.Fatalf("unseen key attempts = %d, want 0", got)
 	}
-	for want := 1; want <= 3; want++ {
-		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, want-1)
+	for i, result := range []struct {
+		disposition string
+		persisted   bool
+	}{
+		{disposition: models.AnalysisDispositionPreliminary},
+		{disposition: models.AnalysisDispositionPreliminary, persisted: true},
+		{disposition: models.AnalysisDispositionCitationsVerified},
+	} {
+		want := i + 1
+		client.recordPreliminaryAttempt(key, result.disposition, result.persisted, i)
 		if got := client.preliminaryAttempts(key); got != want {
-			t.Fatalf("attempts after %d preliminary results = %d, want %d", want, got, want)
+			t.Fatalf("attempts after result %d = %d, want %d", want, got, want)
 		}
 	}
 
@@ -1026,7 +1105,7 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 		t.Fatalf("budget should be spent at %d attempts", maxPreliminaryAttempts)
 	}
 
-	client.recordPreliminaryAttempt(key, models.AnalysisDispositionCitationsVerified, 3)
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionCitationsVerified, true, 3)
 	if got := client.preliminaryAttempts(key); got != 0 {
 		t.Fatalf("attempts after a citation-verified result = %d, want 0", got)
 	}
@@ -1035,45 +1114,146 @@ func TestPreliminaryAttemptsBudgetLifecycle(t *testing.T) {
 	}
 }
 
-// TestPreliminaryRetryBudgetStopsUncachedReanalysis reproduces the deployed
-// churn: under the hard cache policy a preliminary draft with a citation
-// failure is never persisted, so every pass re-ran the full agentic loop
-// against immutable artifacts. The bounded budget must stop that.
+// TestPreliminaryRetryBudgetStopsUncachedReanalysis bounds repeated passes for
+// safe published output that fails private cache quality policy.
 func TestPreliminaryRetryBudgetStopsUncachedReanalysis(t *testing.T) {
 	shrinkCallDelay(t)
-	srv := newScriptedChatServer(t)
-	for range maxPreliminaryAttempts {
-		srv.push(200, chatRespToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"}))
-		srv.push(200, chatRespFinal(missingCitationFinalJSON))
+	var verifiedPunt analysisResponse
+	if err := json.Unmarshal([]byte(puntyFinalJSON), &verifiedPunt); err != nil {
+		t.Fatal(err)
 	}
-	client := newAgenticTestClient(t, srv.URL)
-	registry, enabled := newTestRegistry(t)
-	service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys", ConsecutiveFailures: nil})
-	configureAgenticTestService(service, AgenticOptions{
-		MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
-		Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: CritiqueCachePolicyHard,
-	}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
+	verifiedPunt.EvidenceCitations = []models.EvidenceCitation{
+		{Path: "build-log.txt", LineStart: 1, LineEnd: 1, Quote: "vnet peering mismatch"},
+	}
+	verifiedFinal, err := json.Marshal(verifiedPunt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := verifiedPunt
+	accepted.SuggestedFix = "Correct the vnet peering configuration and redeploy the cluster."
+	acceptedFinal, err := json.Marshal(accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name         string
+		final        string
+		policy       CritiqueCachePolicy
+		disposition  string
+		rejection    CacheRejectionReason
+		minToolCalls int
+	}{
+		{name: "preliminary hard rejection", final: missingCitationFinalJSON, policy: CritiqueCachePolicyHard,
+			disposition: models.AnalysisDispositionPreliminary, rejection: CacheRejectedCritiqueHardFailure},
+		{name: "verified strict rejection", final: string(verifiedFinal), policy: CritiqueCachePolicyStrict,
+			disposition: models.AnalysisDispositionCitationsVerified, rejection: CacheRejectedCritiqueStrictWarning},
+		{name: "verified tool floor rejection", final: string(acceptedFinal), policy: CritiqueCachePolicyHard,
+			disposition: models.AnalysisDispositionCitationsVerified, rejection: CacheRejectedToolFloor, minToolCalls: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := newScriptedChatServer(t)
+			callsPerAttempt := 2
+			if test.minToolCalls > 1 {
+				callsPerAttempt++
+			}
+			for range maxPreliminaryAttempts {
+				srv.push(200, chatRespToolCall("c1", "grep_artifact", map[string]any{
+					"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
+				}))
+				srv.push(200, chatRespFinal(test.final))
+				if test.minToolCalls > 1 {
+					srv.push(200, chatRespFinal(test.final))
+				}
+			}
+			client := newAgenticTestClient(t, srv.URL)
+			registry, enabled := newTestRegistry(t)
+			service := NewService(ServiceConfig{Client: client, Module: &stubModule{name: "kubernetes", prompt: "user"}, SystemPrompt: "sys"})
+			configureAgenticTestService(service, AgenticOptions{
+				MaxIters: 3, ModelByteBudget: 100_000, GCSByteBudget: 100_000,
+				Timeout: 30 * time.Second, CritiqueMaxRetries: 0, CritiqueCachePolicy: test.policy, MinToolCalls: test.minToolCalls,
+			}, &fakeFactory{browser: &fakeBrowser{files: map[string][]byte{"build-log.txt": []byte("vnet peering mismatch\n")}}}, registry, enabled)
 
-	request := FailureAnalysisRequest{
-		JobID: "job", BuildPrefix: "logs/job/1/", Build: newRun("job", "1").BuildInfo,
-		TestCase: *newFailedTC("Test A", "failure"), ConsecutiveFailures: 1,
-	}
-	// Each pass feeds the previously published analysis back in, exactly as the
-	// fetcher does from jobs/*.json.
-	for pass := 1; pass <= maxPreliminaryAttempts+3; pass++ {
-		result, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
-		if err != nil || result.Summary == nil || result.Analysis == nil {
-			t.Fatalf("pass %d result = %+v, error = %v", pass, result, err)
-		}
-		if result.Analysis.Disposition != models.AnalysisDispositionPreliminary {
-			t.Fatalf("pass %d disposition = %q, want preliminary", pass, result.Analysis.Disposition)
-		}
-		wantCalls := int32(2 * min(pass, maxPreliminaryAttempts))
-		if got := atomic.LoadInt32(&srv.calls); got != wantCalls {
-			t.Fatalf("provider calls after pass %d = %d, want %d", pass, got, wantCalls)
-		}
-		request.TestCase.AISummary = result.Summary
-		request.TestCase.AIAnalysis = result.Analysis
+			request := FailureAnalysisRequest{
+				JobID: "job", BuildPrefix: "logs/job/1/", Build: newRun("job", "1").BuildInfo,
+				TestCase: *newFailedTC("Test A", "failure"), ConsecutiveFailures: 1,
+			}
+			key := service.agenticCacheKey(request.JobID, request.Build.BuildID, request.TestCase.Name, request.TestCase.FailureMessage)
+			// Feed the published result into each pass and reload private state.
+			for pass := 1; pass <= maxPreliminaryAttempts+3; pass++ {
+				result, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+				if err != nil || result.Summary == nil || result.Analysis == nil {
+					t.Fatalf("pass %d result = %+v, error = %v", pass, result, err)
+				}
+				if result.Analysis.Disposition != test.disposition {
+					t.Fatalf("pass %d analysis = %+v, want disposition %q", pass, result.Analysis, test.disposition)
+				}
+				if test.policy == CritiqueCachePolicyStrict &&
+					!slices.Equal(result.Analysis.CritiqueSoftWarnings, []string{string(CritiqueRuleRemediationPunt)}) {
+					t.Fatalf("pass %d warnings = %v, want remediation.punt", pass, result.Analysis.CritiqueSoftWarnings)
+				}
+				if result.Analysis.CachePersistenceAttempted || result.Analysis.CachePersistenceAccepted ||
+					CacheRejectionReason(result.Analysis.CachePolicyRejectionReason) != test.rejection {
+					t.Fatalf("pass %d cache persistence = %+v", pass, result.Analysis)
+				}
+				wantAttempts := min(pass, maxPreliminaryAttempts)
+				if got := atomic.LoadInt32(&srv.calls); got != int32(callsPerAttempt*wantAttempts) {
+					t.Fatalf("provider calls after pass %d = %d, want %d", pass, got, callsPerAttempt*wantAttempts)
+				}
+				if test.minToolCalls > 1 {
+					if result.Analysis.ToolCalls != 1 || !result.Analysis.CritiquePassed {
+						t.Fatalf("pass %d floor-rejected analysis = %+v", pass, result.Analysis)
+					}
+					srv.mu.Lock()
+					nudgeRequest := append([]byte(nil), srv.requests[callsPerAttempt*wantAttempts-1]...)
+					srv.mu.Unlock()
+					if !strings.Contains(string(nudgeRequest), "only 1 tool call(s) but need at least 2") {
+						t.Fatalf("pass %d repeated draft was not preceded by a tool-floor nudge", pass)
+					}
+				}
+				if _, ok := client.cache.Lookup(key); ok {
+					t.Fatalf("pass %d rejected analysis was cached", pass)
+				}
+				if err := client.cache.Save(); err != nil {
+					t.Fatal(err)
+				}
+				client.cache = NewCache(client.cache.dir)
+				if got := client.preliminaryAttempts(key); got != wantAttempts {
+					t.Fatalf("pass %d reloaded attempts = %d, want %d", pass, got, wantAttempts)
+				}
+				request.TestCase.AISummary = result.Summary
+				request.TestCase.AIAnalysis = result.Analysis
+			}
+
+			// A fresh accepted result clears the counter and serves private hits.
+			srv.push(200, chatRespToolCall("c2", "grep_artifact", map[string]any{
+				"path": "build-log.txt", "pattern": "vnet peering mismatch", "context_lines": 0,
+			}))
+			if test.minToolCalls > 1 {
+				srv.push(200, chatRespToolCall("c3", "list_artifacts", map[string]any{"path": ""}))
+			}
+			srv.push(200, chatRespFinal(string(acceptedFinal)))
+			request.TestCase.AISummary = nil
+			request.TestCase.AIAnalysis = nil
+			result, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+			if err != nil || result.Analysis == nil || !result.Analysis.CachePersistenceAccepted ||
+				result.Analysis.Disposition != models.AnalysisDispositionCitationsVerified {
+				t.Fatalf("accepted analysis = %+v, error = %v", result.Analysis, err)
+			}
+			if got := client.preliminaryAttempts(key); got != 0 {
+				t.Fatalf("accepted result attempts = %d, want 0", got)
+			}
+			if _, reason := LookupAgenticCache(client.cache, key, service.agenticCachePolicyFor(&request.TestCase)); reason != CacheAccepted {
+				t.Fatalf("accepted private entry rejection = %q", reason)
+			}
+			before := atomic.LoadInt32(&srv.calls)
+			cached, err := service.AnalyzeFailure(t.Context(), &http.Client{}, request)
+			if err != nil || cached.Analysis == nil || !cached.Analysis.CacheHit {
+				t.Fatalf("cached result = %+v, error = %v", cached, err)
+			}
+			if got := atomic.LoadInt32(&srv.calls); got != before {
+				t.Fatalf("private cache hit made %d provider calls", got-before)
+			}
+		})
 	}
 }
 
@@ -1088,13 +1268,17 @@ func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
 		t.Fatal("different builds must not share a cache key")
 	}
 	for i := range maxPreliminaryAttempts {
-		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, i)
+		client.recordPreliminaryAttempt(first, models.AnalysisDispositionPreliminary, false, i)
 	}
 	if !s.preliminaryBudgetSpent(&models.TestCase{}, first) {
 		t.Fatal("first build budget should be spent")
 	}
 	if s.preliminaryBudgetSpent(&models.TestCase{}, second) {
 		t.Fatal("a new build must start with a fresh budget")
+	}
+	otherFailure := s.agenticCacheKey("job", "1", "Test B", "boom")
+	if s.preliminaryBudgetSpent(&models.TestCase{}, otherFailure) {
+		t.Fatal("another failure in the same build must start with a fresh budget")
 	}
 }
 
@@ -1103,7 +1287,7 @@ func TestPreliminaryBudgetIsolatedPerBuild(t *testing.T) {
 func TestPreliminaryBudgetEntryIsNotServableAnalysis(t *testing.T) {
 	client := newAgenticTestClient(t, "http://example.invalid")
 	const key = "agentic:kubernetes:job:1:abcd"
-	client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, 0)
+	client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, false, 0)
 	if _, ok := client.cache.Lookup(key); ok {
 		t.Fatal("budget write must not create an entry under the analysis key")
 	}
@@ -1125,7 +1309,7 @@ func TestPreliminaryBudgetPrefersAcceptedCacheEntry(t *testing.T) {
 	key := s.agenticCacheKey("job", "1", "Test A", "boom")
 	promptHash := PromptFingerprint("sys")
 	for i := range maxPreliminaryAttempts {
-		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, i)
+		client.recordPreliminaryAttempt(key, models.AnalysisDispositionPreliminary, false, i)
 	}
 	published := reusablePublishedTestCase(&models.AIAnalysis{
 		Mode: AgenticMode, Disposition: models.AnalysisDispositionPreliminary,
