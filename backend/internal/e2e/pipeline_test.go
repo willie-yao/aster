@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,19 +171,20 @@ func TestPipeline_NoAI(t *testing.T) {
 
 // TestPipeline_WithAI runs the full pipeline with AI enabled, driving the
 // agentic loop with a scripted model that reads the fixture build log and
-// returns a citation-verified analysis. It asserts the analysis is published and that
-// the tool call actually exercised the local storage backend.
+// JUnit evidence. It asserts citation-verified output and that the tool calls
+// exercised the local storage backend.
 func TestPipeline_WithAI(t *testing.T) {
 	script := aitest.NewScriptServer(t)
-	// The model reads the build log and JUnit evidence required by the Prow
-	// profile, then returns final analysis JSON with a concrete remediation.
+	// Grep supplies line-numbered build log and JUnit evidence for citations.
 	script.PushToolCall("c1", "read_artifact", map[string]any{"path": "build-log.txt"})
-	script.PushToolCall("c2", "tail_artifact", map[string]any{"path": "build-log.txt"})
-	script.PushToolCall("c3", "read_artifact", map[string]any{"path": "artifacts/junit.xml"})
+	script.PushToolCall("c2", "grep_artifact", map[string]any{"path": "build-log.txt", "pattern": "timed out waiting"})
+	script.PushToolCall("c3", "grep_artifact", map[string]any{"path": "artifacts/junit.xml", "pattern": "Timed out after"})
 	script.PushFinal(`{"summary":"Control plane provisioning timed out","is_transient":false,` +
-		`"root_cause":"Only 2 of 3 control plane machines registered before the 600s timeout",` +
+		`"root_cause":"Only 2 of 3 control plane machines existed when provisioning timed out after 600.001s",` +
 		`"severity":"High","suggested_fix":"Raise the control-plane bootstrap timeout above 600s so all three machines have time to register",` +
-		`"relevant_files":["build-log.txt"]}`)
+		`"relevant_files":["build-log.txt"],"evidence_citations":[` +
+		`{"path":"build-log.txt","line_start":3,"line_end":3,"quote":"timed out waiting for 3 control plane machines to exist; have 2, want 3"},` +
+		`{"path":"artifacts/junit.xml","line_start":6,"line_end":6,"quote":"[FAILED] Timed out after 600.001s."}]}`)
 	t.Setenv("AI_TOKEN", "test-token")
 	t.Setenv("AI_ENDPOINT", script.URL)
 	t.Setenv("AI_MODEL", "script-model")
@@ -215,6 +217,25 @@ func TestPipeline_WithAI(t *testing.T) {
 			}
 			if tc.AIAnalysis.SkillSetHash != expectedSkills.Hash() {
 				t.Errorf("skill hash = %q, want merged filesystem contract %q", tc.AIAnalysis.SkillSetHash, expectedSkills.Hash())
+			}
+			if tc.AIAnalysis.Disposition != models.AnalysisDispositionCitationsVerified {
+				t.Errorf("disposition = %q, want citations_verified", tc.AIAnalysis.Disposition)
+			}
+			if !tc.AIAnalysis.CritiquePassed {
+				t.Error("analysis did not pass critique")
+			}
+			if len(tc.AIAnalysis.DispositionWarnings) != 0 {
+				t.Errorf("disposition warnings = %v, want none", tc.AIAnalysis.DispositionWarnings)
+			}
+			if !tc.AIAnalysis.EvidencePlanCovered {
+				t.Error("analysis did not cover the available evidence plan")
+			}
+			wantCitations := []models.EvidenceCitation{
+				{Path: "build-log.txt", LineStart: 3, LineEnd: 3, Quote: "timed out waiting for 3 control plane machines to exist; have 2, want 3"},
+				{Path: "artifacts/junit.xml", LineStart: 6, LineEnd: 6, Quote: "[FAILED] Timed out after 600.001s."},
+			}
+			if !slices.Equal(tc.AIAnalysis.EvidenceCitations, wantCitations) {
+				t.Errorf("evidence citations = %+v, want %+v", tc.AIAnalysis.EvidenceCitations, wantCitations)
 			}
 			analyzed++
 			if !strings.Contains(tc.AIAnalysis.RootCause, "control plane") {

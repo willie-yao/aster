@@ -1,3 +1,5 @@
+// Package aitest provides a scripted chat-completions server for hermetic AI
+// pipeline tests.
 package aitest
 
 import (
@@ -14,8 +16,7 @@ import (
 // ScriptServer is an httptest chat-completions server that returns queued
 // responses in FIFO order regardless of request content. Use it for hermetic,
 // scripted end-to-end scenarios where the request sequence is deterministic
-// (e.g. a single failure's agentic loop). For high-fidelity replay of recorded
-// runs use ReplayServer instead. GET requests to /v1/models return 404 so the
+// (e.g. a single failure's agentic loop). GET requests to /v1/models return 404 so the
 // engine's context-window probe falls back to its default budget.
 type ScriptServer struct {
 	*httptest.Server

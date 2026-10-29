@@ -89,7 +89,7 @@ backend/                         Go 1.26
     analysisruntime/             Wires the in-process failure-analysis runtime
     analysischat/                Bounded conversations about a published analysis
     sourceinvestigation/         Read-only source verification helpers
-    aitest/                      Record/replay chat-completions server for tests
+    aitest/                      Scripted chat-completions server for tests
 
     -- write actions (issues, fix PRs, resolution) --
     actions/                     On-demand single-failure actions behind admin auth
