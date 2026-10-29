@@ -26,7 +26,7 @@ export type AttentionGroup =
   | { kind: "recent" | "persistent" | "flaky"; label: string; items: TestFlakiness[] }
   | { kind: "lowPassRate"; label: string; items: LowPassRateEntry[] };
 
-// Reliability buckets come from overall_status, the last 10 runs. They use
+// Reliability buckets use completed outcomes within the last 10 published runs. They use
 // their own names so "Failed" and "Passed" stay reserved for a run's result.
 export type OverviewStatusFilter = "ALL" | "HEALTHY" | "FLAKY" | "UNRELIABLE" | "LATEST_FAILED";
 
@@ -36,10 +36,11 @@ export const reliabilityLabels = {
   UNRELIABLE: "Unreliable",
 } as const;
 
-const reliabilityByOverallStatus: Record<JobSummary["overall_status"], keyof typeof reliabilityLabels> = {
+const reliabilityByOverallStatus: Record<JobSummary["overall_status"], keyof typeof reliabilityLabels | undefined> = {
   PASSING: "HEALTHY",
   FLAKY: "FLAKY",
   FAILING: "UNRELIABLE",
+  UNKNOWN: undefined,
 };
 
 export function jobMatchesStatusFilter(job: JobSummary, filter: OverviewStatusFilter): boolean {

@@ -318,11 +318,12 @@ type JobSummary struct {
 	ProwJob
 	// CurrentStatus describes the newest observed run independently of rolling reliability.
 	CurrentStatus JobCurrentStatus `json:"current_status"`
-	OverallStatus string           `json:"overall_status"` // "PASSING", "FAILING", "FLAKY"
+	OverallStatus string           `json:"overall_status"` // "PASSING", "FAILING", "FLAKY", "UNKNOWN"
 	LastRun       *RunSummary      `json:"last_run,omitempty"`
 	RecentRuns    []RunSummary     `json:"recent_runs"`
-	// PassRateRecent is the fraction of passing runs over the most recent runs.
-	PassRateRecent float64 `json:"pass_rate_recent"`
+	// PassRateRecent is the passing fraction among completed outcomes in the
+	// newest 10 published runs. Nil means no completed outcomes in that window.
+	PassRateRecent *float64 `json:"pass_rate_recent"`
 }
 
 // RunSummary is a compact summary of a single build run.
@@ -353,7 +354,7 @@ type JobDetail struct {
 	ConfigFile     string           `json:"config_file,omitempty"`
 	ConfigRevision string           `json:"config_revision,omitempty"`
 	CurrentStatus  JobCurrentStatus `json:"current_status"`
-	PassRateRecent float64          `json:"pass_rate_recent"`
+	PassRateRecent *float64         `json:"pass_rate_recent"`
 	// Runs is the analysis window: the newest builds the fetcher was asked for.
 	// Every aggregation, correlation, and AI pass reads this and nothing else,
 	// so its width stays exactly the configured fetch depth.
@@ -941,14 +942,14 @@ type SharedFailure struct {
 	// per-pull-request escalation, which is what makes the shared failure the
 	// only remaining way to investigate it.
 	Escalatable bool `json:"escalatable"`
-	// BaseBranchFailures are the base-branch jobs whose newest run also fails
-	// this test, ordered by job name. Their published runs may already carry an
-	// analysis of the failure.
+	// BaseBranchFailures are the base-branch jobs whose newest completed run also
+	// fails this test, ordered by job name. Their published runs may already
+	// carry an analysis of the failure.
 	BaseBranchFailures []BaseBranchFailure `json:"base_branch_failures,omitempty"`
 }
 
-// BaseBranchFailure is one non-presubmit job whose newest run on a base branch
-// reports a test as failed.
+// BaseBranchFailure is one non-presubmit job whose newest completed run on a
+// base branch reports a test as failed.
 type BaseBranchFailure struct {
 	JobID   string `json:"job_id"`
 	JobName string `json:"job_name"`

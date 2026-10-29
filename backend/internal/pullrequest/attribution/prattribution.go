@@ -28,17 +28,17 @@ const widespreadVerdictMinPulls = 2
 
 // Baseline is the observed non-pull-request evidence for one base branch.
 type Baseline struct {
-	// FailingOnBase maps test name to the base-branch jobs whose newest run
-	// reports it as failed.
+	// FailingOnBase maps test name to the base-branch jobs whose newest completed
+	// run reports it as failed.
 	FailingOnBase map[string][]models.BaseBranchFailure
 	// FlakyTests maps test name to the base-branch jobs whose history classifies
 	// it flaky.
 	FlakyTests map[string][]string
-	// KnownTests holds every test name observed on the base branch, which
-	// separates "passes on the base branch" from "never runs there".
+	// KnownTests holds test names with pass/failure outcomes on the base branch,
+	// separating "passes on the base branch" from "no observed outcome".
 	KnownTests map[string]bool
-	// Observed reports whether any base-branch data was available. When false
-	// every verdict is inconclusive rather than falsely pull-request-specific.
+	// Observed reports whether any completed base-branch run was available.
+	// Without one, baseline-only verdicts are inconclusive.
 	Observed bool
 }
 
@@ -48,10 +48,13 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport,
 	baselines := make(map[string]Baseline)
 	jobBranches := make(map[string]string)
 	for _, detail := range details {
-		if detail.JobType == models.JobTypePresubmit || len(detail.Runs) == 0 {
+		if detail.JobType == models.JobTypePresubmit {
 			continue
 		}
-		newest := newestRun(detail.Runs)
+		newest, ok := newestCompletedRun(detail.Runs)
+		if !ok {
+			continue
+		}
 		branch, ok := baselineBranch(newest.BuildInfo, repo)
 		if !ok {
 			continue
@@ -65,7 +68,7 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport,
 		baseline.Observed = true
 		jobBranches[detail.JobID] = branch
 		for _, tc := range newest.TestCases {
-			if tc.Source == models.TestCaseSourceBuild {
+			if tc.Source == models.TestCaseSourceBuild || tc.Status != "passed" && tc.Status != "failed" {
 				continue
 			}
 			baseline.KnownTests[tc.Name] = true
@@ -96,15 +99,20 @@ func BuildBaseline(details []models.JobDetail, flakiness models.FlakinessReport,
 	return baselines
 }
 
-// newestRun returns the most recently started run.
-func newestRun(runs []models.BuildResult) models.BuildResult {
-	newest := runs[0]
-	for _, run := range runs[1:] {
-		if run.Started.After(newest.Started) {
+// newestCompletedRun returns the most recently started run with a final result.
+func newestCompletedRun(runs []models.BuildResult) (models.BuildResult, bool) {
+	var newest models.BuildResult
+	found := false
+	for _, run := range runs {
+		if run.Result == "" || run.Result == "PENDING" || run.Result == "UNKNOWN" {
+			continue
+		}
+		if !found || run.Started.After(newest.Started) {
 			newest = run
+			found = true
 		}
 	}
-	return newest
+	return newest, found
 }
 
 // baselineBranch reads a single branch for the configured repository without
@@ -229,7 +237,7 @@ func attribute(number int, key failureKey, tc models.TestCase, baseline Baseline
 				names[i] = job.JobName
 				evidence[i] = models.AttributionEvidence{
 					Kind:     models.AttributionEvidenceBaseBranch,
-					Detail:   fmt.Sprintf("The newest run on %s of %s reports this test as failed.", key.baseRef, job.JobName),
+					Detail:   fmt.Sprintf("The newest completed run on %s of %s reports this test as failed.", key.baseRef, job.JobName),
 					JobID:    job.JobID,
 					BuildID:  job.BuildID,
 					TestName: tc.Name,
@@ -289,10 +297,10 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 		return &models.FailureAttribution{
 			Verdict:    models.AttributionInconclusive,
 			Confidence: models.AttributionConfidenceLow,
-			Summary:    fmt.Sprintf("No results from base branch %s were available in this pass, so this failure could not be compared against one.", key.baseRef),
+			Summary:    fmt.Sprintf("No completed results from base branch %s were available in this pass, so this failure could not be compared against one.", key.baseRef),
 			Evidence: []models.AttributionEvidence{{
 				Kind:   models.AttributionEvidenceNoBaseline,
-				Detail: fmt.Sprintf("This pass published no job runs on %s to compare against.", key.baseRef),
+				Detail: fmt.Sprintf("This pass published no completed job runs on %s to compare against.", key.baseRef),
 			}},
 		}
 	}
@@ -314,7 +322,7 @@ func baselineVerdict(key failureKey, tc models.TestCase, buildLevel bool, baseli
 			Summary:    basePassingSummary(key.baseRef, others),
 			Evidence: []models.AttributionEvidence{{
 				Kind:     models.AttributionEvidenceBaseBranch,
-				Detail:   fmt.Sprintf("The newest run on %s reports this test as passing.", key.baseRef),
+				Detail:   fmt.Sprintf("The newest completed run on %s reports this test as passing.", key.baseRef),
 				TestName: tc.Name,
 			}},
 		}

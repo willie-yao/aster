@@ -24,7 +24,7 @@ func sampleDashboard() models.Dashboard {
 					Branch:   "main",
 				},
 				OverallStatus:  "PASSING",
-				PassRateRecent: 0.95,
+				PassRateRecent: new(0.95),
 				RecentRuns: []models.RunSummary{
 					{BuildID: "100", Passed: true, Timestamp: time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)},
 				},
@@ -40,6 +40,7 @@ func sampleJobDetail(name string) models.JobDetail {
 		JobType:        models.JobTypePeriodic,
 		ConfigFile:     "config/jobs/example/periodics.yaml",
 		ConfigRevision: strings.Repeat("a", 40),
+		PassRateRecent: new(1.0),
 		Runs: []models.BuildResult{
 			{
 				BuildInfo: models.BuildInfo{
@@ -135,6 +136,50 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 	if len(got.Runs) != len(detail.Runs) {
 		t.Errorf("len(Runs) = %d, want %d", len(got.Runs), len(detail.Runs))
+	}
+}
+
+func TestWriteJobReliability(t *testing.T) {
+	cases := []struct {
+		name   string
+		rate   *float64
+		status string
+		wire   string
+	}{
+		{"no completed outcomes", nil, "UNKNOWN", "null"},
+		{"completed failures", new(0.0), "FAILING", "0"},
+		{"completed passes", new(1.0), "PASSING", "1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dashboard := sampleDashboard()
+			dashboard.Jobs[0].PassRateRecent = tc.rate
+			dashboard.Jobs[0].OverallStatus = tc.status
+			if err := WriteDashboard(dir, dashboard); err != nil {
+				t.Fatal(err)
+			}
+			var published struct {
+				Jobs []map[string]json.RawMessage `json:"jobs"`
+			}
+			readJSON(t, filepath.Join(dir, "dashboard.json"), &published)
+			if got := string(published.Jobs[0]["pass_rate_recent"]); got != tc.wire {
+				t.Errorf("summary pass rate = %s, want %s", got, tc.wire)
+			}
+			if got := string(published.Jobs[0]["overall_status"]); got != `"`+tc.status+`"` {
+				t.Errorf("summary reliability = %s, want %s", got, tc.status)
+			}
+			detail := sampleJobDetail("job")
+			detail.PassRateRecent = tc.rate
+			if err := WriteJobDetail(dir, detail); err != nil {
+				t.Fatal(err)
+			}
+			var publishedDetail map[string]json.RawMessage
+			readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), &publishedDetail)
+			if got := string(publishedDetail["pass_rate_recent"]); got != tc.wire {
+				t.Errorf("detail pass rate = %s, want %s", got, tc.wire)
+			}
+		})
 	}
 }
 

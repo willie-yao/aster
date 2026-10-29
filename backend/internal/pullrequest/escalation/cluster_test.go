@@ -334,7 +334,7 @@ func TestClusterResolveReadsWhatAttributionPublishes(t *testing.T) {
 	baseline := prattribution.BuildBaseline([]models.JobDetail{{
 		Name: "periodic-project-e2e", JobID: "periodic-project-e2e", JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{{
-			BuildInfo: models.BuildInfo{BuildID: "1", Started: clusterStart, RepoRefs: map[string]string{"org/repo": "main"}},
+			BuildInfo: models.BuildInfo{BuildID: "1", Started: clusterStart, RepoRefs: map[string]string{"org/repo": "main"}, Result: "SUCCESS", Passed: true},
 			TestCases: []models.TestCase{{Name: clusterTest, Status: "passed"}},
 		}},
 	}}, models.FlakinessReport{}, prattribution.Repository{Owner: "org", Name: "repo"})

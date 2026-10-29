@@ -252,6 +252,43 @@ test("reliability buckets and latest-run failures are separate filters", () => {
   assert.equal(runStatusLabel("PASSING"), "Passed");
 });
 
+test("jobs without completed outcomes are not classified into reliability buckets", () => {
+  const unknown = job({
+    current_status: "RUNNING", overall_status: "UNKNOWN", pass_rate_recent: null,
+  });
+  assert.equal(jobMatchesStatusFilter(unknown, "ALL"), true);
+  for (const filter of ["HEALTHY", "FLAKY", "UNRELIABLE", "LATEST_FAILED"] as const) {
+    assert.equal(jobMatchesStatusFilter(unknown, filter), false);
+  }
+  const html = render(createElement(HealthPanel, {
+    jobs: [job(), unknown], onFilterClick: () => undefined,
+  }));
+  assert.match(html, /2 jobs/);
+  assert.match(html, /aria-label="Healthy: 1 job, 50% of jobs\./);
+  assert.match(html, /aria-label="Flaky: 0 jobs, 0% of jobs\./);
+  assert.match(html, /aria-label="Unreliable: 0 jobs, 0% of jobs\./);
+});
+
+test("job ledger distinguishes no completed runs from a genuine zero-percent rate", () => {
+  const unknown = job({
+    current_status: "RUNNING", overall_status: "UNKNOWN", pass_rate_recent: null,
+    recent_runs: [{ build_id: "123", passed: false, result: "PENDING", timestamp: "2026-08-05T10:00:00Z" }],
+  });
+  for (const width of [desktopWidth, mobileWidth]) {
+    const html = render(createElement(JobHealthTable, {
+      sections: [{ id: "jobs", jobs: [unknown] }],
+    }), width);
+    assert.match(html, />No completed runs</);
+    assert.match(html, />Running</);
+    assert.doesNotMatch(html, />0%</);
+    const failed = render(createElement(JobHealthTable, {
+      sections: [{ id: "jobs", jobs: [job({ pass_rate_recent: 0, overall_status: "FAILING" })] }],
+    }), width);
+    assert.match(failed, />0%</);
+    assert.doesNotMatch(failed, /No completed runs/);
+  }
+});
+
 test("job names truncate in the middle so the suffix stays visible", () => {
   assert.deepEqual(splitForMiddleTruncation("main"), { head: "main", tail: "" });
   const name = "capz-periodic-e2e-v1beta1-release-1-26";

@@ -419,7 +419,7 @@ func TestAttributionBaselineReadsTheBaseOnlyReport(t *testing.T) {
 		details: []models.JobDetail{{
 			Name: basePeriodic, JobID: basePeriodic, JobType: models.JobTypePeriodic,
 			Runs: []models.BuildResult{{
-				BuildInfo: models.BuildInfo{BuildID: "1", RepoRefs: map[string]string{"example/project": "main"}},
+				BuildInfo: models.BuildInfo{BuildID: "1", RepoRefs: map[string]string{"example/project": "main"}, Result: "SUCCESS", Passed: true},
 				TestCases: []models.TestCase{{Name: flakyTest, Status: "passed"}},
 			}},
 		}},
@@ -458,7 +458,7 @@ func TestAttributionBaselineUsesConfiguredRepository(t *testing.T) {
 	res := &refreshResult{details: []models.JobDetail{{
 		Name: basePeriodic, JobID: basePeriodic, JobType: models.JobTypePeriodic,
 		Runs: []models.BuildResult{{
-			BuildInfo: models.BuildInfo{BuildID: "1", Started: time.Unix(1700000000, 0)},
+			BuildInfo: models.BuildInfo{BuildID: "1", Started: time.Unix(1700000000, 0), Result: "FAILURE"},
 			TestCases: []models.TestCase{{Name: "fails", Status: "failed"}},
 		}},
 	}}}

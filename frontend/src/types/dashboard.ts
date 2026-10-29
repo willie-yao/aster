@@ -27,11 +27,11 @@ export interface JobSummary {
   timeout: string;
   config_file: string;
   current_status: JobCurrentStatus;
-  overall_status: "PASSING" | "FAILING" | "FLAKY";
+  overall_status: "PASSING" | "FAILING" | "FLAKY" | "UNKNOWN";
   last_run: RunSummary | null;
   recent_runs: RunSummary[];
-  // Fraction of passing runs over the most recent runs.
-  pass_rate_recent: number;
+  // Passing fraction among completed outcomes in the newest 10 published runs.
+  pass_rate_recent: number | null;
 }
 
 export interface Dashboard {
@@ -338,7 +338,7 @@ export interface JobDetail {
   config_file?: string;
   config_revision?: string;
   current_status?: JobCurrentStatus;
-  pass_rate_recent?: number;
+  pass_rate_recent?: number | null;
   runs: BuildResult[];
   // Builds that have aged out of runs, newest-first. Display only: the backend
   // drops their test cases, and no analysis window includes them.

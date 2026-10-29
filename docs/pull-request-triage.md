@@ -67,7 +67,7 @@ The verdict never claims that a pull request caused a failure. Observations can 
 
 Important boundaries:
 
-- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`. The branch is determined from that repository's ref in each job's newest run. Jobs without an interpretable ref for that repository do not establish baseline evidence. Presubmit history belongs to other pull requests and cannot establish the baseline.
+- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`, using each job's newest completed run. Running jobs without a completed run and jobs without an interpretable ref for that repository do not establish baseline evidence. Only passed or failed tests count as observed tests; skipped tests are not evidence of passing on base. Presubmit history belongs to other pull requests and cannot establish the baseline.
 - Cross-pull-request matching includes base branch, job name, and test name.
 - One peer is retained as evidence but does not produce `widespread`; two peers are required.
 - Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
@@ -88,7 +88,7 @@ A shared failure:
 - has a stable ID derived from that key;
 - records each member pull request, build, and attribution;
 - reports only the oldest and newest member builds observed in the current pass;
-- names the base-branch jobs whose newest run also fails the test, when any do;
+- names the base-branch jobs whose newest completed run also fails the test, when any do;
 - is `escalatable` only when no member already offers the cheaper single-pull-request escalation path.
 
 Clustering uses no model calls and is published by both deployment paths.

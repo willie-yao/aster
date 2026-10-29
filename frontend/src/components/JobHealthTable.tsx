@@ -40,6 +40,7 @@ function jobValues(job: JobSummary) {
     duration: job.last_run?.duration_seconds != null
       ? formatDuration(job.last_run.duration_seconds)
       : "Not available",
+    passRate: job.pass_rate_recent === null ? "No completed runs" : formatPercent(job.pass_rate_recent),
   };
 }
 
@@ -135,7 +136,7 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
 }
 
 function DesktopJobRow({ job }: { job: JobSummary }) {
-  const { lastRun, duration } = jobValues(job);
+  const { lastRun, duration, passRate } = jobValues(job);
   return (
     <Box
       role="row"
@@ -166,7 +167,7 @@ function DesktopJobRow({ job }: { job: JobSummary }) {
         {job.branch || "Not set"}
       </Typography>
       <Box role="cell" sx={{ gridArea: "runs", minWidth: 0 }}><Sparkline runs={job.recent_runs} jobID={job.job_id} /></Box>
-      <Typography role="cell" variant="data" sx={{ gridArea: "pass", ...overviewTypography.data }}>{formatPercent(job.pass_rate_recent)}</Typography>
+      <Typography role="cell" variant="data" sx={{ gridArea: "pass", ...overviewTypography.data }}>{passRate}</Typography>
       <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "last", ...overviewTypography.data }}>{lastRun}</Typography>
       <Typography role="cell" variant="data" color="textSecondary" sx={{ gridArea: "duration", ...overviewTypography.data }}>{duration}</Typography>
       <Box role="cell" sx={{ gridArea: "status", justifySelf: "end" }}>
@@ -177,7 +178,7 @@ function DesktopJobRow({ job }: { job: JobSummary }) {
 }
 
 function MobileJobRow({ job }: { job: JobSummary }) {
-  const { lastRun, duration } = jobValues(job);
+  const { lastRun, duration, passRate } = jobValues(job);
   return (
     <Box
       role="listitem"
@@ -204,7 +205,7 @@ function MobileJobRow({ job }: { job: JobSummary }) {
       </Box>
       <Box sx={{ gridArea: "meta", display: "flex", minWidth: 0, alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         <Metric label="Branch" value={job.branch || "Not set"} />
-        <Metric label="Last 10 pass" value={formatPercent(job.pass_rate_recent)} />
+        <Metric label="Last 10 pass" value={passRate} />
         <Metric label="Ran" value={lastRun} />
         <Metric label="Duration" value={duration} />
       </Box>

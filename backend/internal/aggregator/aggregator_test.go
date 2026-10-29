@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -116,8 +117,8 @@ func TestComputeJobSummary_EmptyRuns(t *testing.T) {
 	if len(s.RecentRuns) != 0 {
 		t.Errorf("expected 0 recent runs, got %d", len(s.RecentRuns))
 	}
-	if s.PassRateRecent != 0 {
-		t.Errorf("expected 0 pass rate, got %.2f", s.PassRateRecent)
+	if s.PassRateRecent != nil || s.OverallStatus != "UNKNOWN" {
+		t.Errorf("expected unknown reliability without completed runs, got %+v", s)
 	}
 }
 
@@ -162,12 +163,69 @@ func TestComputeJobSummary_PassRates(t *testing.T) {
 	s := ComputeJobSummary(job, runs)
 
 	// Last 10 runs are 8 pass / 10 = 0.8; failing tail runs are ignored.
-	if s.PassRateRecent < 0.79 || s.PassRateRecent > 0.81 {
-		t.Errorf("expected PassRateRecent ~0.8 over the last 10 runs, got %.4f", s.PassRateRecent)
+	if s.PassRateRecent == nil {
+		t.Fatal("expected a pass rate over completed runs")
+	}
+	if *s.PassRateRecent < 0.79 || *s.PassRateRecent > 0.81 {
+		t.Errorf("expected PassRateRecent ~0.8 over the last 10 runs, got %.4f", *s.PassRateRecent)
 	}
 	// 0.8 is between the thresholds, so status is FLAKY.
 	if s.OverallStatus != "FLAKY" {
 		t.Errorf("expected FLAKY at 0.8 pass rate, got %s", s.OverallStatus)
+	}
+}
+
+func TestComputeJobSummaryCompletedReliability(t *testing.T) {
+	pending := make([]string, passRateRecentRuns)
+	for i := range pending {
+		pending[i] = "PENDING"
+	}
+	cases := []struct {
+		name    string
+		results []string
+		rate    *float64
+		status  string
+	}{
+		{"pending with passes", []string{"PENDING", "SUCCESS", "PENDING", "SUCCESS"}, new(1.0), "PASSING"},
+		{"pending with mixed outcomes", []string{"PENDING", "SUCCESS", "FAILURE", "PENDING"}, new(0.5), "FLAKY"},
+		{"pending with failures", []string{"PENDING", "FAILURE", "PENDING", "FAILURE"}, new(0.0), "FAILING"},
+		{"unknown outcomes ignored", []string{"PENDING", "", "UNKNOWN", "SUCCESS", "FAILURE"}, new(0.5), "FLAKY"},
+		{"all pending", pending, nil, "UNKNOWN"},
+		{"all unknown", []string{"", "UNKNOWN", ""}, nil, "UNKNOWN"},
+		{"empty", nil, nil, "UNKNOWN"},
+		{"completed pass outside window", append(append([]string{}, pending...), "SUCCESS"), nil, "UNKNOWN"},
+		{"completed failure outside window", append(append([]string{}, pending...), "FAILURE"), nil, "UNKNOWN"},
+		{"pass at window boundary", append(append([]string{}, pending[:9]...), "SUCCESS", "FAILURE"), new(1.0), "PASSING"},
+		{"failure at window boundary", append(append([]string{}, pending[:9]...), "FAILURE", "SUCCESS"), new(0.0), "FAILING"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := make([]models.BuildResult, len(tc.results))
+			wantRecent := make([]models.RunSummary, len(tc.results))
+			for i, result := range tc.results {
+				runs[i] = makeBuild(fmt.Sprint(i), hoursAgo(i), result == "SUCCESS", nil)
+				runs[i].Result = result
+				if result == "PENDING" || result == "" || result == "UNKNOWN" {
+					runs[i].Finished = time.Time{}
+				}
+				wantRecent[i] = BuildRunSummary(runs[i])
+			}
+			summary := ComputeJobSummary(models.ProwJob{Name: "job"}, runs)
+			if summary.OverallStatus != tc.status || !reflect.DeepEqual(summary.PassRateRecent, tc.rate) {
+				t.Fatalf("reliability = %s/%v, want %s/%v", summary.OverallStatus, summary.PassRateRecent, tc.status, tc.rate)
+			}
+			if !reflect.DeepEqual(summary.RecentRuns, wantRecent) {
+				t.Errorf("recent runs changed: %+v, want %+v", summary.RecentRuns, wantRecent)
+			}
+			if len(runs) > 0 {
+				if summary.LastRun == nil || *summary.LastRun != wantRecent[0] {
+					t.Errorf("last run = %+v, want %+v", summary.LastRun, wantRecent[0])
+				}
+				if runs[0].Result == "PENDING" && summary.CurrentStatus != models.JobCurrentRunning {
+					t.Errorf("current status = %s, want RUNNING", summary.CurrentStatus)
+				}
+			}
+		})
 	}
 }
 
@@ -204,16 +262,21 @@ func TestRecentPassRate_LimitsToN(t *testing.T) {
 	for i := range runs {
 		runs[i] = makeBuild(fmt.Sprintf("%d", 15-i), hoursAgo(i), i < 10, nil)
 	}
-	if got := recentPassRate(runs, passRateRecentRuns); got != 1.0 {
-		t.Errorf("expected 1.0 over the most recent 10 runs, got %.4f", got)
+	if got := recentPassRate(runs, passRateRecentRuns); got == nil || *got != 1.0 {
+		t.Errorf("expected 1.0 over the most recent 10 runs, got %v", got)
 	}
 	// Fewer runs than the window: average over what exists.
 	short := []models.BuildResult{
 		makeBuild("2", hoursAgo(1), true, nil),
 		makeBuild("1", hoursAgo(2), false, nil),
 	}
-	if got := recentPassRate(short, passRateRecentRuns); got != 0.5 {
-		t.Errorf("expected 0.5 over 2 runs, got %.4f", got)
+	if got := recentPassRate(short, passRateRecentRuns); got == nil || *got != 0.5 {
+		t.Errorf("expected 0.5 over 2 runs, got %v", got)
+	}
+	for _, n := range []int{0, -1} {
+		if got := recentPassRate(short, n); got != nil {
+			t.Errorf("expected no rate for window size %d, got %v", n, got)
+		}
 	}
 }
 
@@ -399,7 +462,7 @@ func TestComputeJobSummarySeparatesCurrentStatusFromRollingReliability(t *testin
 	}
 
 	summary := ComputeJobSummary(models.ProwJob{Name: "recovered"}, runs)
-	if summary.CurrentStatus != models.JobCurrentPassing || summary.OverallStatus != "FLAKY" || summary.PassRateRecent != 0.5 {
+	if summary.CurrentStatus != models.JobCurrentPassing || summary.OverallStatus != "FLAKY" || summary.PassRateRecent == nil || *summary.PassRateRecent != 0.5 {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
