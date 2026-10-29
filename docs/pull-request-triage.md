@@ -71,6 +71,7 @@ Important boundaries:
 - Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
 - A build that tested an older pull request head is marked stale.
 - While a newer build reruns the same revision, the check keeps the newest finished build when it failed, so a retest does not hide the failure. Aborted builds are skipped. A run on a newly pushed revision is reported as running.
+- JUnit `<failure>` and `<error>` cases both count as failed tests, retaining their messages, bodies, and reported source locations.
 - A failed check without a failing JUnit case receives one synthesized `Prow job execution` failure. It is compared with the same job on peers, not with base-branch tests by the generic name.
 - When build artifacts have expired, the check is `UNKNOWN` even if GitHub still retains its commit status.
 

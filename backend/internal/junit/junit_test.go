@@ -24,8 +24,8 @@ func TestParse(t *testing.T) {
 		t.Fatalf("Parse returned error: %v", err)
 	}
 
-	if got := len(cases); got != 5 {
-		t.Fatalf("expected 5 test cases, got %d", got)
+	if got := len(cases); got != 6 {
+		t.Fatalf("expected 6 test cases, got %d", got)
 	}
 
 	// Failed test
@@ -73,8 +73,29 @@ func TestParse(t *testing.T) {
 		t.Errorf("expected status 'skipped', got %q", tc.Status)
 	}
 
-	// Second suite
+	// Error-only test.
 	tc = cases[4]
+	if tc.Status != "failed" || tc.FailureMessage != "Test Panicked" {
+		t.Errorf("expected failed panic, got %+v", tc)
+	}
+	if tc.SuiteName != "capz-e2e" || tc.ClassName != "capz-e2e" || tc.DurationSeconds != 1.50 {
+		t.Errorf("unexpected error case metadata: %+v", tc)
+	}
+	wantBody := "[PANICKED] runtime error: invalid memory address\n" +
+		"sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:42"
+	if tc.FailureBody != wantBody {
+		t.Errorf("failure body = %q, want %q", tc.FailureBody, wantBody)
+	}
+	if tc.FailureLocation != "sigs.k8s.io/cluster-api-provider-azure/test/e2e/azure_test.go:42" {
+		t.Errorf("unexpected error location: %q", tc.FailureLocation)
+	}
+	wantURL := "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/main/test/e2e/azure_test.go#L42"
+	if tc.FailureLocURL != wantURL {
+		t.Errorf("failure location URL = %q, want %q", tc.FailureLocURL, wantURL)
+	}
+
+	// Second suite
+	tc = cases[5]
 	if tc.Status != "passed" {
 		t.Errorf("expected status 'passed', got %q", tc.Status)
 	}
@@ -165,6 +186,62 @@ func TestParse_SingleTestSuite(t *testing.T) {
 	}
 	if cases[0].Status != "passed" {
 		t.Errorf("expected passed, got %q", cases[0].Status)
+	}
+}
+
+func TestParse_SingleTestSuiteErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		elements    string
+		wantMessage string
+		wantBody    string
+	}{
+		{
+			name:        "error only",
+			elements:    `<error message="Test Interrupted" type="interrupted"> interrupted body </error>`,
+			wantMessage: "Test Interrupted",
+			wantBody:    "interrupted body",
+		},
+		{
+			name:     "empty error",
+			elements: `<error/>`,
+		},
+		{
+			name:        "error with skipped",
+			elements:    `<skipped/><error message="panic">panic body</error>`,
+			wantMessage: "panic",
+			wantBody:    "panic body",
+		},
+		{
+			name: "failure before error",
+			elements: `<failure message="failure">failure body</failure>` +
+				`<error message="error">error body</error>`,
+			wantMessage: "failure",
+			wantBody:    "failure body",
+		},
+		{
+			name: "error before failure",
+			elements: `<error message="error">error body</error>` +
+				`<failure message="failure">failure body</failure>`,
+			wantMessage: "failure",
+			wantBody:    "failure body",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := `<testsuite name="suite"><testcase name="test">` + tt.elements + `</testcase></testsuite>`
+			cases, err := Parse([]byte(data))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(cases) != 1 {
+				t.Fatalf("got %d cases, want 1", len(cases))
+			}
+			tc := cases[0]
+			if tc.Status != "failed" || tc.FailureMessage != tt.wantMessage || tc.FailureBody != tt.wantBody {
+				t.Errorf("unexpected failure: %+v", tc)
+			}
+		})
 	}
 }
 
