@@ -161,7 +161,10 @@ Usage ledgers retain provider-reported token categories and operator-priced cost
 
 ## Implementation map
 
-- `backend/internal/ai/agentic.go`: provider loop, finalization, repair, and draft selection.
+- `backend/internal/ai/agentic.go`: analysis orchestration, floor policy, and critique repair.
+- `backend/internal/ai/agent_loop.go`: bounded model/tool loop and finalize decisions.
+- `backend/internal/ai/finalization.go`: structured finalization and draft parsing.
+- `backend/internal/ai/draft_selection.go`: candidate ranking and fallback selection.
 - `backend/internal/ai/evidenceplan/`: ranked evidence planning.
 - `backend/internal/ai/skills/`: engine and consumer evidence recipes.
 - `backend/internal/ai/critique.go`: deterministic critique.
