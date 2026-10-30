@@ -143,10 +143,16 @@ type checkTask struct {
 	job       jobconfig.JobDefinition
 }
 
+type collectedChecks struct {
+	checks []models.PullRequestCheck
+	// unobserved counts applicable checks whose observation did not complete successfully.
+	unobserved int
+}
+
 // collectChecks observes every applicable (pull request, presubmit) pair with a
 // bounded worker pool. The result is indexed by position in pulls.
-func collectChecks(ctx context.Context, backend storage.Backend, pulls []ghpr.PullRequest, presubmits []jobconfig.JobDefinition, opts Options) [][]models.PullRequestCheck {
-	out := make([][]models.PullRequestCheck, len(pulls))
+func collectChecks(ctx context.Context, backend storage.Backend, pulls []ghpr.PullRequest, presubmits []jobconfig.JobDefinition, opts Options) []collectedChecks {
+	out := make([]collectedChecks, len(pulls))
 	var tasks []checkTask
 	for i, pull := range pulls {
 		for _, job := range presubmits {
@@ -157,6 +163,7 @@ func collectChecks(ctx context.Context, backend storage.Backend, pulls []ghpr.Pu
 			}
 			if applies {
 				tasks = append(tasks, checkTask{pullIndex: i, job: job})
+				out[i].unobserved++
 			}
 		}
 	}
@@ -179,11 +186,11 @@ func collectChecks(ctx context.Context, backend storage.Backend, pulls []ghpr.Pu
 				log.Printf("    ⚠ pr #%d %s: %v", pull.Number, task.job.Name, err)
 				return
 			}
-			if check == nil {
-				return
-			}
 			mu.Lock()
-			out[task.pullIndex] = append(out[task.pullIndex], *check)
+			out[task.pullIndex].unobserved--
+			if check != nil {
+				out[task.pullIndex].checks = append(out[task.pullIndex].checks, *check)
+			}
 			mu.Unlock()
 		}(task)
 	}
@@ -350,7 +357,8 @@ func failingCases(ctx context.Context, backend storage.Backend, loc prowbuild.Bu
 func running(check models.PullRequestCheck) bool { return check.Finished.IsZero() }
 
 // buildDetail assembles one pull request's detail file and its derived summary.
-func buildDetail(pull ghpr.PullRequest, repo string, checks []models.PullRequestCheck) models.PullRequestDetail {
+func buildDetail(pull ghpr.PullRequest, repo string, observed collectedChecks) models.PullRequestDetail {
+	checks := observed.checks
 	sortChecks(checks)
 	summary := models.PullRequestSummary{
 		Number:    pull.Number,
@@ -380,7 +388,7 @@ func buildDetail(pull ghpr.PullRequest, repo string, checks []models.PullRequest
 		summary.CIState = models.PullRequestCIFailing
 	case pending:
 		summary.CIState = models.PullRequestCIPending
-	case summary.ChecksObserved > 0:
+	case summary.ChecksObserved > 0 && observed.unobserved == 0:
 		summary.CIState = models.PullRequestCIPassing
 	}
 	if checks == nil {

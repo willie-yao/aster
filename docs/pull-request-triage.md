@@ -67,7 +67,7 @@ Matching names do not establish a shared cause. These verdicts neither prove nor
 
 Important boundaries:
 
-- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`, using each job's newest completed run. Running jobs without a completed run and jobs without an interpretable ref for that repository do not establish baseline evidence. Only passed or failed tests count as observed tests; skipped tests are not evidence of passing on base. Presubmit history belongs to other pull requests and cannot establish the baseline.
+- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`, using each job's newest completed run with at least one passed or failed test-level outcome. Runs with only skipped tests, synthetic build-level failures, or no tests do not replace older usable evidence. Outcomes are taken from that one run, not combined across runs. Jobs without an eligible run or an interpretable ref for that repository do not establish baseline evidence. Presubmit history belongs to other pull requests and cannot establish the baseline.
 - Cross-pull-request matching includes base branch, job name, and test name.
 - One peer is retained as evidence but does not produce `widespread`; two peers are required.
 - Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
@@ -76,6 +76,7 @@ Important boundaries:
 - JUnit `<failure>` and `<error>` cases both count as failed tests, retaining their messages, bodies, and reported source locations.
 - A failed check without a failing JUnit case receives one synthesized `Prow job execution` failure. It is compared with the same job on peers, not with base-branch tests by the generic name.
 - When build artifacts have expired, the check is `UNKNOWN` even if GitHub still retains its commit status.
+- If an applicable check cannot be read, the pull request cannot report `PASSING`. Observed failures still report `FAILING`, and running checks still report `PENDING`; otherwise incomplete observations report `UNKNOWN`. A presubmit that has never run is not an observation error.
 
 ## Shared failures
 
@@ -88,7 +89,7 @@ A shared failure:
 - has a stable ID derived from that key;
 - records each member pull request, build, and attribution;
 - reports only the oldest and newest member builds observed in the current pass;
-- names the base-branch jobs whose newest completed run also fails the test, when any do;
+- names the base-branch jobs whose newest completed run with test-level outcomes also fails the test, when any do;
 - is `escalatable` only when no member already offers the cheaper single-pull-request escalation path.
 
 Clustering uses no model calls and is published by both deployment paths.
