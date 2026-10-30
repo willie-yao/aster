@@ -19,7 +19,7 @@ import (
 // can point at an httptest server.
 const defaultAPIBase = "https://api.github.com"
 
-// ErrWriteOutcomeUnknown means GitHub may have accepted a create request before the response was lost.
+// ErrWriteOutcomeUnknown means GitHub may have accepted a create request without returning its identity.
 var ErrWriteOutcomeUnknown = errors.New("issue write outcome unknown")
 
 // Client is a minimal GitHub REST client scoped to one target repo, with just
@@ -128,7 +128,11 @@ func (c *Client) CreateIssue(ctx context.Context, title, body string, labels []s
 		return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
 	}
 	if resp.StatusCode != http.StatusCreated {
-		return 0, "", fmt.Errorf("create issue: %s: %s", resp.Status, textutil.Truncate(string(rb), 300))
+		createErr := fmt.Errorf("create issue: %s: %s", resp.Status, textutil.Truncate(string(rb), 300))
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, createErr)
+		}
+		return 0, "", createErr
 	}
 	var out struct {
 		Number  int    `json:"number"`

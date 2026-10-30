@@ -674,3 +674,39 @@ func TestCreateIssueMissingIdentityIsOutcomeUnknown(t *testing.T) {
 		t.Fatalf("missing identity error = %v", err)
 	}
 }
+
+func TestCreateIssueStatusOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		wantUnknown bool
+	}{
+		{status: http.StatusUnprocessableEntity},
+		{status: http.StatusBadGateway, wantUnknown: true},
+		{status: http.StatusGatewayTimeout, wantUnknown: true},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/repos/o/r/issues" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				http.Error(w, "create failed", tc.status)
+			}))
+			defer srv.Close()
+			client := NewClient("token", "o", "r")
+			client.apiBase = srv.URL
+			client.httpClient = srv.Client()
+			number, url, err := client.CreateIssue(t.Context(), "title", "body", nil)
+			if number != 0 || url != "" || err == nil {
+				t.Fatalf("create number=%d url=%q err=%v", number, url, err)
+			}
+			if errors.Is(err, ErrWriteOutcomeUnknown) != tc.wantUnknown {
+				t.Errorf("unknown=%t, want %t: %v", errors.Is(err, ErrWriteOutcomeUnknown), tc.wantUnknown, err)
+			}
+			for _, context := range []string{"create issue", strconv.Itoa(tc.status), http.StatusText(tc.status), "create failed"} {
+				if !strings.Contains(err.Error(), context) {
+					t.Errorf("error %q omitted %q", err, context)
+				}
+			}
+		})
+	}
+}

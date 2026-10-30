@@ -591,6 +591,41 @@ func TestCreatePRMissingIdentityIsOutcomeUnknown(t *testing.T) {
 	}
 }
 
+func TestOpenPRCreateStatusOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		wantUnknown bool
+	}{
+		{status: http.StatusUnprocessableEntity},
+		{status: http.StatusBadGateway, wantUnknown: true},
+		{status: http.StatusGatewayTimeout, wantUnknown: true},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			f := newFakeGitHub(t, "main")
+			f.postFailPath = "/pulls"
+			f.postFailCode = tc.status
+			url, err := testClient(f).OpenPR(t.Context(), Request{
+				Owner: "o", Repo: "r", Files: map[string]string{"a.txt": "fixed"},
+				BranchPrefix: "fix", Title: "Fix",
+			})
+			if url != "" || err == nil {
+				t.Fatalf("create url=%q err=%v", url, err)
+			}
+			if errors.Is(err, ErrWriteOutcomeUnknown) != tc.wantUnknown {
+				t.Errorf("unknown=%t, want %t: %v", errors.Is(err, ErrWriteOutcomeUnknown), tc.wantUnknown, err)
+			}
+			if !isResponseStatus(err, tc.status) {
+				t.Errorf("status error was not preserved: %v", err)
+			}
+			for _, context := range []string{"opening pull request in o/r", "POST", "/repos/o/r/pulls", http.StatusText(tc.status)} {
+				if !strings.Contains(err.Error(), context) {
+					t.Errorf("error %q omitted %q", err, context)
+				}
+			}
+		})
+	}
+}
+
 // A failure on a release branch has to resolve that branch's head, not the
 // default branch's, or its commit compares as diverged.
 func TestResolveBaseResolvesRequestedBranch(t *testing.T) {
