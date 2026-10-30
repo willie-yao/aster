@@ -51,14 +51,12 @@ test("no functional text is declared below the eleven pixel floor", () => {
 test("prose on the trends and results ledgers is held to a measure", () => {
   const trends = source("src/pages/FlakinessPage.tsx");
   const testCases = source("src/components/TestCaseTable.tsx");
-  const ledger = source("src/components/ResultLedger.tsx");
 
   // Failure text and analysis prose run to hundreds of characters on a wide
   // ledger, so each is capped at the same measure the expanded detail uses.
   assert.match(trends, /WebkitLineClamp: 2[\s\S]{0,400}?maxWidth: "74ch"/);
   assert.match(trends, /maxWidth: "74ch"[\s\S]{0,200}?activeDefinition\.tooltip/);
   assert.match(testCases, /maxWidth: "74ch"[\s\S]{0,200}?overviewTypography\.secondaryBody/);
-  assert.match(ledger, /maxWidth: "74ch"[\s\S]{0,200}?Skipped tests/);
 });
 
 test("detail headings use the enlarged readable scale", () => {

@@ -17,12 +17,10 @@ export function DialogHeader({
   icon,
   accent = "primary",
   title,
-  subtitle,
 }: {
   icon: ReactNode;
   accent?: "primary" | "warning";
   title: string;
-  subtitle?: string;
 }) {
   return (
     <DialogTitle
@@ -42,15 +40,6 @@ export function DialogHeader({
         <Typography component="span" sx={{ display: "block", ...overviewTypography.majorHeading }}>
           {title}
         </Typography>
-        {subtitle && (
-          <Typography
-            variant="caption"
-            color="textSecondary"
-            sx={{ display: "block", mt: 0.25, maxWidth: "74ch" }}
-          >
-            {subtitle}
-          </Typography>
-        )}
       </Box>
     </DialogTitle>
   );

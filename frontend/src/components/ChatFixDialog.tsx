@@ -5,7 +5,6 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import InputLabel from "@mui/material/InputLabel";
@@ -43,15 +42,14 @@ import { clearStoredChatFixRequest, readStoredChatFixRequest, storeChatFixReques
 import type { AnalysisChatMessage } from "../types/analysisChat";
 import type { PatternAnalysis } from "../types/dashboard";
 import { WarningLines } from "./ActionDraftPreview";
-import { DialogHeader } from "./ActionDialog";
 import { dialogGutter, dialogPaperSx, dialogRegionLabelSx, overviewTypography } from "../theme/overview";
 import { RichText } from "./RichText";
 import { FixReviewWorkspace, type FixReviewProps } from "./FixReviewWorkspace";
+import { FixPreparationWorkspace } from "./FixPreparationWorkspace";
 import { alertRole } from "../theme";
 
-// Reviewing a draft needs room for its diff, so the dialog takes nearly the
-// whole viewport for that step.
-const reviewPaperSx = {
+// Preparation and review share the same viewport-sized workspace.
+const workspacePaperSx = {
   ...dialogPaperSx,
   m: { xs: 1, md: 2 },
   width: { xs: "calc(100% - 16px)", md: "calc(100% - 32px)" },
@@ -537,258 +535,269 @@ export function ChatFixDialog({
         onClose={busy && !(exactAnalysis && busy === "preview") ? undefined : close}
         maxWidth={false}
         fullWidth
-        slotProps={{ paper: { sx: reviewPaperSx } }}
+        slotProps={{ paper: { sx: workspacePaperSx } }}
       >
         <FixReviewWorkspace {...review} />
       </Dialog>
     );
   }
 
+  const patternContext = !exactAnalysis && (
+    <ContextSection title="Recurring pattern">
+      {eligiblePatterns.length > 1 && (
+        <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
+          <InputLabel id="chat-fix-pattern-label">Pattern</InputLabel>
+          <Select
+            labelId="chat-fix-pattern-label"
+            label="Pattern"
+            value={patternID}
+            onChange={(event) => setPatternID(event.target.value)}
+          >
+            {eligiblePatterns.map((pattern) => (
+              <MenuItem key={pattern.id} value={pattern.id}>{pattern.subject}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      )}
+      {selectedPattern && (
+        <Box sx={regionBlockSx}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedPattern.subject}</Typography>
+          {selectedPattern.shared_root_cause && (
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55, maxWidth: "68ch" }}>
+              <RichText text={selectedPattern.shared_root_cause} steps />
+            </Typography>
+          )}
+          {selectedPattern.suggested_fix && (
+            <Typography variant="body2" sx={{ mt: 1, maxWidth: "68ch" }}>
+              <Box component="span" sx={{ fontWeight: 700 }}>Direction: </Box>
+              {selectedPattern.suggested_fix}
+            </Typography>
+          )}
+          {selectedPattern.relevant_files && selectedPattern.relevant_files.length > 0 && (
+            <Box sx={{ mt: 1.25 }}>
+              <Typography sx={dialogRegionLabelSx}>Agent starting files</Typography>
+              {selectedPattern.relevant_files.map((path) => (
+                <Typography key={path} sx={{ ...overviewTypography.data, display: "block", overflowWrap: "anywhere" }}>
+                  {path}
+                </Typography>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
+    </ContextSection>
+  );
+  const findingContext = (
+    <ContextSection title="Selected chat finding">
+      <Typography variant="body2" sx={{ lineHeight: 1.6, maxWidth: "68ch" }}>
+        <RichText text={message.content} steps />
+      </Typography>
+      <FindingCaveats caveats={caveats} />
+      {message.proposed_revision && (
+        <Box sx={{ mt: 2 }}>
+          <Typography sx={dialogRegionLabelSx}>Proposed revision</Typography>
+          <Typography variant="body2" sx={{ maxWidth: "68ch" }}>{message.proposed_revision.root_cause}</Typography>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45, maxWidth: "68ch" }}>
+            {message.proposed_revision.suggested_fix}
+          </Typography>
+        </Box>
+      )}
+      {message.citations && message.citations.length > 0 && (
+        <Box component="details" sx={{ mt: 3, pt: 1, borderTop: "1px solid", borderColor: "divider" }}>
+          <Box
+            component="summary"
+            sx={{
+              ...overviewTypography.subsectionHeading,
+              cursor: "pointer",
+              py: 1,
+              minHeight: 44,
+              "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
+            }}
+          >
+            Validated evidence ({message.citations.length})
+          </Box>
+          <Box sx={{ pt: 1 }}><EvidenceList citations={message.citations} /></Box>
+        </Box>
+      )}
+    </ContextSection>
+  );
+  const notices = (
+    <>
+      {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
+      {observationMessage && <Alert role="status" severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
+      {url && (
+        <Alert role="status" severity="success" icon={<CheckCircleOutlined />} sx={{ mb: 2 }}>
+          Draft PR opened: <Link href={url} target="_blank" rel="noopener noreferrer">{url}</Link>
+        </Alert>
+      )}
+      {requestPresentation && !requestPresentation.canRegenerate && busy === null && !observationMessage && !url && (
+        <Alert severity={requestPresentation.severity} role={alertRole(requestPresentation.severity)} variant="outlined" sx={{ mb: 2 }}>
+          {requestPresentation.message}
+        </Alert>
+      )}
+    </>
+  );
+  const controls = (
+    <Stack spacing={3}>
+      {branchChoice && (
+        <ContextSection title="Target branch">
+          <RadioGroup
+            aria-label="Target branch"
+            value={branchTarget}
+            onChange={(event) => setBranchTarget(event.target.value as ChatFixBranchTarget)}
+          >
+            <FormControlLabel
+              value="tested"
+              disabled={busy !== null || (request !== null && !isNoPatchRetry)}
+              control={<Radio size="small" />}
+              label={`${branchChoice.tested} (tested branch)`}
+            />
+            <FormControlLabel
+              value="default"
+              disabled={busy !== null || (request !== null && !isNoPatchRetry)}
+              control={<Radio size="small" />}
+              label={`${branchChoice.default} (default branch)`}
+            />
+          </RadioGroup>
+          {branchTarget === "default" && (
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
+              The coding agent patches the current head of {branchChoice.default}. The pull request names the
+              failure on {branchChoice.tested} and suggests /cherry-pick {branchChoice.tested} after merge.
+            </Typography>
+          )}
+        </ContextSection>
+      )}
+      {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
+        <Alert severity={requestPresentation.severity} role="status" variant="outlined">
+          <Typography variant="body2" sx={{ fontWeight: 750, mb: 0.4 }}>
+            {isProviderCredentialRetry ? "Provider request refused" : "Generation completed without a patch"}
+          </Typography>
+          <Typography variant="body2">{requestPresentation.message}</Typography>
+        </Alert>
+      )}
+      {request?.status === "failed" && request.failure?.operator_summary && busy === null && !observationMessage && (
+        <Box>
+          <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
+            {request.failure.category === "no_reviewable_patch"
+              ? "Coding agent summary"
+              : request.failure.category === "provider_credential" || request.failure.category === "provider_request"
+                ? "Provider diagnostic"
+                : "Runtime diagnostic"}
+          </Typography>
+          <Typography variant="body2" color="textSecondary" sx={{ overflowWrap: "anywhere" }}>
+            {request.failure.operator_summary}
+          </Typography>
+        </Box>
+      )}
+      {generating ? (
+        sentInstruction && <SentInstruction text={sentInstruction} />
+      ) : (
+        <TextField
+          label="Maintainer instruction (optional)"
+          placeholder="e.g. preserve backward compatibility and change only the controller retry branch"
+          fullWidth
+          multiline
+          minRows={5}
+          maxRows={8}
+          value={instruction}
+          onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
+          helperText={instructionHelperText}
+        />
+      )}
+      {requestPresentation?.canRegenerate && !generating && (
+        <Button
+          variant="outlined"
+          onClick={() => void regeneratePreview()}
+          disabled={busy !== null || (!isProviderCredentialRetry && !hasChangedTarget && !hasRevisedInstruction)}
+          sx={{ alignSelf: "flex-start" }}
+        >
+          {hasChangedTarget ? "Generate fix preview" : isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
+        </Button>
+      )}
+    </Stack>
+  );
+  const actions = (
+    <DialogActions sx={{ px: dialogGutter, py: 2, flexWrap: "wrap", rowGap: 1.5 }}>
+      {generating && (
+        <Stack
+          role="status"
+          direction="row"
+          spacing={1.25}
+          sx={{ alignItems: "center", flex: "1 1 18rem", minWidth: 0, mr: "auto" }}
+        >
+          <CircularProgress size={18} sx={{ flexShrink: 0 }} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+              {busy === "regenerate"
+                ? "Regenerating the fix preview"
+                : request?.stage === "drafting"
+                  ? "Generating the fix preview"
+                  : "Verifying the fix request"}
+            </Typography>
+            <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
+              {exactAnalysis
+                ? "Generation continues in the background. You can close this dialog and return later."
+                : "The coding agent is using only the reviewed context."}
+            </Typography>
+          </Box>
+        </Stack>
+      )}
+      <Button color="inherit" onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
+        {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
+      </Button>
+      {!request && !preview && !url && (
+        <Button
+          variant="contained"
+          startIcon={<BuildOutlined />}
+          onClick={() => void generatePreview()}
+          disabled={busy !== null || (!exactAnalysis && !patternID)}
+        >
+          {busy === "preview" ? "Generating" : "Generate fix preview"}
+        </Button>
+      )}
+      {requestPresentation?.canStartOver && !url && (
+        <Button variant="outlined" onClick={startOver} disabled={busy !== null}>
+          Start over
+        </Button>
+      )}
+      {request?.status === "ready" && request.preview && !preview && !url && (
+        <Button
+          variant="contained"
+          startIcon={<BuildOutlined />}
+          onClick={() => setPreview(request.preview ?? null)}
+          disabled={busy !== null}
+        >
+          Review fix preview
+        </Button>
+      )}
+    </DialogActions>
+  );
   return (
     <Dialog
       open={open}
       onClose={busy && !(exactAnalysis && busy === "preview") ? undefined : close}
-      maxWidth="md"
+      maxWidth={false}
       fullWidth
-      slotProps={{ paper: { sx: dialogPaperSx } }}
+      slotProps={{ paper: { sx: workspacePaperSx } }}
     >
-      <DialogHeader
-        icon={<BuildOutlined sx={{ fontSize: 18 }} />}
-        title="Use this finding in a fix proposal"
-        subtitle={fixScopeSummary(causeScope, exactAnalysis)}
+      <FixPreparationWorkspace
+        context={!url && (
+          <>
+            <Typography sx={{ ...overviewTypography.description, color: "text.secondary", maxWidth: "74ch", mb: 3 }}>
+              {fixScopeSummary(causeScope, exactAnalysis)}
+            </Typography>
+            <Stack spacing={3}>
+              {patternContext}
+              {findingContext}
+            </Stack>
+          </>
+        )}
+        controls={controls}
+        notices={notices}
+        actions={actions}
+        closeDisabled={busy !== null && !(exactAnalysis && busy === "preview")}
+        onClose={close}
       />
-
-      <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
-        {error && <Alert severity="error" variant="outlined" sx={{ mb: 2 }}>{error}</Alert>}
-        {observationMessage && <Alert role="status" severity="info" variant="outlined" sx={{ mb: 2 }}>{observationMessage}</Alert>}
-        {url && (
-          <Alert role="status" severity="success" icon={<CheckCircleOutlined />} sx={{ mb: 2 }}>
-            Draft PR opened: <Link href={url} target="_blank" rel="noopener noreferrer">{url}</Link>
-          </Alert>
-        )}
-
-        {!preview && !url && (
-          <Stack spacing={2.5}>
-            {requestPresentation && !requestPresentation.canRegenerate && busy === null && !observationMessage && (
-              <Alert
-                severity={requestPresentation.severity}
-                role={alertRole(requestPresentation.severity)}
-                variant="outlined"
-              >
-                {requestPresentation.message}
-              </Alert>
-            )}
-
-            {!exactAnalysis && <ContextSection title="Recurring pattern">
-              {eligiblePatterns.length > 1 && (
-                <FormControl fullWidth size="small" sx={{ mb: 1.25 }}>
-                  <InputLabel id="chat-fix-pattern-label">Pattern</InputLabel>
-                  <Select
-                    labelId="chat-fix-pattern-label"
-                    label="Pattern"
-                    value={patternID}
-                    onChange={(event) => setPatternID(event.target.value)}
-                  >
-                    {eligiblePatterns.map((pattern) => (
-                      <MenuItem key={pattern.id} value={pattern.id}>{pattern.subject}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              )}
-              {selectedPattern && (
-                <Box sx={regionBlockSx}>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>{selectedPattern.subject}</Typography>
-                  {selectedPattern.shared_root_cause && (
-                    <Typography variant="body2" color="textSecondary" sx={{ mt: 0.55, lineHeight: 1.55, maxWidth: "68ch" }}>
-                      <RichText text={selectedPattern.shared_root_cause} steps />
-                    </Typography>
-                  )}
-                  {selectedPattern.suggested_fix && (
-                    <Typography variant="body2" sx={{ mt: 1, maxWidth: "68ch" }}>
-                      <Box component="span" sx={{ fontWeight: 700 }}>Direction: </Box>
-                      {selectedPattern.suggested_fix}
-                    </Typography>
-                  )}
-                  {selectedPattern.relevant_files && selectedPattern.relevant_files.length > 0 && (
-                    <Box sx={{ mt: 1.25 }}>
-                      <Typography sx={dialogRegionLabelSx}>Agent starting files</Typography>
-                      {selectedPattern.relevant_files.map((path) => (
-                        <Typography
-                          key={path}
-                          sx={{ ...overviewTypography.data, display: "block", overflowWrap: "anywhere" }}
-                        >
-                          {path}
-                        </Typography>
-                      ))}
-                    </Box>
-                  )}
-                </Box>
-              )}
-            </ContextSection>}
-
-            <ContextSection title="Selected chat finding">
-              <Typography variant="body2" sx={{ lineHeight: 1.6, maxWidth: "68ch" }}>
-                <RichText text={message.content} steps />
-              </Typography>
-              <FindingCaveats caveats={caveats} />
-              {message.proposed_revision && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography sx={dialogRegionLabelSx}>Proposed revision</Typography>
-                  <Typography variant="body2" sx={{ maxWidth: "68ch" }}>{message.proposed_revision.root_cause}</Typography>
-                  <Typography variant="body2" color="textSecondary" sx={{ mt: 0.45, maxWidth: "68ch" }}>
-                    {message.proposed_revision.suggested_fix}
-                  </Typography>
-                </Box>
-              )}
-              {message.citations && message.citations.length > 0 && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography sx={dialogRegionLabelSx}>Validated evidence</Typography>
-                  <EvidenceList citations={message.citations} />
-                </Box>
-              )}
-            </ContextSection>
-
-            {branchChoice && (
-              <ContextSection title="Target branch">
-                <RadioGroup
-                  aria-label="Target branch"
-                  value={branchTarget}
-                  onChange={(event) => setBranchTarget(event.target.value as ChatFixBranchTarget)}
-                >
-                  <FormControlLabel
-                    value="tested"
-                    disabled={busy !== null || (request !== null && !isNoPatchRetry)}
-                    control={<Radio size="small" />}
-                    label={`${branchChoice.tested} (tested branch)`}
-                  />
-                  <FormControlLabel
-                    value="default"
-                    disabled={busy !== null || (request !== null && !isNoPatchRetry)}
-                    control={<Radio size="small" />}
-                    label={`${branchChoice.default} (default branch)`}
-                  />
-                </RadioGroup>
-                {branchTarget === "default" && (
-                  <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
-                    The coding agent patches the current head of {branchChoice.default}. The pull request names the
-                    failure on {branchChoice.tested} and suggests /cherry-pick {branchChoice.tested} after merge.
-                  </Typography>
-                )}
-              </ContextSection>
-            )}
-
-            {requestPresentation?.canRegenerate && busy === null && !observationMessage && (
-              <Alert severity={requestPresentation.severity} role="status" variant="outlined">
-                <Typography variant="body2" sx={{ fontWeight: 750, mb: 0.4 }}>
-                  {isProviderCredentialRetry ? "Provider request refused" : "Generation completed without a patch"}
-                </Typography>
-                <Typography variant="body2">{requestPresentation.message}</Typography>
-              </Alert>
-            )}
-            {request?.status === "failed" && request.failure?.operator_summary && busy === null && !observationMessage && (
-              <Box sx={{ mt: 1.1 }}>
-                <Typography variant="caption" sx={{ display: "block", fontWeight: 750, mb: 0.35 }}>
-                  {request.failure.category === "no_reviewable_patch"
-                    ? "Coding agent summary"
-                    : request.failure.category === "provider_credential" || request.failure.category === "provider_request"
-                      ? "Provider diagnostic"
-                      : "Runtime diagnostic"}
-                </Typography>
-                <Typography variant="body2" color="textSecondary" sx={{ overflowWrap: "anywhere" }}>
-                  {request.failure.operator_summary}
-                </Typography>
-              </Box>
-            )}
-
-            {generating ? (
-              sentInstruction && <SentInstruction text={sentInstruction} />
-            ) : (
-              <TextField
-                label="Maintainer instruction (optional)"
-                placeholder="e.g. preserve backward compatibility and change only the controller retry branch"
-                fullWidth
-                multiline
-                minRows={2}
-                maxRows={5}
-                value={instruction}
-                onChange={(event) => setInstruction(limitChatFixInstruction(event.target.value))}
-                helperText={instructionHelperText}
-              />
-            )}
-            {requestPresentation?.canRegenerate && !generating && (
-              <Button
-                variant="outlined"
-                onClick={() => void regeneratePreview()}
-                disabled={busy !== null || (!isProviderCredentialRetry && !hasChangedTarget && !hasRevisedInstruction)}
-                sx={{ alignSelf: "flex-start" }}
-              >
-                {hasChangedTarget ? "Generate fix preview" : isProviderCredentialRetry ? "Retry fix preview" : "Regenerate with feedback"}
-              </Button>
-            )}
-            {exactAnalysis && (
-              <Typography variant="caption" color="textSecondary" sx={{ display: "block", maxWidth: "74ch" }}>
-                The repository and generation base are pinned when the request is admitted. Later target-branch changes are allowed
-                only if they preserve that base and do not touch patched files. The pull request keeps the pinned base without rebasing.
-              </Typography>
-            )}
-          </Stack>
-        )}
-      </DialogContent>
-
-      <DialogActions sx={{ px: dialogGutter, py: 2, flexWrap: generating ? "wrap" : undefined, rowGap: 1.5 }}>
-        {generating && (
-          <Stack
-            role="status"
-            direction="row"
-            spacing={1.25}
-            sx={{ alignItems: "center", flex: "1 1 18rem", minWidth: 0, mr: "auto" }}
-          >
-            <CircularProgress size={18} sx={{ flexShrink: 0 }} />
-            <Box sx={{ minWidth: 0 }}>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                {busy === "regenerate"
-                  ? "Regenerating the fix preview"
-                  : request?.stage === "drafting"
-                    ? "Generating the fix preview"
-                    : "Verifying the fix request"}
-              </Typography>
-              <Typography variant="caption" color="textSecondary" sx={{ display: "block" }}>
-                {exactAnalysis
-                  ? "Generation continues in the background. You can close this dialog and return later."
-                  : "The coding agent is using only the reviewed context."}
-              </Typography>
-            </Box>
-          </Stack>
-        )}
-        <Button color="inherit" onClick={close} disabled={busy !== null && !(exactAnalysis && busy === "preview")}>
-          {url ? "Done" : exactAnalysis && busy === "preview" ? "Close" : "Cancel"}
-        </Button>
-        {!request && !preview && !url && (
-          <Button
-            variant="contained"
-            startIcon={<BuildOutlined />}
-            onClick={() => void generatePreview()}
-            disabled={busy !== null || (!exactAnalysis && !patternID)}
-          >
-            {busy === "preview" ? "Generating" : "Generate fix preview"}
-          </Button>
-        )}
-        {requestPresentation?.canStartOver && !url && (
-          <Button variant="outlined" onClick={startOver} disabled={busy !== null}>
-            Start over
-          </Button>
-        )}
-        {request?.status === "ready" && request.preview && !preview && !url && (
-          <Button
-            variant="contained"
-            startIcon={<BuildOutlined />}
-            onClick={() => setPreview(request.preview ?? null)}
-            disabled={busy !== null}
-          >
-            Review fix preview
-          </Button>
-        )}
-      </DialogActions>
     </Dialog>
   );
 }

@@ -154,16 +154,6 @@ export function ResultLedger({
         </Box>
       </Box>
       {children}
-      <Typography
-        component="p"
-        color="textSecondary"
-        sx={{ m: 0, px: 1.5, py: 1, borderTop: "1px solid", borderColor: "divider", ...overviewTypography.description }}
-      >
-        {/* The rule spans the ledger; the sentence reads at prose measure. */}
-        <Box component="span" sx={{ display: "block", maxWidth: "74ch" }}>
-          Skipped tests and successful setup/teardown cases are summarized above and are not included in this ledger.
-        </Box>
-      </Typography>
     </Box>
   );
 }

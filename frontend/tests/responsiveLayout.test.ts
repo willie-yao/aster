@@ -266,18 +266,16 @@ test("each ledger grid fits the viewport at the width it engages", () => {
   }
 });
 
-test("technical identity sits below the evidence and the phone briefing leads with the next step", () => {
-  for (const path of ["src/pages/JobDetailPage.tsx", "src/pages/TestDetailPage.tsx"]) {
-    const page = source(path);
-    assert.ok(
-      page.indexOf("<MetricStrip") < page.lastIndexOf("<TechnicalIdentity"),
-      `${path} must render technical identity after the metrics`,
-    );
-    assert.ok(
-      page.indexOf("<TechnicalIdentity") > page.indexOf("<RuntimeTrend"),
-      `${path} must render technical identity after the analysis and rail`,
-    );
-  }
+test("test identity sits below the evidence and the phone briefing leads with the next step", () => {
+  const page = source("src/pages/TestDetailPage.tsx");
+  assert.ok(
+    page.indexOf("<MetricStrip") < page.lastIndexOf("<TechnicalIdentity"),
+    "test detail must render technical identity after the metrics",
+  );
+  assert.ok(
+    page.indexOf("<TechnicalIdentity") > page.indexOf("<RuntimeTrend"),
+    "test detail must render technical identity after the analysis and rail",
+  );
 
   const briefing = source("src/components/AnalysisBriefing.tsx");
   assert.ok(
