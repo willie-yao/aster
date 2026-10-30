@@ -38,7 +38,6 @@ import { describeRecurrence, recurrenceForBuild } from "../lib/recurrence";
 import { useSharedFetchStatus } from "../hooks/useSharedFetchStatus";
 import { useManifest } from "../hooks/useManifest";
 import { MetricStrip, type MetricStripItem } from "../components/MetricStrip";
-import { TechnicalIdentity } from "../components/TechnicalIdentity";
 import { RunMetadata } from "../components/RunMetadata";
 import { JobConfigMetadata } from "../components/JobConfigMetadata";
 import { ResultLedger } from "../components/ResultLedger";
@@ -692,18 +691,6 @@ export function JobDetailPage() {
           ) : null}
         </>
       )}
-
-      <TechnicalIdentity
-        desktopInline
-        summary="Canonical job ID"
-        items={[
-          {
-            label: "Canonical job ID",
-            value: canonicalJobID,
-            copyLabel: "Copy canonical job ID",
-          },
-        ]}
-      />
     </Box>
   );
 }

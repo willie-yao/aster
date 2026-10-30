@@ -185,13 +185,12 @@ test("job detail uses the approved shared detail composition", () => {
   const nextStep = source("src/components/CausalGroupNextStep.tsx");
   const briefing = source("src/components/AnalysisBriefing.tsx");
   const buildFailure = source("src/components/BuildFailurePanel.tsx");
-  const identity = source("src/components/TechnicalIdentity.tsx");
   const testTable = source("src/components/TestCaseTable.tsx");
   const analysis = source("src/components/AiAnalysisPanel.tsx");
   const ledger = source("src/components/ResultLedger.tsx");
 
   assert.match(page, /shortJobName\([\s\S]*manifest\.short_name_prefix/);
-  assert.match(page, /<TechnicalIdentity[\s\S]*Canonical job ID[\s\S]*Copy canonical job ID/);
+  assert.doesNotMatch(page, /TechnicalIdentity|Canonical job ID/);
   assert.match(page, /<MetricStrip items=\{metricItems\} label="Job metrics"/);
   assert.match(page, /label: "Latest run"/);
   assert.match(page, /label: "Last 10 runs"/);
@@ -240,8 +239,6 @@ test("job detail uses the approved shared detail composition", () => {
   assert.match(buildFailure, /<FailureActions[\s\S]*appearance="detail"/);
   assert.match(buildFailure, /Open build failure details/);
   assert.doesNotMatch(buildFailure, /detailAppearance/);
-  assert.match(identity, /display: \{ xs: "none", md: "flex" \}/);
-  assert.match(identity, /desktopInline \? \{ xs: "block", md: "none" \}/);
   assert.match(testTable, /Evidence/);
   assert.match(testTable, /Analysis →/);
   assert.match(testTable, /Show inline evidence/);
@@ -254,6 +251,9 @@ test("job detail uses the approved shared detail composition", () => {
   assert.doesNotMatch(analysis, /Suggested Fix/);
 
   assert.match(ledger, /failed: "Failed"[\s\S]*passed: "Passed"[\s\S]*all: "All statuses"/);
+  assert.doesNotMatch(ledger, /Skipped tests and successful setup\/teardown cases are summarized above/);
+  assert.match(ledger, /successful setup\/teardown hidden/);
+  assert.match(ledger, /skipped hidden/);
   assert.doesNotMatch(ledger, /Skipped"/);
   assert.doesNotMatch(page, /virtual/i);
 });

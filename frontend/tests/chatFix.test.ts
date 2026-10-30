@@ -88,9 +88,7 @@ test("exact JUnit fix dialog excludes pattern authority and keeps confirmation s
   assert.match(dialog, /loadAnalysisChatFixRequest/);
   assert.match(dialog, /Generation continues in the background/);
   assert.match(dialog, /previewChatFix\([\s\S]*patternID/);
-  assert.match(dialog, /repository and generation base are pinned when the request is admitted/);
-  assert.match(dialog, /Later target-branch changes are allowed/);
-  assert.match(dialog, /only if they preserve that base and do not touch patched files/);
+  assert.doesNotMatch(dialog, /The repository and generation base are pinned when the request is admitted/);
   assert.match(dialog, /chatFixFindingCaveats\(message, request\?\.warnings\)/);
   assert.match(dialog, /Generate fix preview/);
   assert.match(source("src/components/FixReviewWorkspace.tsx"), /Open draft PR with warnings/);

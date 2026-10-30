@@ -923,7 +923,6 @@ export function FailureActions({
           }
           accent="warning"
           title={isFix ? "Review draft fix PR" : "Review issue draft"}
-          subtitle={`Review the exact ${isFix ? "pull request" : "issue"} before it is opened on GitHub`}
         />
         <DialogContent dividers sx={{ px: dialogGutter, py: 2 }}>
           {(busy === "preview" || request?.status === "pending") && (

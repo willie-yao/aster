@@ -3,6 +3,7 @@ import "./analysisHealth.test.js";
 import "./analysisChat.test.js";
 import "./historyPresentation.test.js";
 import "./chatFix.test.js";
+import "./fixPreparation.test.js";
 import "./fixReview.test.js";
 import "./aiUsage.test.js";
 import "./patternChat.test.js";
