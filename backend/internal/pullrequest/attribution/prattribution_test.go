@@ -93,7 +93,7 @@ func TestBaseBranchFailureReportsMatchingTestName(t *testing.T) {
 	}
 	want := models.AttributionEvidence{
 		Kind:     models.AttributionEvidenceBaseBranch,
-		Detail:   "The newest completed run on main of " + basePeriodicJob + " reports this test as failed.",
+		Detail:   "The newest completed run with test outcomes on main of " + basePeriodicJob + " reports this test as failed.",
 		JobID:    basePeriodicJob,
 		BuildID:  "base-1",
 		TestName: testName,
@@ -481,6 +481,12 @@ func TestBuildBaselineCompletedOutcomes(t *testing.T) {
 	pending := run("pending", "PENDING", "passed", 30)
 	pending.RepoRefs["example/project"] = "release-1.30"
 	skipped := run("skipped", "SUCCESS", "skipped", 25)
+	aborted := run("aborted", "ABORTED", "skipped", 35)
+	errored := run("error", "ERROR", "skipped", 40)
+	buildOnly := run("build-only", "FAILURE", "failed", 45)
+	buildOnly.TestCases = []models.TestCase{models.NewProwJobExecutionFailure(10)}
+	noTests := run("no-tests", "SUCCESS", "", 50)
+	noTests.TestCases = nil
 	cases := []struct {
 		name           string
 		runs           []models.BuildResult
@@ -492,9 +498,15 @@ func TestBuildBaselineCompletedOutcomes(t *testing.T) {
 	}{
 		{"pending preserves failure", []models.BuildResult{pending, failed}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
 		{"latest completed pass supersedes failure", []models.BuildResult{failed, pending, passed}, true, true, "", models.AttributionUnexplained, models.AttributionConfidenceHigh},
-		{"skipped only", []models.BuildResult{skipped}, true, false, "", models.AttributionUnexplained, models.AttributionConfidenceLow},
-		{"pending after skipped", []models.BuildResult{pending, skipped}, true, false, "", models.AttributionUnexplained, models.AttributionConfidenceLow},
-		{"latest completed skipped is not a pass", []models.BuildResult{failed, skipped, pending}, true, false, "", models.AttributionUnexplained, models.AttributionConfidenceLow},
+		{"skipped only", []models.BuildResult{skipped}, false, false, "", models.AttributionInconclusive, models.AttributionConfidenceLow},
+		{"pending after skipped", []models.BuildResult{pending, skipped}, false, false, "", models.AttributionInconclusive, models.AttributionConfidenceLow},
+		{"latest completed skipped preserves failure", []models.BuildResult{failed, skipped, pending}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"aborted preserves failure", []models.BuildResult{aborted, failed}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"error preserves failure", []models.BuildResult{failed, errored}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"build-only failure preserves failure", []models.BuildResult{buildOnly, failed}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"no test cases preserves failure", []models.BuildResult{failed, noTests}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"all newer unusable runs preserve failure", []models.BuildResult{noTests, aborted, failed, errored, buildOnly, skipped}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
+		{"no eligible test outcomes", []models.BuildResult{noTests, aborted, errored, buildOnly, skipped}, false, false, "", models.AttributionInconclusive, models.AttributionConfidenceLow},
 		{"unknown newer result preserves failure", []models.BuildResult{run("unknown", "", "passed", 40), failed}, true, true, "failed", models.AttributionPreExisting, models.AttributionConfidenceHigh},
 		{"all pending", []models.BuildResult{pending, run("older-pending", "PENDING", "failed", 5)}, false, false, "", models.AttributionInconclusive, models.AttributionConfidenceLow},
 		{"missing result", []models.BuildResult{run("unknown", "", "passed", 40)}, false, false, "", models.AttributionInconclusive, models.AttributionConfidenceLow},
@@ -540,6 +552,32 @@ func TestBuildBaselineCompletedOutcomes(t *testing.T) {
 				t.Errorf("clusters = %+v, want shared base failures %+v", clusters, wantFailures)
 			}
 		})
+	}
+}
+
+func TestBuildBaselineDoesNotCombineTestOutcomesAcrossRuns(t *testing.T) {
+	baseline := BuildBaseline([]models.JobDetail{{
+		Name: basePeriodicJob, JobID: basePeriodicJob, JobType: models.JobTypePeriodic,
+		Runs: []models.BuildResult{{
+			BuildInfo: models.BuildInfo{
+				BuildID: "older", Result: "FAILURE", Started: time.Unix(10, 0),
+				RepoRefs: map[string]string{"example/project": "main"},
+			},
+			TestCases: []models.TestCase{{Name: testName, Status: "failed"}},
+		}, {
+			BuildInfo: models.BuildInfo{
+				BuildID: "newer", Result: "SUCCESS", Started: time.Unix(20, 0),
+				RepoRefs: map[string]string{"example/project": "main"},
+			},
+			TestCases: []models.TestCase{{Name: "another-test", Status: "passed"}, {Name: testName, Status: "skipped"}},
+		}},
+	}}, models.FlakinessReport{}, testRepo)["main"]
+
+	if !baseline.Observed || !baseline.KnownTests["another-test"] || baseline.KnownTests[testName] {
+		t.Fatalf("baseline = %+v, want only the newer run's test outcomes", baseline)
+	}
+	if len(baseline.FailingOnBase) != 0 {
+		t.Errorf("base failures = %+v, want no failure carried over from the older run", baseline.FailingOnBase)
 	}
 }
 
@@ -731,11 +769,17 @@ func TestBuildBaselineTakesOnlyFlakyClassifications(t *testing.T) {
 	details := []models.JobDetail{
 		{
 			Name: "periodic-a", JobID: "periodic-a", JobType: models.JobTypePeriodic,
-			Runs: []models.BuildResult{{BuildInfo: models.BuildInfo{RepoRefs: map[string]string{"example/project": "main"}, Result: "SUCCESS"}}},
+			Runs: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{RepoRefs: map[string]string{"example/project": "main"}, Result: "SUCCESS"},
+				TestCases: []models.TestCase{{Name: "flaky-test", Status: "passed"}},
+			}},
 		},
 		{
 			Name: "periodic-b", JobID: "periodic-b", JobType: models.JobTypePeriodic,
-			Runs: []models.BuildResult{{BuildInfo: models.BuildInfo{RepoRefs: map[string]string{"example/project": "main"}, Result: "SUCCESS"}}},
+			Runs: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{RepoRefs: map[string]string{"example/project": "main"}, Result: "SUCCESS"},
+				TestCases: []models.TestCase{{Name: "broken-test", Status: "failed"}},
+			}},
 		},
 	}
 	report := models.FlakinessReport{
@@ -853,7 +897,7 @@ func TestBuildBaselineSkipsBuildLevelCasesFromTheBaseBranch(t *testing.T) {
 		}},
 	}}, models.FlakinessReport{}, testRepo)["main"]
 
-	if len(baseline.FailingOnBase) != 0 || len(baseline.KnownTests) != 0 {
+	if baseline.Observed || len(baseline.FailingOnBase) != 0 || len(baseline.KnownTests) != 0 {
 		t.Fatalf("baseline = %+v, want build-level cases excluded", baseline)
 	}
 }

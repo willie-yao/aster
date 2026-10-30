@@ -35,10 +35,11 @@ type fakeLister struct {
 
 type finishedErrorBackend struct {
 	storage.Backend
+	job string
 }
 
 func (b finishedErrorBackend) Open(ctx context.Context, name string) (io.ReadCloser, int64, error) {
-	if strings.HasSuffix(name, "/finished.json") {
+	if strings.HasSuffix(name, "/finished.json") && (b.job == "" || strings.Contains(name, "/"+b.job+"/")) {
 		return nil, 0, os.ErrPermission
 	}
 	return b.Backend.Open(ctx, name)
@@ -223,6 +224,44 @@ func TestCollectLogsAndSkipsUnreadableFinishedMetadata(t *testing.T) {
 	}
 }
 
+func TestCollectDoesNotReportPassingWithUnreadableChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		passed      bool
+		running     bool
+		wantState   models.PullRequestCIState
+		wantFailing int
+	}{
+		{name: "passing", passed: true, wantState: models.PullRequestCIUnknown},
+		{name: "failing", wantState: models.PullRequestCIFailing, wantFailing: 1},
+		{name: "pending", running: true, wantState: models.PullRequestCIPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := finishedErrorBackend{Backend: writeBucket(t, []buildSpec{
+				{job: "pull-unit", pullNumber: 7, buildID: "100", passed: tc.passed, running: tc.running},
+				{job: "pull-e2e", pullNumber: 7, buildID: "200", passed: true},
+				{job: "pull-unit", pullNumber: 8, buildID: "101", passed: true},
+			}), job: "pull-e2e"}
+			index, details := collect(t, backend,
+				&fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA), pull(8, "main", headSHA)}},
+				catalogOf(presubmit("pull-unit"), presubmit("pull-e2e")))
+			if len(details) != 2 || len(details[0].Checks) != 1 || details[0].Checks[0].JobName != "pull-unit" {
+				t.Fatalf("details = %+v, want only readable checks", details)
+			}
+			summary := index.PullRequests[0]
+			if summary.CIState != tc.wantState || summary.ChecksObserved != 1 || summary.ChecksFailing != tc.wantFailing {
+				t.Errorf("summary = %+v, want %s, one observed, %d failing", summary, tc.wantState, tc.wantFailing)
+			}
+			if details[0].CIState != summary.CIState {
+				t.Errorf("detail state = %s, want index state %s", details[0].CIState, summary.CIState)
+			}
+			if got := index.PullRequests[1]; got.CIState != models.PullRequestCIPassing || got.ChecksObserved != 1 {
+				t.Errorf("other pull summary = %+v, want PASSING with one observed check", got)
+			}
+		})
+	}
+}
+
 func TestCollectReportsJUnitErrorsAsFailures(t *testing.T) {
 	backend := writeBucket(t, []buildSpec{
 		{
@@ -378,10 +417,13 @@ func TestCollectOmitsPresubmitsThatNeverRan(t *testing.T) {
 		{job: "pull-e2e", pullNumber: 7, buildID: "200", passed: true},
 	})
 	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
-	_, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e"), presubmit("pull-never-run")))
+	index, details := collect(t, backend, lister, catalogOf(presubmit("pull-e2e"), presubmit("pull-never-run")))
 
 	if len(details[0].Checks) != 1 || details[0].Checks[0].JobName != "pull-e2e" {
 		t.Fatalf("checks = %+v, want only the job that ran", details[0].Checks)
+	}
+	if got := index.PullRequests[0].CIState; got != models.PullRequestCIPassing {
+		t.Errorf("ci state = %q, want PASSING when another presubmit never ran", got)
 	}
 }
 
