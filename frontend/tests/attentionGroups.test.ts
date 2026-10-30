@@ -47,7 +47,6 @@ function manifest(threshold?: number): Manifest {
   return {
     id: "example",
     name: "Example",
-    testgrid: { dashboard: "sig-foo" },
     storage: { provider: "gcs", bucket: "logs" },
     branding: {
       title: "Example",

@@ -56,7 +56,7 @@ function EmptyDashboardState({ generatedAt }: { generatedAt: string }) {
       </Typography>
       <Typography color="textSecondary" sx={{ mt: 1 }}>
         Check the fetcher logs first. Fix storage or artifact errors if jobs failed
-        to load. Otherwise verify <Box component="code">testgrid.dashboard</Box> or
+        to load. Otherwise verify <Box component="code">discovery.testgrid_dashboard</Box> or
         the bucket discovery settings in <Box component="code">project.yaml</Box>.
       </Typography>
       <Box

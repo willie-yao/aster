@@ -84,7 +84,7 @@ on:
         type: boolean
         default: false
       runs-on:
-        description: "Runner label for the deploy job. Accepts a single label (e.g. 'ubuntu-latest') or a JSON-encoded array (e.g. '[\"self-hosted\", \"qwen-cluster\"]') for multi-label self-hosted runners with cluster-internal connectivity."
+        description: "Runner label for the deploy job. Requires Python 3 available as python3 (standard library only). Accepts a single label (e.g. 'ubuntu-latest') or a JSON-encoded array (e.g. '[\"self-hosted\", \"qwen-cluster\"]') for multi-label self-hosted runners with cluster-internal connectivity."
         required: false
         type: string
         default: ubuntu-latest

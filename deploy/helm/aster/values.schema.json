@@ -720,7 +720,7 @@
         },
         "timeout": {
           "type": "string",
-          "description": "Discovery and artifact fetch timeout."
+          "description": "Bounds one pass: discovery, artifact fetching, and AI analysis."
         },
         "extraEnv": {
           "$ref": "#/definitions/envVars"
