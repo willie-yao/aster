@@ -32,6 +32,9 @@ interface PageData {
 
 const pages = await withSSR(async (vite) => {
   const { fixture } = await vite.ssrLoadModule("/src/hooks/useData.ts") as { fixture: PageData };
+  const { DashboardPage } = await vite.ssrLoadModule("/src/pages/DashboardPage.tsx") as {
+    DashboardPage: ComponentType;
+  };
   const { PullRequestDetailPage } = await vite.ssrLoadModule("/src/pages/PullRequestDetailPage.tsx") as {
     PullRequestDetailPage: ComponentType;
   };
@@ -45,7 +48,7 @@ const pages = await withSSR(async (vite) => {
     ManifestContext: Context<Manifest | null>;
   };
   const { defaultTheme } = await vite.ssrLoadModule("/src/theme/index.ts") as { defaultTheme: Theme };
-  return { fixture, PullRequestDetailPage, SharedFailurePage, TestDetailPage, ManifestContext, defaultTheme };
+  return { fixture, DashboardPage, PullRequestDetailPage, SharedFailurePage, TestDetailPage, ManifestContext, defaultTheme };
 }, [{
   name: "dashboard-wire-data",
   load(id) {
@@ -54,6 +57,7 @@ const pages = await withSSR(async (vite) => {
       export const fixture = { dashboard: null, detail: null, shared: null, job: null };
       const result = (data) => ({ data, loading: data === null, error: null });
       export const useDashboard = () => result(fixture.dashboard);
+      export const useFlakinessReport = () => result(null);
       export const usePullRequestDetail = () => result(fixture.detail);
       export const useSharedFailures = () => result(fixture.shared);
       export const useJobDetail = () => result(fixture.job);
@@ -65,7 +69,6 @@ const manifest: Manifest = {
   id: "example",
   name: "Example",
   discovery: { source: "testgrid", include_presubmits: true },
-  testgrid: { dashboard: "example" },
   storage: { provider: "gcs", bucket: "logs" },
   branding: {
     title: "Example",
@@ -150,6 +153,17 @@ function renderPage(
     ),
   );
 }
+
+test("empty dashboard points to supported discovery settings", () => {
+  resetData();
+  pages.fixture.dashboard!.jobs = [];
+  const html = renderPage(pages.DashboardPage, "/", "/");
+  assert.match(html, /No jobs available yet/);
+  assert.match(html, /discovery\.testgrid_dashboard/);
+  assert.match(html, /bucket discovery settings/);
+  assert.match(html, /project\.yaml/);
+  assert.doesNotMatch(html, /testgrid\.dashboard/);
+});
 
 test("Go-serialized checks stay running or completed in the pull request UI", () => {
   resetData();

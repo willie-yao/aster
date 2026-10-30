@@ -155,6 +155,8 @@ GitHub-hosted runners cannot reach a ClusterIP or private network endpoint. Use 
 2. Set the reusable workflow's `runs-on` input to a preconfigured self-hosted runner that can reach the endpoint.
 3. Fetch elsewhere, commit `<project_dir>/data`, and set `skip-fetch: true`.
 
+Self-hosted runners must provide Python 3 as `python3` on `PATH` for `hack/pages-base-path.py`, including when `skip-fetch: true`. It uses only the Python standard library.
+
 For pre-fetched data:
 
 ```bash

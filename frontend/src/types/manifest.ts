@@ -19,10 +19,6 @@ export interface Discovery {
   include_presubmits?: boolean;
 }
 
-export interface TestGrid {
-  dashboard: string;
-}
-
 // PullRequestsManifest mirrors the optional pull_requests config block. The
 // nav tab and pull request routes are shown only when it is enabled.
 export interface PullRequestsManifest {
@@ -77,7 +73,6 @@ export interface Manifest {
   name: string;
   short_name?: string;
   discovery?: Discovery;
-  testgrid: TestGrid;
   storage: Storage;
   branding: Branding;
   pull_requests?: PullRequestsManifest;
