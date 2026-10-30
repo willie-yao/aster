@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1334,6 +1335,67 @@ func TestConfirmAmbiguousWriteReconcilesWithoutSecondWrite(t *testing.T) {
 				t.Fatalf("reconciled audit = %+v", record)
 			}
 		})
+	}
+}
+
+func TestConfirmIssueServerErrorReconcilesWithoutSecondWrite(t *testing.T) {
+	var creates, searches atomic.Int32
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/search/issues":
+			searches.Add(1)
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues":
+			creates.Add(1)
+			http.Error(w, "create response unavailable", http.StatusBadGateway)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer github.Close()
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	transport := original.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != "api.github.com:443" {
+			return nil, fmt.Errorf("external request blocked by action test")
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, github.Listener.Addr().String())
+	}
+	http.DefaultTransport = transport
+	t.Cleanup(transport.CloseIdleConnections)
+
+	dataDir := t.TempDir()
+	detail := analyzedBuildDetail(false)
+	writeJobDetail(t, dataDir, models.JobDataFilename(detail.JobID), detail)
+	cfg := &project.Config{Issues: &project.Issues{Repo: &project.SourceRepo{Owner: "o", Name: "r"}}}
+	service := NewService(cfg, dataDir, AIConfig{})
+	preview, err := service.PreviewIssue(t.Context(), BuildFailureID(detail.JobID, "123"), "alice", "token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url, err := service.Confirm(t.Context(), preview.Token, "alice", "token"); url != "" || !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("502 confirmation url=%q err=%v", url, err)
+	}
+	if record := persistedConfirmationPreview(t, service, preview.Token); record.Status != previewStatusUnknown {
+		t.Fatalf("502 status = %s", record.Status)
+	}
+	if creates.Load() != 1 {
+		t.Fatalf("create calls = %d, want 1", creates.Load())
+	}
+	searchesBeforeRetry := searches.Load()
+
+	restarted := NewService(cfg, dataDir, AIConfig{})
+	if url, err := restarted.Confirm(t.Context(), preview.Token, "alice", "token"); url != "" || !errors.Is(err, ErrPreviewOutcomeUnknown) {
+		t.Fatalf("empty reconciliation url=%q err=%v", url, err)
+	}
+	if record := persistedConfirmationPreview(t, restarted, preview.Token); record.Status != previewStatusUnknown {
+		t.Fatalf("empty reconciliation status = %s", record.Status)
+	}
+	if creates.Load() != 1 || searches.Load() != searchesBeforeRetry+1 {
+		t.Fatalf("reconciliation made creates=%d searches=%d, want 1 and %d", creates.Load(), searches.Load(), searchesBeforeRetry+1)
 	}
 }
 

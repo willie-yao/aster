@@ -27,7 +27,7 @@ const apiBase = "https://api.github.com"
 // maxResponseBytes bounds a single GitHub API response body.
 const maxResponseBytes = 16 << 20
 
-// ErrWriteOutcomeUnknown means GitHub may have created a PR before the response was lost.
+// ErrWriteOutcomeUnknown means GitHub may have created a PR without returning its identity.
 var ErrWriteOutcomeUnknown = errors.New("pull request write outcome unknown")
 
 // ErrBranchNotFound means the requested branch ref no longer exists.
@@ -504,6 +504,10 @@ func (c *Client) createPR(ctx context.Context, owner, repo, title, body, head, b
 	var decode *decodeResponseError
 	if errors.As(err, &transport) || errors.As(err, &decode) {
 		return 0, "", fmt.Errorf("%w: %v", ErrWriteOutcomeUnknown, err)
+	}
+	var status *responseStatusError
+	if errors.As(err, &status) && status.statusCode >= http.StatusInternalServerError {
+		return 0, "", fmt.Errorf("%w: %w", ErrWriteOutcomeUnknown, err)
 	}
 	if err == nil && (out.Number <= 0 || strings.TrimSpace(out.HTMLURL) == "") {
 		return 0, "", fmt.Errorf("%w: create response omitted pull request identity", ErrWriteOutcomeUnknown)
