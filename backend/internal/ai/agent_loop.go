@@ -64,6 +64,12 @@ func (c *Client) runAgenticLoop(ctx context.Context, state *agentState, messages
 
 agentLoop:
 	for iter := 0; iter < maxIters; iter++ {
+		// Leave time for structured finalization after the investigation.
+		if iter > 0 && state.recentModelRequest > 0 && ctx.Err() == nil && time.Until(state.deadline) < 2*state.recentModelRequest+critiqueFinalizationReserve {
+			state.considerDraft(state.fallbackDraft)
+			log.Printf("  ⓘ agentic time headroom exhausted; finalizing with the evidence gathered")
+			break
+		}
 		var fits bool
 		messages, fits = prepareContextRequest(ctx, messages, schemaBytes, headroom, "applied")
 		if !fits {
