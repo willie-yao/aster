@@ -30,20 +30,18 @@ func outcomesForTest(testName string, runs []models.BuildResult) []testOutcome {
 	var outcomes []testOutcome
 	for _, run := range runs {
 		for _, tc := range run.TestCases {
-			if tc.Source == models.TestCaseSourceBuild {
+			if tc.Source == models.TestCaseSourceBuild || tc.Status == "skipped" {
 				continue
 			}
 			if tc.Name != testName {
 				continue
 			}
-			if tc.Status != "skipped" {
-				outcomes = append(outcomes, testOutcome{
-					passed:  tc.Status == "passed",
-					message: tc.FailureMessage,
-					buildID: run.BuildID,
-					started: run.Started,
-				})
-			}
+			outcomes = append(outcomes, testOutcome{
+				passed:  tc.Status == "passed",
+				message: tc.FailureMessage,
+				buildID: run.BuildID,
+				started: run.Started,
+			})
 			break
 		}
 	}
@@ -55,16 +53,13 @@ func collectTestOutcomes(runs []models.BuildResult) map[string][]testOutcome {
 	for _, run := range runs {
 		seen := make(map[string]bool, len(run.TestCases))
 		for _, tc := range run.TestCases {
-			if tc.Source == models.TestCaseSourceBuild {
+			if tc.Source == models.TestCaseSourceBuild || tc.Status == "skipped" {
 				continue
 			}
 			if seen[tc.Name] {
 				continue
 			}
 			seen[tc.Name] = true
-			if tc.Status == "skipped" {
-				continue
-			}
 			out[tc.Name] = append(out[tc.Name], testOutcome{
 				passed:  tc.Status == "passed",
 				message: tc.FailureMessage,
