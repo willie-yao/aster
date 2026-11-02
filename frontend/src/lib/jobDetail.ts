@@ -1,14 +1,12 @@
 import type { BuildResult, JobCurrentStatus, TestCase } from "../types/dashboard";
 import { junitTestCases } from "./buildFailures.js";
+import { isSetupTeardown } from "./testResults.js";
 
 export type ResultLedgerFilter = "failed" | "passed" | "all";
 
 export function selectJobRun(runs: BuildResult[], requestedBuildID: string | null): BuildResult | undefined {
   return runs.find((run) => run.build_id === requestedBuildID) ?? runs[0];
 }
-
-const setupPatterns =
-  /synchronizedbeforesuite|synchronizedaftersuite|beforesuite|aftersuite/iu;
 
 export function normalizeResultLedgerFilter(
   value: string | null,
@@ -29,7 +27,7 @@ export function summarizeResultTests(testCases: TestCase[]): ResultTestSummary {
   );
   const visible = executed.filter(
     (testCase) =>
-      testCase.status === "failed" || !setupPatterns.test(testCase.name),
+      testCase.status === "failed" || !isSetupTeardown(testCase.name),
   );
   return {
     executed,

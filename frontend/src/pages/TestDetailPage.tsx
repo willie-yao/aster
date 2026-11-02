@@ -29,6 +29,7 @@ import { parseTestDisplayName } from "../lib/detailTitles";
 import { withJobDetailParam } from "../lib/jobDetail";
 import {
   fixPatternsForRun,
+  normalizeErrorMessage,
   summarizeTestHistory,
   testRunFileContext,
 } from "../lib/testDetail";
@@ -47,15 +48,6 @@ import { overviewTypography } from "../theme/overview";
 import { stickyRailSx } from "../theme/helpers";
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
 import { summarizeRuntime, testRuntimePoints } from "../lib/runtimeTrend";
-
-function normalizeMessage(message: string): string {
-  return message
-    .replace(/0x[0-9a-fA-F]+/gu, "…")
-    .replace(/[0-9a-f]{8,}/giu, "…")
-    .replace(/\d+/gu, "…")
-    .replace(/…[.…]+/gu, "…")
-    .trim();
-}
 
 interface TestOccurrence {
   run: BuildResult;
@@ -187,7 +179,7 @@ export function TestDetailPage() {
     for (const occurrence of failedOccurrences) {
       const message = occurrence.testCase?.failure_message;
       if (!message) continue;
-      const normalized = normalizeMessage(message);
+      const normalized = normalizeErrorMessage(message);
       const current = groups.get(normalized);
       if (current) current.count += 1;
       else groups.set(normalized, { sample: message, count: 1 });
@@ -271,7 +263,7 @@ export function TestDetailPage() {
     ? failureGroups.find(
         (group) =>
           group.normalizedMessage ===
-          normalizeMessage(selectedTestCase.failure_message ?? ""),
+          normalizeErrorMessage(selectedTestCase.failure_message ?? ""),
       )?.count ?? failedOccurrences.length
     : failedOccurrences.length;
   const selectedMetadataCase = selectedTestCase ?? latestTestCase;

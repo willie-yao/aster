@@ -2,13 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { fixPatternsForRun, summarizeTestHistory } from "../src/lib/testDetail.js";
+import { fixPatternsForRun, normalizeErrorMessage, summarizeTestHistory } from "../src/lib/testDetail.js";
 import { DEFAULT_PERSISTENT_AFTER, persistentAfter } from "../src/lib/attention.js";
 import type { Manifest } from "../src/types/manifest.js";
 import type { PatternAnalysis, TestCase } from "../src/types/dashboard.js";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
+}
+
+const messageFixture = JSON.parse(source("tests/fixtures/test-contracts.json")) as {
+  messages: Array<{ name: string; input: string; normalized: string }>;
+};
+for (const example of messageFixture.messages) {
+  test(`failure message grouping matches Go: ${example.name}`, () => {
+    assert.equal(normalizeErrorMessage(example.input), example.normalized);
+  });
 }
 
 

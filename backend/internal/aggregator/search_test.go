@@ -1,11 +1,43 @@
 package aggregator
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
+
+func TestBuildSearchIndexSharedSetupContract(t *testing.T) {
+	raw, err := os.ReadFile("../../../frontend/tests/fixtures/test-contracts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name, Status string
+			Visible      bool
+		} `json:"setup_cases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range fixture.Cases {
+		t.Run(test.Name, func(t *testing.T) {
+			index := BuildSearchIndex(map[string][]models.BuildResult{"job": {{
+				TestCases: []models.TestCase{{Name: test.Name, Status: test.Status}},
+			}}}, []models.ProwJob{{JobID: "job"}}, time.Time{})
+			visible := false
+			for _, entry := range index.Entries {
+				visible = visible || entry.Kind == "test"
+			}
+			if visible != test.Visible {
+				t.Errorf("searchable = %v, want %v", visible, test.Visible)
+			}
+		})
+	}
+}
 
 func makeSearchBuild(buildID, jobName string, started time.Time, passed bool, tests []models.TestCase) models.BuildResult {
 	build := makeBuild(buildID, started, passed, tests)

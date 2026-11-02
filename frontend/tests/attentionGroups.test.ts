@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
+import { resolvedFixturePlugin, type ResolvedFixture } from "./helpers/resolved.js";
 import { normalizeFlakinessReport, type FlakinessReportWire } from "../src/lib/flakinessReport.js";
 import {
   attentionGroupNoun,
@@ -19,12 +20,14 @@ import type {
   FlakinessReport,
   JobSummary,
   LowPassRateEntry,
+  PatternAnalysis,
   TestFlakiness,
 } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 import type { SharedFailure } from "../src/types/pullRequests.js";
 
-const { NeedsAttention, ManifestContext, defaultTheme } = await withSSR(async (vite) => {
+const { NeedsAttention, ManifestContext, defaultTheme, resolvedFixture } = await withSSR(async (vite) => {
+  const { resolvedFixture } = await vite.ssrLoadModule("/src/hooks/useData.ts") as { resolvedFixture: ResolvedFixture };
   const { NeedsAttention } = (await vite.ssrLoadModule("/src/components/NeedsAttention.tsx")) as {
     NeedsAttention: (props: {
       report: FlakinessReport | null;
@@ -40,8 +43,8 @@ const { NeedsAttention, ManifestContext, defaultTheme } = await withSSR(async (v
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
     defaultTheme: Theme;
   };
-  return { NeedsAttention, ManifestContext, defaultTheme };
-});
+  return { NeedsAttention, ManifestContext, defaultTheme, resolvedFixture };
+}, [resolvedFixturePlugin]);
 
 function manifest(threshold?: number): Manifest {
   return {
@@ -317,3 +320,37 @@ test("needs attention omits the shared group when triage publishes none", () => 
   assert.doesNotMatch(html, /shared PR failure/);
   assert.match(html, /No active test alerts/);
 });
+
+for (const availability of ["loading", "unavailable"] as const) {
+  test(`attention keeps test and shared alerts readable while resolution state is ${availability}`, () => {
+    const previous = resolvedFixture.state;
+    const pattern: PatternAnalysis = {
+      id: "resolved-pattern", job_id: "example/periodic-example", subject: "periodic-example",
+      generated_at: "2026-03-15T12:00:00Z", builds_analyzed: 2,
+      systemic: true, confidence: "high", summary: "recurring analysis awaiting resolution state",
+      shared_builds: ["1", "2"],
+    };
+    const resolution = { resolved_at: "2026-03-15", resolved_by: "admin", watermark: "2" };
+    resolvedFixture.state = {
+      data: { resolved: { "resolved-pattern": resolution }, causes: {} },
+      loading: availability === "loading", error: availability === "unavailable" ? "offline" : null, availability,
+    };
+    try {
+      const html = renderAttention(report({
+        recurring_patterns: [pattern],
+        recently_broken: [flakyTest("TestStillVisible", {
+          last_failure: { build_id: "2", timestamp: "2026-03-15T12:00:00Z", failure_message: "test failure", error_hash: "hash" },
+        })],
+      }), undefined, [sharedFailure("shared-still-visible", 2)]);
+      assert.match(html, new RegExp(`Resolution status is ${availability}`));
+      assert.match(html, new RegExp(`recurring patterns ${availability} · 1 test alert · 1 shared PR failure`));
+      assert.match(html, /TestStillVisible/);
+      assert.match(html, /shared-still-visible/);
+      assert.doesNotMatch(html, /recurring analysis awaiting resolution state|resolved failure|No active test alerts/);
+      assert.equal(html.includes("Retry resolution status"), availability === "unavailable");
+      assert.doesNotMatch(renderAttention(report()), /No active test alerts/);
+    } finally {
+      resolvedFixture.state = previous;
+    }
+  });
+}

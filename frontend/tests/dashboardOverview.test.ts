@@ -7,6 +7,7 @@ import { createElement, type Context } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
+import { resolvedFixturePlugin } from "./helpers/resolved.js";
 import {
   attentionGroups,
   countLabel,
@@ -101,7 +102,7 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
     defaultTheme: Theme;
   };
   return { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPatternRow, NeedsAttention, ManifestContext, RunHistory, StatusFilterTiles, defaultTheme };
-});
+}, [resolvedFixturePlugin]);
 
 function job(overrides: Partial<JobSummary> = {}): JobSummary {
   return {
@@ -460,6 +461,8 @@ test("overview count labels place dynamic counts in Needs attention", () => {
   assert.equal(needsAttentionSummary(null, null, false, true), "recurring patterns unavailable · test alerts unavailable");
   assert.equal(needsAttentionSummary(5, 12, false, false, 0), "5 recurring patterns · 12 test alerts");
   assert.equal(needsAttentionSummary(1, 0, false, false, 2), "1 recurring pattern · 0 test alerts · 2 shared PR failures");
+  assert.equal(needsAttentionSummary(null, 3, false, false, 2, true), "recurring patterns loading · 3 test alerts · 2 shared PR failures");
+  assert.equal(needsAttentionSummary(null, 3, false, false), "recurring patterns unavailable · 3 test alerts");
 });
 
 test("recurring pattern ranking leads with an active same-cause streak", () => {
@@ -944,7 +947,7 @@ test("overview source uses ledger rows without nested panel scrolling", () => {
   assert.match(attention, /No active test alerts/);
   assert.match(attention, /No published test-level or recurring-pattern alerts need attention/);
   assert.match(attention, /const hasActiveItems = recurring\.length > 0 \|\| groups\.length > 0/);
-  assert.match(attention, /const noActiveAlerts = Boolean\(report && !hasActiveItems\)/);
+  assert.match(attention, /const noActiveAlerts = Boolean\(report && resolutionKnown && !hasActiveItems\)/);
   assert.match(attention, /report && \(resolvedPatterns\.length > 0 \|\| unlisted\.length > 0 \|\| unlistedCauses\.length > 0\)/);
   assert.doesNotMatch(attention, /const allClear/);
   assert.doesNotMatch(attention, /New regressions/);

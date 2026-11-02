@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { ThemeProvider, type Theme } from "@mui/material/styles";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
+import { withSSR } from "./helpers/ssr.js";
+import { failedJUnitRun } from "./helpers/failedJUnitRun.js";
 import {
   sortResultTests,
   summarizeResultTests,
@@ -15,7 +21,15 @@ import {
   gridCellAccessibleName,
   gridStatusSymbol,
 } from "../src/lib/testResultsGrid.js";
-import type { TestCase } from "../src/types/dashboard.js";
+import type { BuildResult, TestCase } from "../src/types/dashboard.js";
+
+const { TestResultsGrid, defaultTheme } = await withSSR(async (vite) => {
+  const { TestResultsGrid } = await vite.ssrLoadModule("/src/components/TestResultsGrid.tsx") as {
+    TestResultsGrid: (props: { runs: BuildResult[]; jobID: string }) => ReturnType<typeof createElement>;
+  };
+  const { defaultTheme } = await vite.ssrLoadModule("/src/theme/index.ts") as { defaultTheme: Theme };
+  return { TestResultsGrid, defaultTheme };
+});
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -23,6 +37,21 @@ function source(path: string): string {
 
 function testCase(name: string, status: TestCase["status"]): TestCase {
   return { name, status, duration_seconds: 1 };
+}
+
+const setupFixture = JSON.parse(source("tests/fixtures/test-contracts.json")) as {
+  setup_cases: Array<{ name: string; status: TestCase["status"]; visible: boolean }>;
+};
+for (const example of setupFixture.setup_cases) {
+  test(`result filtering matches search: ${example.name}`, () => {
+    const summary = summarizeResultTests([testCase(example.name, example.status)]);
+    assert.equal(summary.visible.length > 0, example.visible);
+    const run = { ...failedJUnitRun("1", example.name), test_cases: [testCase(example.name, example.status)] };
+    const html = renderToStaticMarkup(createElement(ThemeProvider, { theme: defaultTheme },
+      createElement(MemoryRouter, null, createElement(TestResultsGrid, { runs: [run], jobID: "job" })),
+    ));
+    assert.equal(html.includes(`title="${example.name}"`), example.visible);
+  });
 }
 
 test("result summaries account for hidden successful setup and teardown cases", () => {

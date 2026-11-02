@@ -16,6 +16,7 @@ import "./briefingSection.test.js";
 import "./analysisBriefing.test.js";
 import "./upstreamCause.test.js";
 import "./patternResolution.test.js";
+import "./resolvedState.test.js";
 import "./pageMetadata.test.js";
 import "./navigation.test.js";
 import "./routes.test.js";

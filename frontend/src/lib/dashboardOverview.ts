@@ -352,12 +352,16 @@ export function needsAttentionSummary(
   loading: boolean,
   failed: boolean,
   sharedFailures = 0,
+  resolutionLoading = false,
 ): string {
   if (loading) return "recurring patterns loading · test alerts loading";
-  if (failed || recurringPatterns === null || testAlerts === null) {
+  if (failed || testAlerts === null) {
     return "recurring patterns unavailable · test alerts unavailable";
   }
-  const summary = `${countLabel(recurringPatterns, "recurring pattern")} · ${countLabel(testAlerts, "test alert")}`;
+  const patterns = recurringPatterns === null
+    ? `recurring patterns ${resolutionLoading ? "loading" : "unavailable"}`
+    : countLabel(recurringPatterns, "recurring pattern");
+  const summary = `${patterns} · ${countLabel(testAlerts, "test alert")}`;
   return sharedFailures > 0
     ? `${summary} · ${countLabel(sharedFailures, "shared PR failure")}`
     : summary;

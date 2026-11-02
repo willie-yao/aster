@@ -1,6 +1,15 @@
 import type { BuildResult, PatternAnalysis, TestCase } from "../types/dashboard";
 import type { FileToUrlContext } from "./utils";
 
+// Matches aggregator.NormalizeErrorMessage, including Go's whitespace rules.
+export function normalizeErrorMessage(message: string): string {
+  return message
+    .replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "")
+    .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\t\n\f\r ]*/gu, "<timestamp>")
+    .replace(/\b\d[\d.]*\b/gu, "<num>")
+    .replace(/[\t\n\f\r ]+/gu, " ");
+}
+
 // firstSentence returns the leading sentence of an analysis for a synopsis.
 export function firstSentence(value: string): string {
   const match = value.trim().match(/^.*?[.!?](?:\s|$)/u);
