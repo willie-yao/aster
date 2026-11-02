@@ -196,7 +196,8 @@ export function fetchStatusHasCompletedPipeline(response: FetchStatusResponse): 
   const status = response.status;
   return response.state === "idle"
     || response.state === "completed"
-    || Boolean(status?.outcome === "succeeded" && ["idle", "complete"].includes(status.phase));
+    || response.state === "degraded"
+    || Boolean((status?.outcome === "succeeded" || status?.outcome === "degraded") && ["idle", "complete"].includes(status.phase));
 }
 
 export function fetchStatusPublishedThisPass(response: FetchStatusResponse): boolean {
@@ -213,12 +214,15 @@ export function fetchStatusFollowUpFailureSummary(status: FetchProgressStatus): 
 }
 
 export interface FetchStatusWarningGroup {
-  label: "Analysis quality" | "Pattern quality" | "Follow-up";
+  label: "Job data" | "Analysis quality" | "Pattern quality" | "Follow-up";
   items: string[];
 }
 
 export function fetchStatusWarningGroups(status: FetchProgressStatus): FetchStatusWarningGroup[] {
   const groups: FetchStatusWarningGroup[] = [];
+  if (status.jobs.failed > 0) {
+    groups.push({ label: "Job data", items: [`${status.jobs.failed} of ${status.jobs.total} jobs could not be refreshed`] });
+  }
   const analysisItems: string[] = [];
   if (status.analyses.failed > 0) {
     analysisItems.push(`${status.analyses.failed} ${status.analyses.failed === 1 ? "analysis" : "analyses"} unavailable`);
@@ -302,6 +306,11 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
       detail = "The latest dashboard is published";
       severity = "success";
       break;
+    case "degraded":
+      title = "Published with incomplete job data";
+      detail = `${status.jobs.failed} of ${status.jobs.total} jobs could not be refreshed; prior data is shown where available`;
+      severity = "warning";
+      break;
     case "failed": {
       if (fetchStatusPublishedThisPass(response)) {
         const followUpSummary = fetchStatusFollowUpFailureSummary(status);
@@ -320,7 +329,7 @@ export function fetchStatusPresentation(response: FetchStatusResponse): FetchSta
     }
     case "stale":
       title = "Status stale";
-      detail = status.outcome === "succeeded" && ["idle", "complete"].includes(status.phase)
+      detail = (status.outcome === "succeeded" || status.outcome === "degraded") && ["idle", "complete"].includes(status.phase)
         ? "The next scheduled refresh check is overdue"
         : `Last reported activity while ${currentPhaseLabel.toLowerCase()}`;
       severity = "warning";
@@ -393,7 +402,7 @@ export function shouldShowFetchStatusStrip(response: FetchStatusResponse | null)
   return Boolean(
     response?.available
     && response.status
-    && ["failed", "stale", "interrupted", "cancelled"].includes(response.state),
+    && ["degraded", "failed", "stale", "interrupted", "cancelled"].includes(response.state),
   );
 }
 

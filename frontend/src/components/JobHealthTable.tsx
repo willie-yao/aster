@@ -10,6 +10,7 @@ import { jobPath } from "../lib/routes";
 import { splitForMiddleTruncation } from "../lib/middleTruncate";
 import { runStatusLabel } from "../lib/dashboardOverview";
 import { Sparkline } from "./Sparkline";
+import { JobFreshnessNotice } from "./FetchFreshnessNotice";
 import { StatusChip } from "./StatusChip";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
@@ -114,6 +115,7 @@ function JobLink({ job, compact }: { job: JobSummary; compact: boolean }) {
           {tail && <Box component="span" sx={{ flexShrink: 0 }}>{tail}</Box>}
         </Link>
       </Tooltip>
+      <JobFreshnessNotice fetch={job.fetch} compact />
       {description && (
         <Typography
           variant="caption"

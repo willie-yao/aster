@@ -80,7 +80,7 @@ func fetchStatusHandlerWithClock(dataDir string, now func() time.Time, staleAfte
 
 func classifyFetchStatus(status fetchprogress.Status, now time.Time, staleAfter time.Duration) (string, bool) {
 	stale := status.Outcome == fetchprogress.OutcomeRunning && staleAfter > 0 && now.Sub(status.LastProgressAt) > staleAfter
-	if status.Outcome == fetchprogress.OutcomeSucceeded && status.Phase == fetchprogress.PhaseIdle && staleAfter > 0 {
+	if (status.Outcome == fetchprogress.OutcomeSucceeded || status.Outcome == fetchprogress.OutcomeDegraded) && status.Phase == fetchprogress.PhaseIdle && staleAfter > 0 {
 		next := earliestTime(status.NextWatchAt, status.NextReconcileAt)
 		stale = next != nil && now.Sub(*next) > staleAfter
 	}
@@ -90,6 +90,8 @@ func classifyFetchStatus(status fetchprogress.Status, now time.Time, staleAfter 
 	switch status.Outcome {
 	case fetchprogress.OutcomeRunning:
 		return "active", false
+	case fetchprogress.OutcomeDegraded:
+		return "degraded", false
 	case fetchprogress.OutcomeFailed:
 		return "failed", false
 	case fetchprogress.OutcomeCancelled:

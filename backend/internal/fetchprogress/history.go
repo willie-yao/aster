@@ -13,7 +13,7 @@ import (
 
 const (
 	// HistorySchemaVersion is the current private pass history schema.
-	HistorySchemaVersion = 6
+	HistorySchemaVersion = 7
 	// HistoryFilename stores bounded terminal pass summaries.
 	HistoryFilename = "history.json"
 	// HistoryLimit bounds retained pass summaries.

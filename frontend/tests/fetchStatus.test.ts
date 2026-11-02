@@ -22,7 +22,7 @@ import type { FetchProgressStatus, FetchStatusResponse } from "../src/types/fetc
 const fetchStatusSource = readFileSync(resolve(process.cwd(), "src/components/FetchStatus.tsx"), "utf8");
 
 const activeStatus: FetchProgressStatus = {
-  schema_version: 14,
+  schema_version: 15,
   run_id: "safe-run",
   pass_id: "safe-pass",
   pass_type: "lightweight-watch",
@@ -34,7 +34,7 @@ const activeStatus: FetchProgressStatus = {
   last_checked_at: "2026-07-28T11:00:30Z",
   last_successful_publication_at: "2026-07-28T10:55:00Z",
   outcome: "running",
-  jobs: { total: 28, completed: 28 },
+  jobs: { total: 28, completed: 28, failed: 0 },
   builds: { cached: 241, fetched: 29 },
   analyses: {
     logical_total: 126,
@@ -260,7 +260,7 @@ test("early refresh phases use user-facing labels and scoped progress", () => {
   const artifactResponse = response("active", {
     ...activeStatus,
     phase: "artifacts",
-    jobs: { total: 28, completed: 18 },
+    jobs: { total: 28, completed: 18, failed: 0 },
   });
   const artifacts = fetchStatusCompactPresentation(artifactResponse);
   const artifactPresentation = fetchStatusPresentation(artifactResponse);
@@ -582,4 +582,27 @@ test("the refresh pipeline section survives a missing snapshot and is reachable"
   assert.match(section, /headingTabIndex=\{-1\}/);
   assert.doesNotMatch(section, /"&:focus": \{ outline: "none" \}/);
   assert.match(page, /<RefreshPipelineSection response=\{fetchStatus\} ready=\{!loading\} \/>/);
+});
+
+
+test("degraded publication is complete with a job data warning", () => {
+  const degraded = response("degraded", {
+    ...completedStatus,
+    outcome: "degraded",
+    jobs: { total: 3, completed: 3, failed: 2 },
+  });
+  const presentation = fetchStatusPresentation(degraded)!;
+  assert.equal(presentation.title, "Published with incomplete job data");
+  assert.equal(presentation.severity, "warning");
+  assert.match(presentation.detail, /2 of 3 jobs could not be refreshed/);
+  assert.equal(fetchStatusHasCompletedPipeline(degraded), true);
+  assert.equal(fetchStatusHasCompletedPipeline({ ...degraded, state: "stale", status: { ...degraded.status!, phase: "idle" } }), true);
+  assert.ok(fetchStatusMacroStages(degraded).every((stage) => stage.state === "complete"));
+  assert.equal(shouldShowFetchStatusStrip(degraded), true);
+  assert.equal(fetchStatusCompactPresentation(degraded)?.severity, "warning");
+  assert.deepEqual(fetchStatusWarningGroups(degraded.status!)[0], {
+    label: "Job data", items: ["2 of 3 jobs could not be refreshed"],
+  });
+  const stale = fetchStatusPresentation({ ...degraded, state: "stale", status: { ...degraded.status!, phase: "idle" } })!;
+  assert.equal(stale.detail, "The next scheduled refresh check is overdue");
 });

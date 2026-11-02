@@ -279,8 +279,8 @@ func TestTrackerPhaseCountersAndTerminalOutcomes(t *testing.T) {
 	tracker.CompletePhase()
 	tracker.StartPhase(PhaseArtifacts)
 	tracker.SetJobs(2)
-	tracker.FinishJob(3, 1)
-	tracker.FinishJob(2, 2)
+	tracker.FinishJob(3, 1, false)
+	tracker.FinishJob(2, 2, false)
 	tracker.MarkChecked()
 	tracker.CompletePhase()
 	tracker.StartPhase(PhaseAnalysisPlanning)
@@ -386,7 +386,7 @@ func TestTrackerWriteFailureDoesNotAbortOrExposePath(t *testing.T) {
 	})
 	tracker.StartPass(PassOneShot)
 	tracker.SetJobs(1)
-	tracker.FinishJob(0, 1)
+	tracker.FinishJob(0, 1, false)
 	tracker.FinishSuccess(false)
 	if got := tracker.Snapshot(); got.Outcome != OutcomeSucceeded || got.Jobs.Completed != 1 {
 		t.Fatalf("status after write failure = %+v", got)
@@ -421,9 +421,9 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	tracker.PlanAnalyses(100, 0)
 	tracker.StartPhase(PhaseAnalysis)
 	var wg sync.WaitGroup
-	for range 100 {
+	for i := range 100 {
 		wg.Go(func() {
-			tracker.FinishJob(1, 2)
+			tracker.FinishJob(1, 2, i%2 == 0)
 			tracker.StartAnalysis(false)
 			tracker.FinishAnalysis(false, OutcomeSucceeded)
 		})
@@ -431,7 +431,7 @@ func TestTrackerConcurrentUpdates(t *testing.T) {
 	wg.Wait()
 	tracker.CompletePhase()
 	status := tracker.Snapshot()
-	if status.Jobs != (JobProgress{Total: 100, Completed: 100}) || status.Builds != (BuildProgress{Cached: 100, Fetched: 200}) {
+	if status.Jobs != (JobProgress{Total: 100, Completed: 100, Failed: 50}) || status.Builds != (BuildProgress{Cached: 100, Fetched: 200}) {
 		t.Fatalf("fetch counters = jobs:%+v builds:%+v", status.Jobs, status.Builds)
 	}
 	if status.Analyses != (AnalysisProgress{LogicalTotal: 100, Completed: 100}) {
@@ -763,5 +763,72 @@ func TestTrackerRecordsAndCancelsFollowUpComponents(t *testing.T) {
 	after := tracker.Snapshot()
 	if after.FollowUp.AutomaticIssues.State != FollowUpCancelled {
 		t.Fatalf("cancelled follow-up progress = %+v", after.FollowUp)
+	}
+}
+
+func TestTrackerDegradedPublicationAndRecovery(t *testing.T) {
+	for _, watch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watch=%t", watch), func(t *testing.T) {
+			dir := t.TempDir()
+			tracker := New(dir, "sha-test")
+			tracker.StartPass(PassLightweightWatch)
+			tracker.SetJobs(2)
+			tracker.FinishJob(0, 0, true)
+			tracker.FinishJob(1, 2, false)
+			tracker.FinishJob(0, 0, true)
+			tracker.MarkPublished()
+			publication := tracker.Snapshot().LastSuccessfulPublicationAt
+			nextWatch, nextReconcile := time.Now().Add(time.Minute), time.Now().Add(time.Hour)
+			tracker.SetSchedule(nextWatch, nextReconcile)
+			tracker.FinishSuccess(watch)
+			status, err := Read(Path(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPhase := PhaseComplete
+			if watch {
+				wantPhase = PhaseIdle
+			}
+			if status.Outcome != OutcomeDegraded || status.Phase != wantPhase || status.FailureCategory != FailureNone || status.Jobs != (JobProgress{Total: 2, Completed: 2, Failed: 1}) || status.LastSuccessfulPublicationAt == nil || !status.LastSuccessfulPublicationAt.Equal(*publication) || !status.NextWatchAt.Equal(nextWatch) || !status.NextReconcileAt.Equal(nextReconcile) {
+				t.Fatalf("degraded status = %+v", status)
+			}
+			history, err := ReadHistory(HistoryPath(dir))
+			if err != nil || len(history.Passes) != 1 || history.Passes[0].Outcome != OutcomeDegraded || !history.Passes[0].Published {
+				t.Fatalf("degraded history = %+v, error %v", history, err)
+			}
+			tracker.StartPass(PassLightweightWatch)
+			tracker.SetJobs(2)
+			tracker.FinishJob(1, 0, false)
+			tracker.FinishJob(1, 0, false)
+			tracker.MarkPublished()
+			tracker.FinishSuccess(watch)
+			if got := tracker.Snapshot(); got.Outcome != OutcomeSucceeded || got.Jobs.Failed != 0 {
+				t.Fatalf("recovered status = %+v", got)
+			}
+		})
+	}
+}
+
+func TestReadRejectsInvalidJobFailureCounters(t *testing.T) {
+	cases := []struct {
+		name string
+		jobs JobProgress
+	}{
+		{"negative failures", JobProgress{Total: 2, Completed: 1, Failed: -1}},
+		{"failures exceed completion", JobProgress{Total: 2, Completed: 1, Failed: 2}},
+		{"completion exceeds total", JobProgress{Total: 1, Completed: 2, Failed: 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status := testStatus(time.Now())
+			status.Jobs = tc.jobs
+			path := Path(t.TempDir())
+			if err := Write(path, status); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Read(path); err == nil {
+				t.Fatalf("accepted invalid counters: %+v", tc.jobs)
+			}
+		})
 	}
 }

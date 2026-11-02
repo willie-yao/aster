@@ -309,3 +309,35 @@ func TestFetchStatusHandlerReadsEachSnapshot(t *testing.T) {
 		t.Fatalf("second read = %+v", got)
 	}
 }
+
+func TestFetchStatusDegradedPublicationAndOverdueWatch(t *testing.T) {
+	now := time.Now().UTC()
+	dataDir := t.TempDir()
+	tracker := fetchprogress.New(dataDir, "sha-test")
+	tracker.StartPass(fetchprogress.PassLightweightWatch)
+	tracker.SetJobs(2)
+	tracker.FinishJob(1, 0, false)
+	tracker.FinishJob(0, 0, true)
+	tracker.MarkPublished()
+	tracker.FinishSuccess(true)
+	tracker.SetSchedule(now.Add(time.Minute), now.Add(time.Hour))
+	handler := fetchStatusHandlerWithClock(dataDir, func() time.Time { return now }, time.Minute)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/fetch-status", nil))
+	var response fetchStatusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Available || response.State != "degraded" || response.Stale || response.Status == nil || response.Status.Outcome != fetchprogress.OutcomeDegraded || response.Status.Jobs.Failed != 1 || response.Status.Phase != fetchprogress.PhaseIdle || response.Status.LastSuccessfulPublicationAt == nil || len(response.History) != 1 || response.History[0].Outcome != fetchprogress.OutcomeDegraded || !response.History[0].Published {
+		t.Fatalf("degraded response = %+v, JSON %s", response, recorder.Body.String())
+	}
+	tracker.SetSchedule(now.Add(-2*time.Minute), now.Add(time.Hour))
+	status := tracker.Snapshot()
+	if state, stale := classifyFetchStatus(status, now, time.Minute); state != "stale" || !stale {
+		t.Fatalf("overdue degraded watch = %s stale=%t", state, stale)
+	}
+	status.Phase = fetchprogress.PhaseComplete
+	if state, stale := classifyFetchStatus(status, now, time.Minute); state != "degraded" || stale {
+		t.Fatalf("completed degraded pass = %s stale=%t", state, stale)
+	}
+}

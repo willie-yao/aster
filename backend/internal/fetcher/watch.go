@@ -78,7 +78,8 @@ func RunWatch(ctx context.Context, opts Options, watchInterval, reconcileInterva
 	}
 	if err := runWatchLoop(ctx, p, watchInterval, reconcileInterval, realWatchClock); err != nil {
 		outcome := progress.Snapshot().Outcome
-		if errors.Is(err, context.Canceled) && (outcome == fetchprogress.OutcomeRunning || outcome == fetchprogress.OutcomeSucceeded) {
+		if errors.Is(err, context.Canceled) &&
+			(outcome == fetchprogress.OutcomeRunning || outcome == fetchprogress.OutcomeSucceeded || outcome == fetchprogress.OutcomeDegraded) {
 			progress.FinishCancelled()
 		} else {
 			progress.CancelIfRunning()

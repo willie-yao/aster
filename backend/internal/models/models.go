@@ -313,9 +313,32 @@ const (
 	JobCurrentFailing JobCurrentStatus = "FAILING"
 )
 
+// JobFetchStatus describes the last attempt to refresh a job's build listing.
+type JobFetchStatus struct {
+	State         JobFetchState `json:"state"`
+	CheckedAt     time.Time     `json:"checked_at"`
+	LastSuccessAt *time.Time    `json:"last_success_at,omitempty"`
+}
+
+// JobFetchState distinguishes current build data from retained observations.
+type JobFetchState string
+
+const (
+	JobFetchFresh          JobFetchState = "fresh"
+	JobFetchCarriedForward JobFetchState = "carried_forward"
+)
+
+// JobFetchSummary counts discovered jobs and incomplete fetches in a publication.
+type JobFetchSummary struct {
+	Total   int `json:"total"`
+	Failed  int `json:"failed"`
+	Missing int `json:"missing"`
+}
+
 // JobSummary represents aggregated data for a job on the landing page.
 type JobSummary struct {
 	ProwJob
+	Fetch *JobFetchStatus `json:"fetch,omitempty"`
 	// CurrentStatus describes the newest observed run independently of rolling reliability.
 	CurrentStatus JobCurrentStatus `json:"current_status"`
 	OverallStatus string           `json:"overall_status"` // "PASSING", "FAILING", "FLAKY", "UNKNOWN"
@@ -341,12 +364,14 @@ type RunSummary struct {
 
 // Dashboard is the top-level structure for dashboard.json.
 type Dashboard struct {
-	GeneratedAt time.Time    `json:"generated_at"`
-	Jobs        []JobSummary `json:"jobs"`
+	Fetch       *JobFetchSummary `json:"fetch,omitempty"`
+	GeneratedAt time.Time        `json:"generated_at"`
+	Jobs        []JobSummary     `json:"jobs"`
 }
 
 // JobDetail is the per-job detail structure for jobs/{job-id}.json.
 type JobDetail struct {
+	Fetch          *JobFetchStatus  `json:"fetch,omitempty"`
 	Name           string           `json:"name"`
 	JobID          string           `json:"job_id"`
 	JobType        string           `json:"job_type"`
@@ -958,10 +983,11 @@ type SharedFailureIndex struct {
 
 // FlakinessReport is the top-level structure for flakiness.json.
 type FlakinessReport struct {
-	GeneratedAt        string          `json:"generated_at"`
-	MostFlaky          []TestFlakiness `json:"most_flaky"`
-	PersistentFailures []TestFlakiness `json:"persistent_failures"`
-	RecentlyBroken     []TestFlakiness `json:"recently_broken"`
+	Fetch              *JobFetchSummary `json:"fetch,omitempty"`
+	GeneratedAt        string           `json:"generated_at"`
+	MostFlaky          []TestFlakiness  `json:"most_flaky"`
+	PersistentFailures []TestFlakiness  `json:"persistent_failures"`
+	RecentlyBroken     []TestFlakiness  `json:"recently_broken"`
 	// LowPassRate holds tests selected by the optional
 	// attention.low_pass_rate rule. It is always present and empty when the
 	// rule is not configured. Selection does not change classification.

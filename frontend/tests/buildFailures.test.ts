@@ -6,10 +6,10 @@ import type { TestCase } from "../src/types/dashboard.js";
 
 const failure: TestCase = { name: "Prow job execution", source: "build", status: "failed", duration_seconds: 1 };
 const status: FetchProgressStatus = {
-  schema_version: 14, run_id: "run", pass_id: "pass", pass_type: "initial-watch", phase: "analysis",
+  schema_version: 15, run_id: "run", pass_id: "pass", pass_type: "initial-watch", phase: "analysis",
   run_started_at: "2026-07-30T00:00:00Z", pass_started_at: "2026-07-30T00:00:00Z",
   phase_started_at: "2026-07-30T00:00:00Z", last_progress_at: "2026-07-30T00:00:00Z", outcome: "running",
-  jobs: { total: 1, completed: 1 }, builds: { cached: 0, fetched: 1 },
+  jobs: { total: 1, completed: 1, failed: 0 }, builds: { cached: 0, fetched: 1 },
   analyses: {
     logical_total: 1, queued: 1, running: 0, completed: 0, failed: 0, cancelled: 0,
     build_subjects: { logical_total: 1, queued: 1, running: 0, completed: 0, failed: 0, cancelled: 0 },

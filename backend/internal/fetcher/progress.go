@@ -73,9 +73,9 @@ func (p *pipeline) setProgressJobs(total int) {
 	}
 }
 
-func (p *pipeline) finishProgressJob(cached, fetched int) {
+func (p *pipeline) finishProgressJob(cached, fetched int, failed bool) {
 	if p.progress != nil {
-		p.progress.FinishJob(cached, fetched)
+		p.progress.FinishJob(cached, fetched, failed)
 	}
 }
 

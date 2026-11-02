@@ -877,3 +877,60 @@ func TestWriteManifest_OmitsPullRequestCommentConfig(t *testing.T) {
 		t.Errorf("manifest dropped pull_requests, which the frontend needs:\n%s", manifest)
 	}
 }
+
+func TestWriteAllPreservesFetchFreshnessContract(t *testing.T) {
+	var fixture struct {
+		Dashboard      models.Dashboard       `json:"dashboard"`
+		Detail         models.JobDetail       `json:"detail"`
+		Flakiness      models.FlakinessReport `json:"flakiness"`
+		EmptyDashboard models.Dashboard       `json:"empty_dashboard"`
+		EmptyFlakiness models.FlakinessReport `json:"empty_flakiness"`
+	}
+	readJSON(t, "../../../frontend/tests/fixtures/fetch-freshness.json", &fixture)
+	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	lastSuccess := now.Add(-24 * time.Hour)
+	fetch := &models.JobFetchStatus{State: models.JobFetchCarriedForward, CheckedAt: now, LastSuccessAt: &lastSuccess}
+	summary := models.JobSummary{
+		ProwJob: models.ProwJob{Name: "carried-job", JobID: "carried-job", JobType: models.JobTypePeriodic, Branch: "main"},
+		Fetch:   fetch, CurrentStatus: models.JobCurrentPassing, OverallStatus: "UNKNOWN", RecentRuns: []models.RunSummary{},
+	}
+	detail := models.JobDetail{Name: "carried-job", JobID: "carried-job", JobType: models.JobTypePeriodic, CurrentStatus: models.JobCurrentPassing, Fetch: fetch, Runs: []models.BuildResult{}}
+	cases := []struct {
+		name          string
+		jobs          []models.JobSummary
+		details       []models.JobDetail
+		fetch         *models.JobFetchSummary
+		wantDashboard models.Dashboard
+		wantReport    models.FlakinessReport
+	}{
+		{"carried data", []models.JobSummary{summary}, []models.JobDetail{detail}, &models.JobFetchSummary{Total: 2, Failed: 2, Missing: 1}, fixture.Dashboard, fixture.Flakiness},
+		{"all new jobs missing", nil, nil, &models.JobFetchSummary{Total: 2, Failed: 2, Missing: 2}, fixture.EmptyDashboard, fixture.EmptyFlakiness},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dashboard := models.Dashboard{GeneratedAt: now, Fetch: tc.fetch, Jobs: tc.jobs}
+			report := models.FlakinessReport{
+				GeneratedAt: now.Format(time.RFC3339), Fetch: tc.fetch,
+				MostFlaky: []models.TestFlakiness{}, PersistentFailures: []models.TestFlakiness{}, RecentlyBroken: []models.TestFlakiness{},
+			}
+			if err := WriteAll(dir, sampleConfig(), dashboard, tc.details, report, models.SearchIndex{}); err != nil {
+				t.Fatal(err)
+			}
+			var writtenDashboard models.Dashboard
+			var writtenReport models.FlakinessReport
+			readJSON(t, filepath.Join(dir, "dashboard.json"), &writtenDashboard)
+			readJSON(t, filepath.Join(dir, "flakiness.json"), &writtenReport)
+			if !reflect.DeepEqual(writtenDashboard, tc.wantDashboard) || !reflect.DeepEqual(writtenReport, tc.wantReport) {
+				t.Fatalf("writer contract differs from frontend fixture: dashboard=%+v report=%+v", writtenDashboard, writtenReport)
+			}
+			if len(tc.details) > 0 {
+				var writtenDetail models.JobDetail
+				readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename("carried-job")), &writtenDetail)
+				if !reflect.DeepEqual(writtenDetail, fixture.Detail) {
+					t.Fatalf("detail differs from frontend fixture: %+v", writtenDetail)
+				}
+			}
+		})
+	}
+}
