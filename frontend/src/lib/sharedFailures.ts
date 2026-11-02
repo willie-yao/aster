@@ -25,12 +25,14 @@ export function sharedFailureSubject(failure: SharedFailure): string {
   return failure.build_level ? failure.job_name : failure.test_name;
 }
 
-// sharedFailureScope describes how many pull requests the failure spans, which
-// is the number that makes it worth looking at.
+// sharedFailureScope describes retained observations, including older heads.
 export function sharedFailureScope(failure: SharedFailure): string {
   const count = failure.pull_requests.length;
   const pulls = count === 1 ? "1 pull request" : `${count} pull requests`;
-  return failure.base_ref ? `${pulls} targeting ${failure.base_ref}` : pulls;
+  const scope = failure.base_ref ? `${pulls} targeting ${failure.base_ref}` : pulls;
+  const older = failure.pull_requests.filter((member) => member.stale).length;
+  const history = older > 0 ? `; ${older} ${older === 1 ? "result" : "results"} from older revisions` : "";
+  return `Observed on ${scope}${history}`;
 }
 
 // baseBranchNote names where the base branch already fails the shared test, or

@@ -56,6 +56,7 @@ const { HealthPanel, JobHealthTable, AttentionRow, DisclosureButton, FeaturedPat
       summary: string;
       detail?: string;
       count?: string;
+      wrapCount?: boolean;
       signal?: string;
       statusColor?: "success" | "warning" | "error";
       muted?: boolean;
@@ -739,6 +740,17 @@ test("attention rows use one full-row destination link", () => {
   assert.match(html, /timed out waiting for cluster/);
   assert.match(html, /3 consecutive failures/);
   assert.match(html, />Failing</);
+});
+
+test("shared observation counts wrap within a capped column while ordinary counts stay on one line", () => {
+  const count = `Observed on 3 pull requests targeting release/${"long-branch".repeat(12)}; 2 results from older revisions`;
+  const props = { to: "/pull-requests/shared/example", destinationLabel: "Open shared failure", subject: "pull-e2e", summary: "TestA", count };
+  const ordinary = render(createElement(AttentionRow, props));
+  const shared = render(createElement(AttentionRow, { ...props, wrapCount: true }));
+  assert.match(ordinary, /grid-area:count;display:none;white-space:nowrap;/);
+  assert.doesNotMatch(ordinary, /max-width:180px|overflow-wrap:anywhere/);
+  assert.match(shared, /grid-area:count;display:none;white-space:normal;min-width:0;max-width:180px;overflow-wrap:anywhere;/);
+  assert.ok(shared.includes(count));
 });
 
 test("featured recurring pattern exposes a current same-cause streak", () => {

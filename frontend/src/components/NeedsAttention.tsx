@@ -488,6 +488,7 @@ interface AttentionRowProps {
   summary: string;
   detail?: string;
   count?: string;
+  wrapCount?: boolean;
   signal?: string;
   statusColor?: "success" | "warning" | "error";
   muted?: boolean;
@@ -500,6 +501,7 @@ export function AttentionRow({
   summary,
   detail,
   count,
+  wrapCount = false,
   signal,
   statusColor,
   muted = false,
@@ -601,7 +603,8 @@ export function AttentionRow({
         sx={{
           gridArea: "count",
           display: "none",
-          whiteSpace: "nowrap",
+          whiteSpace: wrapCount ? "normal" : "nowrap",
+          ...(wrapCount && { minWidth: 0, maxWidth: 180, overflowWrap: "anywhere" }),
           ...overviewTypography.data,
           [attentionDesktopBreakpoint]: { display: "block" },
         }}
@@ -640,7 +643,7 @@ export function AttentionRow({
               variant="data"
               component="span"
               color="textSecondary"
-              sx={overviewTypography.data}
+              sx={{ ...overviewTypography.data, ...(wrapCount && { minWidth: 0, overflowWrap: "anywhere" }) }}
             >
               {count}
             </Typography>
@@ -909,6 +912,7 @@ export function NeedsAttention({
         summary={testName}
         detail={baseBranchNote(failure, (jobName) => shortJobName(jobName, filePrefix))}
         count={sharedFailureScope(failure)}
+        wrapCount
         signal="Shared"
         statusColor="error"
       />

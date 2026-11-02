@@ -10,7 +10,7 @@ import { withSSR } from "./helpers/ssr.js";
 import { checkState, checkStatusLabel, checkSummaryLine } from "../src/lib/pullRequests.js";
 import { evidenceMember, sharedFailureAnalyzable } from "../src/lib/sharedFailures.js";
 import { jobPath } from "../src/lib/routes.js";
-import type { Dashboard, JobDetail, JobSummary } from "../src/types/dashboard.js";
+import type { Dashboard, FlakinessReport, JobDetail, JobSummary } from "../src/types/dashboard.js";
 import type { Manifest } from "../src/types/manifest.js";
 import type {
   PullRequestCheck,
@@ -30,6 +30,7 @@ const observations: { indexes: PullRequestIndex[] } = JSON.parse(
 
 interface PageData {
   dashboard: Dashboard | null;
+  attention: FlakinessReport | null;
   detail: PullRequestDetail | null;
   index: PullRequestIndex | null;
   indexLoading: boolean;
@@ -68,14 +69,15 @@ const pages = await withSSR(async (vite) => {
   load(id) {
     if (!id.endsWith("/src/hooks/useData.ts")) return;
     return `
-      export const fixture = { dashboard: null, detail: null, shared: null, job: null, index: null, indexLoading: false, indexError: null };
+      export const fixture = { dashboard: null, attention: null, detail: null, shared: null, job: null, index: null, indexLoading: false, indexError: null };
       const result = (data) => ({ data, loading: data === null, error: null });
       export const useDashboard = () => result(fixture.dashboard);
-      export const useFlakinessReport = () => result(null);
+      export const useFlakinessReport = () => result(fixture.attention);
       export const usePullRequestDetail = () => result(fixture.detail);
       export const usePullRequestIndex = () => ({ data: fixture.index, loading: fixture.indexLoading, error: fixture.indexError });
       export const useSharedFailures = () => result(fixture.shared);
       export const useJobDetail = () => result(fixture.job);
+      export const useResolved = () => ({ data: { resolved: {}, causes: {} }, loading: false, error: null, availability: 'available', refetch: () => {} });
     `;
   },
 }]);
@@ -114,6 +116,7 @@ const publishedJob: JobSummary = {
 };
 
 function resetData(): void {
+  pages.fixture.attention = null;
   pages.fixture.index = observations.indexes[0];
   pages.fixture.indexLoading = false;
   pages.fixture.indexError = null;
@@ -282,6 +285,33 @@ test("retained analysis hints require a loaded, complete same-repository index",
     assert.match(html, /Presubmit checks/);
     assert.match(html, /Still running/);
     assert.doesNotMatch(html, /This pull request is closed/);
+  }
+});
+
+test("shared headline and overview qualify retained older-revision observations", () => {
+  for (const older of [0, 2, 3]) {
+    resetData();
+    pages.fixture.attention = { generated_at: "", most_flaky: [], persistent_failures: [], recently_broken: [], build_failures: [] };
+    const failure = pages.fixture.shared!.failures[0];
+    failure.pull_requests = [1, 2, 3].map((number) => ({
+      ...wire.members[1], number, stale: number > 3 - older,
+    }));
+    const scope = `Observed on 3 pull requests targeting main${older ? `; ${older} results from older revisions` : ""}`;
+    for (const html of [
+      renderPage(pages.SharedFailurePage, "/pull-requests/shared/:id", "/pull-requests/shared/shared"),
+      renderPage(pages.PullRequestsPage, "/pull-requests", "/pull-requests"),
+      renderPage(pages.DashboardPage, "/", "/"),
+    ]) {
+      const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+      assert.ok(text.includes(scope), `${older} older results: ${scope}`);
+      assert.doesNotMatch(text, /Failing on 3 pull requests/);
+    }
+    const detail = renderPage(pages.SharedFailurePage, "/pull-requests/shared/:id", "/pull-requests/shared/shared");
+    assert.match(detail, /Affected pull requests/);
+    for (const number of [1, 2, 3]) assert.ok(detail.includes(`href="/pull-requests/${number}"`));
+    assert.equal((detail.match(/tested an older head/g) ?? []).length, older);
+    const overview = renderPage(pages.DashboardPage, "/", "/");
+    assert.match(overview, /grid-area:count;display:none;white-space:normal;min-width:0;max-width:180px;overflow-wrap:anywhere;/);
   }
 });
 
