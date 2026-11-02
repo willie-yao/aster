@@ -27,6 +27,7 @@ import {
   withOverviewFilters,
   type OverviewStatusFilter,
 } from "../lib/dashboardOverview";
+import { FetchFreshnessNotice } from "../components/FetchFreshnessNotice";
 import { LoadingState } from "../components/LoadingState";
 import { ErrorState } from "../components/ErrorState";
 import { overviewLayout, overviewTypography } from "../theme/overview";
@@ -161,7 +162,12 @@ export function DashboardPage() {
   if (loading) return <LoadingState />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
   if (!data) return null;
-  if (data.jobs.length === 0) return <EmptyDashboardState generatedAt={data.generated_at} />;
+  if (data.jobs.length === 0) return (
+    <>
+      <FetchFreshnessNotice fetch={data.fetch} />
+      <EmptyDashboardState generatedAt={data.generated_at} />
+    </>
+  );
 
   const sortedCategories = Object.keys(grouped).sort((a, b) => {
     const ai = categoryOrder.indexOf(a);
@@ -231,6 +237,8 @@ export function DashboardPage() {
           <li>Updated {timeAgo(data.generated_at)}</li>
         </Box>
       </Box>
+
+      <FetchFreshnessNotice fetch={data.fetch} />
 
       <OverviewSectionNav />
 

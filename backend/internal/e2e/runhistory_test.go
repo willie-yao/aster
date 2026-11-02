@@ -73,7 +73,7 @@ func TestPipeline_RetainsBuildsPastTheFetchWindow(t *testing.T) {
 	if retained.BuildID != aged {
 		t.Errorf("retained build = %s, want the aged-out %s", retained.BuildID, aged)
 	}
-	if retained.TestCases != nil {
+	if len(retained.TestCases) != 0 {
 		t.Errorf("retained build kept %d test cases, want none", len(retained.TestCases))
 	}
 	if retained.Started.IsZero() || retained.Result == "" {

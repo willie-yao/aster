@@ -75,6 +75,12 @@ Recreate the Secret with `printf %s` (not `echo`) to write the value cleanly.
 
 A `403` with "oauth authorization did not grant the configured access" is a different problem: the exchange succeeded but the grant was not exactly `read:user`. See the section above.
 
+## Published with incomplete job data
+
+This warning means some discovered jobs could not refresh their build listings. Aster keeps prior runs where available and marks those jobs **Carried forward**. Their observed status and pass rate describe prior data. Jobs with no prior publication are counted as missing. Check the fetcher logs for the storage or listing errors; a successful refresh clears the warning.
+
+Both Pages and Kubernetes deployments publish aggregate `fetch.total`, `fetch.failed`, and `fetch.missing` counts in `dashboard.json` and `flakiness.json`. Each published job's `fetch` records its check time and last successful fetch when known. An absent last-success time means unknown. The top-level `generated_at` describes the publication, so it does not establish that every job refreshed successfully. Kubernetes fetch status reports a completed publication with failed jobs as `degraded` and keeps the normal watch schedule.
+
 ## No jobs were published
 
 A dashboard that loads with zero jobs has a valid frontend and manifest, but the latest fetch published no job summaries. This has two common causes: discovery found no matching jobs, or every discovered job failed while loading build data.

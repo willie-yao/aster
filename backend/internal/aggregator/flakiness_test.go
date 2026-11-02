@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,6 +18,53 @@ func makeTC(name, status string, duration float64, failMsg string) models.TestCa
 		Status:          status,
 		DurationSeconds: duration,
 		FailureMessage:  failMsg,
+	}
+}
+
+func TestTestOutcomesFirstExecutedPerBuild(t *testing.T) {
+	passed := makeTC("TestA", "passed", 1, "")
+	failed := makeTC("TestA", "failed", 1, "failure")
+	skipped := makeTC("TestA", "skipped", 0, "")
+	buildFailure := failed
+	buildFailure.Source = models.TestCaseSourceBuild
+	passOutcome := testOutcome{passed: true, buildID: "1", started: hoursAgo(1)}
+	failOutcome := testOutcome{message: "failure", buildID: "1", started: hoursAgo(1)}
+	for _, tc := range []struct {
+		name string
+		runs [][]models.TestCase
+		want []testOutcome
+	}{
+		{name: "skipped then failed", runs: [][]models.TestCase{{skipped, failed}}, want: []testOutcome{failOutcome}},
+		{name: "failed then skipped", runs: [][]models.TestCase{{failed, skipped}}, want: []testOutcome{failOutcome}},
+		{name: "skipped then passed", runs: [][]models.TestCase{{skipped, passed}}, want: []testOutcome{passOutcome}},
+		{name: "passed then skipped", runs: [][]models.TestCase{{passed, skipped}}, want: []testOutcome{passOutcome}},
+		{name: "all skipped", runs: [][]models.TestCase{{skipped, skipped}}},
+		{name: "passed then failed", runs: [][]models.TestCase{{passed, failed}}, want: []testOutcome{passOutcome}},
+		{name: "failed then passed", runs: [][]models.TestCase{{failed, passed}}, want: []testOutcome{failOutcome}},
+		{name: "build failure then passed", runs: [][]models.TestCase{{buildFailure, passed}}, want: []testOutcome{passOutcome}},
+		{name: "build failure then failed", runs: [][]models.TestCase{{buildFailure, failed}}, want: []testOutcome{failOutcome}},
+		{
+			name: "build boundaries",
+			runs: [][]models.TestCase{{skipped, failed, passed}, {skipped, skipped}, {skipped, passed, failed}},
+			want: []testOutcome{failOutcome, {passed: true, buildID: "3", started: hoursAgo(3)}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var runs []models.BuildResult
+			for i, cases := range tc.runs {
+				runs = append(runs, makeBuild(fmt.Sprint(i+1), hoursAgo(i+1), false, cases))
+			}
+			if got := outcomesForTest("TestA", runs); !slices.Equal(got, tc.want) {
+				t.Errorf("outcomesForTest = %+v, want %+v", got, tc.want)
+			}
+			collected := collectTestOutcomes(runs)
+			if got := collected["TestA"]; !slices.Equal(got, tc.want) {
+				t.Errorf("collectTestOutcomes = %+v, want %+v", got, tc.want)
+			}
+			if len(tc.want) == 0 && len(collected) != 0 {
+				t.Errorf("all-skipped tests entered outcome map: %+v", collected)
+			}
+		})
 	}
 }
 

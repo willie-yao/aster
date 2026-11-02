@@ -1,0 +1,97 @@
+{
+  "dashboard": {
+    "generated_at": "2026-08-17T10:00:00Z",
+    "jobs": [
+      {
+        "name": "carried-job",
+        "job_id": "carried-job",
+        "job_type": "periodic",
+        "repo": "",
+        "tab_name": "",
+        "category": "",
+        "branch": "main",
+        "description": "",
+        "minimum_interval": "",
+        "timeout": "",
+        "config_file": "",
+        "current_status": "PASSING",
+        "overall_status": "UNKNOWN",
+        "recent_runs": [],
+        "pass_rate_recent": null,
+        "fetch": {
+          "state": "carried_forward",
+          "checked_at": "2026-08-17T10:00:00Z",
+          "last_success_at": "2026-08-16T10:00:00Z"
+        }
+      }
+    ],
+    "fetch": {
+      "total": 2,
+      "failed": 2,
+      "missing": 1
+    }
+  },
+  "detail": {
+    "name": "carried-job",
+    "job_id": "carried-job",
+    "job_type": "periodic",
+    "repo": "",
+    "current_status": "PASSING",
+    "runs": [],
+    "pass_rate_recent": null,
+    "fetch": {
+      "state": "carried_forward",
+      "checked_at": "2026-08-17T10:00:00Z",
+      "last_success_at": "2026-08-16T10:00:00Z"
+    }
+  },
+  "flakiness": {
+    "generated_at": "2026-08-17T10:00:00Z",
+    "most_flaky": [],
+    "persistent_failures": [],
+    "recently_broken": [],
+    "low_pass_rate": [],
+    "build_failures": [],
+    "pattern_refresh": {
+      "current": 0,
+      "retained": 0,
+      "failed": 0,
+      "unavailable": 0,
+      "not_applicable": 0
+    },
+    "fetch": {
+      "total": 2,
+      "failed": 2,
+      "missing": 1
+    }
+  },
+  "empty_dashboard": {
+    "generated_at": "2026-08-17T10:00:00Z",
+    "jobs": [],
+    "fetch": {
+      "total": 2,
+      "failed": 2,
+      "missing": 2
+    }
+  },
+  "empty_flakiness": {
+    "generated_at": "2026-08-17T10:00:00Z",
+    "most_flaky": [],
+    "persistent_failures": [],
+    "recently_broken": [],
+    "low_pass_rate": [],
+    "build_failures": [],
+    "pattern_refresh": {
+      "current": 0,
+      "retained": 0,
+      "failed": 0,
+      "unavailable": 0,
+      "not_applicable": 0
+    },
+    "fetch": {
+      "total": 2,
+      "failed": 2,
+      "missing": 2
+    }
+  }
+}

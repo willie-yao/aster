@@ -2,12 +2,14 @@ import type {
   BuildFailureSummary,
   FlakinessReport,
   LowPassRateEntry,
+  JobFetchSummary,
   PatternAnalysis,
   PatternRefreshReport,
   TestFlakiness,
 } from "../types/dashboard";
 
 export interface FlakinessReportWire {
+  fetch?: JobFetchSummary;
   generated_at: string;
   most_flaky?: TestFlakiness[] | null;
   persistent_failures?: TestFlakiness[] | null;
@@ -21,6 +23,7 @@ export interface FlakinessReportWire {
 export function normalizeFlakinessReport(report: FlakinessReportWire): FlakinessReport {
   return {
     generated_at: report.generated_at,
+    fetch: report.fetch,
     most_flaky: report.most_flaky ?? [],
     persistent_failures: report.persistent_failures ?? [],
     recently_broken: report.recently_broken ?? [],

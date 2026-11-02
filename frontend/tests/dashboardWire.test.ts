@@ -44,11 +44,14 @@ const pages = await withSSR(async (vite) => {
   const { TestDetailPage } = await vite.ssrLoadModule("/src/pages/TestDetailPage.tsx") as {
     TestDetailPage: ComponentType;
   };
+  const { BuildFailurePage } = await vite.ssrLoadModule("/src/pages/BuildFailurePage.tsx") as {
+    BuildFailurePage: ComponentType;
+  };
   const { ManifestContext } = await vite.ssrLoadModule("/src/hooks/useManifest.ts") as {
     ManifestContext: Context<Manifest | null>;
   };
   const { defaultTheme } = await vite.ssrLoadModule("/src/theme/index.ts") as { defaultTheme: Theme };
-  return { fixture, DashboardPage, PullRequestDetailPage, SharedFailurePage, TestDetailPage, ManifestContext, defaultTheme };
+  return { fixture, DashboardPage, PullRequestDetailPage, SharedFailurePage, TestDetailPage, BuildFailurePage, ManifestContext, defaultTheme };
 }, [{
   name: "dashboard-wire-data",
   load(id) {
@@ -163,6 +166,23 @@ test("empty dashboard points to supported discovery settings", () => {
   assert.match(html, /bucket discovery settings/);
   assert.match(html, /project\.yaml/);
   assert.doesNotMatch(html, /testgrid\.dashboard/);
+});
+
+test("direct build failure URL with no published runs renders the missing-build state", () => {
+  resetData();
+  pages.fixture.job = JSON.parse(
+    readFileSync(resolve(process.cwd(), "tests/fixtures/empty-job-detail.json"), "utf8"),
+  ) as JobDetail;
+
+  const html = renderPage(
+    pages.BuildFailurePage,
+    "/job/:jobName/build/:buildId/failure",
+    "/job/example%2Fperiodic-example/build/100/failure",
+  );
+  assert.match(html, /Build failure not found/);
+  assert.match(html, /The requested build failure is not present in the current window/);
+  assert.ok(html.includes(`href="${jobPath(pages.fixture.job.job_id)}"`));
+  assert.doesNotMatch(html, /Failed to load build failure/);
 });
 
 test("Go-serialized checks stay running or completed in the pull request UI", () => {

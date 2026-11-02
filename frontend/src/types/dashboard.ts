@@ -14,7 +14,20 @@ export interface RunSummary {
 
 export type JobCurrentStatus = "UNKNOWN" | "RUNNING" | "PASSING" | "FAILING";
 
+export interface JobFetchStatus {
+  state: "fresh" | "carried_forward";
+  checked_at: string;
+  last_success_at?: string;
+}
+
+export interface JobFetchSummary {
+  total: number;
+  failed: number;
+  missing: number;
+}
+
 export interface JobSummary {
+  fetch?: JobFetchStatus;
   name: string;
   job_id: string;
   job_type: "periodic" | "presubmit";
@@ -35,6 +48,7 @@ export interface JobSummary {
 }
 
 export interface Dashboard {
+  fetch?: JobFetchSummary;
   generated_at: string;
   jobs: JobSummary[];
 }
@@ -213,6 +227,7 @@ export interface LowPassRateEntry extends TestFlakiness {
 }
 
 export interface FlakinessReport {
+  fetch?: JobFetchSummary;
   generated_at: string;
   most_flaky: TestFlakiness[];
   persistent_failures: TestFlakiness[];
@@ -316,6 +331,7 @@ export interface RemediationTarget {
 }
 
 export interface JobDetail {
+  fetch?: JobFetchStatus;
   name: string;
   job_id: string;
   job_type: "periodic" | "presubmit";

@@ -140,6 +140,83 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 }
 
+func TestWriteJobDetailPublishesArraysWithoutMutatingInput(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		runs     []models.BuildResult
+		retained []models.BuildResult
+	}{
+		{name: "nil runs"},
+		{
+			name: "nil test cases",
+			runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "100"}}},
+		},
+		{
+			name: "retained metadata and populated tests",
+			runs: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{BuildID: "101"},
+				TestCases: []models.TestCase{{Name: "TestA", Status: "passed"}},
+			}},
+			retained: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{BuildID: "99"}, TestsTotal: 4, TestsPassed: 4,
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := models.JobDetail{
+				Name: "periodic-example", JobID: "example/periodic-example",
+				JobType: models.JobTypePeriodic, Repo: "example/project", CurrentStatus: models.JobCurrentUnknown,
+				Runs: test.runs, RetainedRuns: test.retained,
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteJobDetail(dir, detail); err != nil {
+				t.Fatal(err)
+			}
+			after, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("WriteJobDetail mutated its input")
+			}
+			path := filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID))
+			var written models.JobDetail
+			readJSON(t, path, &written)
+			if written.Runs == nil || len(written.Runs) != len(test.runs) || len(written.RetainedRuns) != len(test.retained) {
+				t.Fatalf("published runs = %+v, retained = %+v", written.Runs, written.RetainedRuns)
+			}
+			for _, runs := range [][]models.BuildResult{written.Runs, written.RetainedRuns} {
+				for _, run := range runs {
+					if run.TestCases == nil {
+						t.Errorf("build %s test_cases is null, want an array", run.BuildID)
+					}
+				}
+			}
+			if len(test.retained) > 0 {
+				retained := written.RetainedRuns[0]
+				if retained.BuildID != "99" || retained.TestsTotal != 4 || retained.TestsPassed != 4 || len(retained.TestCases) != 0 {
+					t.Fatalf("retained metadata changed: %+v", retained)
+				}
+				if !reflect.DeepEqual(written.Runs[0].TestCases, test.runs[0].TestCases) {
+					t.Fatalf("populated tests changed: %+v", written.Runs[0].TestCases)
+				}
+			}
+			if test.name == "nil runs" {
+				var published, fixture map[string]any
+				readJSON(t, path, &published)
+				readJSON(t, "../../../frontend/tests/fixtures/empty-job-detail.json", &fixture)
+				if !reflect.DeepEqual(published, fixture) {
+					t.Fatalf("published job differs from frontend fixture:\ngot  %+v\nwant %+v", published, fixture)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteAllPreservesRunDurationsWithoutDuplicateHistory(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
@@ -798,5 +875,62 @@ func TestWriteManifest_OmitsPullRequestCommentConfig(t *testing.T) {
 	// The triage toggle itself must still publish: the nav tab depends on it.
 	if !strings.Contains(manifest, "pull_requests") {
 		t.Errorf("manifest dropped pull_requests, which the frontend needs:\n%s", manifest)
+	}
+}
+
+func TestWriteAllPreservesFetchFreshnessContract(t *testing.T) {
+	var fixture struct {
+		Dashboard      models.Dashboard       `json:"dashboard"`
+		Detail         models.JobDetail       `json:"detail"`
+		Flakiness      models.FlakinessReport `json:"flakiness"`
+		EmptyDashboard models.Dashboard       `json:"empty_dashboard"`
+		EmptyFlakiness models.FlakinessReport `json:"empty_flakiness"`
+	}
+	readJSON(t, "../../../frontend/tests/fixtures/fetch-freshness.json", &fixture)
+	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)
+	lastSuccess := now.Add(-24 * time.Hour)
+	fetch := &models.JobFetchStatus{State: models.JobFetchCarriedForward, CheckedAt: now, LastSuccessAt: &lastSuccess}
+	summary := models.JobSummary{
+		ProwJob: models.ProwJob{Name: "carried-job", JobID: "carried-job", JobType: models.JobTypePeriodic, Branch: "main"},
+		Fetch:   fetch, CurrentStatus: models.JobCurrentPassing, OverallStatus: "UNKNOWN", RecentRuns: []models.RunSummary{},
+	}
+	detail := models.JobDetail{Name: "carried-job", JobID: "carried-job", JobType: models.JobTypePeriodic, CurrentStatus: models.JobCurrentPassing, Fetch: fetch, Runs: []models.BuildResult{}}
+	cases := []struct {
+		name          string
+		jobs          []models.JobSummary
+		details       []models.JobDetail
+		fetch         *models.JobFetchSummary
+		wantDashboard models.Dashboard
+		wantReport    models.FlakinessReport
+	}{
+		{"carried data", []models.JobSummary{summary}, []models.JobDetail{detail}, &models.JobFetchSummary{Total: 2, Failed: 2, Missing: 1}, fixture.Dashboard, fixture.Flakiness},
+		{"all new jobs missing", nil, nil, &models.JobFetchSummary{Total: 2, Failed: 2, Missing: 2}, fixture.EmptyDashboard, fixture.EmptyFlakiness},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dashboard := models.Dashboard{GeneratedAt: now, Fetch: tc.fetch, Jobs: tc.jobs}
+			report := models.FlakinessReport{
+				GeneratedAt: now.Format(time.RFC3339), Fetch: tc.fetch,
+				MostFlaky: []models.TestFlakiness{}, PersistentFailures: []models.TestFlakiness{}, RecentlyBroken: []models.TestFlakiness{},
+			}
+			if err := WriteAll(dir, sampleConfig(), dashboard, tc.details, report, models.SearchIndex{}); err != nil {
+				t.Fatal(err)
+			}
+			var writtenDashboard models.Dashboard
+			var writtenReport models.FlakinessReport
+			readJSON(t, filepath.Join(dir, "dashboard.json"), &writtenDashboard)
+			readJSON(t, filepath.Join(dir, "flakiness.json"), &writtenReport)
+			if !reflect.DeepEqual(writtenDashboard, tc.wantDashboard) || !reflect.DeepEqual(writtenReport, tc.wantReport) {
+				t.Fatalf("writer contract differs from frontend fixture: dashboard=%+v report=%+v", writtenDashboard, writtenReport)
+			}
+			if len(tc.details) > 0 {
+				var writtenDetail models.JobDetail
+				readJSON(t, filepath.Join(dir, "jobs", models.JobDataFilename("carried-job")), &writtenDetail)
+				if !reflect.DeepEqual(writtenDetail, fixture.Detail) {
+					t.Fatalf("detail differs from frontend fixture: %+v", writtenDetail)
+				}
+			}
+		})
 	}
 }

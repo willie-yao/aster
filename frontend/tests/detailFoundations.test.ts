@@ -177,7 +177,7 @@ function usageDay(overrides: Partial<AIUsageDaily> = {}): AIUsageDaily {
 }
 
 const buildFetchProgress: FetchProgressStatus = {
-  schema_version: 14,
+  schema_version: 15,
   run_id: "run",
   pass_id: "pass",
   pass_type: "initial-watch",
@@ -187,7 +187,7 @@ const buildFetchProgress: FetchProgressStatus = {
   phase_started_at: "2026-08-11T00:00:00Z",
   last_progress_at: "2026-08-11T00:00:00Z",
   outcome: "running",
-  jobs: { total: 1, completed: 1 },
+  jobs: { total: 1, completed: 1, failed: 0 },
   builds: { cached: 0, fetched: 1 },
   analyses: {
     logical_total: 1,

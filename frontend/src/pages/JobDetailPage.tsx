@@ -16,6 +16,7 @@ import {
   WarningAmber,
 } from "@mui/icons-material";
 import { Link as RouterLink, useParams, useSearchParams } from "react-router-dom";
+import { JobFreshnessNotice } from "../components/FetchFreshnessNotice";
 import { useDashboard, useJobDetail } from "../hooks/useData";
 import {
   formatDuration,
@@ -523,6 +524,7 @@ export function JobDetailPage() {
             {lastRun ? `Last run ${timeAgo(lastRun.started)} · ` : ""}
             {data.job_type} job
           </Typography>
+          <JobFreshnessNotice fetch={data.fetch} />
           <JobConfigMetadata
             job={data}
             discovery={manifest.discovery}

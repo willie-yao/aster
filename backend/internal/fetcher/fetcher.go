@@ -321,6 +321,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 		job      models.ProwJob
 		runs     []models.BuildResult
 		retained []models.BuildResult
+		fetch    *models.JobFetchStatus
 	}
 
 	results := make([]jobResult, len(jobs))
@@ -337,7 +338,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 			defer func() { <-sem }()
 
 			runs, stats, err := fetchJobRunsCachedWithStats(fetchCtx, p.backend, cfg, &j, opts.BuildsPerJob, cachedJobs[j.JobID])
-			defer p.finishProgressJob(stats.cached, stats.fetched)
+			defer p.finishProgressJob(stats.cached, stats.fetched, err != nil)
+			checkedAt := time.Now().UTC()
 			if err != nil {
 				mu.Lock()
 				fetchErrors = append(fetchErrors, fmt.Errorf("job %s: %w", j.Name, err))
@@ -351,13 +353,17 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 					}
 					results[idx] = jobResult{
 						job: j, runs: carried, retained: selectRetainedRuns(carried, priorHistory[j.JobID]),
+						fetch: carriedJobFetchStatus(prior.Fetch, checkedAt),
 					}
 					log.Printf("  ⚠ %s (%s): carrying forward prior published runs", j.Name, j.JobID)
 				}
 				return
 			}
 
-			results[idx] = jobResult{job: j, runs: runs, retained: selectRetainedRuns(runs, priorHistory[j.JobID])}
+			results[idx] = jobResult{
+				job: j, runs: runs, retained: selectRetainedRuns(runs, priorHistory[j.JobID]),
+				fetch: &models.JobFetchStatus{State: models.JobFetchFresh, CheckedAt: checkedAt, LastSuccessAt: &checkedAt},
+			}
 			passed := 0
 			for _, r := range runs {
 				if r.Passed {
@@ -385,7 +391,8 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	p.startProgressPhase(fetchprogress.PhaseAggregation)
 
 	now := time.Now().UTC()
-	dashboard := models.Dashboard{GeneratedAt: now}
+	fetchSummary := &models.JobFetchSummary{Total: len(jobs), Failed: len(fetchErrors)}
+	dashboard := models.Dashboard{GeneratedAt: now, Fetch: fetchSummary}
 	var details []models.JobDetail
 
 	configRevision := ""
@@ -394,11 +401,14 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 	for _, r := range results {
 		if r.job.Name == "" {
+			fetchSummary.Missing++
 			continue // skipped due to fetch error
 		}
 		summary := aggregator.ComputeJobSummary(r.job, r.runs)
+		summary.Fetch = r.fetch
 		dashboard.Jobs = append(dashboard.Jobs, summary)
 		details = append(details, models.JobDetail{
+			Fetch:          r.fetch,
 			Name:           r.job.Name,
 			JobID:          r.job.JobID,
 			JobType:        r.job.JobType,
@@ -421,6 +431,7 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	}
 	aggregatorSettings := attentionSettings(p.cfg)
 	flakinessReport := aggregator.ComputeFlakinessReport(jobResultMap, jobs, now, aggregatorSettings)
+	flakinessReport.Fetch = fetchSummary
 	baseFlakiness := baseBranchFlakiness(jobResultMap, jobs, flakinessReport, now, aggregatorSettings)
 	log.Printf("Flakiness report: %d most flaky, %d persistent, %d recently broken, %d low pass rate",
 		len(flakinessReport.MostFlaky), len(flakinessReport.PersistentFailures),
@@ -501,6 +512,15 @@ func (p *pipeline) refreshDataWithAnalysisContext(fetchCtx, analysisCtx context.
 	p.completeProgressPhase()
 
 	return &refreshResult{details: details, flakiness: flakinessReport, baseFlakiness: baseFlakiness}, nil
+}
+
+func carriedJobFetchStatus(prior *models.JobFetchStatus, checkedAt time.Time) *models.JobFetchStatus {
+	status := &models.JobFetchStatus{State: models.JobFetchCarriedForward, CheckedAt: checkedAt}
+	if prior != nil && prior.LastSuccessAt != nil {
+		lastSuccess := *prior.LastSuccessAt
+		status.LastSuccessAt = &lastSuccess
+	}
+	return status
 }
 
 // recordRecurrence gives recurring causes memory that outlives the build window,

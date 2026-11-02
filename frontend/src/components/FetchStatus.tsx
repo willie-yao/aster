@@ -145,6 +145,8 @@ function stateIcon(response: FetchStatusResponse, size = 18, severity?: "info" |
   switch (response.state) {
     case "active":
       return <FetchActivityIcon size={size} />;
+    case "degraded":
+      return <WarningAmber sx={{ fontSize: size }} />;
     case "failed":
       return severity === "warning" ? <WarningAmber sx={{ fontSize: size }} /> : <ErrorOutlineOutlined sx={{ fontSize: size }} />;
     case "stale":

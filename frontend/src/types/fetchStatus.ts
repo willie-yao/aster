@@ -16,9 +16,9 @@ export type FetchPhase =
   | "cancelled"
   | "interrupted";
 
-export type FetchOutcome = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+export type FetchOutcome = "running" | "succeeded" | "degraded" | "failed" | "cancelled" | "interrupted";
 export type FetchStageState = "pending" | "running" | "completed" | "skipped" | "failed" | "cancelled";
-export type FetchStatusState = "missing" | "unavailable" | "active" | "idle" | "completed" | "failed" | "cancelled" | "interrupted" | "stale";
+export type FetchStatusState = "missing" | "unavailable" | "active" | "idle" | "completed" | "degraded" | "failed" | "cancelled" | "interrupted" | "stale";
 export type FetchFollowUpState = "running" | "completed" | "skipped" | "disabled" | "failed" | "cancelled";
 export type FetchFollowUpReason = "not-configured" | "no-work" | "dependency-failed";
 
@@ -49,7 +49,7 @@ export interface FetchProgressStatus {
   last_successful_publication_at?: string;
   outcome: FetchOutcome;
   failure_category?: string;
-  jobs: { total: number; completed: number };
+  jobs: { total: number; completed: number; failed: number };
   builds: { cached: number; fetched: number };
   analyses: {
     logical_total: number;

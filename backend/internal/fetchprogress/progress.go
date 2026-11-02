@@ -23,7 +23,7 @@ import (
 
 const (
 	// SchemaVersion is the current private fetch status schema.
-	SchemaVersion = 14
+	SchemaVersion = 15
 	// StatusDirectory is hidden from the public /data file server.
 	StatusDirectory = ".fetch-status"
 	// StatusFilename is the current fetch status snapshot.
@@ -69,6 +69,7 @@ type Outcome string
 const (
 	OutcomeRunning     Outcome = "running"
 	OutcomeSucceeded   Outcome = "succeeded"
+	OutcomeDegraded    Outcome = "degraded"
 	OutcomeFailed      Outcome = "failed"
 	OutcomeCancelled   Outcome = "cancelled"
 	OutcomeInterrupted Outcome = "interrupted"
@@ -164,6 +165,7 @@ type FollowUpProgress struct {
 type JobProgress struct {
 	Total     int `json:"total"`
 	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
 }
 
 // BuildProgress tracks reused and newly fetched builds.
@@ -331,6 +333,7 @@ func (s Status) validate() error {
 		return errors.New("fetch status is incomplete")
 	}
 	if s.Jobs.Total < 0 || s.Jobs.Completed < 0 || s.Jobs.Completed > s.Jobs.Total ||
+		s.Jobs.Failed < 0 || s.Jobs.Failed > s.Jobs.Completed ||
 		s.Builds.Cached < 0 || s.Builds.Fetched < 0 ||
 		s.Analyses.LogicalTotal < 0 || s.Analyses.Queued < 0 || s.Analyses.Running < 0 ||
 		s.Analyses.Completed < 0 || s.Analyses.Failed < 0 || s.Analyses.Cancelled < 0 ||
@@ -401,7 +404,7 @@ func validPhase(value Phase) bool {
 
 func validOutcome(value Outcome) bool {
 	switch value {
-	case OutcomeRunning, OutcomeSucceeded, OutcomeFailed, OutcomeCancelled, OutcomeInterrupted:
+	case OutcomeRunning, OutcomeSucceeded, OutcomeDegraded, OutcomeFailed, OutcomeCancelled, OutcomeInterrupted:
 		return true
 	default:
 		return false
@@ -727,10 +730,13 @@ func (t *Tracker) SetJobs(total int) {
 }
 
 // FinishJob records one processed job and its build source counts.
-func (t *Tracker) FinishJob(cached, fetched int) {
+func (t *Tracker) FinishJob(cached, fetched int, failed bool) {
 	t.update(false, func(status *Status) {
 		if status.Jobs.Completed < status.Jobs.Total {
 			status.Jobs.Completed++
+			if failed {
+				status.Jobs.Failed++
+			}
 		}
 		status.Builds.Cached += cached
 		status.Builds.Fetched += fetched
@@ -958,7 +964,7 @@ func (t *Tracker) SetSchedule(nextWatch, nextReconcile time.Time) {
 	})
 }
 
-// FinishSuccess marks the pass complete or idle between watch passes.
+// FinishSuccess completes publication, with a degraded outcome for failed jobs.
 func (t *Tracker) FinishSuccess(watch bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -972,11 +978,14 @@ func (t *Tracker) FinishSuccess(watch bool) {
 	t.status.PhaseStartedAt = now
 	t.status.LastProgressAt = now
 	t.status.Outcome = OutcomeSucceeded
+	if t.status.Jobs.Failed > 0 {
+		t.status.Outcome = OutcomeDegraded
+	}
 	t.status.FailureCategory = FailureNone
 	t.persistLocked(true)
 	t.appendHistoryLocked(now)
-	t.logf("fetch pass completed: pass=%s jobs=%d/%d analyses=%d/%d duration=%s",
-		t.status.PassType, t.status.Jobs.Completed, t.status.Jobs.Total,
+	t.logf("fetch pass completed: pass=%s outcome=%s jobs=%d/%d failed_jobs=%d analyses=%d/%d duration=%s",
+		t.status.PassType, t.status.Outcome, t.status.Jobs.Completed, t.status.Jobs.Total, t.status.Jobs.Failed,
 		t.status.Analyses.Completed+t.status.Analyses.Failed+t.status.Analyses.Cancelled,
 		t.status.Analyses.LogicalTotal, formatDuration(now.Sub(t.status.PassStartedAt)))
 }

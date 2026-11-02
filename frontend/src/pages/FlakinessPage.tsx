@@ -13,6 +13,7 @@ import { Link as RouterLink } from "react-router-dom";
 import { DetailSectionBand } from "../components/DetailSectionBand";
 import { ErrorState } from "../components/ErrorState";
 import { FetchActivityIcon } from "../components/FetchStatus";
+import { FetchFreshnessNotice } from "../components/FetchFreshnessNotice";
 import { LoadingState } from "../components/LoadingState";
 import { useFlakinessReport } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
@@ -607,6 +608,7 @@ export function FlakinessPage() {
 
   return (
     <Stack spacing={{ xs: 2.5, sm: 3.5 }}>
+      <FetchFreshnessNotice fetch={data.fetch} />
       <Box>
         <Typography
           component="h1"
