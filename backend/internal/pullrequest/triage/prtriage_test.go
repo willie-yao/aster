@@ -3,6 +3,7 @@ package triage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -510,6 +511,37 @@ func TestCollectRequiresOwnerRepoAndDependencies(t *testing.T) {
 				t.Fatal("want error")
 			}
 		})
+	}
+}
+
+type cancellingCheckBackend struct {
+	storage.Backend
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (b *cancellingCheckBackend) List(ctx context.Context, _ string) (*storage.Listing, error) {
+	b.calls++
+	b.cancel()
+	return nil, ctx.Err()
+}
+
+func TestCollectPropagatesCancellationDuringChecks(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend := &cancellingCheckBackend{Backend: writeBucket(t, nil), cancel: cancel}
+	lister := &fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}}
+	result, err := Collect(ctx, backend, lister, catalogOf(presubmit("pull-unit")), Options{
+		Owner: "example", Repo: "project", Workers: 1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Collect error = %v, want context cancellation", err)
+	}
+	if lister.limit == 0 || backend.calls != 1 {
+		t.Fatalf("listing limit = %d, check reads = %d", lister.limit, backend.calls)
+	}
+	if result.Index.Repo != "" || len(result.Index.PullRequests) != 0 || len(result.Details) != 0 || result.Truncated {
+		t.Fatalf("cancelled collection returned a partial result: %+v", result)
 	}
 }
 

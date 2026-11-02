@@ -22,7 +22,9 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/aggregator"
 	"github.com/willie-yao/aster/backend/internal/models"
+	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
+	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
 	prattribution "github.com/willie-yao/aster/backend/internal/pullrequest/attribution"
 	"github.com/willie-yao/aster/backend/internal/storage"
 )
@@ -675,4 +677,74 @@ func TestRunPullRequestPassSkipsCommentingWhenTriageFails(t *testing.T) {
 		client: failingHTTPClient(t),
 	}
 	p.runPullRequestPass(context.Background(), nil)
+}
+
+type cancellingTriageBackend struct {
+	storage.Backend
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (b *cancellingTriageBackend) List(ctx context.Context, _ string) (*storage.Listing, error) {
+	b.calls++
+	b.cancel()
+	return nil, ctx.Err()
+}
+
+func TestRunPullRequestPassCancellationPreservesPublishedView(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_READ_TOKEN", "")
+	setCommentAppCredentials(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backend := &cancellingTriageBackend{Backend: triageDiscoveryBackend(t), cancel: cancel}
+	cfg := commentConfig(true, true)
+	cfg.Branding.SourceRepo = project.SourceRepo{Owner: "example", Name: "project"}
+	job := jobconfig.JobDefinition{Name: "pull-project-pass", JobType: models.JobTypePresubmit, Repo: "example/project"}
+	p := &pipeline{
+		cfg: cfg, backend: backend,
+		client:     &http.Client{Transport: triageDiscoveryTransport{t: t}},
+		jobCatalog: &jobconfig.Catalog{Jobs: map[string]jobconfig.JobDefinition{job.ID(): job}},
+		opts:       Options{OutDir: t.TempDir(), Workers: 1},
+	}
+	summary := models.PullRequestSummary{Number: 1, CIState: models.PullRequestCIFailing}
+	if err := output.WritePullRequests(p.opts.OutDir,
+		models.PullRequestIndex{Repo: "example/project", PullRequests: []models.PullRequestSummary{summary}},
+		[]models.PullRequestDetail{{PullRequestSummary: summary}},
+		models.SharedFailureIndex{Repo: "example/project"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	previous := make(map[string][]byte)
+	for _, name := range []string{output.PullRequestIndexFilename, "pull-requests/1.json", output.SharedFailureIndexFilename} {
+		data, err := os.ReadFile(filepath.Join(p.opts.OutDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous[name] = data
+	}
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+
+	p.runPullRequestPass(ctx, nil)
+
+	if ctx.Err() != context.Canceled || backend.calls != 1 {
+		t.Fatalf("context error = %v, check reads = %d", ctx.Err(), backend.calls)
+	}
+	for name, want := range previous {
+		got, err := os.ReadFile(filepath.Join(p.opts.OutDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("cancelled triage replaced %s", name)
+		}
+	}
+	if !strings.Contains(logs.String(), "keeping the previous view: prtriage: context canceled") {
+		t.Fatalf("missing cancellation failure: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), "commenting failed") {
+		t.Fatalf("cancelled triage reached commenting: %s", logs.String())
+	}
 }

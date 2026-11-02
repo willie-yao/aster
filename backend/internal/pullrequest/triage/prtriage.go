@@ -105,6 +105,9 @@ func Collect(ctx context.Context, backend storage.Backend, lister PullRequestLis
 		len(pulls), len(presubmits), opts.fullRepo())
 
 	checks := collectChecks(ctx, backend, pulls, presubmits, opts)
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("prtriage: %w", err)
+	}
 
 	details := make([]models.PullRequestDetail, 0, len(pulls))
 	summaries := make([]models.PullRequestSummary, 0, len(pulls))
