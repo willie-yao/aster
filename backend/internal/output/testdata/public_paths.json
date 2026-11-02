@@ -1,0 +1,297 @@
+[
+  {
+    "name": "manifest.json",
+    "path": "manifest.json",
+    "public": true
+  },
+  {
+    "name": "dashboard.json",
+    "path": "dashboard.json",
+    "public": true
+  },
+  {
+    "name": "flakiness.json",
+    "path": "flakiness.json",
+    "public": true
+  },
+  {
+    "name": "search-index.json",
+    "path": "search-index.json",
+    "public": true
+  },
+  {
+    "name": "resolved.json",
+    "path": "resolved.json",
+    "public": true
+  },
+  {
+    "name": "pull-requests.json",
+    "path": "pull-requests.json",
+    "public": true
+  },
+  {
+    "name": "pull-request-failures.json",
+    "path": "pull-request-failures.json",
+    "public": true
+  },
+  {
+    "name": "provenance.json",
+    "path": "provenance.json",
+    "public": true
+  },
+  {
+    "name": "job f",
+    "path": "jobs/Zg.json",
+    "public": true
+  },
+  {
+    "name": "job ab",
+    "path": "jobs/YWI.json",
+    "public": true
+  },
+  {
+    "name": "job abc",
+    "path": "jobs/YWJj.json",
+    "public": true
+  },
+  {
+    "name": "job periodic-x",
+    "path": "jobs/cGVyaW9kaWMteA.json",
+    "public": true
+  },
+  {
+    "name": "job example/project/pull-e2e",
+    "path": "jobs/ZXhhbXBsZS9wcm9qZWN0L3B1bGwtZTJl.json",
+    "public": true
+  },
+  {
+    "name": "job unicode-☃",
+    "path": "jobs/dW5pY29kZS3imIM.json",
+    "public": true
+  },
+  {
+    "name": "pull request 1",
+    "path": "pull-requests/1.json",
+    "public": true
+  },
+  {
+    "name": "pull request 123",
+    "path": "pull-requests/123.json",
+    "public": true
+  },
+  {
+    "name": "pull request 9223372036854775807",
+    "path": "pull-requests/9223372036854775807.json",
+    "public": true
+  },
+  {
+    "name": "empty",
+    "path": "",
+    "public": false
+  },
+  {
+    "name": "data directory",
+    "path": ".",
+    "public": false
+  },
+  {
+    "name": "absolute",
+    "path": "/dashboard.json",
+    "public": false
+  },
+  {
+    "name": "unknown root",
+    "path": "private_state.json",
+    "public": false
+  },
+  {
+    "name": "unknown text",
+    "path": "notes.txt",
+    "public": false
+  },
+  {
+    "name": "known private",
+    "path": "issue_state.json",
+    "public": false
+  },
+  {
+    "name": "private lock",
+    "path": "issue_state.json.lock",
+    "public": false
+  },
+  {
+    "name": "public lock",
+    "path": "dashboard.json.lock",
+    "public": false
+  },
+  {
+    "name": "public temp",
+    "path": "dashboard.json.tmp-123",
+    "public": false
+  },
+  {
+    "name": "dot file",
+    "path": ".dashboard.json",
+    "public": false
+  },
+  {
+    "name": "case variant",
+    "path": "Dashboard.json",
+    "public": false
+  },
+  {
+    "name": "unicode case variant",
+    "path": "ſearch-index.json",
+    "public": false
+  },
+  {
+    "name": "dot directory",
+    "path": ".private/dashboard.json",
+    "public": false
+  },
+  {
+    "name": "fetch status",
+    "path": ".fetch-status/status.json",
+    "public": false
+  },
+  {
+    "name": "jobs directory",
+    "path": "jobs",
+    "public": false
+  },
+  {
+    "name": "jobs slash",
+    "path": "jobs/",
+    "public": false
+  },
+  {
+    "name": "nested job",
+    "path": "jobs/nested/Zg.json",
+    "public": false
+  },
+  {
+    "name": "dot job",
+    "path": "jobs/.Zg.json",
+    "public": false
+  },
+  {
+    "name": "job temp",
+    "path": "jobs/Zg.json.tmp-123",
+    "public": false
+  },
+  {
+    "name": "job lock",
+    "path": "jobs/Zg.json.lock",
+    "public": false
+  },
+  {
+    "name": "empty job id",
+    "path": "jobs/.json",
+    "public": false
+  },
+  {
+    "name": "job padding",
+    "path": "jobs/Zg==.json",
+    "public": false
+  },
+  {
+    "name": "job pad bits",
+    "path": "jobs/Zh.json",
+    "public": false
+  },
+  {
+    "name": "job invalid length",
+    "path": "jobs/Z.json",
+    "public": false
+  },
+  {
+    "name": "job newline",
+    "path": "jobs/Zg\n.json",
+    "public": false
+  },
+  {
+    "name": "job plain name",
+    "path": "jobs/periodic-x.json",
+    "public": false
+  },
+  {
+    "name": "job traversal",
+    "path": "jobs/../dashboard.json",
+    "public": false
+  },
+  {
+    "name": "job dot segment",
+    "path": "jobs/./Zg.json",
+    "public": false
+  },
+  {
+    "name": "double slash",
+    "path": "jobs//Zg.json",
+    "public": false
+  },
+  {
+    "name": "backslash",
+    "path": "jobs\\Zg.json",
+    "public": false
+  },
+  {
+    "name": "unknown directory",
+    "path": "private/Zg.json",
+    "public": false
+  },
+  {
+    "name": "zero pull request",
+    "path": "pull-requests/0.json",
+    "public": false
+  },
+  {
+    "name": "negative pull request",
+    "path": "pull-requests/-1.json",
+    "public": false
+  },
+  {
+    "name": "leading zero pull request",
+    "path": "pull-requests/0123.json",
+    "public": false
+  },
+  {
+    "name": "positive sign pull request",
+    "path": "pull-requests/+123.json",
+    "public": false
+  },
+  {
+    "name": "overflow pull request",
+    "path": "pull-requests/9223372036854775808.json",
+    "public": false
+  },
+  {
+    "name": "nested pull request",
+    "path": "pull-requests/nested/123.json",
+    "public": false
+  },
+  {
+    "name": "pull request lock",
+    "path": "pull-requests/123.json.lock",
+    "public": false
+  },
+  {
+    "name": "control",
+    "path": "\u0000dashboard.json",
+    "public": false
+  },
+  {
+    "name": "tab",
+    "path": "\tdashboard.json",
+    "public": false
+  },
+  {
+    "name": "percent slash",
+    "path": "jobs%2FZg.json",
+    "public": false
+  },
+  {
+    "name": "pull request newline",
+    "path": "pull-requests/123\n.json",
+    "public": false
+  }
+]

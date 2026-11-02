@@ -9,7 +9,6 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
-	"github.com/willie-yao/aster/backend/internal/recurrenceledger"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -22,40 +21,6 @@ const (
 	// AIUsageServerFilename is the server-owned private usage ledger.
 	AIUsageServerFilename = "ai_usage_server.json"
 )
-
-// NonPublishedFiles are operational files written into the output directory that
-// must not be served by the API server or deployed to the public Pages site:
-// the AI cache, private analysis state, and operational side-effect state. The
-// frontend never reads them; they carry operational metadata rather than
-// dashboard data. resolved.json is intentionally excluded from this list because
-// the frontend serves it to render resolved-failure state.
-var NonPublishedFiles = []string{
-	"ai_cache.json",
-	AITraceFilename,
-	AIUsageFetcherFilename,
-	AIUsageServerFilename,
-	"prepared_cause_findings.json",
-	"issue_state.json",
-	"fix_pr_state.json",
-	"fix_previews.json",
-	"notification_state.json",
-	"pr_comment_state.json",
-	// Retained so private ledger files left by the removed closed-loop
-	// remediation feature are never published from an existing data directory.
-	"remediation_state.json",
-	"remediation_prow_catalog.json",
-	// Retained so a stale file left in an existing data directory by a removed
-	// analysis runtime is never published.
-	"orka_analysis.json",
-	// Retained so private state left by the removed analysis corrections
-	// feature is never published from an existing data directory.
-	"analysis_correction_state.json",
-	"action_request_state.json",
-	"action_preview_state.json",
-	"pr_escalation_state.json",
-	"shared_failure_escalation_state.json",
-	recurrenceledger.FileName,
-}
 
 // writeJSON writes indented JSON to path atomically, creating parent
 // directories as needed. See statefile.WriteJSON.

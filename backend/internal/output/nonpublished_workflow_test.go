@@ -5,28 +5,61 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
-// The Pages deploy strips private files with a hand-maintained shell list. That
-// list silently drifts whenever NonPublishedFiles gains an entry, and the
-// consequence is publishing operator-private state to a world-readable site, so
-// the two are pinned together here.
-func TestDeployWorkflowStripsEveryNonPublishedFile(t *testing.T) {
-	path := filepath.Join("..", "..", "..", ".github", "workflows", "reusable-deploy.yml")
-	data, err := os.ReadFile(path)
+func TestDeployWorkflowStagesPublicData(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "reusable-deploy.yml"))
 	if err != nil {
-		t.Fatalf("reading the deploy workflow: %v", err)
+		t.Fatal(err)
 	}
-	workflow := string(data)
-
-	step := "Strip non-published data files"
-	if !strings.Contains(workflow, step) {
-		t.Fatalf("the deploy workflow no longer has a %q step; this guard needs updating", step)
-	}
-	for _, name := range NonPublishedFiles {
-		if !strings.Contains(workflow, "/"+name) {
-			t.Errorf("%s is in NonPublishedFiles but the deploy workflow never removes it, "+
-				"so it would be published to the public site", name)
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string
+				Run  string
+				Uses string
+			}
 		}
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	positions := make(map[string]int)
+	runs := make(map[string]string)
+	for i, step := range workflow.Jobs["build-and-deploy"].Steps {
+		if step.Name != "" {
+			positions[step.Name] = i
+			runs[step.Name] = step.Run
+		}
+		if strings.HasPrefix(step.Uses, "actions/upload-pages-artifact@") {
+			positions["upload"] = i
+		}
+		if strings.Contains(step.Run, "cp -r") || step.Name == "Strip non-published data files" {
+			t.Fatal("Pages must stage the public contract instead of copying and stripping private names")
+		}
+	}
+	previous := -1
+	for _, name := range []string{
+		"Save data cache", "Stage public input data", "Write public build provenance",
+		"Build frontend", "Stage public output data", "upload",
+	} {
+		position, ok := positions[name]
+		if !ok || position <= previous {
+			t.Fatalf("missing or out-of-order Pages step %q", name)
+		}
+		previous = position
+	}
+	for _, name := range []string{"Stage public input data", "Stage public output data"} {
+		if !strings.Contains(runs[name], "engine/hack/stage-public-data.mjs") {
+			t.Fatalf("%q does not use public data staging", name)
+		}
+	}
+	if !strings.Contains(runs["Stage public input data"], "$PROJECT_DIR/data") {
+		t.Fatal("pre-fetched consumer data must pass through public staging")
+	}
+	if !strings.Contains(runs["Stage public output data"], "engine/frontend/dist/data") {
+		t.Fatal("final Pages output must be replaced by public staging")
 	}
 }

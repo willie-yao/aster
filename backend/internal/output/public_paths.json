@@ -1,0 +1,10 @@
+[
+  "manifest.json",
+  "dashboard.json",
+  "flakiness.json",
+  "search-index.json",
+  "resolved.json",
+  "pull-requests.json",
+  "pull-request-failures.json",
+  "provenance.json"
+]

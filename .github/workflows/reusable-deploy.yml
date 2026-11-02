@@ -269,25 +269,23 @@ jobs:
           path: engine/frontend/public/data
           key: data-cache-${{ steps.cfg.outputs.slug }}-${{ github.run_id }}
 
-      # --- Pre-fetched data path (skip-fetch=true) ---
-      - name: Copy pre-fetched data
-        if: ${{ inputs.skip-fetch }}
-        run: |
-          DATA_SRC="${{ steps.cfg.outputs.project_dir_abs }}/data"
-          if [ ! -d "$DATA_SRC" ]; then
-            echo "::error::skip-fetch=true but no data/ directory found at $DATA_SRC. Run the fetcher locally and commit the output to <project_dir>/data/ in the consumer repo."
-            exit 1
-          fi
-          mkdir -p "$GITHUB_WORKSPACE/engine/frontend/public/data"
-          cp -r "$DATA_SRC/." "$GITHUB_WORKSPACE/engine/frontend/public/data/"
-          echo "Copied pre-fetched data from $DATA_SRC"
-          ls -la "$GITHUB_WORKSPACE/engine/frontend/public/data"
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: engine/frontend/package-lock.json
+
+      - name: Stage public input data
+        env:
+          SKIP_FETCH: ${{ inputs.skip-fetch }}
+          PROJECT_DIR: ${{ steps.cfg.outputs.project_dir_abs }}
+        run: |
+          DATA_DIR="$GITHUB_WORKSPACE/engine/frontend/public/data"
+          DATA_SRC="$DATA_DIR"
+          if [ "$SKIP_FETCH" = "true" ]; then
+            DATA_SRC="$PROJECT_DIR/data"
+          fi
+          node "$GITHUB_WORKSPACE/engine/hack/stage-public-data.mjs" "$DATA_SRC" "$DATA_DIR"
 
       - name: Write public build provenance
         env:
@@ -354,33 +352,11 @@ jobs:
           VITE_BASE_PATH: ${{ steps.cfg.outputs.base_path }}
         run: npm run build
 
-      # Keep operational files out of the public site. Vite copies public/data/
-      # into dist/data/ at build; strip AI traces, the cache, and side-effect
-      # state (they carry operational metadata, never dashboard data). The flat
-      # files stay in sync with output.NonPublishedFiles; private status and
-      # retired investigation cache files are hidden in dot-directories.
-      # Strip the listed private and operational files from pre-fetched data.
-      - name: Strip non-published data files
+      - name: Stage public output data
         run: |
-          d=engine/frontend/dist/data
-          [ -d "$d" ] && rm -f "$d"/ai_cache.json "$d"/ai_traces.json \
-            "$d"/ai_usage_fetcher.json "$d"/ai_usage_server.json "$d"/prepared_cause_findings.json \
-            "$d"/issue_state.json \
-            "$d"/fix_pr_state.json "$d"/fix_previews.json \
-            "$d"/notification_state.json "$d"/remediation_state.json \
-            "$d"/pr_comment_state.json "$d"/pr_comment_state.json.lock \
-            "$d"/remediation_prow_catalog.json \
-            "$d"/orka_analysis.json "$d"/analysis_correction_state.json \
-            "$d"/action_request_state.json "$d"/action_preview_state.json \
-            "$d"/pr_escalation_state.json \
-            "$d"/shared_failure_escalation_state.json \
-            "$d"/recurrence_ledger.json "$d"/.recurrence-ledger.lock \
-            "$d"/.fetch-status/status.json "$d"/.fetch-status/status.json.tmp-* \
-            "$d"/.fetch-status/history.json "$d"/.fetch-status/history.json.tmp-* \
-            "$d"/.remediation-investigations/cache.json \
-            "$d"/.remediation-investigations/cache.json.tmp-* \
-            "$d"/.remediation-investigations/cache.lock || true
-          rmdir "$d"/.remediation-investigations 2>/dev/null || true
+          node "$GITHUB_WORKSPACE/engine/hack/stage-public-data.mjs" \
+            "$GITHUB_WORKSPACE/engine/frontend/public/data" \
+            "$GITHUB_WORKSPACE/engine/frontend/dist/data"
 
       # --- Deploy to GitHub Pages ---
       - uses: actions/configure-pages@v5

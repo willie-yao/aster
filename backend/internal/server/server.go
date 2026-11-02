@@ -15,12 +15,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/willie-yao/aster/backend/internal/actions"
 	"github.com/willie-yao/aster/backend/internal/ai"
@@ -202,10 +199,10 @@ func Handler(opts Options) (http.Handler, error) {
 	if opts.DataDir == "" {
 		return nil, fmt.Errorf("server: DataDir is required")
 	}
-	if info, err := os.Stat(opts.DataDir); err != nil {
+	if info, err := os.Lstat(opts.DataDir); err != nil {
 		return nil, fmt.Errorf("server: data dir %q: %w", opts.DataDir, err)
-	} else if !info.IsDir() {
-		return nil, fmt.Errorf("server: data dir %q is not a directory", opts.DataDir)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("server: data dir %q is not a regular directory", opts.DataDir)
 	}
 
 	if opts.ChatFix != nil && (opts.AnalysisChat == nil || opts.Actions == nil) {
@@ -390,7 +387,7 @@ func Handler(opts Options) (http.Handler, error) {
 	// is rewritten every fetch, so mark it no-cache: the browser revalidates via
 	// If-Modified-Since (cheap 304 when unchanged) instead of serving a stale
 	// copy from its heuristic cache.
-	dataFS := http.FileServer(noListFS{http.Dir(opts.DataDir)})
+	dataFS := http.FileServer(publicDataFS{dir: opts.DataDir})
 	mux.Handle("/data/", readOnly(http.StripPrefix("/data/", noCache(dataFS))))
 
 	if opts.StaticDir != "" {
@@ -402,7 +399,7 @@ func Handler(opts Options) (http.Handler, error) {
 		mux.Handle("/", readOnly(spaHandler(opts.StaticDir)))
 	}
 
-	return compressResponses(securityHeaders(opts.HSTSEnabled, mux)), nil
+	return compressResponses(securityHeaders(opts.HSTSEnabled, publicDataPaths(mux))), nil
 }
 
 const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'"
@@ -843,54 +840,84 @@ func noCache(next http.Handler) http.Handler {
 	})
 }
 
-// noListFS wraps an http.FileSystem to disable directory listings and hide
-// operational files: opening a directory or a non-published file (the AI cache
-// and write-automation state) returns os.ErrNotExist, so http.FileServer
-// responds 404 instead of listing the tree or serving operational metadata.
-type noListFS struct{ fs http.FileSystem }
+// publicDataPaths rejects invalid paths before ServeMux and FileServer clean them.
+func publicDataPaths(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/data" || strings.HasPrefix(r.URL.Path, "/data/") {
+			name := strings.TrimPrefix(r.URL.Path, "/data/")
+			if !output.IsPublicDataPath(name) {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
-func (f noListFS) Open(name string) (http.File, error) {
-	if invalidDataPath(name) || hiddenDataPath(name) || hiddenDataBasename(name) {
+// publicDataFS serves only regular public files under pinned directories.
+type publicDataFS struct{ dir string }
+
+func (f publicDataFS) Open(name string) (http.File, error) {
+	name = strings.TrimPrefix(name, "/")
+	if !output.IsPublicDataPath(name) {
 		return nil, os.ErrNotExist
 	}
-	file, err := f.fs.Open(name)
+	info, err := os.Lstat(f.dir)
 	if err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, os.ErrNotExist
+	}
+	root, err := os.OpenRoot(f.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if opened, err := root.Stat("."); err != nil || !os.SameFile(info, opened) {
+		return nil, os.ErrNotExist
+	}
+
+	// Pin the optional child directory before opening its file.
+	if dir, base, nested := strings.Cut(name, "/"); nested {
+		info, err := root.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, os.ErrNotExist
+		}
+		child, err := root.OpenRoot(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer child.Close()
+		if opened, err := child.Stat("."); err != nil || !os.SameFile(info, opened) {
+			return nil, os.ErrNotExist
+		}
+		root = child
+		name = base
+	}
+
+	info, err = root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, os.ErrNotExist
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
 	if err != nil {
 		file.Close()
 		return nil, err
 	}
-	if info.IsDir() {
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		file.Close()
 		return nil, os.ErrNotExist
 	}
 	return file, nil
-}
-
-func invalidDataPath(name string) bool {
-	if !utf8.ValidString(name) || strings.ContainsRune(name, '\\') {
-		return true
-	}
-	return strings.IndexFunc(name, unicode.IsControl) >= 0
-}
-
-func hiddenDataPath(name string) bool {
-	for segment := range strings.SplitSeq(path.Clean("/"+name), "/") {
-		if strings.HasPrefix(segment, ".") && segment != "." && segment != ".." {
-			return true
-		}
-	}
-	return false
-}
-
-func hiddenDataBasename(name string) bool {
-	base := path.Base(path.Clean("/" + name))
-	for _, hidden := range output.NonPublishedFiles {
-		if strings.EqualFold(base, hidden) {
-			return true
-		}
-	}
-	return false
 }
