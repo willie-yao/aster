@@ -104,9 +104,7 @@ func dispatchAgenticToolWithPayload(
 			if p := extractToolPathArg(tc.Function.Arguments); p != "" && visiblePayload != nil {
 				s.recordSuccessfulRead(p)
 				beforeLines := analysisEvidenceLineSnapshot(s.analysisEvidence, p)
-				if _, roomLeft := recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload, s.analysisEvidenceBudget); !roomLeft {
-					s.analysisEvidenceFull = true
-				}
+				recordAnalysisChatEvidence(s.analysisEvidence, tc, visiblePayload, s.analysisEvidenceBudget)
 				visibleSnippets := toolResultSnippets(tc.Function.Name, visiblePayload)
 				newPath := false
 				if len(visibleSnippets) > 0 {

@@ -234,7 +234,7 @@ func remediationClauses(text string) []string {
 // That covers both a materially stronger gate and a publication rule whose old
 // output no longer reflects what the model said. Cosmetic prompt-shape changes
 // do not bump.
-const currentCritiqueVersion = 18
+const currentCritiqueVersion = 19
 
 // transientPersistThreshold is the consecutive-failure count at or above which a
 // draft claiming is_transient=true is contradicted. It is an engine-owned
@@ -490,7 +490,6 @@ func (o critiqueOutcome) MissingEvidenceCount() int {
 
 type analysisCitationContext struct {
 	Evidence map[string]*analysisChatEvidence
-	Full     bool
 }
 
 type proseLineClaim struct {
@@ -600,7 +599,7 @@ func critiqueDraftWithContent(parsed analysisResponse, readsFull, readsBase map[
 	missingArtifactCitationNeedsTool := false
 	if len(citationContexts) > 0 {
 		citationIssues = validateAnalysisCitations(parsed, citationContexts[0])
-		missingArtifactCitation = !citationContexts[0].Full && len(citationContexts[0].Evidence) > 0 && len(parsed.EvidenceCitations) == 0
+		missingArtifactCitation = len(citationContexts[0].Evidence) > 0 && len(parsed.EvidenceCitations) == 0
 		missingArtifactCitationNeedsTool = missingArtifactCitation && !hasCitableArtifactEvidence(citationContexts[0].Evidence)
 	}
 
@@ -643,12 +642,6 @@ var bareLineClaimRE = regexp.MustCompile(`\bL(\d+)(?:\s*(?:-|–|to)\s*L?(\d+))?
 
 func validateAnalysisCitations(parsed analysisResponse, context analysisCitationContext) []string {
 	claims := proseLineClaims(parsed.RootCause + "\n" + parsed.Summary)
-	if context.Full {
-		if len(parsed.EvidenceCitations) > 0 || len(claims) > 0 {
-			return []string{"evidence read budget was exceeded"}
-		}
-		return nil
-	}
 	var issues []string
 	if len(parsed.EvidenceCitations) > 20 {
 		issues = append(issues, "more than 20 evidence citations")

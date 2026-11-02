@@ -359,7 +359,7 @@ func TestInvalidEvidenceCitationIsDropped(t *testing.T) {
 	}
 }
 
-func TestEvidenceOverflowPreservesRetainedCitations(t *testing.T) {
+func TestPublishedCitationsPreserveRetainedEvidence(t *testing.T) {
 	valid := models.EvidenceCitation{
 		Path: "build-log.txt", LineStart: 42, LineEnd: 42, Quote: "controller failed to reconcile",
 	}
@@ -374,7 +374,6 @@ func TestEvidenceOverflowPreservesRetainedCitations(t *testing.T) {
 		},
 	}
 	context := analysisCitationContext{
-		Full: true,
 		Evidence: map[string]*analysisChatEvidence{
 			"build-log.txt": {Lines: map[int]string{42: "controller failed to reconcile"}},
 		},
@@ -452,16 +451,103 @@ func TestSourceLineClaimsCannotUseArtifactCitations(t *testing.T) {
 	}
 }
 
-func TestEvidenceOverflowOnlyBlocksLineAwareDrafts(t *testing.T) {
-	context := analysisCitationContext{Full: true}
-	fix := "Add the missing readiness guard to the controller."
-	plain := analysisResponse{RootCause: "The controller failed after the API became unavailable.", SuggestedFix: fix}
-	if out := critiqueDraftWithContent(plain, nil, nil, nil, nil, nil, 0, context); !out.Passed {
-		t.Fatalf("plain draft was blocked by unused evidence overflow: %+v", out)
+func TestEvidenceOverflowValidatesRetainedCitations(t *testing.T) {
+	const readBytes = 16 << 10
+	retainedLine := "controller failed to reconcile"
+	discardedLine := "discarded failure evidence "
+	largeContent := retainedLine + "\n" + discardedLine
+	largeContent += strings.Repeat("x", readBytes-len(largeContent))
+	state := boundedToolState(t, &fakeBrowser{files: map[string][]byte{
+		"large.log": []byte(largeContent),
+		"small.log": []byte("controller failed after the API became unavailable\n"),
+	}})
+	dispatchAgenticTool(t.Context(), state, transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_artifact", Arguments: `{"path":"large.log","pattern":"controller","context_lines":0}`,
+	}})
+	for range 10 {
+		dispatchAgenticTool(t.Context(), state, transport.ToolCall{Function: transport.FunctionCall{
+			Name: "read_artifact", Arguments: `{"path":"large.log","length":16384}`,
+		}})
 	}
-	lineAware := analysisResponse{RootCause: "The controller failed at line 42.", SuggestedFix: fix}
-	if out := critiqueDraftWithContent(lineAware, nil, nil, nil, nil, nil, 0, context); out.Passed || len(out.CitationIssues) == 0 {
-		t.Fatalf("line-aware draft ignored evidence overflow: %+v", out)
+	retainedBytes := state.analysisEvidence["large.log"].Bytes
+	if retainedBytes != len(retainedLine)+7*readBytes || retainedBytes > state.analysisEvidenceBudget {
+		t.Fatalf("retained bytes = %d, want %d within budget %d", retainedBytes, len(retainedLine)+7*readBytes, state.analysisEvidenceBudget)
+	}
+	dispatchAgenticTool(t.Context(), state, transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_artifact", Arguments: `{"path":"large.log","pattern":".","context_lines":0}`,
+	}})
+	if entry := state.analysisEvidence["large.log"]; entry.Bytes != retainedBytes || len(entry.Lines) != 1 {
+		t.Fatalf("overflowing grep changed retained evidence: bytes=%d lines=%v", entry.Bytes, entry.Lines)
+	}
+	dispatchAgenticTool(t.Context(), state, transport.ToolCall{Function: transport.FunctionCall{
+		Name: "grep_artifact", Arguments: `{"path":"small.log","pattern":"controller","context_lines":0}`,
+	}})
+	context := analysisCitationContext{Evidence: state.analysisEvidence}
+	retained := models.EvidenceCitation{Path: "large.log", LineStart: 1, LineEnd: 1, Quote: retainedLine}
+	unaffected := models.EvidenceCitation{Path: "small.log", LineStart: 1, LineEnd: 1, Quote: "controller failed after the API became unavailable"}
+	for _, test := range []struct {
+		name        string
+		rootCause   string
+		citations   []models.EvidenceCitation
+		wantIssue   string
+		wantMissing bool
+	}{
+		{
+			name: "unaffected artifact", rootCause: "The controller failed at small.log:1.",
+			citations: []models.EvidenceCitation{unaffected},
+		},
+		{
+			name: "retained lines on overflowed artifact", rootCause: "The controller failed at large.log:1.",
+			citations: []models.EvidenceCitation{retained},
+		},
+		{
+			name:      "discarded coordinates",
+			citations: []models.EvidenceCitation{{Path: "large.log", LineStart: 2, LineEnd: 2, Quote: discardedLine}},
+			wantIssue: "quote does not occur at the claimed lines",
+		},
+		{
+			name:      "unread artifact",
+			citations: []models.EvidenceCitation{{Path: "missing.log", LineStart: 1, LineEnd: 1, Quote: retainedLine}},
+			wantIssue: "names an unread artifact",
+		},
+		{
+			name:      "wrong quote",
+			citations: []models.EvidenceCitation{{Path: "small.log", LineStart: 1, LineEnd: 1, Quote: "an unrelated failure"}},
+			wantIssue: "quote does not occur at the claimed lines",
+		},
+		{name: "missing citations", wantMissing: true},
+		{
+			name: "unsupported prose line", rootCause: "The controller failed at large.log:2.",
+			citations: []models.EvidenceCitation{retained}, wantIssue: "prose line claim large.log:2-2 has no matching citation",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := analysisResponse{
+				RootCause:         "The controller failed after the API became unavailable.",
+				SuggestedFix:      "Add the missing readiness guard to the controller.",
+				EvidenceCitations: test.citations,
+			}
+			if test.rootCause != "" {
+				parsed.RootCause = test.rootCause
+			}
+			out := critiqueDraftWithContent(parsed, state.readArtifactsFull, state.readArtifactsBase, nil, nil, nil, 0, context)
+			wantPassed := test.wantIssue == "" && !test.wantMissing
+			if out.Passed != wantPassed || out.MissingArtifactCitation != test.wantMissing {
+				t.Fatalf("citation outcome = %+v, want passed=%v missing=%v", out, wantPassed, test.wantMissing)
+			}
+			if test.wantMissing && (out.MissingArtifactCitationNeedsTool || !slices.Contains(out.HardRuleIDs(), CritiqueRuleCitationMissing)) {
+				t.Fatalf("retained evidence did not require a citation: %+v", out)
+			}
+			if test.wantIssue != "" && !strings.Contains(strings.Join(out.CitationIssues, " "), test.wantIssue) {
+				t.Fatalf("citation issues = %v, want %q", out.CitationIssues, test.wantIssue)
+			}
+			if wantPassed {
+				sanitized := sanitizePublishedCitations(parsed, context)
+				if !slices.Equal(sanitized.EvidenceCitations, parsed.EvidenceCitations) || sanitized.RootCause != parsed.RootCause {
+					t.Fatalf("valid retained evidence changed during publication: %+v", sanitized)
+				}
+			}
+		})
 	}
 }
 
@@ -550,10 +636,5 @@ func TestAnalysisRequiresArtifactCitationWhenEvidenceIsAvailable(t *testing.T) {
 	out = critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{})
 	if !out.Passed || out.MissingArtifactCitation {
 		t.Fatalf("draft without readable artifact evidence was blocked: %+v", out)
-	}
-
-	out = critiqueDraftWithContent(parsed, nil, nil, nil, nil, nil, 0, analysisCitationContext{Full: true})
-	if !out.Passed || out.MissingArtifactCitation {
-		t.Fatalf("evidence-overflow draft was blocked: %+v", out)
 	}
 }
