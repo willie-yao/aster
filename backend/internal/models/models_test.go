@@ -66,3 +66,35 @@ func TestPullRequestFinishedWire(t *testing.T) {
 		t.Fatalf("pull request wire shape differs from frontend fixture:\ngot  %s\nwant %s", data, compact.Bytes())
 	}
 }
+
+func TestPullRequestObservationWire(t *testing.T) {
+	payload := struct {
+		Indexes []PullRequestIndex `json:"indexes"`
+	}{}
+	for _, truncated := range []bool{false, true} {
+		payload.Indexes = append(payload.Indexes, PullRequestIndex{
+			GeneratedAt: time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC),
+			Repo:        "example/project", Truncated: truncated,
+			PullRequests: []PullRequestSummary{
+				{Number: 7, Repo: "example/project", CIState: PullRequestCIUnknown},
+				{Number: 8, Repo: "example/project", CIState: PullRequestCIUnknown, ChecksUnobserved: 1},
+				{Number: 9, Repo: "example/project", CIState: PullRequestCIUnknown, ChecksObserved: 1, ChecksUnobserved: 1},
+			},
+		})
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("../../../frontend/tests/fixtures/pull-request-observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, compact.Bytes()) {
+		t.Fatalf("pull request observations differ from frontend fixture:\ngot  %s\nwant %s", data, compact.Bytes())
+	}
+}

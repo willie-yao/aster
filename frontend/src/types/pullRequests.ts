@@ -16,6 +16,8 @@ export interface PullRequestSummary {
   updated_at: string;
   ci_state: PullRequestCIState;
   checks_observed: number;
+  // Retained snapshots may predate observation-completeness reporting.
+  checks_unobserved?: number;
   checks_failing: number;
   failing_tests: number;
 }
@@ -83,6 +85,7 @@ export interface PullRequestCheck {
 
 export interface PullRequestIndex {
   generated_at: string;
+  truncated?: boolean;
   repo: string;
   pull_requests: PullRequestSummary[];
 }

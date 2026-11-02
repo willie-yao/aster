@@ -15,6 +15,7 @@ import type { Manifest } from "../src/types/manifest.js";
 import type {
   PullRequestCheck,
   PullRequestDetail,
+  PullRequestIndex,
   SharedFailureIndex,
   SharedFailureMember,
 } from "../src/types/pullRequests.js";
@@ -23,9 +24,16 @@ const wire: { checks: PullRequestCheck[]; members: SharedFailureMember[] } = JSO
   readFileSync(resolve(process.cwd(), "tests/fixtures/pull-request-checks.json"), "utf8"),
 );
 
+const observations: { indexes: PullRequestIndex[] } = JSON.parse(
+  readFileSync(resolve(process.cwd(), "tests/fixtures/pull-request-observations.json"), "utf8"),
+);
+
 interface PageData {
   dashboard: Dashboard | null;
   detail: PullRequestDetail | null;
+  index: PullRequestIndex | null;
+  indexLoading: boolean;
+  indexError: string | null;
   shared: SharedFailureIndex | null;
   job: JobDetail | null;
 }
@@ -37,6 +45,9 @@ const pages = await withSSR(async (vite) => {
   };
   const { PullRequestDetailPage } = await vite.ssrLoadModule("/src/pages/PullRequestDetailPage.tsx") as {
     PullRequestDetailPage: ComponentType;
+  };
+  const { PullRequestsPage } = await vite.ssrLoadModule("/src/pages/PullRequestsPage.tsx") as {
+    PullRequestsPage: ComponentType;
   };
   const { SharedFailurePage } = await vite.ssrLoadModule("/src/pages/SharedFailurePage.tsx") as {
     SharedFailurePage: ComponentType;
@@ -51,17 +62,18 @@ const pages = await withSSR(async (vite) => {
     ManifestContext: Context<Manifest | null>;
   };
   const { defaultTheme } = await vite.ssrLoadModule("/src/theme/index.ts") as { defaultTheme: Theme };
-  return { fixture, DashboardPage, PullRequestDetailPage, SharedFailurePage, TestDetailPage, BuildFailurePage, ManifestContext, defaultTheme };
+  return { fixture, DashboardPage, PullRequestDetailPage, PullRequestsPage, SharedFailurePage, TestDetailPage, BuildFailurePage, ManifestContext, defaultTheme };
 }, [{
   name: "dashboard-wire-data",
   load(id) {
     if (!id.endsWith("/src/hooks/useData.ts")) return;
     return `
-      export const fixture = { dashboard: null, detail: null, shared: null, job: null };
+      export const fixture = { dashboard: null, detail: null, shared: null, job: null, index: null, indexLoading: false, indexError: null };
       const result = (data) => ({ data, loading: data === null, error: null });
       export const useDashboard = () => result(fixture.dashboard);
       export const useFlakinessReport = () => result(null);
       export const usePullRequestDetail = () => result(fixture.detail);
+      export const usePullRequestIndex = () => ({ data: fixture.index, loading: fixture.indexLoading, error: fixture.indexError });
       export const useSharedFailures = () => result(fixture.shared);
       export const useJobDetail = () => result(fixture.job);
     `;
@@ -102,6 +114,9 @@ const publishedJob: JobSummary = {
 };
 
 function resetData(): void {
+  pages.fixture.index = observations.indexes[0];
+  pages.fixture.indexLoading = false;
+  pages.fixture.indexError = null;
   pages.fixture.dashboard = { generated_at: "", jobs: [publishedJob] };
   pages.fixture.detail = {
     number: 7,
@@ -113,9 +128,10 @@ function resetData(): void {
     html_url: "https://github.com/example/project/pull/7",
     created_at: "2026-08-17T08:00:00Z",
     updated_at: "2026-08-17T10:00:00Z",
-    generated_at: "2026-08-17T10:00:00Z",
+    generated_at: "2026-08-17T11:00:00Z",
     ci_state: "FAILING",
     checks_observed: 3,
+    checks_unobserved: 0,
     checks_failing: 1,
     failing_tests: 0,
     checks: wire.checks,
@@ -202,6 +218,71 @@ test("Go-serialized checks stay running or completed in the pull request UI", ()
   const shared = pages.fixture.shared!.failures[0];
   assert.equal(evidenceMember(shared)?.number, 2);
   assert.equal(sharedFailureAnalyzable({ ...shared, pull_requests: [wire.members[0]] }), false);
+});
+
+test("Go observation counts label the pull request ledger and detail consistently", () => {
+  resetData();
+  const html = renderPage(pages.PullRequestsPage, "/pull-requests", "/pull-requests");
+  assert.match(html, /No runs/);
+  assert.equal((html.match(/>Incomplete</g) ?? []).length, 2);
+  assert.match(html, /Analysis snapshot/);
+  assert.match(html, /PR updated/);
+  assert.match(html, /Observed/);
+
+  for (const [i, label] of ["No runs", "Incomplete", "Incomplete"].entries()) {
+    resetData();
+    const pull = observations.indexes[0].pull_requests[i];
+    pages.fixture.detail = {
+      ...pull, generated_at: observations.indexes[0].generated_at,
+      checks: pull.checks_observed ? [wire.checks[2]] : [],
+    };
+    const detail = renderPage(pages.PullRequestDetailPage, "/pull-requests/:number", `/pull-requests/${pull.number}`);
+    assert.ok(detail.includes(`>${label}<`), label);
+    const text = detail.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+    assert.ok(text.includes(`Checks unavailable ${pull.checks_unobserved}`));
+    if (i > 0) {
+      assert.doesNotMatch(detail, /No runs|No presubmit builds were found/);
+    }
+  }
+});
+
+test("historical snapshots without observation completeness stay unknown", () => {
+  resetData();
+  pages.fixture.detail = {
+    ...observations.indexes[0].pull_requests[0],
+    generated_at: observations.indexes[0].generated_at, checks: [],
+  };
+  delete pages.fixture.detail.checks_unobserved;
+  const html = renderPage(pages.PullRequestDetailPage, "/pull-requests/:number", "/pull-requests/7");
+  assert.match(html, />Unknown</);
+  assert.match(html, /completeness is unknown/);
+  assert.doesNotMatch(html, /No runs|No presubmit builds were found/);
+});
+
+test("detail identifies analysis snapshot time separately from the GitHub update time", () => {
+  resetData();
+  const html = renderPage(pages.PullRequestDetailPage, "/pull-requests/:number", "/pull-requests/7");
+  const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  assert.ok(text.includes(`Analysis snapshot ${new Date(pages.fixture.detail!.generated_at).toLocaleString()}`));
+  assert.ok(text.includes(`PR updated ${new Date(pages.fixture.detail!.updated_at).toLocaleString()}`));
+  assert.notEqual(pages.fixture.detail!.generated_at, pages.fixture.detail!.updated_at);
+});
+
+test("retained analysis hints require a loaded, complete same-repository index", () => {
+  for (const state of ["complete", "truncated", "historical", "another repo", "loading", "failed", "present"] as const) {
+    resetData();
+    pages.fixture.index = { ...observations.indexes[state === "truncated" ? 1 : 0], generated_at: "2026-08-18T10:00:00Z", pull_requests: [] };
+    if (state === "historical") delete pages.fixture.index.truncated;
+    if (state === "another repo") pages.fixture.index.repo = "another/project";
+    if (state === "loading") pages.fixture.indexLoading = true;
+    if (state === "failed") pages.fixture.indexError = "HTTP 503";
+    if (state === "present") pages.fixture.index.pull_requests = [pages.fixture.detail!];
+    const html = renderPage(pages.PullRequestDetailPage, "/pull-requests/:number", "/pull-requests/7");
+    assert.equal(html.includes("Not in current open snapshot"), state === "complete", state);
+    assert.match(html, /Presubmit checks/);
+    assert.match(html, /Still running/);
+    assert.doesNotMatch(html, /This pull request is closed/);
+  }
 });
 
 for (const state of ["published", "unpublished", "loading", "disabled"] as const) {

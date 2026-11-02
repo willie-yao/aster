@@ -6,6 +6,8 @@ import type {
   PullRequestCIState,
   PullRequestCheck,
   PullRequestFailure,
+  PullRequestDetail,
+  PullRequestIndex,
   PullRequestSummary,
 } from "../types/pullRequests";
 
@@ -23,6 +25,27 @@ const stateFilters: PullRequestStateFilter[] = [
 // Display state of one check. Derived rather than stored so a build that has
 // not finished is never presented as a pass.
 export type CheckState = "FAILING" | "RUNNING" | "PASSING";
+
+export function pullRequestStateLabel(pull: PullRequestSummary): string {
+  switch (pull.ci_state) {
+    case "FAILING": return "Failing";
+    case "PENDING": return "Pending";
+    case "PASSING": return "Passing";
+    default:
+      if (pull.checks_observed === 0 && pull.checks_unobserved === 0) return "No runs";
+      return (pull.checks_unobserved ?? 0) > 0 ? "Incomplete" : "Unknown";
+  }
+}
+
+// Absence describes only a complete, newer snapshot of the same repository.
+export function notInCurrentOpenSnapshot(
+  detail: PullRequestDetail,
+  index: PullRequestIndex | null,
+): boolean {
+  return index !== null && index.truncated === false && index.repo === detail.repo &&
+    Date.parse(index.generated_at) >= Date.parse(detail.generated_at) &&
+    !index.pull_requests.some((pull) => pull.number === detail.number);
+}
 
 export function isPublishedPresubmitJob(
   jobID: string,

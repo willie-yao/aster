@@ -75,7 +75,7 @@ func (m *Module) sharedContext() string {
 	sb.WriteString("\n---\n\nShared failure context\n\n")
 
 	pulls := m.subject.orderedPulls()
-	fmt.Fprintf(&sb, "%s is failing the same way on %d open pull requests",
+	fmt.Fprintf(&sb, "%s is reported as failing with matching job/test names on %d open pull requests",
 		m.subject.subjectName(), len(pulls))
 	if m.subject.BaseRef != "" {
 		fmt.Fprintf(&sb, " targeting %s", m.subject.BaseRef)

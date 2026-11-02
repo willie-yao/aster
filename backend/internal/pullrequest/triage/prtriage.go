@@ -117,7 +117,7 @@ func Collect(ctx context.Context, backend storage.Backend, lister PullRequestLis
 		summaries = append(summaries, detail.PullRequestSummary)
 	}
 	return Result{
-		Index:     models.PullRequestIndex{Repo: opts.fullRepo(), PullRequests: summaries},
+		Index:     models.PullRequestIndex{Repo: opts.fullRepo(), PullRequests: summaries, Truncated: truncated},
 		Details:   details,
 		Truncated: truncated,
 	}, nil
@@ -364,16 +364,17 @@ func buildDetail(pull ghpr.PullRequest, repo string, observed collectedChecks) m
 	checks := observed.checks
 	sortChecks(checks)
 	summary := models.PullRequestSummary{
-		Number:    pull.Number,
-		Title:     pull.Title,
-		Author:    pull.Author,
-		Repo:      repo,
-		BaseRef:   pull.Base.Ref,
-		HeadSHA:   pull.Head.SHA,
-		HTMLURL:   pull.HTMLURL,
-		CreatedAt: pull.CreatedAt,
-		UpdatedAt: pull.UpdatedAt,
-		CIState:   models.PullRequestCIUnknown,
+		Number:           pull.Number,
+		Title:            pull.Title,
+		Author:           pull.Author,
+		Repo:             repo,
+		BaseRef:          pull.Base.Ref,
+		HeadSHA:          pull.Head.SHA,
+		HTMLURL:          pull.HTMLURL,
+		CreatedAt:        pull.CreatedAt,
+		UpdatedAt:        pull.UpdatedAt,
+		CIState:          models.PullRequestCIUnknown,
+		ChecksUnobserved: observed.unobserved,
 	}
 	pending := false
 	for _, check := range checks {

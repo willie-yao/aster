@@ -152,6 +152,32 @@ func TestConcurrentFailuresOnOtherPullRequestsAreWidespread(t *testing.T) {
 	}
 }
 
+func TestStalePeersDoNotMakeCurrentFailureWidespread(t *testing.T) {
+	details := []models.PullRequestDetail{
+		detail(1, e2eJob, failure(testName)),
+		detail(2, e2eJob, failure(testName)),
+		detail(3, e2eJob, failure(testName)),
+	}
+	details[1].Checks[0].Stale = true
+	details[2].Checks[0].Stale = true
+	got := annotateOne(t, observedBaseline(testName), details)
+	if got.Verdict != models.AttributionUnexplained || !escalatableOnPull(details[0].Checks[0], details[0].Checks[0].Failures[0]) {
+		t.Fatalf("current failure = %+v, want individual investigation", got)
+	}
+	for _, evidence := range got.Evidence {
+		if evidence.Kind == models.AttributionEvidenceOtherPulls {
+			t.Errorf("stale peers counted as current evidence: %+v", evidence)
+		}
+	}
+	clusters := Clusters(details, nil)
+	if len(clusters) != 1 || len(clusters[0].PullRequests) != 3 || clusters[0].Escalatable {
+		t.Fatalf("historical cluster = %+v, want context with individual escalation preserved", clusters)
+	}
+	if !clusters[0].PullRequests[1].Stale || !clusters[0].PullRequests[2].Stale {
+		t.Errorf("historical members lost stale flags: %+v", clusters[0].PullRequests)
+	}
+}
+
 func TestWidespreadConfidenceScalesWithPeerCount(t *testing.T) {
 	cases := []struct {
 		name  string

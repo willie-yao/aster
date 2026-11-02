@@ -736,6 +736,8 @@ type PullRequestSummary struct {
 	// request. ChecksFailing counts those whose reported build did not pass.
 	ChecksObserved int `json:"checks_observed"`
 	ChecksFailing  int `json:"checks_failing"`
+	// ChecksUnobserved counts applicable checks whose observation failed.
+	ChecksUnobserved int `json:"checks_unobserved"`
 	// FailingTests totals the failing cases across every observed check,
 	// including cases omitted from the detail file by the per-check cap.
 	FailingTests int `json:"failing_tests"`
@@ -878,6 +880,8 @@ const PullRequestCheckFailureCap = 50
 // PullRequestIndex is the top-level structure for pull-requests.json.
 type PullRequestIndex struct {
 	GeneratedAt time.Time `json:"generated_at"`
+	// Truncated reports that this snapshot omits some open pull requests.
+	Truncated bool `json:"truncated"`
 	// Repo is the "org/repo" whose open pull requests were triaged.
 	Repo         string               `json:"repo"`
 	PullRequests []PullRequestSummary `json:"pull_requests"`

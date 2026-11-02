@@ -54,9 +54,12 @@ func TestPromptKeepsTheUniversalInvestigationSeed(t *testing.T) {
 
 func TestPromptNamesTheCorrelationAndItsPullRequests(t *testing.T) {
 	got := promptFor(t, testSubject())
+	if strings.Contains(got, "failing the same way") {
+		t.Error("matching job/test names must not assert identical failure behavior")
+	}
 
 	for _, want := range []string{
-		"This test is failing the same way on 3 open pull requests targeting main",
+		"This test is reported as failing with matching job/test names on 3 open pull requests targeting main",
 		"Affected pull requests: #6209, #6210, #6215",
 		"pull request #6215, which was chosen only because it is the most recent",
 	} {
@@ -120,10 +123,10 @@ func TestBuildLevelFailureNamesTheJob(t *testing.T) {
 	subject.BuildLevel = true
 
 	got := promptFor(t, subject)
-	if !strings.Contains(got, "pull-project-e2e is failing the same way") {
+	if !strings.Contains(got, "pull-project-e2e is reported as failing with matching job/test names") {
 		t.Fatal("a build-level failure has no useful test name, so the job should be the subject")
 	}
-	if strings.Contains(got, "This test is failing the same way") {
+	if strings.Contains(got, "This test is reported as failing with matching job/test names") {
 		t.Error("a build-level failure must not be described as a test")
 	}
 }
@@ -147,7 +150,7 @@ func TestZeroPullNumbersAreDropped(t *testing.T) {
 	subject := Subject{BaseRef: "main", JobName: "j", TestName: "t", PullNumbers: []int{0, 7, 9}}
 
 	got := promptFor(t, subject)
-	if !strings.Contains(got, "failing the same way on 2 open pull requests") {
+	if !strings.Contains(got, "failing with matching job/test names on 2 open pull requests") {
 		t.Fatalf("an unusable pull request number must not be counted:\n%s", got)
 	}
 	if strings.Contains(got, "#0") {

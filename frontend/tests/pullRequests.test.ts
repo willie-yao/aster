@@ -14,6 +14,8 @@ import {
   filterPullRequests,
   isPublishedPresubmitJob,
   orderPullRequests,
+  notInCurrentOpenSnapshot,
+  pullRequestStateLabel,
   pullRequestStateCounts,
   pullRequestStateFromParam,
   shortSHA,
@@ -29,6 +31,8 @@ import type {
   PullRequestCIState,
   PullRequestCheck,
   PullRequestFailure,
+  PullRequestDetail,
+  PullRequestIndex,
   PullRequestSummary,
 } from "../src/types/pullRequests.js";
 import type { JobSummary } from "../src/types/dashboard.js";
@@ -70,6 +74,31 @@ function check(overrides: Partial<PullRequestCheck> = {}): PullRequestCheck {
     ...overrides,
   };
 }
+
+test("pull request state labels distinguish empty, unread, and unknown observations", () => {
+  const pull = summary(7, "UNKNOWN");
+  assert.equal(pullRequestStateLabel({ ...pull, checks_observed: 0, checks_unobserved: 0 }), "No runs");
+  assert.equal(pullRequestStateLabel({ ...pull, checks_observed: 0, checks_unobserved: 2 }), "Incomplete");
+  assert.equal(pullRequestStateLabel({ ...pull, checks_observed: 1, checks_unobserved: 2 }), "Incomplete");
+  assert.equal(pullRequestStateLabel({ ...pull, checks_observed: 0 }), "Unknown");
+  assert.equal(pullRequestStateLabel(pull), "Unknown");
+  for (const [state, label] of [["FAILING", "Failing"], ["PENDING", "Pending"], ["PASSING", "Passing"]] as const) {
+    assert.equal(pullRequestStateLabel({ ...pull, ci_state: state }), label);
+  }
+});
+
+test("retained analysis absence requires a complete current snapshot for the same repository", () => {
+  const detail: PullRequestDetail = { ...summary(7, "FAILING"), generated_at: "2026-08-17T10:00:00Z", checks: [] };
+  const index: PullRequestIndex = { generated_at: "2026-08-18T10:00:00Z", repo: detail.repo, truncated: false, pull_requests: [] };
+  assert.equal(notInCurrentOpenSnapshot(detail, index), true);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, truncated: true }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, truncated: undefined }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, repo: "another/project" }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, generated_at: "2026-08-16T10:00:00Z" }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, generated_at: "" }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, { ...index, pull_requests: [detail] }), false);
+  assert.equal(notInCurrentOpenSnapshot(detail, null), false);
+});
 
 test("state filter only accepts known presubmit states", () => {
   assert.equal(pullRequestStateFromParam("FAILING"), "FAILING");

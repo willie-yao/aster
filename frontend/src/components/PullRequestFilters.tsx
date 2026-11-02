@@ -12,7 +12,7 @@ const stateFilters: { label: string; value: PullRequestStateFilter }[] = [
   { label: "Failing", value: "FAILING" },
   { label: "Pending", value: "PENDING" },
   { label: "Passing", value: "PASSING" },
-  { label: "No runs", value: "UNKNOWN" },
+  { label: "Unknown", value: "UNKNOWN" },
 ];
 
 // Status tone for each presubmit state; the label always names the state.
