@@ -455,7 +455,7 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		if err := entry.fix.ValidateExecutionVerification(); err != nil {
 			return PreviewResult{}, err
 		}
-		if remediationpolicy.RelationshipTextWarning(entry.fix.Preview.Diff) != "" {
+		if remediationpolicy.PatchTextWarning(entry.fix.Preview.Diff) != "" {
 			return PreviewResult{}, withReason(ReasonUnsafeRemediation, ErrPreviewRejected, "")
 		}
 		return PreviewResult{

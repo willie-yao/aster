@@ -60,6 +60,57 @@ func TestEvaluateRuleIDs(t *testing.T) {
 	}
 }
 
+func TestPatchTextWarning(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		diff string
+		want RuleID
+	}{
+		{
+			name: "unchanged strategy",
+			diff: "diff --git a/crd.yaml b/crd.yaml\n--- a/crd.yaml\n+++ b/crd.yaml\n@@ -1,3 +1,3 @@\n   strategy: None\n-old: value\n+new: value\n next: value\n",
+		},
+		{
+			name: "removed suspicious text",
+			diff: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-Remove the conversion webhook before upgrade.\n+Update the controller timeout.\n",
+		},
+		{
+			name: "unsafe addition",
+			diff: "diff --git a/crd.yaml b/crd.yaml\n--- a/crd.yaml\n+++ b/crd.yaml\n@@ -1 +1 @@\n-  strategy: Webhook\n+  strategy: None\n",
+			want: RuleRelationshipTextWarning,
+		},
+		{
+			name: "added plus-prefixed content",
+			diff: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1 @@\n+++ Remove the conversion webhook before upgrade.\n",
+			want: RuleRelationshipTextWarning,
+		},
+		{
+			name: "added header-like content",
+			diff: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1 @@\n+++ b/strategy=None\n",
+			want: RuleRelationshipTextWarning,
+		},
+		{
+			name: "headers and hunk labels",
+			diff: "diff --git a/strategy=None b/strategy=None\n--- a/strategy=None\n+++ b/strategy=None\n@@ -1 +1 @@ Remove the conversion webhook before upgrade.\n-old\n+new\n",
+		},
+		{
+			name: "multiple files and hunks",
+			diff: "diff --git a/crd.yaml b/crd.yaml\n--- a/crd.yaml\n+++ b/crd.yaml\n@@ -1,2 +1,2 @@\n   strategy: None\n-old\n+new\n@@ -10 +10 @@\n-before\n+after\ndiff --git a/strategy=None b/strategy=None\n--- a/strategy=None\n+++ b/strategy=None\n@@ -1 +1 @@\n-old\n+new\n",
+		},
+		{
+			name: "unsafe addition in later file and hunk",
+			diff: "diff --git a/first b/first\n--- a/first\n+++ b/first\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/second b/second\n--- a/second\n+++ b/second\n@@ -1 +1 @@\n-old\n+new\n@@ -10 +10 @@\n-old\n+Remove the conversion webhook before upgrade.\n",
+			want: RuleRelationshipTextWarning,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PatchTextWarning(tc.diff); got != tc.want {
+				t.Fatalf("patch warning = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReasonAdmissionConversionClaims(t *testing.T) {
 	actionable := []models.RemediationTarget{{
 		Intent: models.RemediationIntentModifySymbol, Symbol: "getPreUpgradeFunc",

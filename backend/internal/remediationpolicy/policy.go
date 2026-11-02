@@ -85,6 +85,24 @@ func RelationshipTextWarning(relationship string) RuleID {
 	return ""
 }
 
+// PatchTextWarning reports suspicious added text in a validated Git diff.
+func PatchTextWarning(diff string) RuleID {
+	var added strings.Builder
+	inHunk := false
+	for line := range strings.SplitSeq(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			inHunk = false
+		case strings.HasPrefix(line, "@@"):
+			inHunk = true
+		case inHunk && strings.HasPrefix(line, "+"):
+			added.WriteString(line[1:])
+			added.WriteByte('\n')
+		}
+	}
+	return RelationshipTextWarning(added.String())
+}
+
 func blockedEvaluation(ruleID RuleID) Evaluation {
 	return Evaluation{RuleID: ruleID, PublicReason: UnsafeConversionReason}
 }
