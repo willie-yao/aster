@@ -490,6 +490,29 @@ sed 's/timeout: 10m/timeout: 30m/' "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandb
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-max-timeout-values.yaml" \
   -s templates/agent-sandbox-fix-runtime-admission.yaml > "$tmp/agent-sandbox-max-timeout.yaml"
 grep -Fq 'variables.pod.activeDeadlineSeconds == 1935' "$tmp/agent-sandbox-max-timeout.yaml"
+while IFS='|' read -r name timeout command_timeout seconds; do
+  [[ $name == \#* ]] && continue
+  sed -e "s/^          timeout: 10m$/          timeout: $timeout/" \
+    -e "s/^              timeout: 30s$/              timeout: $command_timeout/" \
+    "$tmp/agent-sandbox.yaml" > "$tmp/timeout-$name-values.yaml"
+  if [ "$seconds" -eq 0 ]; then
+    expect_fail "timeout-$name" 'project ai.fix_prs.agent_runtime.' -f "$tmp/timeout-$name-values.yaml"
+    continue
+  fi
+  helm template test "$chart" -n dashboard-test -f "$tmp/timeout-$name-values.yaml" > "$tmp/timeout-$name.yaml"
+  grep -Fq "variables.pod.activeDeadlineSeconds == $((seconds + 135))" "$tmp/timeout-$name.yaml"
+  case "$name" in
+    empty-default|null-default) expected_timeout=10m ;;
+    *) expected_timeout=$timeout ;;
+  esac
+  grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-$name.yaml" | grep -Fq "value: \"$expected_timeout\""
+done < "$root/backend/internal/project/testdata/fix-timeouts.txt"
+grep -Fq 'variables.pod.activeDeadlineSeconds == 225' "$tmp/timeout-seconds.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-seconds.yaml" | grep -Fq 'value: "90s"'
+sed '/timeout: 10m/d' "$tmp/agent-sandbox.yaml" > "$tmp/timeout-omitted-values.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/timeout-omitted-values.yaml" > "$tmp/timeout-omitted.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-omitted.yaml" | grep -Fq 'value: "10m"'
+grep -Fq 'variables.pod.activeDeadlineSeconds == 735' "$tmp/timeout-omitted.yaml"
 grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
@@ -614,6 +637,9 @@ PROJECT
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
   --set-file project.config="$tmp/project-agent-default.yaml" > "$tmp/agent-sandbox-default-command.yaml"
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-default-command.yaml"
+sed 's/timeout: 10m/timeout: 30s/' "$tmp/project-agent-default.yaml" > "$tmp/project-agent-short-timeout.yaml"
+expect_fail agent-sandbox-default-command-timeout 'exceeds the execution timeout' \
+  -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-short-timeout.yaml"
 awk '/^      max_turns: 30$/ { print; print "      allowed_commands: []"; next } { print }' \
   "$tmp/project-agent-default.yaml" > "$tmp/project-agent-empty-command.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \

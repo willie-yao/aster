@@ -274,7 +274,24 @@ project.config whenever the fix runtime is enabled, so these always resolve.
 
 {{- define "aster.fixRuntimeTimeout" -}}
 {{- $agent := fromYaml (include "aster.fixRuntimeProjectAgent" .) -}}
-{{- default "10m" (get $agent "timeout") -}}
+{{- $timeout := get $agent "timeout" -}}
+{{- if or (kindIs "invalid" $timeout) (eq (printf "%v" $timeout) "") -}}10m{{- else -}}{{- $timeout -}}{{- end -}}
+{{- end -}}
+
+{{/* Parse a Fix timeout before using it in execution or admission bounds. */}}
+{{- define "aster.fixTimeoutSeconds" -}}
+{{- $timeout := printf "%v" .timeout -}}
+{{- if not (regexMatch "^[1-9][0-9]*(s|m)$" $timeout) -}}
+  {{- fail (printf "%s must use positive whole seconds or minutes" .field) -}}
+{{- end -}}
+{{- $minutes := hasSuffix "m" $timeout -}}
+{{- if or (and $minutes (gt (len $timeout) 3)) (and (not $minutes) (gt (len $timeout) 5)) -}}
+  {{- fail (printf "%s must be at most 30m" .field) -}}
+{{- end -}}
+{{- $seconds := trimSuffix "s" $timeout | int64 -}}
+{{- if $minutes -}}{{- $seconds = mul (trimSuffix "m" $timeout | int64) 60 -}}{{- end -}}
+{{- if gt $seconds 1800 -}}{{- fail (printf "%s must be at most 30m" .field) -}}{{- end -}}
+{{- $seconds -}}
 {{- end -}}
 
 {{- define "aster.fixRuntimeOutputLimitBytes" -}}
@@ -365,7 +382,7 @@ project.config whenever the fix runtime is enabled, so these always resolve.
   {{- $projectProvider := get $projectRuntime "model_provider" | default dict -}}
   {{- $maxSteps := int (default 30 (get $projectRuntime "max_turns")) -}}
   {{- $maxFiles := int (default 3 (get $projectFix "max_files")) -}}
-  {{- $fixTimeout := default "10m" (get $projectRuntime "timeout") -}}
+  {{- $fixTimeout := include "aster.fixRuntimeTimeout" . -}}
   {{- $outputLimitBytes := int64 (default 524288 (get $projectRuntime "output_limit_bytes")) -}}
   {{- $allowedCommands := get $projectRuntime "allowed_commands" | default list -}}
   {{- if eq (len $allowedCommands) 0 -}}
@@ -441,12 +458,11 @@ project.config whenever the fix runtime is enabled, so these always resolve.
       {{- if or (not $providerAuth.tokenKey) (gt (len $providerAuth.tokenKey) 253) (not (regexMatch "^[A-Za-z0-9._-]+$" $providerAuth.tokenKey)) -}}{{- fail "agentSandbox.fixRuntime.modelProvider.auth.tokenKey is required for bearer auth and must be a valid Secret key" -}}{{- end -}}
     {{- end -}}
   {{- end -}}
-  {{- if not (regexMatch "^([1-9]|[12][0-9]|30)m$" (printf "%v" $fixTimeout)) -}}{{- fail "project ai.fix_prs.agent_runtime.timeout must use whole minutes from 1m through 30m" -}}{{- end -}}
+  {{- $overallSeconds := include "aster.fixTimeoutSeconds" (dict "timeout" $fixTimeout "field" "project ai.fix_prs.agent_runtime.timeout") | int64 -}}
   {{- $poll := printf "%v" $cfg.pollInterval -}}
   {{- if or (not (regexMatch "^(([0-9]+([.][0-9]+)?)|([.][0-9]+))(ms|s)$" $poll)) (not (regexMatch "[1-9]" $poll)) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be a positive duration below 30s" -}}{{- end -}}
   {{- if regexMatch "^([3-9][0-9]|[1-9][0-9]{2,})s$" (durationRound $poll) -}}{{- fail "agentSandbox.fixRuntime.pollInterval must be below 30s" -}}{{- end -}}
   {{- if or (lt $outputLimitBytes 4096) (gt $outputLimitBytes 1048576) -}}{{- fail "project ai.fix_prs.agent_runtime.output_limit_bytes must be between 4096 and 1048576" -}}{{- end -}}
-  {{- $overallSeconds := mul (trimSuffix "m" (printf "%v" $fixTimeout) | int) 60 -}}
   {{- if ge (len $allowedCommands) $maxSteps -}}{{- fail "project ai.fix_prs.agent_runtime.max_turns must reserve at least one coding-agent step after allowed_commands" -}}{{- end -}}
   {{- range $index, $command := $allowedCommands -}}
     {{- $argv := get $command "argv" | default list -}}
@@ -463,17 +479,7 @@ project.config whenever the fix runtime is enabled, so these always resolve.
     {{- if has $executable (list "env" "busybox" "toybox") -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must not use a command dispatcher" $index) -}}{{- end -}}
     {{- if has $executable (list "opencode" "fixexecutor") -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] must not invoke a coding agent or executor" $index) -}}{{- end -}}
     {{- if and (eq $executable "git") (ne (toJson $argv) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d] git is reserved for the exact final diff check" $index) -}}{{- end -}}
-    {{- $commandTimeout := printf "%v" (get $command "timeout") -}}
-    {{- $commandSeconds := 0 -}}
-    {{- if regexMatch "^[1-9][0-9]*s$" $commandTimeout -}}
-      {{- if gt (len $commandTimeout) 5 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
-      {{- $commandSeconds = trimSuffix "s" $commandTimeout | int -}}
-    {{- else if regexMatch "^[1-9][0-9]*m$" $commandTimeout -}}
-      {{- if gt (len $commandTimeout) 3 -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
-      {{- $commandSeconds = mul (trimSuffix "m" $commandTimeout | int) 60 -}}
-    {{- else -}}
-      {{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout must use positive whole seconds or minutes" $index) -}}
-    {{- end -}}
+    {{- $commandSeconds := include "aster.fixTimeoutSeconds" (dict "timeout" (get $command "timeout") "field" (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout" $index)) | int64 -}}
     {{- if gt $commandSeconds $overallSeconds -}}{{- fail (printf "project ai.fix_prs.agent_runtime.allowed_commands[%d].timeout exceeds the execution timeout" $index) -}}{{- end -}}
   {{- end -}}
   {{- if or (eq (len $allowedCommands) 0) (ne (toJson (get (last $allowedCommands) "argv")) (toJson (list "git" "diff" "--cached" "--check"))) -}}{{- fail "project ai.fix_prs.agent_runtime.allowed_commands must end with argv [git diff --cached --check]" -}}{{- end -}}

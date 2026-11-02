@@ -308,7 +308,7 @@ The focused feature guides own their credential, admission, timeout, and securit
 | `type` | Optional. Defaults to and accepts only `agent-sandbox`. |
 | `max_turns` | Defaults to `30`; must not exceed `1000`. The executor stops runs exceeding the coding-agent model-step allowance, with one additional wrap-up step. Validator commands reserve steps from this total, and the elapsed timeout also applies. |
 | `allow_bash` | Defaults to `false` and must remain false. |
-| `timeout` | Defaults to `10m`; must be positive and at most `30m`. |
+| `timeout` | Defaults to `10m`; accepts positive whole seconds or minutes up to `30m`, such as `90s` or `10m`. Fractions, compound durations, leading zeros, and whitespace are rejected. |
 | `output_limit_bytes` | Defaults to `524288`; accepts `4096` through `1048576`. |
 | `allowed_commands` | Optional exact argv validators with explicit timeouts. Empty uses only the mandatory staged-diff check. |
 | `model_provider.credential_mode` | `direct` by default or explicit `gateway`. |

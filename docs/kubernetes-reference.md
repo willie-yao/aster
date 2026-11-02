@@ -231,7 +231,7 @@ The project owns generation limits and exact validators under `ai.fix_prs.agent_
 
 Each Fix Sandbox defaults to a `1Gi` memory limit and a `128Mi` memory request. Override these with `agentSandbox.fixRuntime.resources.limits.memory` and `agentSandbox.fixRuntime.resources.requests.memory`.
 
-When this runtime is enabled, Helm requires `ai.fix_prs.agent_runtime.timeout` in whole minutes from `1m` through `30m`. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts accept positive whole seconds or minutes within the execution timeout.
+Helm and project validation accept `ai.fix_prs.agent_runtime.timeout` as positive whole seconds or minutes up to `30m`, such as `90s` or `10m`. An omitted or empty timeout uses `10m`. Fractions, compound durations, leading zeros, and whitespace are rejected. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts use the same syntax and must fit within the execution timeout.
 
 The timeout bounds executor work, not image pull or VM startup. Admission pins the Pod deadline to that timeout plus a 2-minute startup allowance and 15-second result grace. Cleanup confirmation allows 90 seconds for Pod and VM termination; see [Fix generation deadlines](fix-prs.md#required-project-configuration) for the server and Sandbox shutdown bounds.
 

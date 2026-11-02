@@ -1,0 +1,41 @@
+# name|overall timeout YAML|command timeout YAML|accepted execution seconds (0 rejects)
+seconds|90s|30s|90
+minute|1m|30s|60
+minute-in-seconds|60s|30s|60
+maximum-minutes|30m|1m|1800
+maximum-seconds|1800s|60s|1800
+maximum-command-minutes|1800s|30m|1800
+maximum-command-seconds|30m|1800s|1800
+minimum|1s|1s|1
+equal-command-seconds|90s|90s|90
+equal-command-minutes|60s|1m|60
+empty-default|''|30s|600
+null-default|null|30s|600
+too-large-minutes|31m|30s|0
+too-large-seconds|1801s|30s|0
+zero-seconds|0s|30s|0
+zero-scalar|0|30s|0
+false-scalar|false|30s|0
+negative|-1m|30s|0
+fractional|1.5m|30s|0
+fractional-seconds|90.0s|30s|0
+compound|1m30s|30s|0
+milliseconds|90000ms|30s|0
+invalid|soon|30s|0
+overflow|999999999999999999999999999999999999s|30s|0
+leading-zero|090s|30s|0
+leading-space|' 90s'|30s|0
+trailing-space|'90s '|30s|0
+whitespace|' '|30s|0
+positive-sign|+90s|30s|0
+command-too-large|90s|91s|0
+command-minutes-too-large|90s|2m|0
+command-exceeds-short-timeout|30s|1m|0
+command-zero|90s|0s|0
+command-empty|90s|''|0
+command-negative|90s|-1s|0
+command-fractional|90s|1.5s|0
+command-compound|90s|1m1s|0
+command-overflow|90s|999999999999999999999999999999999999m|0
+command-leading-zero|90s|030s|0
+command-whitespace|90s|'30s '|0

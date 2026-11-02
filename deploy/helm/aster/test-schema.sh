@@ -294,6 +294,32 @@ agentSandbox:
     fixClientServiceAccountName: ""
 VALUES
 expect_pass agent-sandbox "$tmp/agent-sandbox.yaml"
+while IFS='|' read -r name timeout command_timeout seconds; do
+  [[ $name == \#* ]] && continue
+  sed -e "s/^          timeout: 10m$/          timeout: $timeout/" \
+    -e "s/^              timeout: 30s$/              timeout: $command_timeout/" \
+    "$tmp/agent-sandbox.yaml" > "$tmp/timeout-$name.yaml"
+  cat >> "$tmp/timeout-$name.yaml" <<'VALUES'
+server:
+  actions:
+    enabled: true
+    mode: proxy
+    admins: [fixture]
+    proxy:
+      header: X-Authenticated-User
+      botToken: test-token
+VALUES
+  if [ "$seconds" -gt 0 ]; then
+    expect_pass "timeout-$name" "$tmp/timeout-$name.yaml"
+    helm template test "$chart" -n dashboard-test -f "$tmp/base.yaml" -f "$tmp/timeout-$name.yaml" > "$tmp/timeout-$name-render.yaml"
+  else
+    if helm template test "$chart" -n dashboard-test -f "$tmp/base.yaml" -f "$tmp/timeout-$name.yaml" > "$tmp/timeout-$name.out" 2>&1; then
+      echo "invalid Fix timeout accepted: $name" >&2
+      exit 1
+    fi
+    grep -Fq 'project ai.fix_prs.agent_runtime.' "$tmp/timeout-$name.out"
+  fi
+done < "$root/backend/internal/project/testdata/fix-timeouts.txt"
 
 cat > "$tmp/invalid-agent-sandbox-pull.yaml" <<'VALUES'
 agentSandbox:

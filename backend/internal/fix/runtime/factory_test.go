@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -25,6 +26,48 @@ func setAgentSandboxProviderEnv(t *testing.T, prefix string, provider modelprovi
 		"MEMORY_REQUEST": "128Mi", "MEMORY_LIMIT": "512Mi", "EPHEMERAL_STORAGE_LIMIT": "256Mi",
 	} {
 		t.Setenv(prefix+name, value)
+	}
+}
+
+func TestAgentSandboxEnvironmentTimeoutBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout string
+		want    time.Duration
+	}{
+		{name: "second", timeout: "1s", want: time.Second},
+		{name: "90s", timeout: "90s", want: 90 * time.Second},
+		{name: "minute", timeout: "1m", want: time.Minute},
+		{name: "minute in seconds", timeout: "60s", want: time.Minute},
+		{name: "maximum minutes", timeout: "30m", want: 30 * time.Minute},
+		{name: "maximum seconds", timeout: "1800s", want: 30 * time.Minute},
+		{name: "machine duration", timeout: (90 * time.Second).String(), want: 90 * time.Second},
+		{name: "zero", timeout: "0s"},
+		{name: "negative", timeout: "-1s"},
+		{name: "fractional", timeout: "90.5s"},
+		{name: "subsecond", timeout: "1ms"},
+		{name: "too large", timeout: "1801s"},
+		{name: "invalid", timeout: "soon"},
+		{name: "overflow", timeout: "999999999999999999999999999s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := testDirectUnauthenticatedProvider("https://provider.example/v1/chat/completions", "fixture-model")
+			setAgentSandboxProviderEnv(t, "AGENT_SANDBOX_", provider, ProviderSecretRef{}, tc.timeout)
+			opts, err := agentSandboxBaseOptionsFromEnv("AGENT_SANDBOX_")
+			if err == nil {
+				opts.ModelProvider = provider
+				err = validateAgentSandboxOptions(opts)
+			}
+			if tc.want == 0 {
+				if err == nil || !strings.Contains(err.Error(), "agent sandbox timeout") {
+					t.Fatalf("error = %v, want timeout rejection", err)
+				}
+				return
+			}
+			if err != nil || opts.Timeout != tc.want {
+				t.Fatalf("timeout = %v, error = %v, want %v", opts.Timeout, err, tc.want)
+			}
+		})
 	}
 }
 
