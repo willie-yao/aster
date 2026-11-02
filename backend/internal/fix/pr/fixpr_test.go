@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -45,6 +47,10 @@ type fakePR struct {
 	searchURL       string
 	searchFound     bool
 	searchAnyCalls  int
+	searchOpenCalls int
+	pulls           map[int]ghpr.PullRequest
+	pullErr         error
+	pullLookups     []pullLookup
 	base            ghpr.Base
 	bases           []ghpr.Base
 	resolveCalls    int
@@ -55,6 +61,23 @@ type fakePR struct {
 	compareErr      error
 	comparisons     [][2]string
 	pinnedTree      string
+}
+
+type pullLookup struct {
+	owner  string
+	repo   string
+	number int
+}
+
+func (f *fakePR) GetPullRequest(_ context.Context, owner, repo string, number int) (ghpr.PullRequest, error) {
+	f.pullLookups = append(f.pullLookups, pullLookup{owner: owner, repo: repo, number: number})
+	if f.pullErr != nil {
+		return ghpr.PullRequest{}, f.pullErr
+	}
+	if f.pulls != nil {
+		return f.pulls[number], nil
+	}
+	return ghpr.PullRequest{Number: number, State: "open"}, nil
 }
 
 func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
@@ -69,6 +92,7 @@ func (f *fakePR) OpenPR(_ context.Context, req ghpr.Request) (string, error) {
 }
 
 func (f *fakePR) SearchOpenPR(_ context.Context, _, _, _, _ string) (int, string, bool, error) {
+	f.searchOpenCalls++
 	if f.searchFound {
 		return 5, f.searchURL, true, nil
 	}
@@ -301,6 +325,137 @@ func TestOpenFromPreview_PartialSuccessStillTracks(t *testing.T) {
 	}
 	if _, tracked := m.state.Tracked[KeyFor(p)]; !tracked {
 		t.Errorf("partial-success PR should be tracked")
+	}
+}
+
+func TestOpenFromPreview_TrackedPatternLifecycle(t *testing.T) {
+	lookupErr := errors.New("lookup unavailable")
+	for _, tc := range []struct {
+		name      string
+		pull      ghpr.PullRequest
+		lookupErr error
+		wantErr   bool
+		wantOpen  bool
+	}{
+		{name: "open", pull: ghpr.PullRequest{Number: 4, State: "open"}},
+		{name: "merged", pull: ghpr.PullRequest{Number: 4, State: "closed", Merged: true}},
+		{name: "declined", pull: ghpr.PullRequest{Number: 4, State: "closed"}, wantOpen: true},
+		{name: "lookup failure", lookupErr: lookupErr, wantErr: true},
+		{name: "unknown state", pull: ghpr.PullRequest{Number: 4, State: "unknown"}, wantErr: true},
+		{name: "missing state", pull: ghpr.PullRequest{Number: 4}, wantErr: true},
+		{name: "wrong number", pull: ghpr.PullRequest{Number: 6, State: "closed"}, wantErr: true},
+		{name: "open marked merged", pull: ghpr.PullRequest{Number: 4, State: "open", Merged: true}, wantErr: true},
+		{name: "inconsistent merge time", pull: ghpr.PullRequest{Number: 4, State: "closed", MergedAt: time.Unix(1, 0)}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakePR{
+				pulls:   map[int]ghpr.PullRequest{4: tc.pull, 5: {Number: 5, State: "open"}},
+				pullErr: tc.lookupErr,
+			}
+			manager := newManager(t, client, goodAgent(), Options{})
+			pattern := systemicPattern("etcd")
+			fix := &GeneratedFix{key: KeyFor(pattern), pattern: pattern, Title: "Fix timeout", Body: "Update timeout."}
+			const trackedURL = "https://github.com/up/stream/pull/4"
+			manager.state.Tracked[fix.key] = trackedGeneratedFix(trackedURL, fix)
+			if err := manager.SaveState(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(manager.stateFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantURL := trackedURL
+			if tc.wantOpen {
+				wantURL = "https://github.com/up/stream/pull/5"
+			}
+			for range 2 {
+				got, err := manager.OpenFromPreview(t.Context(), fix)
+				if tc.wantErr {
+					if err == nil || got != "" {
+						t.Fatalf("uncertain lifecycle url=%q, error=%v", got, err)
+					}
+					if tc.lookupErr != nil && !errors.Is(err, tc.lookupErr) {
+						t.Fatalf("lookup error was not retained: %v", err)
+					}
+				} else if err != nil || got != wantURL {
+					t.Fatalf("OpenFromPreview url=%q, error=%v, want %q", got, err, wantURL)
+				}
+				if manager.state.Tracked[fix.key].URL != wantURL {
+					t.Fatalf("tracking = %+v, want %s", manager.state.Tracked, wantURL)
+				}
+				if err := manager.SaveState(); err != nil {
+					t.Fatal(err)
+				}
+				if !tc.wantOpen {
+					after, err := os.ReadFile(manager.stateFile)
+					if err != nil || string(after) != string(before) {
+						t.Fatalf("retained tracking changed: %s, error=%v", after, err)
+					}
+				}
+				manager = NewManager(client, manager.stateFile, manager.opts)
+			}
+			wantWrites, wantSearches := 0, 0
+			if tc.wantOpen {
+				wantWrites, wantSearches = 1, 1
+			}
+			if len(client.opened) != wantWrites || client.searchOpenCalls != wantSearches || client.searchAnyCalls != 0 {
+				t.Fatalf("opened=%d, open searches=%d, any searches=%d", len(client.opened), client.searchOpenCalls, client.searchAnyCalls)
+			}
+			wantSecond := 4
+			if tc.wantOpen {
+				wantSecond = 5
+			}
+			if !slices.Equal(client.pullLookups, []pullLookup{{owner: "up", repo: "stream", number: 4}, {owner: "up", repo: "stream", number: wantSecond}}) {
+				t.Fatalf("tracked PR lookups = %+v", client.pullLookups)
+			}
+		})
+	}
+}
+
+func TestOpenFromPreview_InvalidTrackedPatternURLBlocksWrites(t *testing.T) {
+	for _, trackedURL := range []string{
+		"", "not a URL", "https://github.com/%", "/up/stream/pull/4",
+		"https://github.com/other/stream/pull/4", "https://github.com/up/other/pull/4",
+		"https://github.com/up/stream/issues/4", "https://github.com/up/stream/pull/not-a-number",
+		"https://github.com/up/stream/pull/0", "https://github.com/up/stream/pull/-1",
+		"https://github.com/up/stream/pull/99999999999999999999999",
+		"https://other.example/up/stream/pull/4", "http://github.com/up/stream/pull/4",
+		"https://user@github.com/up/stream/pull/4", "https://github.com/up/stream/pull/4/files",
+	} {
+		t.Run(trackedURL, func(t *testing.T) {
+			client := &fakePR{}
+			manager := newManager(t, client, goodAgent(), Options{})
+			pattern := systemicPattern("etcd")
+			fix := &GeneratedFix{key: KeyFor(pattern), pattern: pattern}
+			manager.state.Tracked[fix.key] = trackedGeneratedFix(trackedURL, fix)
+			if got, err := manager.OpenFromPreview(t.Context(), fix); err == nil || got != "" {
+				t.Fatalf("invalid tracked URL returned %q, error=%v", got, err)
+			}
+			if tracked, found := manager.state.Tracked[fix.key]; !found || tracked.URL != trackedURL {
+				t.Fatalf("invalid URL tracking was lost: %+v", manager.state.Tracked)
+			}
+			if len(client.pullLookups) != 0 || client.searchOpenCalls != 0 || len(client.opened) != 0 {
+				t.Fatalf("invalid URL reached GitHub: lookups=%v searches=%d opened=%d", client.pullLookups, client.searchOpenCalls, len(client.opened))
+			}
+		})
+	}
+}
+
+func TestOpenFromPreview_NonPatternKeysKeepAnyStateDedup(t *testing.T) {
+	for _, key := range []string{"fix-build::build-id", "fix-analysis::analysis-id"} {
+		t.Run(key, func(t *testing.T) {
+			client := &fakePR{searchFound: true, searchURL: "https://github.com/up/stream/pull/4", pullErr: errors.New("must not inspect lifecycle")}
+			manager := newManager(t, client, goodAgent(), Options{})
+			fix := &GeneratedFix{key: key}
+			for range 2 {
+				if got, err := manager.OpenFromPreview(t.Context(), fix); err != nil || got != client.searchURL {
+					t.Fatalf("non-pattern dedup returned %q, error=%v", got, err)
+				}
+			}
+			if client.searchAnyCalls != 1 || len(client.pullLookups) != 0 || len(client.opened) != 0 {
+				t.Fatalf("any searches=%d, lifecycle lookups=%v, opened=%d", client.searchAnyCalls, client.pullLookups, len(client.opened))
+			}
+		})
 	}
 }
 
