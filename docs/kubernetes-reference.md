@@ -200,6 +200,8 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 
 Use the full chart values that match the installed chart version before adding a field not present in the generated consumer file.
 
+Both doctors reject invalid Service exposure settings, including universal source ranges and internal LoadBalancers without annotations. With authenticated features enabled, a public LoadBalancer requires a single bounded source range, an explicit internal origin, or `publicOriginAcknowledged: true`. Multiple ranges without an internal origin require acknowledgement; the consumer doctor warns and the deployment doctor reports them as unverified. Generic Service annotations do not establish origin restriction. The consumer doctor also checks NetworkPolicy independently.
+
 If `fetcher.timeout` expires during individual analysis, private analysis state and traces are checkpointed for the next pass without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow the normal cache acceptance and bounded preliminary-retry policy. Explicit cancellation still rolls back uncommitted analysis state.
 
 Interactive server upgrades use a `Recreate` rollout. For non-Helm deployments, stop old server processes before starting replacements. Chat-only replicas require advisory locking, atomic rename, and file and directory synchronization on the shared filesystem.

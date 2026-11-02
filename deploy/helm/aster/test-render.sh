@@ -322,6 +322,60 @@ expect_fail escalation-public-load-balancer 'authenticated server features with 
   --set server.actions.mode=proxy \
   --set server.service.type=LoadBalancer
 
+# These real-CIDR exposure cases also run through both Go doctors.
+origin_args=(--set server.actions.enabled=true --set server.actions.mode=proxy --set server.actions.proxy.existingSecret=origin-test-auth --set server.service.type=LoadBalancer)
+for cidr in '0.0.0.0/0' '::/0' '0:0:0:0:0:0:0:0/0'; do
+  expect_fail origin-universal-range 'must not contain universal CIDRs' \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=[\"$cidr\"]"
+done
+expect_fail origin-universal-acknowledged 'must not contain universal CIDRs' \
+  "${origin_args[@]}" --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/0"]' \
+  --set server.service.publicOriginAcknowledged=true
+expect_fail origin-empty-range 'must not contain empty entries' \
+  "${origin_args[@]}" --set-json 'server.service.loadBalancerSourceRanges=[""]'
+for ranges in '["0.0.0.0/1","128.0.0.0/1"]' '["::/1","8000::/1"]' '["192.0.2.0/24","198.51.100.0/24"]'; do
+  expect_fail origin-multiple-ranges 'multiple loadBalancerSourceRanges require publicOriginAcknowledged=true' \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=$ranges"
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=$ranges" \
+    --set server.service.publicOriginAcknowledged=true > "$tmp/origin-multiple-acknowledged.yaml"
+done
+for cidr in '192.0.2.0/24' '2001:db8::/32'; do
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=[\"$cidr\"]" \
+    > "$tmp/origin-single-range.yaml"
+  grep -Fq "$cidr" "$tmp/origin-single-range.yaml"
+done
+expect_fail origin-internal-without-annotations 'internal.annotations is required' \
+  "${origin_args[@]}" --set server.service.internal.enabled=true
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${origin_args[@]}" --set server.service.internal.enabled=true \
+  --set-json 'server.service.internal.annotations={"network.example.test/internal":"true"}' \
+  > "$tmp/origin-internal.yaml"
+grep -Fq 'network.example.test/internal: "true"' "$tmp/origin-internal.yaml"
+expect_fail origin-generic-annotations 'authenticated server features with a LoadBalancer require' \
+  "${origin_args[@]}" --set-json 'server.service.annotations={"network.example.test/origin-policy":"reviewed"}'
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${origin_args[@]}" --set server.service.publicOriginAcknowledged=true \
+  > "$tmp/origin-public-acknowledged.yaml"
+expect_fail origin-nodeport-ranges 'loadBalancerSourceRanges requires server.service.type=LoadBalancer' \
+  --set server.service.type=NodePort --set-json 'server.service.loadBalancerSourceRanges=["192.0.2.0/24"]'
+expect_fail origin-clusterip-internal 'internal.enabled requires server.service.type=LoadBalancer' \
+  --set server.service.internal.enabled=true \
+  --set-json 'server.service.internal.annotations={"network.example.test/internal":"true"}'
+expect_fail origin-nodeport-acknowledgement 'publicOriginAcknowledged applies only to LoadBalancer' \
+  --set server.service.type=NodePort --set server.service.publicOriginAcknowledged=true
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.service.type=LoadBalancer > "$tmp/origin-disabled-public.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.service.type=LoadBalancer \
+  --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/1","128.0.0.0/1"]' \
+  > "$tmp/origin-disabled-multiple.yaml"
+expect_fail origin-disabled-universal 'must not contain universal CIDRs' \
+  --set server.service.type=LoadBalancer --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/0"]'
+expect_fail origin-disabled-internal-without-annotations 'internal.annotations is required' \
+  --set server.service.type=LoadBalancer --set server.service.internal.enabled=true
+
 # The whole chart must install for escalation alone: the Deployment references
 # the OAuth auth Secret, so secret-auth.yaml has to render it too.
 helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \

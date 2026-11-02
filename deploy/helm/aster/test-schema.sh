@@ -49,6 +49,15 @@ expect_fail() {
 # The complete chart defaults must satisfy the schema before template validation.
 helm lint "$chart" > "$tmp/default.out" 2>&1
 
+for service_type in ' LoadBalancer ' 'loadbalancer' 'ExternalName'; do
+  cat > "$tmp/invalid-service-type.yaml" <<VALUES
+server:
+  service:
+    type: "$service_type"
+VALUES
+  expect_fail invalid-service-type "$tmp/invalid-service-type.yaml" /server/service/type
+done
+
 cat > "$tmp/watch.yaml" <<'VALUES'
 mode: watch
 fetcher:

@@ -717,14 +717,29 @@ func checkKubernetesPullRequestEscalation(add func(string, DoctorStatus, string,
 }
 
 func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), values doctorKubernetesValues) {
-	if !values.Server.Actions.Enabled && !values.Server.Chat.Enabled && !values.Server.PullRequestEscalation.Enabled {
+	interactive := values.Server.Actions.Enabled || values.Server.Chat.Enabled || values.Server.PullRequestEscalation.Enabled
+	service := values.Server.Service
+	restriction, err := ClassifyKubernetesOrigin(KubernetesOriginPolicy{
+		ServiceType:              service.Type,
+		SourceRanges:             service.LoadBalancerSourceRanges,
+		InternalEnabled:          service.Internal.Enabled,
+		HasInternalAnnotations:   len(service.Internal.Annotations) > 0,
+		PublicOriginAcknowledged: service.PublicOriginAcknowledged,
+		Interactive:              interactive,
+	})
+	if err != nil {
+		add("Kubernetes origin security", DoctorFail, err.Error(), "Fix server.service origin settings to match the chart exposure contract.")
+		return
+	}
+	if !interactive {
 		add("Kubernetes origin security", DoctorPass, "authenticated server features are disabled", "")
 		return
 	}
-	serviceType := strings.TrimSpace(values.Server.Service.Type)
+	serviceType := strings.TrimSpace(service.Type)
 	if serviceType == "" {
 		serviceType = "ClusterIP"
 	}
+
 	switch serviceType {
 	case "ClusterIP":
 		if doctorNetworkPolicyRestricted(values.NetworkPolicy) {
@@ -733,17 +748,8 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 			add("Kubernetes origin security", DoctorWarn, "authenticated server features use a ClusterIP Service without a restrictive NetworkPolicy", "Enable NetworkPolicy and allow only the expected ingress controller or authentication proxy path.")
 		}
 	case "LoadBalancer":
-		if values.Server.Service.Internal.Enabled && len(values.Server.Service.Internal.Annotations) == 0 {
-			add("Kubernetes origin security", DoctorWarn, "internal LoadBalancer is enabled without provider annotations", "Set server.service.internal.annotations for the cloud provider and verify that the resulting address is private.")
-			return
-		}
-		restricted := values.Server.Service.Internal.Enabled || doctorRestrictedSourceRanges(values.Server.Service.LoadBalancerSourceRanges)
-		if !restricted {
-			if values.Server.Service.PublicOriginAcknowledged {
-				add("Kubernetes origin security", DoctorWarn, "authenticated server features use an acknowledged public LoadBalancer", "Verify direct origin reachability at runtime and restrict it with source ranges, a private origin, and NetworkPolicy where possible.")
-			} else {
-				add("Kubernetes origin security", DoctorWarn, "authenticated server features use a public LoadBalancer without source ranges, an explicit internal origin, or acknowledgement", "Prefer ClusterIP, configure an internal LoadBalancer or loadBalancerSourceRanges, and enable NetworkPolicy. Use publicOriginAcknowledged only for an intentional last-resort public origin.")
-			}
+		if restriction == KubernetesOriginUnverified {
+			add("Kubernetes origin security", DoctorWarn, "authenticated server features use an acknowledged LoadBalancer whose origin restriction is unverified", "Verify direct origin reachability at runtime and restrict it with source ranges, a private origin, and NetworkPolicy where possible.")
 			return
 		}
 		if !doctorNetworkPolicyRestricted(values.NetworkPolicy) {
@@ -754,20 +760,6 @@ func checkKubernetesOrigin(add func(string, DoctorStatus, string, string), value
 	default:
 		add("Kubernetes origin security", DoctorWarn, "authenticated server features use Service type "+serviceType, "Prefer ClusterIP behind an ingress or an explicitly restricted LoadBalancer, then verify runtime reachability.")
 	}
-}
-
-func doctorRestrictedSourceRanges(ranges []string) bool {
-	if len(ranges) != 1 {
-		return false
-	}
-	for _, cidr := range ranges {
-		cidr = strings.TrimSpace(cidr)
-		prefix, err := netip.ParsePrefix(cidr)
-		if err != nil || prefix.Bits() == 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func doctorNetworkPolicyRestricted(policy doctorNetworkPolicyValues) bool {
