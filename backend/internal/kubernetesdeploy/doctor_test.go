@@ -898,11 +898,15 @@ func TestKubernetesDoctorPublicLoadBalancerOriginEvidence(t *testing.T) {
 		service  string
 		disabled bool
 		status   KubernetesDoctorStatus
+		detail   string
 	}{
 		{name: "single bounded source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24]\n", status: KubernetesDoctorPass},
 		{name: "single bounded ipv6 source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [2001:db8::/32]\n", status: KubernetesDoctorPass},
 		{name: "universal ipv4 range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\n", status: KubernetesDoctorFail},
 		{name: "universal ipv6 range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/0']\n", status: KubernetesDoctorFail},
+		{name: "mapped ipv4 universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0.0.0.0/96']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped hexadecimal universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0:0/96']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped bounded source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:192.0.2.0/120']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
 		{name: "alternate ipv6 universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\n", status: KubernetesDoctorFail},
 		{name: "universal range acknowledged", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorFail},
 		{name: "empty source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['']\n", status: KubernetesDoctorFail},
@@ -945,6 +949,13 @@ func TestKubernetesDoctorPublicLoadBalancerOriginEvidence(t *testing.T) {
 			dir := writeDoctorBundle(t, values)
 			report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), baselineCluster(false))
 			assertDoctorCheck(t, report, "external origin restriction", test.status)
+			if test.detail != "" {
+				for _, check := range report.Checks {
+					if check.Name == "external origin restriction" && !strings.Contains(check.Detail, test.detail) {
+						t.Fatalf("origin detail = %q, want %q", check.Detail, test.detail)
+					}
+				}
+			}
 			if test.status == KubernetesDoctorUnverified {
 				for _, check := range report.Checks {
 					if check.Name == "external origin restriction" && !strings.Contains(check.Detail, "cannot be proven") {

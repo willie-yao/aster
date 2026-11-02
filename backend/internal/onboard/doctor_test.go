@@ -271,6 +271,7 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		name       string
 		originYAML string
 		want       DoctorStatus
+		detail     string
 	}{
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
@@ -294,6 +295,9 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
 		{name: "acknowledged public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    publicOriginAcknowledged: true\n", want: DoctorWarn},
 		{name: "universal source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
+		{name: "mapped ipv4 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0.0.0.0/96']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped hexadecimal universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0:0/96']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped bounded source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:192.0.2.0/120']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
 		{name: "alternate ipv6 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
 		{name: "complementary ipv4 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
 		{name: "complementary ipv6 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
@@ -334,6 +338,13 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 			})
 			if !hasDoctorCheck(report, "Kubernetes origin security", test.want) {
 				t.Fatalf("checks = %+v", report.Checks)
+			}
+			if test.detail != "" {
+				for _, check := range report.Checks {
+					if check.Name == "Kubernetes origin security" && !strings.Contains(check.Detail, test.detail) {
+						t.Fatalf("origin detail = %q, want %q", check.Detail, test.detail)
+					}
+				}
 			}
 		})
 	}

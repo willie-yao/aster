@@ -44,6 +44,9 @@ func ClassifyKubernetesOrigin(policy KubernetesOriginPolicy) (KubernetesOriginRe
 		if err != nil {
 			return "", fmt.Errorf("server.service.loadBalancerSourceRanges contains invalid CIDR %q: %w", cidr, err)
 		}
+		if prefix.Addr().Is4In6() {
+			return "", fmt.Errorf("server.service.loadBalancerSourceRanges must not contain IPv4-mapped IPv6 CIDR %q; use IPv4 CIDR notation", cidr)
+		}
 		if prefix.Bits() == 0 {
 			return "", fmt.Errorf("server.service.loadBalancerSourceRanges must not contain universal CIDRs; remove them and set publicOriginAcknowledged=true for an intentional public origin")
 		}
