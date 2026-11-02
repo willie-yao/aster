@@ -292,38 +292,29 @@ func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing
 	}
 }
 
-func TestActionRequestStateNoncurrentVersionsResetToV7(t *testing.T) {
+func TestActionRequestStateNoncurrentVersionsFailClosed(t *testing.T) {
 	for _, version := range []int{6, actionRequestStateVersion + 1} {
 		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
 			service, _ := requestTestService(t)
-			now := time.Now().UTC()
-			state := actionRequestState{Version: version, Requests: map[string]*actionRequest{
-				"existing": {ActionRequestView: ActionRequestView{
-					ID: "existing", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestFailed,
-					CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
-				}},
-			}}
-			if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
-				t.Fatal(err)
-			}
-			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
-			if _, err := reloaded.GetRequest("existing", "alice"); !errors.Is(err, ErrRequestNotFound) {
-				t.Fatalf("GetRequest error = %v", err)
-			}
-			data, err := os.ReadFile(reloaded.requestStatePath())
+			state := validUnknownRequestState(time.Now().UTC())
+			state.Version = version
+			writeActionRequestState(t, service.dataDir, state, 0o600)
+			before, err := os.ReadFile(service.requestStatePath())
 			if err != nil {
 				t.Fatal(err)
 			}
-			var reset actionRequestState
-			if err := json.Unmarshal(data, &reset); err != nil {
-				t.Fatal(err)
+			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+			if _, err := reloaded.GetRequest("unknown", "alice"); !errors.Is(err, ErrActionStateUnavailable) {
+				t.Fatalf("GetRequest error = %v", err)
 			}
-			if reset.Version != actionRequestStateVersion || len(reset.Requests) != 0 {
-				t.Fatalf("reset state = %+v", reset)
+			after, err := os.ReadFile(service.requestStatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("unsupported state changed: err=%v", err)
 			}
 		})
 	}
 }
+
 func TestReadyAnalysisFixRequestReloads(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
@@ -439,6 +430,8 @@ func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
 		state.Previews[tokenHash(token)] = &persistedPreview{
 			Owner: tokenHash("alice"), InitiatedBy: "alice", InitiatedAt: now.Format(time.RFC3339Nano),
 			Kind: gfKind, Status: previewStatusReady, CreatedAt: now.Format(time.RFC3339Nano),
+			FailureID: "failure", PatternHash: "hash", VerificationVersion: sourceVerificationVersion,
+			Fix: &fixpr.GeneratedFixSnapshot{Key: "analysis-fix"},
 		}
 		return true, nil
 	}); err != nil {
@@ -1161,7 +1154,7 @@ func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-1": {ActionRequestView: ActionRequestView{
-			ID: "request-1", Owner: "alice", Status: RequestPending,
+			ID: "request-1", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestPending,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		}},
 	}}
@@ -1181,7 +1174,7 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-refine": {
 			ActionRequestView: ActionRequestView{
-				ID: "request-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				ID: "request-refine", FailureID: "failure", Owner: "alice", Status: RequestPending, Kind: "create-issue",
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			},
 			BaseIssue: base, BaseTargetRepo: "o/r",
@@ -1218,7 +1211,7 @@ func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-unsafe-refine": {
 			ActionRequestView: ActionRequestView{
-				ID: "request-unsafe-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				ID: "request-unsafe-refine", FailureID: "failure", Owner: "alice", Status: RequestPending, Kind: "create-issue",
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			},
 			BaseIssue: base, BaseTargetRepo: "o/r",
@@ -1378,7 +1371,7 @@ func TestConfigureAsyncRequestsSkipsExpiredReadyEmail(t *testing.T) {
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-expired": {ActionRequestView: ActionRequestView{
-			ID: "request-expired", Owner: "alice", Kind: "create-issue", Status: RequestReady,
+			ID: "request-expired", FailureID: "failure", Owner: "alice", Kind: "create-issue", Status: RequestReady,
 			CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
 			ExpiresAt: now.Add(-time.Hour).Format(time.RFC3339),
 			Preview:   &PreviewResult{Kind: "issue", Title: "Expired", Body: "Body"},

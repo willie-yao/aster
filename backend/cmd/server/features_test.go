@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/willie-yao/aster/backend/internal/actions"
 	fixruntime "github.com/willie-yao/aster/backend/internal/fix/runtime"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/runtime"
@@ -309,5 +311,27 @@ func TestFormatPricingRate(t *testing.T) {
 		if got := formatPricingRate(test.value); got != test.want {
 			t.Errorf("formatPricingRate(%q) = %q, want %q", test.value, got, test.want)
 		}
+	}
+}
+
+func TestEnableActionsRetainsServiceOnStateFailure(t *testing.T) {
+	for _, name := range []string{"AI_API", "AI_ENDPOINT", "AI_MODEL", "AI_TOKEN"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("ACTION_TIMEOUT", "40m")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "action_request_state.json"), []byte(`{"broken":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := &server.Options{}
+	service, err := enableActions(t.Context(), opts, &project.Config{}, dir, nil)
+	if err != nil {
+		t.Fatalf("server action setup failed: %v", err)
+	}
+	if opts.Actions != service || !errors.Is(service.InitializationError(), actions.ErrActionStateUnavailable) {
+		t.Fatalf("service=%v initialization error=%v", opts.Actions, service.InitializationError())
+	}
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

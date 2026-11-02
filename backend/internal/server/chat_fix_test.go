@@ -630,3 +630,11 @@ func TestHandlerExactJUnitChatFixRequestBoundsSourcePinning(t *testing.T) {
 		t.Fatal("source pinning ran without a server deadline")
 	}
 }
+
+func TestChatFixStateUnavailableErrorIsSafe(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeChatFixError(recorder, "session", "alice", fmt.Errorf("%w: private state contents", actions.ErrActionStateUnavailable))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != "GitHub write actions are unavailable\n" {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}

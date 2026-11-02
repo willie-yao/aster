@@ -3,8 +3,8 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -225,25 +225,26 @@ func (s *Service) observeRuntimeWork(id string) runtime.WorkObserver {
 	}
 }
 
-func (s *Service) loadActionRequests() {
-	state := &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
+func (s *Service) loadActionRequests() error {
+	state := &actionRequestState{}
 	data, err := os.ReadFile(s.requestStatePath())
-	if err == nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		state = &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
+	case err != nil:
+		return fmt.Errorf("reading action request state: %w", err)
+	default:
 		if err := json.Unmarshal(data, state); err != nil {
-			log.Printf("Warning: failed to parse action request state: %v", err)
-			state = &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
+			return fmt.Errorf("decoding action request state: %w", err)
+		}
+		if err := validateActionRequestState(state); err != nil {
+			return fmt.Errorf("validating action request state: %w", err)
 		}
 	}
-	migrated := state.Version != actionRequestStateVersion
-	if migrated {
-		state = &actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{}}
-	}
-	if state.Requests == nil {
-		state.Requests = map[string]*actionRequest{}
-	}
+
 	now := time.Now().UTC()
 	s.requests = state
-	changed := migrated || s.expireRequestsLocked(now)
+	changed := s.expireRequestsLocked(now)
 	nowText := now.Format(time.RFC3339)
 	for _, request := range state.Requests {
 		if request == nil || request.Status != RequestReady {
@@ -336,10 +337,50 @@ func (s *Service) loadActionRequests() {
 		}
 	}
 	if changed {
-		if err := statefile.WritePrivateJSONDurable(s.requestStatePath(), state); err != nil {
-			log.Printf("Warning: failed to save recovered action request state: %v", err)
+		if err := s.saveRequestsLocked(); err != nil {
+			return fmt.Errorf("saving recovered action request state: %w", err)
 		}
 	}
+	return nil
+}
+
+func validateActionRequestState(state *actionRequestState) error {
+	if state.Version != actionRequestStateVersion {
+		return fmt.Errorf("unsupported version %d", state.Version)
+	}
+	if state.Requests == nil {
+		return fmt.Errorf("requests map is missing")
+	}
+	for id, request := range state.Requests {
+		if request == nil || id == "" || request.ID != id ||
+			request.Owner == "" || request.Owner != normalizeActionOwner(request.Owner) {
+			return fmt.Errorf("request %q has invalid identity", id)
+		}
+		switch request.Kind {
+		case "create-issue", "propose-fix", requestKindAnalysisFix:
+		default:
+			return fmt.Errorf("request %q has unsupported kind %q", id, request.Kind)
+		}
+		switch request.Status {
+		case RequestPending, RequestCancelling, RequestReady, RequestUnknown, RequestFailed, RequestConfirmed, RequestCancelled, RequestExpired:
+		default:
+			return fmt.Errorf("request %q has unsupported status %q", id, request.Status)
+		}
+		needsFailureID := request.Status == RequestPending || request.Status == RequestCancelling || request.Status == RequestUnknown ||
+			(request.Status == RequestReady && request.Kind != "propose-fix")
+		if needsFailureID && strings.TrimSpace(request.FailureID) == "" {
+			return fmt.Errorf("request %q has no failure identity", id)
+		}
+		if request.Kind == requestKindAnalysisFix && analysisFixRequestReusable(request) && strings.TrimSpace(request.RequestHash) == "" {
+			return fmt.Errorf("request %q has no analysis request identity", id)
+		}
+		for _, timestamp := range []string{request.CreatedAt, request.UpdatedAt, request.ExpiresAt} {
+			if _, err := time.Parse(time.RFC3339, timestamp); err != nil {
+				return fmt.Errorf("request %q has invalid lifecycle time: %w", id, err)
+			}
+		}
+	}
+	return nil
 }
 
 func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
@@ -537,6 +578,9 @@ func (s *Service) validateSubjectSnapshot(failureID, patternHash string, kind ..
 }
 
 func (s *Service) saveRequestsLocked() error {
+	if err := s.InitializationError(); err != nil {
+		return err
+	}
 	write := s.requestStateWriter
 	if write == nil {
 		write = statefile.WritePrivateJSONDurable

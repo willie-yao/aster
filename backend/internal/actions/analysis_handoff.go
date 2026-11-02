@@ -209,6 +209,9 @@ func analysisFixContext(input AnalysisFixInput) fixpr.GenerationContext {
 
 // FindAnalysisFixRequest reconnects an admitted request without reading chat.
 func (s *Service) FindAnalysisFixRequest(sessionID, requestID, owner string, target FixBranchTarget, instruction string) (ActionRequestView, bool, error) {
+	if err := s.InitializationError(); err != nil {
+		return ActionRequestView{}, false, err
+	}
 	owner = normalizeActionOwner(owner)
 	if owner == "" || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(requestID) == "" || !target.Valid() {
 		return ActionRequestView{}, false, ErrRequestNotFound

@@ -195,6 +195,7 @@ type Service struct {
 
 	rmu                       sync.Mutex
 	requests                  *actionRequestState
+	initializationErr         error
 	requestTimeout            time.Duration
 	requestNotify             RequestReadyNotifier
 	requestNotifyCancels      map[string]context.CancelFunc
@@ -241,8 +242,20 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		}
 		return managed, nil
 	}
-	s.loadActionRequests()
+	if _, _, err := s.previewStore.load(); err != nil {
+		s.initializationErr = fmt.Errorf("%w: loading action preview state: %w", ErrActionStateUnavailable, err)
+	} else if err := s.loadActionRequests(); err != nil {
+		s.initializationErr = fmt.Errorf("%w: %w", ErrActionStateUnavailable, err)
+	}
 	return s
+}
+
+// ErrActionStateUnavailable means durable action guards could not be initialized.
+var ErrActionStateUnavailable = errors.New("action state is unavailable")
+
+// InitializationError reports why write actions cannot safely run.
+func (s *Service) InitializationError() error {
+	return s.initializationErr
 }
 
 // ConfigureFixActions controls whether Fix PR preview and confirmation are exposed.
@@ -944,6 +957,9 @@ func (s *Service) generateIssuePreview(ctx context.Context, failureID, userToken
 // PreviewIssue renders the exact issue that would be filed for the failure,
 // without filing it, and caches it for confirmation.
 func (s *Service) PreviewIssue(ctx context.Context, failureID, owner, writeToken, instruction string) (PreviewResult, error) {
+	if err := s.InitializationError(); err != nil {
+		return PreviewResult{}, err
+	}
 	preview, entry, err := s.generateIssuePreview(ctx, failureID, writeToken, instruction, nil, "", "")
 	if err != nil {
 		return PreviewResult{}, err
@@ -1127,6 +1143,9 @@ const gfKind = "fix"
 
 // PreviewFix generates the exact fix PR preview and caches it for confirmation.
 func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, instruction string) (PreviewResult, error) {
+	if err := s.InitializationError(); err != nil {
+		return PreviewResult{}, err
+	}
 	if err := s.requireFixActions(); err != nil {
 		return PreviewResult{}, err
 	}
@@ -1150,6 +1169,9 @@ func (s *Service) PreviewFix(ctx context.Context, failureID, owner, writeToken, 
 func (s *Service) PreviewFixWithContext(
 	ctx context.Context, pattern models.PatternAnalysis, owner, writeToken, instruction string, target FixTarget, generationContext fixpr.GenerationContext,
 ) (_ PreviewResult, resultErr error) {
+	if err := s.InitializationError(); err != nil {
+		return PreviewResult{}, err
+	}
 	if err := s.requireFixActions(); err != nil {
 		return PreviewResult{}, err
 	}
@@ -1183,6 +1205,9 @@ func (s *Service) PreviewFixWithContext(
 
 // Confirm files the issue or opens the PR previously cached under token.
 func (s *Service) Confirm(ctx context.Context, token, owner, writeToken string) (string, error) {
+	if err := s.InitializationError(); err != nil {
+		return "", err
+	}
 	lease := s.requestTimeout + 30*time.Second
 	entry, resultURL, attemptID, reconcile, err := s.beginConfirm(owner, token, lease)
 	if err != nil || resultURL != "" {
@@ -1325,6 +1350,9 @@ func (s *Service) reconcileEntry(ctx context.Context, entry *previewEntry, userT
 }
 
 func (s *Service) confirmEntry(ctx context.Context, entry *previewEntry, userToken string) (string, error) {
+	if err := s.InitializationError(); err != nil {
+		return "", err
+	}
 	var result string
 	err := patternstate.WithLock(s.dataDir, func() error {
 		var err error
@@ -1528,6 +1556,9 @@ func (s *Service) unresolveUnlocked(failureID string) error {
 
 // stash persists a draft under a fresh token bound to the admin identity.
 func (s *Service) stash(owner string, entry *previewEntry) (string, error) {
+	if err := s.InitializationError(); err != nil {
+		return "", err
+	}
 	return s.previewStore.stash(owner, entry)
 }
 

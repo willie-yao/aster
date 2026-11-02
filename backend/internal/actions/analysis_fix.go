@@ -365,6 +365,9 @@ func (s *Service) verifyAnalysisSourceCompatibility(
 func (s *Service) PreviewAnalysisFix(
 	ctx context.Context, input AnalysisFixInput, owner, writeToken, instruction string,
 ) (_ PreviewResult, resultErr error) {
+	if err := s.InitializationError(); err != nil {
+		return PreviewResult{}, err
+	}
 	if err := s.requireFixActions(); err != nil {
 		return PreviewResult{}, err
 	}

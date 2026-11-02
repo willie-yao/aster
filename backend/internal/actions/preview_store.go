@@ -406,12 +406,12 @@ func (s *previewStore) load() (*previewState, bool, error) {
 	if len(data) > maxBytes {
 		return nil, false, fmt.Errorf("preview state exceeds %d bytes", maxBytes)
 	}
-	state := freshPreviewState()
+	state := &previewState{}
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, false, fmt.Errorf("decoding preview state: %w", err)
 	}
-	if state.Version != previewStateVersion || state.Previews == nil {
-		return freshPreviewState(), true, nil
+	if err := validatePreviewState(state); err != nil {
+		return nil, false, fmt.Errorf("validating preview state: %w", err)
 	}
 	changed := false
 	for key, preview := range state.Previews {
@@ -427,6 +427,47 @@ func (s *previewStore) load() (*previewState, bool, error) {
 		}
 	}
 	return state, changed, nil
+}
+
+func validatePreviewState(state *previewState) error {
+	if state.Version != previewStateVersion {
+		return fmt.Errorf("unsupported version %d", state.Version)
+	}
+	if state.Previews == nil {
+		return fmt.Errorf("previews map is missing")
+	}
+	for key, preview := range state.Previews {
+		if key == "" || preview == nil {
+			return fmt.Errorf("preview %q is missing", key)
+		}
+		if preview.Kind != "issue" && preview.Kind != gfKind {
+			return fmt.Errorf("preview %q has unsupported kind %q", key, preview.Kind)
+		}
+		switch preview.Status {
+		case previewStatusReady, previewStatusGenerating, previewStatusRunning, previewStatusDone, previewStatusUnknown:
+		default:
+			return fmt.Errorf("preview %q has unsupported status %q", key, preview.Status)
+		}
+		if _, err := time.Parse(time.RFC3339Nano, preview.CreatedAt); err != nil {
+			return fmt.Errorf("preview %q has invalid creation time: %w", key, err)
+		}
+		if preview.Status == previewStatusDone && strings.TrimSpace(preview.ResultURL) == "" {
+			return fmt.Errorf("preview %q has no confirmed result", key)
+		}
+		if preview.Status == previewStatusGenerating {
+			if preview.Kind != gfKind || preview.InitiatedBy == "" ||
+				preview.Owner != tokenHash(normalizeActionOwner(preview.InitiatedBy)) ||
+				preview.IdempotencyKey == "" || preview.GenerationHash == "" {
+				return fmt.Errorf("preview %q has invalid generation identity", key)
+			}
+		} else if _, err := restorePreview(preview); err != nil {
+			return fmt.Errorf("preview %q: %w", key, err)
+		} else if (preview.Kind == "issue" && strings.TrimSpace(preview.Issue.Key) == "") ||
+			(preview.Kind == gfKind && strings.TrimSpace(preview.Fix.Key) == "") {
+			return fmt.Errorf("preview %q has no action identity", key)
+		}
+	}
+	return nil
 }
 
 func normalizeActionOwner(owner string) string {
