@@ -23,6 +23,7 @@ var promptPlaceholderPattern = regexp.MustCompile(`(?m)^\s*<!--\s*TODO:`)
 // DoctorOptions selects an existing consumer scaffold to validate.
 type DoctorOptions struct {
 	ProjectDir string
+	ValuesFile string
 }
 
 // DoctorStatus is the outcome of one validation check.
@@ -125,7 +126,13 @@ func runDoctor(ctx context.Context, opts DoctorOptions, deps doctorDependencies)
 	}
 
 	pagesPath, pages, pagesErr := findPagesWorkflow(deps.files, dir)
-	k8sPath := filepath.Join(dir, "deploy", "values.yaml")
+	k8sPath := opts.ValuesFile
+	if strings.TrimSpace(k8sPath) == "" {
+		k8sPath = filepath.Join("deploy", "values.yaml")
+	}
+	if !filepath.IsAbs(k8sPath) {
+		k8sPath = filepath.Join(dir, k8sPath)
+	}
 	k8s, k8sErr := deps.files.ReadFile(k8sPath)
 	pagesExists := pagesErr == nil
 	k8sExists := k8sErr == nil

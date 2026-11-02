@@ -213,6 +213,59 @@ ai:
 	}
 }
 
+func TestDoctor_ValuesFile(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeProject, err := filepath.Rel(cwd, "/consumer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const valid = "persistence:\n  existingClaim: data\nai:\n  enabled: false\n"
+	const invalid = "persistence:\n  enabled: false\n"
+	for _, tc := range []struct {
+		name          string
+		projectDir    string
+		valuesFile    string
+		selectedPath  string
+		defaultValues string
+		want          DoctorStatus
+	}{
+		{name: "default", projectDir: "/consumer", selectedPath: "/consumer/deploy/values.yaml", want: DoctorPass},
+		{name: "blank default", projectDir: "/consumer", valuesFile: "  ", selectedPath: "/consumer/deploy/values.yaml", want: DoctorPass},
+		{name: "relative", projectDir: "/consumer/../consumer", valuesFile: "config/production.yaml", selectedPath: "/consumer/config/production.yaml", defaultValues: invalid, want: DoctorPass},
+		{name: "relative project", projectDir: "  " + relativeProject + "  ", valuesFile: "config/production.yaml", selectedPath: "/consumer/config/production.yaml", want: DoctorPass},
+		{name: "absolute", projectDir: "/consumer", valuesFile: "/external/values.yaml", selectedPath: "/external/values.yaml", defaultValues: invalid, want: DoctorPass},
+		{name: "missing selected", projectDir: "/consumer", valuesFile: "config/missing.yaml", defaultValues: valid, want: DoctorFail},
+		{name: "missing default", projectDir: "/consumer", selectedPath: "/consumer/config/production.yaml", want: DoctorFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := doctorFiles(nil)
+			if tc.defaultValues != "" {
+				files["/consumer/deploy/values.yaml"] = tc.defaultValues
+			}
+			if tc.selectedPath != "" {
+				files[tc.selectedPath] = valid
+			}
+			report := runDoctor(t.Context(), DoctorOptions{ProjectDir: tc.projectDir, ValuesFile: tc.valuesFile}, doctorDependencies{
+				files:   files,
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job"}}},
+			})
+			if report.ProjectDir != "/consumer" || !hasDoctorCheck(report, "deployment", tc.want) {
+				t.Fatalf("report = %+v", report)
+			}
+			if tc.want == DoctorPass {
+				if report.HasFailures() || !hasDoctorCheck(report, "Kubernetes storage", DoctorPass) {
+					t.Fatalf("checks = %+v", report.Checks)
+				}
+			} else if hasDoctorCheck(report, "Kubernetes storage", DoctorPass) {
+				t.Fatalf("missing values fell back to another file: %+v", report.Checks)
+			}
+		})
+	}
+}
+
 func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 	tests := []struct {
 		name       string

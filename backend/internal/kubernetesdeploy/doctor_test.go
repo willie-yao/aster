@@ -1231,6 +1231,83 @@ func TestWriteKubernetesDoctorReportBoundsTotalOutput(t *testing.T) {
 	}
 }
 
+func TestKubernetesDoctorSelectedValues(t *testing.T) {
+	valid := baselineValues(false)
+	invalid := strings.Replace(valid, "accessMode: ReadWriteMany", "accessMode: ReadWriteOnce", 1)
+	for _, tc := range []struct {
+		name           string
+		absolute       bool
+		useDefault     bool
+		defaultValues  string
+		selectedValues string
+		wantStorage    KubernetesDoctorStatus
+		wantMissing    bool
+	}{
+		{name: "relative alternate only", selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "absolute alternate only", absolute: true, selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "invalid default valid alternate", defaultValues: invalid, selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "valid default invalid alternate", defaultValues: valid, selectedValues: invalid, wantStorage: KubernetesDoctorFail},
+		{name: "missing selected with valid default", defaultValues: valid, wantMissing: true},
+		{name: "missing default with valid alternate", useDefault: true, selectedValues: valid, wantMissing: true},
+		{name: "default", useDefault: true, defaultValues: valid, wantStorage: KubernetesDoctorPass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			storageDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(storageDir, "logs", "fixture-job"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			projectYAML := strings.Replace(minimalProject, "testgrid_dashboard: test", "source: bucket", 1)
+			projectYAML = strings.Replace(projectYAML, "base: /tmp", "base: "+storageDir, 1)
+			writeFile(t, filepath.Join(dir, "project.yaml"), projectYAML)
+			writeFile(t, filepath.Join(dir, "prompts", "system.md"), "prompt")
+			if tc.defaultValues != "" {
+				writeFile(t, filepath.Join(dir, "deploy", "values.yaml"), tc.defaultValues)
+			}
+			valuesFile := filepath.Join("config", "production.yaml")
+			selectedPath := filepath.Join(dir, valuesFile)
+			if tc.absolute {
+				selectedPath = filepath.Join(t.TempDir(), "production.yaml")
+				valuesFile = selectedPath
+			}
+			if tc.selectedValues != "" {
+				writeFile(t, selectedPath, tc.selectedValues)
+			}
+			if tc.useDefault {
+				valuesFile = ""
+				selectedPath = filepath.Join(dir, "deploy", "values.yaml")
+			}
+			runner := baselineDoctorRunner()
+			cluster := baselineCluster(false)
+			report := runKubernetesDoctor(t.Context(), KubernetesDoctorOptions{
+				Action: "install", ProjectDir: dir, ValuesFile: valuesFile,
+				Release: "sample", Namespace: "sample", KubeContext: "test", Chart: "chart",
+			}, kubernetesDoctorDependencies{
+				runner:         runner,
+				clusterFactory: func(string) (clusterReader, error) { return cluster, nil },
+				consumerDoctor: onboard.Doctor,
+				readFile:       os.ReadFile,
+			})
+			if tc.wantMissing {
+				assertDoctorCheck(t, report, "deployment bundle", KubernetesDoctorFail)
+				if len(runner.commands) != 0 || len(cluster.calls) != 0 {
+					t.Fatalf("missing selected values reached Helm or cluster: %v, %v", runner.commands, cluster.calls)
+				}
+				if !strings.Contains(report.Checks[len(report.Checks)-1].Detail, selectedPath) {
+					t.Fatalf("missing values path absent from failure: %+v", report.Checks)
+				}
+				return
+			}
+			assertDoctorCheck(t, report, "consumer deployment", KubernetesDoctorPass)
+			assertDoctorCheck(t, report, "consumer Kubernetes storage", tc.wantStorage)
+			assertDoctorCheck(t, report, "consumer Prow discovery", KubernetesDoctorPass)
+			if len(runner.commands) != 1 || !containsPair(runner.commands[0].args, "--values", selectedPath) {
+				t.Fatalf("Helm did not use selected absolute path %q: %+v", selectedPath, runner.commands)
+			}
+		})
+	}
+}
+
 func runDoctorForTest(t *testing.T, dir, action string, runner *doctorRunner, cluster *fakeDoctorCluster) KubernetesDoctorReport {
 	t.Helper()
 	return runKubernetesDoctor(context.Background(), KubernetesDoctorOptions{

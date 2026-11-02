@@ -150,18 +150,6 @@ func runKubernetesDoctor(ctx context.Context, opts KubernetesDoctorOptions, deps
 		return report
 	}
 
-	consumer := deps.consumerDoctor(ctx, onboard.DoctorOptions{ProjectDir: opts.ProjectDir})
-	for _, check := range consumer.Checks {
-		status := KubernetesDoctorPass
-		switch check.Status {
-		case onboard.DoctorWarn:
-			status = KubernetesDoctorWarn
-		case onboard.DoctorFail:
-			status = KubernetesDoctorFail
-		}
-		add("consumer "+check.Name, status, check.Detail, check.Action)
-	}
-
 	deployAction := action
 	if deployAction == "auto" {
 		deployAction = "install"
@@ -177,6 +165,18 @@ func runKubernetesDoctor(ctx context.Context, opts KubernetesDoctorOptions, deps
 		return report
 	}
 	add("deployment bundle", KubernetesDoctorPass, fmt.Sprintf("validated project, prompt, values, and %d consumer skill files", len(skillPaths)), "")
+
+	consumer := deps.consumerDoctor(ctx, onboard.DoctorOptions{ProjectDir: resolved.ProjectDir, ValuesFile: resolved.ValuesFile})
+	for _, check := range consumer.Checks {
+		status := KubernetesDoctorPass
+		switch check.Status {
+		case onboard.DoctorWarn:
+			status = KubernetesDoctorWarn
+		case onboard.DoctorFail:
+			status = KubernetesDoctorFail
+		}
+		add("consumer "+check.Name, status, check.Detail, check.Action)
+	}
 
 	valuesYAML, err := deps.readFile(resolved.ValuesFile)
 	if err != nil {
