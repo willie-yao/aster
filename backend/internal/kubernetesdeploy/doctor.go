@@ -150,18 +150,6 @@ func runKubernetesDoctor(ctx context.Context, opts KubernetesDoctorOptions, deps
 		return report
 	}
 
-	consumer := deps.consumerDoctor(ctx, onboard.DoctorOptions{ProjectDir: opts.ProjectDir})
-	for _, check := range consumer.Checks {
-		status := KubernetesDoctorPass
-		switch check.Status {
-		case onboard.DoctorWarn:
-			status = KubernetesDoctorWarn
-		case onboard.DoctorFail:
-			status = KubernetesDoctorFail
-		}
-		add("consumer "+check.Name, status, check.Detail, check.Action)
-	}
-
 	deployAction := action
 	if deployAction == "auto" {
 		deployAction = "install"
@@ -177,6 +165,18 @@ func runKubernetesDoctor(ctx context.Context, opts KubernetesDoctorOptions, deps
 		return report
 	}
 	add("deployment bundle", KubernetesDoctorPass, fmt.Sprintf("validated project, prompt, values, and %d consumer skill files", len(skillPaths)), "")
+
+	consumer := deps.consumerDoctor(ctx, onboard.DoctorOptions{ProjectDir: resolved.ProjectDir, ValuesFile: resolved.ValuesFile})
+	for _, check := range consumer.Checks {
+		status := KubernetesDoctorPass
+		switch check.Status {
+		case onboard.DoctorWarn:
+			status = KubernetesDoctorWarn
+		case onboard.DoctorFail:
+			status = KubernetesDoctorFail
+		}
+		add("consumer "+check.Name, status, check.Detail, check.Action)
+	}
 
 	valuesYAML, err := deps.readFile(resolved.ValuesFile)
 	if err != nil {
@@ -715,17 +715,26 @@ func checkPublicOrigin(ctx context.Context, add func(string, KubernetesDoctorSta
 		add("public topology", KubernetesDoctorFail, "Ingress and LoadBalancer origin are both enabled", "Choose one documented public topology.")
 	}
 	serviceType := firstNonempty(values.Server.Service.Type, "ClusterIP")
+	service := values.Server.Service
+	restriction, err := onboard.ClassifyKubernetesOrigin(onboard.KubernetesOriginPolicy{
+		ServiceType:              service.Type,
+		SourceRanges:             service.LoadBalancerSourceRanges,
+		InternalEnabled:          service.Internal.Enabled,
+		HasInternalAnnotations:   len(service.Internal.Annotations) > 0,
+		PublicOriginAcknowledged: service.PublicOriginAcknowledged,
+		Interactive:              values.serverInteractive(),
+	})
 	switch {
-	case serviceType != "LoadBalancer":
+	case err != nil:
+		add("external origin restriction", KubernetesDoctorFail, err.Error(), "Fix server.service origin settings to match the chart exposure contract.")
+	case !values.serverInteractive():
+		add("external origin restriction", KubernetesDoctorPass, "authenticated server features are disabled", "")
+	case restriction == onboard.KubernetesOriginNotLoadBalancer:
 		add("external origin restriction", KubernetesDoctorPass, "configured Service is not a public LoadBalancer", "")
-	case values.Server.Service.Internal.Enabled:
-		add("external origin restriction", KubernetesDoctorPass, "LoadBalancer uses the explicit internal-Service contract", "")
-	case len(values.Server.Service.LoadBalancerSourceRanges) > 0:
-		add("external origin restriction", KubernetesDoctorPass, "LoadBalancer has explicit Kubernetes source ranges", "")
-	case len(values.Server.Service.Annotations) > 0 || values.Server.Service.PublicOriginAcknowledged:
-		add("external origin restriction", KubernetesDoctorUnverified, "public LoadBalancer relies on provider annotations or explicit public-origin acknowledgement that Kubernetes-generic reads cannot validate", "Validate the external origin restriction through reviewed infrastructure-as-code and target-cluster acceptance.")
+	case restriction == onboard.KubernetesOriginRestricted:
+		add("external origin restriction", KubernetesDoctorPass, "LoadBalancer has a single bounded source range or uses the explicit internal-Service contract", "")
 	default:
-		add("external origin restriction", KubernetesDoctorFail, "public LoadBalancer has no source ranges, internal contract, provider annotations, or explicit public-origin acknowledgement", "Add enforceable restriction evidence or acknowledge the externally managed origin contract before deployment.")
+		add("external origin restriction", KubernetesDoctorUnverified, "acknowledged LoadBalancer origin restriction cannot be proven from its static configuration", "Validate the external origin restriction through reviewed infrastructure-as-code and target-cluster acceptance.")
 	}
 	if releaseExists {
 		selector := "app.kubernetes.io/instance=" + opts.Release + ",app.kubernetes.io/component=server"

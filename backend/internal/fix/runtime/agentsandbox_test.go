@@ -869,6 +869,10 @@ func TestAgentSandboxProductionOptionsFailClosed(t *testing.T) {
 		}, want: "non-provider"},
 		{name: "internal with acknowledgement", edit: func(o *AgentSandboxOptions) { o.ModelProvider.PublicCAPrivateDNS = true }, want: "applies only"},
 		{name: "resource", edit: func(o *AgentSandboxOptions) { o.Resources.MemoryLimit = "not-a-quantity" }, want: "memory limit"},
+		{name: "zero timeout", edit: func(o *AgentSandboxOptions) { o.Timeout = 0 }, want: "positive whole seconds"},
+		{name: "negative timeout", edit: func(o *AgentSandboxOptions) { o.Timeout = -time.Second }, want: "positive whole seconds"},
+		{name: "fractional timeout", edit: func(o *AgentSandboxOptions) { o.Timeout = 90*time.Second + time.Nanosecond }, want: "whole seconds"},
+		{name: "large timeout", edit: func(o *AgentSandboxOptions) { o.Timeout = 30*time.Minute + time.Second }, want: "at most 30m"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := base
@@ -972,6 +976,7 @@ func TestAgentSandboxDeadlineOrdering(t *testing.T) {
 		timeout time.Duration
 	}{
 		{name: "minimum", timeout: time.Minute},
+		{name: "90s", timeout: 90 * time.Second},
 		{name: "default", timeout: 10 * time.Minute},
 		{name: "maximum", timeout: 30 * time.Minute},
 	} {
@@ -995,6 +1000,9 @@ func TestAgentSandboxDeadlineOrdering(t *testing.T) {
 			runBudget := agentSandboxRunTimeout(spec)
 			if runBudget != podBudget+5*time.Second {
 				t.Fatalf("run deadline = %v, Pod deadline = %v", runBudget, podBudget)
+			}
+			if tc.timeout == 90*time.Second && (podBudget != 225*time.Second || runBudget != 230*time.Second) {
+				t.Fatalf("90s execution: Pod deadline = %v, run deadline = %v", podBudget, runBudget)
 			}
 			shutdown, err := time.Parse(time.RFC3339, sandbox["shutdownTime"].(string))
 			if err != nil {

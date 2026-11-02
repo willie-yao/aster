@@ -200,6 +200,8 @@ The complete commented defaults live in `deploy/helm/aster/values.yaml`. Generat
 
 Use the full chart values that match the installed chart version before adding a field not present in the generated consumer file.
 
+Both doctors reject invalid Service exposure settings, including universal source ranges and internal LoadBalancers without annotations. With authenticated features enabled, a public LoadBalancer requires a single bounded source range, an explicit internal origin, or `publicOriginAcknowledged: true`. Multiple ranges without an internal origin require acknowledgement; the consumer doctor warns and the deployment doctor reports them as unverified. Generic Service annotations do not establish origin restriction. The consumer doctor also checks NetworkPolicy independently.
+
 If `fetcher.timeout` expires during individual analysis, private analysis state and traces are checkpointed for the next pass without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow the normal cache acceptance and bounded preliminary-retry policy. Explicit cancellation still rolls back uncommitted analysis state.
 
 Interactive server upgrades use a `Recreate` rollout. For non-Helm deployments, stop old server processes before starting replacements. Chat-only replicas require advisory locking, atomic rename, and file and directory synchronization on the shared filesystem.
@@ -231,7 +233,7 @@ The project owns generation limits and exact validators under `ai.fix_prs.agent_
 
 Each Fix Sandbox defaults to a `1Gi` memory limit and a `128Mi` memory request. Override these with `agentSandbox.fixRuntime.resources.limits.memory` and `agentSandbox.fixRuntime.resources.requests.memory`.
 
-When this runtime is enabled, Helm requires `ai.fix_prs.agent_runtime.timeout` in whole minutes from `1m` through `30m`. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts accept positive whole seconds or minutes within the execution timeout.
+Helm and project validation accept `ai.fix_prs.agent_runtime.timeout` as positive whole seconds or minutes up to `30m`, such as `90s` or `10m`. An omitted or empty timeout uses `10m`. Fractions, compound durations, leading zeros, and whitespace are rejected. An omitted or empty validator list runs the mandatory staged-diff check with a `1m` timeout; explicit validator timeouts use the same syntax and must fit within the execution timeout.
 
 The timeout bounds executor work, not image pull or VM startup. Admission pins the Pod deadline to that timeout plus a 2-minute startup allowance and 15-second result grace. Cleanup confirmation allows 90 seconds for Pod and VM termination; see [Fix generation deadlines](fix-prs.md#required-project-configuration) for the server and Sandbox shutdown bounds.
 

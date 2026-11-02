@@ -4,9 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 )
@@ -1256,6 +1259,57 @@ func validAgentSandboxModelProvider() FixModelProvider {
 	}
 }
 
+func TestAgentSandboxFixTimeoutParity(t *testing.T) {
+	data, err := os.ReadFile("testdata/fix-timeouts.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "|")
+		if len(fields) != 4 {
+			t.Fatalf("invalid timeout fixture %q", line)
+		}
+		t.Run(fields[0], func(t *testing.T) {
+			seconds, err := strconv.ParseInt(fields[3], 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime := &FixAgentRuntime{Type: "agent-sandbox", ModelProvider: validAgentSandboxModelProvider()}
+			input := "timeout: " + fields[1] + "\nallowed_commands:\n  - argv: [git, diff, --cached, --check]\n    timeout: " + fields[2] + "\n"
+			if err := yaml.Unmarshal([]byte(input), runtime); err != nil {
+				t.Fatal(err)
+			}
+			c := validConfig()
+			c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: runtime}}
+			err = c.Validate()
+			if seconds == 0 {
+				if err == nil || !strings.Contains(err.Error(), "ai.fix_prs.agent_runtime") {
+					t.Fatalf("validation = %v, want timeout rejection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			effective := c.EffectiveFixPRs().AgentRuntime
+			if got := effective.ParsedTimeout(); got != time.Duration(seconds)*time.Second {
+				t.Fatalf("timeout = %v, want %ds", got, seconds)
+			}
+			commands, err := effective.RuntimeCommands(effective.ParsedTimeout())
+			if err != nil {
+				t.Fatal(err)
+			}
+			commandTimeout, err := time.ParseDuration(runtime.AllowedCommands[0].Timeout)
+			if err != nil || commands[0].TimeoutSeconds != int64(commandTimeout/time.Second) {
+				t.Fatalf("commands = %+v, timeout = %v, error = %v", commands, commandTimeout, err)
+			}
+		})
+	}
+}
+
 func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 	newRuntime := func() *FixAgentRuntime {
 		no := false
@@ -1276,6 +1330,10 @@ func TestValidateAgentSandboxFixRuntime(t *testing.T) {
 			r.AllowedCommands = nil
 			r.OutputLimitBytes = 0
 		}, ""},
+		{"default command exceeds timeout", func(r *FixAgentRuntime) {
+			r.Timeout = "30s"
+			r.AllowedCommands = nil
+		}, "execution timeout"},
 		{"Responses provider", func(r *FixAgentRuntime) {
 			r.ModelProvider.API = "responses"
 			r.ModelProvider.Endpoint = "https://api.githubcopilot.com/responses"

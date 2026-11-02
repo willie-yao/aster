@@ -894,45 +894,72 @@ func TestKubernetesDoctorOAuthMismatchWithoutActions(t *testing.T) {
 
 func TestKubernetesDoctorPublicLoadBalancerOriginEvidence(t *testing.T) {
 	tests := []struct {
-		name    string
-		service string
-		status  KubernetesDoctorStatus
+		name     string
+		service  string
+		disabled bool
+		status   KubernetesDoctorStatus
+		detail   string
 	}{
-		{name: "source ranges pass", status: KubernetesDoctorPass, service: `  service:
-    type: LoadBalancer
-    loadBalancerSourceRanges:
-      - 192.0.2.0/24
-`},
-		{name: "internal contract passes", status: KubernetesDoctorPass, service: `  service:
-    type: LoadBalancer
-    internal:
-      enabled: true
-      annotations:
-        network.example.test/internal: "true"
-`},
-		{name: "provider annotation is unverified", status: KubernetesDoctorUnverified, service: `  service:
-    type: LoadBalancer
-    annotations:
-      network.example.test/origin-policy: reviewed-edge
-`},
-		{name: "explicit acknowledgement is unverified", status: KubernetesDoctorUnverified, service: `  service:
-    type: LoadBalancer
-    publicOriginAcknowledged: true
-`},
-		{name: "no evidence fails", status: KubernetesDoctorFail, service: `  service:
-    type: LoadBalancer
-`},
+		{name: "single bounded source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24]\n", status: KubernetesDoctorPass},
+		{name: "single bounded ipv6 source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [2001:db8::/32]\n", status: KubernetesDoctorPass},
+		{name: "universal ipv4 range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\n", status: KubernetesDoctorFail},
+		{name: "universal ipv6 range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/0']\n", status: KubernetesDoctorFail},
+		{name: "mapped ipv4 universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0.0.0.0/96']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped hexadecimal universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0:0/96']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped bounded source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:192.0.2.0/120']\n", status: KubernetesDoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "alternate ipv6 universal range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\n", status: KubernetesDoctorFail},
+		{name: "universal range acknowledged", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorFail},
+		{name: "empty source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['']\n", status: KubernetesDoctorFail},
+		{name: "invalid source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [invalid]\n", status: KubernetesDoctorFail},
+		{name: "leading whitespace source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [\" 192.0.2.0/24\"]\n", status: KubernetesDoctorFail},
+		{name: "trailing whitespace source range", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [\"192.0.2.0/24 \"]\n", status: KubernetesDoctorFail},
+		{name: "internal contract", service: "  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n      annotations:\n        network.example.test/internal: \"true\"\n", status: KubernetesDoctorPass},
+		{name: "internal missing annotations", service: "  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n", status: KubernetesDoctorFail},
+		{name: "generic annotations only", service: "  service:\n    type: LoadBalancer\n    annotations:\n      network.example.test/origin-policy: reviewed-edge\n", status: KubernetesDoctorFail},
+		{name: "explicit acknowledgement", service: "  service:\n    type: LoadBalancer\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorUnverified},
+		{name: "complementary ipv4 ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\n", status: KubernetesDoctorFail},
+		{name: "complementary ipv6 ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\n", status: KubernetesDoctorFail},
+		{name: "acknowledged complementary ipv4 ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorUnverified},
+		{name: "multiple bounded ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\n", status: KubernetesDoctorFail},
+		{name: "acknowledged multiple bounded ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorUnverified},
+		{name: "no evidence", service: "  service:\n    type: LoadBalancer\n", status: KubernetesDoctorFail},
+		{name: "node port ranges", service: "  service:\n    type: NodePort\n    loadBalancerSourceRanges: [192.0.2.0/24]\n", status: KubernetesDoctorFail},
+		{name: "cluster ip internal", service: "  service:\n    type: ClusterIP\n    internal:\n      enabled: true\n      annotations:\n        network.example.test/internal: \"true\"\n", status: KubernetesDoctorFail},
+		{name: "node port acknowledgement", service: "  service:\n    type: NodePort\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorFail},
+		{name: "unknown service type", service: "  service:\n    type: ExternalName\n", status: KubernetesDoctorFail},
+		{name: "cluster ip", service: "  service:\n    type: ClusterIP\n", status: KubernetesDoctorPass},
+		{name: "default service type", service: "  service: {}\n", status: KubernetesDoctorPass},
+		{name: "disabled public load balancer", service: "  service:\n    type: LoadBalancer\n", disabled: true, status: KubernetesDoctorPass},
+		{name: "disabled multiple ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\n", disabled: true, status: KubernetesDoctorPass},
+		{name: "disabled invalid origin", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\n", disabled: true, status: KubernetesDoctorFail},
+		{name: "disabled internal missing annotations", service: "  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n", disabled: true, status: KubernetesDoctorFail},
+		{name: "node port", service: "  service:\n    type: NodePort\n", status: KubernetesDoctorPass},
+		{name: "acknowledged complementary ipv6 ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\n    publicOriginAcknowledged: true\n", status: KubernetesDoctorUnverified},
+		{name: "internal with ranges", service: "  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\n    internal:\n      enabled: true\n      annotations:\n        network.example.test/internal: \"true\"\n", status: KubernetesDoctorPass},
+		{name: "whitespace service type", service: "  service:\n    type: \" LoadBalancer \"\n", status: KubernetesDoctorFail},
+		{name: "lowercase service type", service: "  service:\n    type: \"loadbalancer\"\n", status: KubernetesDoctorFail},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			values := strings.Replace(baselineValues(false), "  service:\n    type: ClusterIP\n", test.service, 1)
+			server := test.service
+			if !test.disabled {
+				server += "  actions:\n    enabled: true\n    mode: proxy\n"
+			}
+			values := strings.Replace(baselineValues(false), "  service:\n    type: ClusterIP\n", server, 1)
 			dir := writeDoctorBundle(t, values)
 			report := runDoctorForTest(t, dir, "install", baselineDoctorRunner(), baselineCluster(false))
 			assertDoctorCheck(t, report, "external origin restriction", test.status)
+			if test.detail != "" {
+				for _, check := range report.Checks {
+					if check.Name == "external origin restriction" && !strings.Contains(check.Detail, test.detail) {
+						t.Fatalf("origin detail = %q, want %q", check.Detail, test.detail)
+					}
+				}
+			}
 			if test.status == KubernetesDoctorUnverified {
 				for _, check := range report.Checks {
-					if check.Name == "external origin restriction" && strings.Contains(check.Detail, "unrestricted") {
-						t.Fatalf("annotation or acknowledgement was falsely described as unrestricted: %+v", check)
+					if check.Name == "external origin restriction" && !strings.Contains(check.Detail, "cannot be proven") {
+						t.Fatalf("acknowledgement was falsely described as proven restriction: %+v", check)
 					}
 				}
 			}
@@ -1228,6 +1255,83 @@ func TestWriteKubernetesDoctorReportBoundsTotalOutput(t *testing.T) {
 	}
 	if output.Len() > maxKubernetesDoctorOutputBytes || !strings.Contains(output.String(), "additional checks omitted") || !strings.Contains(output.String(), "kubernetes_doctor=pass") {
 		t.Fatalf("output length=%d tail=%q", output.Len(), output.String()[max(0, output.Len()-500):])
+	}
+}
+
+func TestKubernetesDoctorSelectedValues(t *testing.T) {
+	valid := baselineValues(false)
+	invalid := strings.Replace(valid, "accessMode: ReadWriteMany", "accessMode: ReadWriteOnce", 1)
+	for _, tc := range []struct {
+		name           string
+		absolute       bool
+		useDefault     bool
+		defaultValues  string
+		selectedValues string
+		wantStorage    KubernetesDoctorStatus
+		wantMissing    bool
+	}{
+		{name: "relative alternate only", selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "absolute alternate only", absolute: true, selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "invalid default valid alternate", defaultValues: invalid, selectedValues: valid, wantStorage: KubernetesDoctorPass},
+		{name: "valid default invalid alternate", defaultValues: valid, selectedValues: invalid, wantStorage: KubernetesDoctorFail},
+		{name: "missing selected with valid default", defaultValues: valid, wantMissing: true},
+		{name: "missing default with valid alternate", useDefault: true, selectedValues: valid, wantMissing: true},
+		{name: "default", useDefault: true, defaultValues: valid, wantStorage: KubernetesDoctorPass},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			storageDir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(storageDir, "logs", "fixture-job"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			projectYAML := strings.Replace(minimalProject, "testgrid_dashboard: test", "source: bucket", 1)
+			projectYAML = strings.Replace(projectYAML, "base: /tmp", "base: "+storageDir, 1)
+			writeFile(t, filepath.Join(dir, "project.yaml"), projectYAML)
+			writeFile(t, filepath.Join(dir, "prompts", "system.md"), "prompt")
+			if tc.defaultValues != "" {
+				writeFile(t, filepath.Join(dir, "deploy", "values.yaml"), tc.defaultValues)
+			}
+			valuesFile := filepath.Join("config", "production.yaml")
+			selectedPath := filepath.Join(dir, valuesFile)
+			if tc.absolute {
+				selectedPath = filepath.Join(t.TempDir(), "production.yaml")
+				valuesFile = selectedPath
+			}
+			if tc.selectedValues != "" {
+				writeFile(t, selectedPath, tc.selectedValues)
+			}
+			if tc.useDefault {
+				valuesFile = ""
+				selectedPath = filepath.Join(dir, "deploy", "values.yaml")
+			}
+			runner := baselineDoctorRunner()
+			cluster := baselineCluster(false)
+			report := runKubernetesDoctor(t.Context(), KubernetesDoctorOptions{
+				Action: "install", ProjectDir: dir, ValuesFile: valuesFile,
+				Release: "sample", Namespace: "sample", KubeContext: "test", Chart: "chart",
+			}, kubernetesDoctorDependencies{
+				runner:         runner,
+				clusterFactory: func(string) (clusterReader, error) { return cluster, nil },
+				consumerDoctor: onboard.Doctor,
+				readFile:       os.ReadFile,
+			})
+			if tc.wantMissing {
+				assertDoctorCheck(t, report, "deployment bundle", KubernetesDoctorFail)
+				if len(runner.commands) != 0 || len(cluster.calls) != 0 {
+					t.Fatalf("missing selected values reached Helm or cluster: %v, %v", runner.commands, cluster.calls)
+				}
+				if !strings.Contains(report.Checks[len(report.Checks)-1].Detail, selectedPath) {
+					t.Fatalf("missing values path absent from failure: %+v", report.Checks)
+				}
+				return
+			}
+			assertDoctorCheck(t, report, "consumer deployment", KubernetesDoctorPass)
+			assertDoctorCheck(t, report, "consumer Kubernetes storage", tc.wantStorage)
+			assertDoctorCheck(t, report, "consumer Prow discovery", KubernetesDoctorPass)
+			if len(runner.commands) != 1 || !containsPair(runner.commands[0].args, "--values", selectedPath) {
+				t.Fatalf("Helm did not use selected absolute path %q: %+v", selectedPath, runner.commands)
+			}
+		})
 	}
 }
 

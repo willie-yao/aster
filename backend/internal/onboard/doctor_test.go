@@ -213,11 +213,65 @@ ai:
 	}
 }
 
+func TestDoctor_ValuesFile(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativeProject, err := filepath.Rel(cwd, "/consumer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const valid = "persistence:\n  existingClaim: data\nai:\n  enabled: false\n"
+	const invalid = "persistence:\n  enabled: false\n"
+	for _, tc := range []struct {
+		name          string
+		projectDir    string
+		valuesFile    string
+		selectedPath  string
+		defaultValues string
+		want          DoctorStatus
+	}{
+		{name: "default", projectDir: "/consumer", selectedPath: "/consumer/deploy/values.yaml", want: DoctorPass},
+		{name: "blank default", projectDir: "/consumer", valuesFile: "  ", selectedPath: "/consumer/deploy/values.yaml", want: DoctorPass},
+		{name: "relative", projectDir: "/consumer/../consumer", valuesFile: "config/production.yaml", selectedPath: "/consumer/config/production.yaml", defaultValues: invalid, want: DoctorPass},
+		{name: "relative project", projectDir: "  " + relativeProject + "  ", valuesFile: "config/production.yaml", selectedPath: "/consumer/config/production.yaml", want: DoctorPass},
+		{name: "absolute", projectDir: "/consumer", valuesFile: "/external/values.yaml", selectedPath: "/external/values.yaml", defaultValues: invalid, want: DoctorPass},
+		{name: "missing selected", projectDir: "/consumer", valuesFile: "config/missing.yaml", defaultValues: valid, want: DoctorFail},
+		{name: "missing default", projectDir: "/consumer", selectedPath: "/consumer/config/production.yaml", want: DoctorFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := doctorFiles(nil)
+			if tc.defaultValues != "" {
+				files["/consumer/deploy/values.yaml"] = tc.defaultValues
+			}
+			if tc.selectedPath != "" {
+				files[tc.selectedPath] = valid
+			}
+			report := runDoctor(t.Context(), DoctorOptions{ProjectDir: tc.projectDir, ValuesFile: tc.valuesFile}, doctorDependencies{
+				files:   files,
+				sweeper: &doctorFakeSweeper{jobs: []models.ProwJob{{Name: "job"}}},
+			})
+			if report.ProjectDir != "/consumer" || !hasDoctorCheck(report, "deployment", tc.want) {
+				t.Fatalf("report = %+v", report)
+			}
+			if tc.want == DoctorPass {
+				if report.HasFailures() || !hasDoctorCheck(report, "Kubernetes storage", DoctorPass) {
+					t.Fatalf("checks = %+v", report.Checks)
+				}
+			} else if hasDoctorCheck(report, "Kubernetes storage", DoctorPass) {
+				t.Fatalf("missing values fell back to another file: %+v", report.Checks)
+			}
+		})
+	}
+}
+
 func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 	tests := []struct {
 		name       string
 		originYAML string
 		want       DoctorStatus
+		detail     string
 	}{
 		{name: "actions disabled", want: DoctorPass},
 		{name: "cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
@@ -236,17 +290,44 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 		{name: "cluster ip with does not exist expression", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\nnetworkPolicy:\n  enabled: true\n  ingress:\n    - from:\n        - namespaceSelector:\n            matchExpressions:\n              - key: blocked\n                operator: DoesNotExist\n", want: DoctorWarn},
 		{name: "chat cluster ip without network policy", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
 		{name: "escalation cluster ip without network policy", originYAML: "server:\n  pullRequestEscalation:\n    enabled: true\n  service:\n    type: ClusterIP\n", want: DoctorWarn},
-		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
-		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorWarn},
-		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
+		{name: "unrestricted public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorFail},
+		{name: "chat public load balancer", originYAML: "server:\n  chat:\n    enabled: true\n  service:\n    type: LoadBalancer\n", want: DoctorFail},
+		{name: "network policy only public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
 		{name: "acknowledged public load balancer", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    publicOriginAcknowledged: true\n", want: DoctorWarn},
-		{name: "universal source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
-		{name: "alternate ipv6 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
-		{name: "complementary ipv4 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorWarn},
-		{name: "complementary ipv6 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorWarn},
-		{name: "internal missing annotations", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorWarn},
+		{name: "universal source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
+		{name: "mapped ipv4 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0.0.0.0/96']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped hexadecimal universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:0:0/96']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "mapped bounded source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::ffff:192.0.2.0/120']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail, detail: "IPv4-mapped IPv6 CIDR"},
+		{name: "alternate ipv6 universal range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['0:0:0:0:0:0:0:0/0']\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
+		{name: "complementary ipv4 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "complementary ipv6 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "internal missing annotations", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n", want: DoctorFail},
 		{name: "source ranges and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [10.0.0.0/8]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
 		{name: "internal and network policy", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "empty source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['']\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "invalid source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [invalid]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "leading whitespace source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [\" 192.0.2.0/24\"]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "trailing whitespace source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [\"192.0.2.0/24 \"]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "ipv6 universal range acknowledged", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/0']\n    publicOriginAcknowledged: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "acknowledged complementary ipv4 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\n    publicOriginAcknowledged: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorWarn},
+		{name: "acknowledged multiple bounded ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\n    publicOriginAcknowledged: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorWarn},
+		{name: "multiple bounded ranges without acknowledgement", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "generic annotations only", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    annotations:\n      example.com/origin-policy: reviewed\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "internal with ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [192.0.2.0/24, 198.51.100.0/24]\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: \"true\"\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "node port ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: NodePort\n    loadBalancerSourceRanges: [192.0.2.0/24]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "cluster ip internal", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ClusterIP\n    internal:\n      enabled: true\n      annotations:\n        example.com/internal: \"true\"\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "node port acknowledgement", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: NodePort\n    publicOriginAcknowledged: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "unknown service type", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: ExternalName\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "disabled public load balancer", originYAML: "server:\n  actions:\n    enabled: false\n  service:\n    type: LoadBalancer\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "disabled multiple ranges", originYAML: "server:\n  actions:\n    enabled: false\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/1, 128.0.0.0/1]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "disabled invalid origin", originYAML: "server:\n  actions:\n    enabled: false\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [0.0.0.0/0]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "disabled internal missing annotations", originYAML: "server:\n  actions:\n    enabled: false\n  service:\n    type: LoadBalancer\n    internal:\n      enabled: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorFail},
+		{name: "whitespace service type", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: \" LoadBalancer \"\n", want: DoctorFail},
+		{name: "lowercase service type", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: \"loadbalancer\"\n", want: DoctorFail},
+		{name: "default cluster ip without network policy", originYAML: "server:\n  actions:\n    enabled: true\n", want: DoctorWarn},
+		{name: "node port", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: NodePort\n", want: DoctorWarn},
+		{name: "single bounded ipv6 source range", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: [2001:db8::/32]\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorPass},
+		{name: "acknowledged complementary ipv6 ranges", originYAML: "server:\n  actions:\n    enabled: true\n  service:\n    type: LoadBalancer\n    loadBalancerSourceRanges: ['::/1', '8000::/1']\n    publicOriginAcknowledged: true\nnetworkPolicy:\n  enabled: true\n  ingress: []\n", want: DoctorWarn},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -257,6 +338,13 @@ func TestDoctor_KubernetesOriginSecurity(t *testing.T) {
 			})
 			if !hasDoctorCheck(report, "Kubernetes origin security", test.want) {
 				t.Fatalf("checks = %+v", report.Checks)
+			}
+			if test.detail != "" {
+				for _, check := range report.Checks {
+					if check.Name == "Kubernetes origin security" && !strings.Contains(check.Detail, test.detail) {
+						t.Fatalf("origin detail = %q, want %q", check.Detail, test.detail)
+					}
+				}
 			}
 		})
 	}

@@ -715,8 +715,8 @@ type FixAgentRuntime struct {
 	ModelProvider FixModelProvider `yaml:"model_provider,omitempty" json:"model_provider,omitempty"`
 	// OutputLimitBytes bounds the structured executor result. Defaults to 512 KiB.
 	OutputLimitBytes int64 `yaml:"output_limit_bytes,omitempty" json:"output_limit_bytes,omitempty"`
-	// Timeout bounds the whole generation, e.g. "10m". Empty uses the Runtime
-	// default.
+	// Timeout bounds generation in positive whole seconds or minutes, up to 30m.
+	// Empty uses the 10m default.
 	Timeout string `yaml:"timeout,omitempty" json:"-"`
 }
 
@@ -762,7 +762,7 @@ func (r *FixAgentRuntime) RuntimeCommands(overall time.Duration) ([]agentruntime
 				return nil, fmt.Errorf("allowed command %d: %w", index, err)
 			}
 		}
-		timeout, err := parseFixAgentCommandTimeout(value.Timeout)
+		timeout, err := parseFixAgentTimeout(value.Timeout)
 		if err != nil {
 			return nil, fmt.Errorf("allowed command %d timeout: %w", index, err)
 		}
@@ -780,7 +780,7 @@ func (r *FixAgentRuntime) RuntimeCommands(overall time.Duration) ([]agentruntime
 	return commands, nil
 }
 
-func parseFixAgentCommandTimeout(value string) (time.Duration, error) {
+func parseFixAgentTimeout(value string) (time.Duration, error) {
 	if value == "" || value != strings.TrimSpace(value) || len(value) < 2 {
 		return 0, fmt.Errorf("must use positive whole seconds or minutes")
 	}
@@ -810,7 +810,7 @@ func (a *FixAgentRuntime) ParsedTimeout() time.Duration {
 	if a == nil {
 		return 0
 	}
-	d, err := time.ParseDuration(strings.TrimSpace(a.Timeout))
+	d, err := parseFixAgentTimeout(a.Timeout)
 	if err != nil {
 		return 0
 	}
@@ -887,7 +887,7 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 		}
 		zero := 0
 		out.CritiqueRetries = &zero
-		if strings.TrimSpace(out.AgentRuntime.Timeout) == "" {
+		if out.AgentRuntime.Timeout == "" {
 			out.AgentRuntime.Timeout = "10m"
 		}
 		if out.AgentRuntime.OutputLimitBytes == 0 {
@@ -1529,13 +1529,13 @@ func (c *Config) Validate() error {
 			if ar.MaxTurns < 0 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be >= 0")
 			}
-			var timeout time.Duration
-			hasTimeout := strings.TrimSpace(ar.Timeout) != ""
-			if value := strings.TrimSpace(ar.Timeout); value != "" {
-				var err error
-				timeout, err = time.ParseDuration(value)
+			if ar.Timeout != "" {
+				timeout, err := parseFixAgentTimeout(ar.Timeout)
 				if err != nil {
-					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout %q is not a valid duration", ar.Timeout)
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout: %w", err)
+				}
+				if timeout > 30*time.Minute {
+					return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be at most 30m")
 				}
 			}
 			if runtimeType != "" && runtimeType != "agent-sandbox" {
@@ -1564,9 +1564,6 @@ func (c *Config) Validate() error {
 			}
 			if ar.MaxTurns > 1000 {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.max_turns must be 0 or between 1 and 1000")
-			}
-			if hasTimeout && (timeout <= 0 || timeout > 30*time.Minute) {
-				return fmt.Errorf("ai.fix_prs.agent_runtime.timeout must be greater than zero and at most 30m")
 			}
 		}
 	}

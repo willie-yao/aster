@@ -250,20 +250,61 @@ expect_fail escalation-replicas "$replica_error" \
   --set server.actions.mode=proxy
 grep -Fq "$replica_error" "$tmp/escalation-replicas.out"
 
-# Escalation must not leak a GitHub read token into a server that cannot use it.
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set ai.enabled=true \
-  --set ai.endpoint=https://model.example.test/v1/chat/completions \
-  --set ai.model=fixture-model \
-  --set ai.token=test-token \
-  --set ai.githubReadTokenSecretName=read-token \
-  --set server.chat.enabled=true \
-  --set server.actions.mode=proxy \
-  --show-only templates/server-deployment.yaml > "$tmp/escalation-off.yaml"
-if grep -Fq 'name: PULL_REQUEST_ESCALATION_ENABLED' "$tmp/escalation-off.yaml" || grep -Fq 'name: GITHUB_READ_TOKEN' "$tmp/escalation-off.yaml"; then
-  echo 'chat-only render leaked escalation environment' >&2
-  exit 1
-fi
+# Chat and escalation use the read token without enabling write actions.
+for feature in chat escalation combined disabled; do
+  chat=false
+  escalation=false
+  case "$feature" in
+    chat) chat=true ;;
+    escalation) escalation=true ;;
+    combined) chat=true; escalation=true ;;
+  esac
+  for credential in inline existing unset; do
+    read_token=""
+    read_token_secret=""
+    secret_name=test-prow-ai-dashboard-github-read
+    case "$credential" in
+      inline) read_token=fixture-read-token ;;
+      existing)
+        read_token_secret=fixture-github-read
+        secret_name=fixture-github-read
+        ;;
+    esac
+    rendered="$tmp/read-token-$feature-$credential.yaml"
+    helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+      --set ai.enabled=true \
+      --set ai.endpoint=https://model.example.test/v1/chat/completions \
+      --set ai.model=fixture-model \
+      --set ai.token=test-token \
+      --set ai.githubReadTokenSecretKey=source-token \
+      --set server.chat.enabled="$chat" \
+      --set server.pullRequestEscalation.enabled="$escalation" \
+      --set server.actions.mode=proxy \
+      --set ai.githubReadToken="$read_token" \
+      --set ai.githubReadTokenSecretName="$read_token_secret" \
+      --show-only templates/server-deployment.yaml > "$rendered"
+    if [[ "$feature" != disabled && "$credential" != unset ]]; then
+      test "$(grep -Fc 'name: GITHUB_READ_TOKEN' "$rendered")" -eq 1
+      grep -A4 -F 'name: GITHUB_READ_TOKEN' "$rendered" | grep -Fq "name: $secret_name"
+      grep -A4 -F 'name: GITHUB_READ_TOKEN' "$rendered" | grep -Fq 'key: source-token'
+      if grep -Fq 'optional: true' "$rendered"; then
+        echo "read token Secret is optional: $feature/$credential" >&2
+        exit 1
+      fi
+    elif grep -Fq 'name: GITHUB_READ_TOKEN' "$rendered"; then
+      echo "unused or unconfigured read token rendered: $feature/$credential" >&2
+      exit 1
+    fi
+    if grep -Fq 'name: BOT_TOKEN' "$rendered" || grep -Fq 'name: ACTIONS_ENABLED' "$rendered"; then
+      echo "read-only features rendered write-action credentials: $feature/$credential" >&2
+      exit 1
+    fi
+    if [[ "$escalation" == false ]] && grep -Fq 'name: PULL_REQUEST_ESCALATION_ENABLED' "$rendered"; then
+      echo "disabled escalation environment rendered: $feature/$credential" >&2
+      exit 1
+    fi
+  done
+done
 
 expect_fail escalation-without-ai 'server.pullRequestEscalation.enabled requires ai.enabled' --set server.pullRequestEscalation.enabled=true --set server.actions.mode=proxy
 expect_fail escalation-raw-env 'server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED' \
@@ -280,6 +321,60 @@ expect_fail escalation-public-load-balancer 'authenticated server features with 
   --set server.pullRequestEscalation.enabled=true \
   --set server.actions.mode=proxy \
   --set server.service.type=LoadBalancer
+
+# These real-CIDR exposure cases also run through both Go doctors.
+origin_args=(--set server.actions.enabled=true --set server.actions.mode=proxy --set server.actions.proxy.existingSecret=origin-test-auth --set server.service.type=LoadBalancer)
+for cidr in '0.0.0.0/0' '::/0' '0:0:0:0:0:0:0:0/0'; do
+  expect_fail origin-universal-range 'must not contain universal CIDRs' \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=[\"$cidr\"]"
+done
+expect_fail origin-universal-acknowledged 'must not contain universal CIDRs' \
+  "${origin_args[@]}" --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/0"]' \
+  --set server.service.publicOriginAcknowledged=true
+expect_fail origin-empty-range 'must not contain empty entries' \
+  "${origin_args[@]}" --set-json 'server.service.loadBalancerSourceRanges=[""]'
+for ranges in '["0.0.0.0/1","128.0.0.0/1"]' '["::/1","8000::/1"]' '["192.0.2.0/24","198.51.100.0/24"]'; do
+  expect_fail origin-multiple-ranges 'multiple loadBalancerSourceRanges require publicOriginAcknowledged=true' \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=$ranges"
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=$ranges" \
+    --set server.service.publicOriginAcknowledged=true > "$tmp/origin-multiple-acknowledged.yaml"
+done
+for cidr in '192.0.2.0/24' '2001:db8::/32'; do
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    "${origin_args[@]}" --set-json "server.service.loadBalancerSourceRanges=[\"$cidr\"]" \
+    > "$tmp/origin-single-range.yaml"
+  grep -Fq "$cidr" "$tmp/origin-single-range.yaml"
+done
+expect_fail origin-internal-without-annotations 'internal.annotations is required' \
+  "${origin_args[@]}" --set server.service.internal.enabled=true
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${origin_args[@]}" --set server.service.internal.enabled=true \
+  --set-json 'server.service.internal.annotations={"network.example.test/internal":"true"}' \
+  > "$tmp/origin-internal.yaml"
+grep -Fq 'network.example.test/internal: "true"' "$tmp/origin-internal.yaml"
+expect_fail origin-generic-annotations 'authenticated server features with a LoadBalancer require' \
+  "${origin_args[@]}" --set-json 'server.service.annotations={"network.example.test/origin-policy":"reviewed"}'
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  "${origin_args[@]}" --set server.service.publicOriginAcknowledged=true \
+  > "$tmp/origin-public-acknowledged.yaml"
+expect_fail origin-nodeport-ranges 'loadBalancerSourceRanges requires server.service.type=LoadBalancer' \
+  --set server.service.type=NodePort --set-json 'server.service.loadBalancerSourceRanges=["192.0.2.0/24"]'
+expect_fail origin-clusterip-internal 'internal.enabled requires server.service.type=LoadBalancer' \
+  --set server.service.internal.enabled=true \
+  --set-json 'server.service.internal.annotations={"network.example.test/internal":"true"}'
+expect_fail origin-nodeport-acknowledgement 'publicOriginAcknowledged applies only to LoadBalancer' \
+  --set server.service.type=NodePort --set server.service.publicOriginAcknowledged=true
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.service.type=LoadBalancer > "$tmp/origin-disabled-public.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+  --set server.service.type=LoadBalancer \
+  --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/1","128.0.0.0/1"]' \
+  > "$tmp/origin-disabled-multiple.yaml"
+expect_fail origin-disabled-universal 'must not contain universal CIDRs' \
+  --set server.service.type=LoadBalancer --set-json 'server.service.loadBalancerSourceRanges=["0.0.0.0/0"]'
+expect_fail origin-disabled-internal-without-annotations 'internal.annotations is required' \
+  --set server.service.type=LoadBalancer --set server.service.internal.enabled=true
 
 # The whole chart must install for escalation alone: the Deployment references
 # the OAuth auth Secret, so secret-auth.yaml has to render it too.
@@ -449,6 +544,29 @@ sed 's/timeout: 10m/timeout: 30m/' "$tmp/agent-sandbox.yaml" > "$tmp/agent-sandb
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox-max-timeout-values.yaml" \
   -s templates/agent-sandbox-fix-runtime-admission.yaml > "$tmp/agent-sandbox-max-timeout.yaml"
 grep -Fq 'variables.pod.activeDeadlineSeconds == 1935' "$tmp/agent-sandbox-max-timeout.yaml"
+while IFS='|' read -r name timeout command_timeout seconds; do
+  [[ $name == \#* ]] && continue
+  sed -e "s/^          timeout: 10m$/          timeout: $timeout/" \
+    -e "s/^              timeout: 30s$/              timeout: $command_timeout/" \
+    "$tmp/agent-sandbox.yaml" > "$tmp/timeout-$name-values.yaml"
+  if [ "$seconds" -eq 0 ]; then
+    expect_fail "timeout-$name" 'project ai.fix_prs.agent_runtime.' -f "$tmp/timeout-$name-values.yaml"
+    continue
+  fi
+  helm template test "$chart" -n dashboard-test -f "$tmp/timeout-$name-values.yaml" > "$tmp/timeout-$name.yaml"
+  grep -Fq "variables.pod.activeDeadlineSeconds == $((seconds + 135))" "$tmp/timeout-$name.yaml"
+  case "$name" in
+    empty-default|null-default) expected_timeout=10m ;;
+    *) expected_timeout=$timeout ;;
+  esac
+  grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-$name.yaml" | grep -Fq "value: \"$expected_timeout\""
+done < "$root/backend/internal/project/testdata/fix-timeouts.txt"
+grep -Fq 'variables.pod.activeDeadlineSeconds == 225' "$tmp/timeout-seconds.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-seconds.yaml" | grep -Fq 'value: "90s"'
+sed '/timeout: 10m/d' "$tmp/agent-sandbox.yaml" > "$tmp/timeout-omitted-values.yaml"
+helm template test "$chart" -n dashboard-test -f "$tmp/timeout-omitted-values.yaml" > "$tmp/timeout-omitted.yaml"
+grep -A1 -F 'name: AGENT_SANDBOX_TIMEOUT' "$tmp/timeout-omitted.yaml" | grep -Fq 'value: "10m"'
+grep -Fq 'variables.pod.activeDeadlineSeconds == 735' "$tmp/timeout-omitted.yaml"
 grep -Fq 'apiGroups: ["agents.x-k8s.io"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["sandboxes"]' "$tmp/agent-sandbox-render.yaml"
 grep -Fq 'resources: ["pods/log"]' "$tmp/agent-sandbox-render.yaml"
@@ -573,6 +691,9 @@ PROJECT
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \
   --set-file project.config="$tmp/project-agent-default.yaml" > "$tmp/agent-sandbox-default-command.yaml"
 grep -Fq 'kind: ValidatingAdmissionPolicy' "$tmp/agent-sandbox-default-command.yaml"
+sed 's/timeout: 10m/timeout: 30s/' "$tmp/project-agent-default.yaml" > "$tmp/project-agent-short-timeout.yaml"
+expect_fail agent-sandbox-default-command-timeout 'exceeds the execution timeout' \
+  -f "$tmp/agent-sandbox.yaml" --set-file project.config="$tmp/project-agent-short-timeout.yaml"
 awk '/^      max_turns: 30$/ { print; print "      allowed_commands: []"; next } { print }' \
   "$tmp/project-agent-default.yaml" > "$tmp/project-agent-empty-command.yaml"
 helm template test "$chart" -n dashboard-test -f "$tmp/agent-sandbox.yaml" \

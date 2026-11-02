@@ -336,8 +336,8 @@ func validateAgentSandboxOptions(opts AgentSandboxOptions) error {
 			return fmt.Errorf("agent sandbox model provider CA bundle is Fix-runtime only")
 		}
 	}
-	if opts.Timeout <= 0 || opts.Timeout > 30*time.Minute {
-		return fmt.Errorf("agent sandbox timeout must be greater than zero and at most 30m")
+	if opts.Timeout <= 0 || opts.Timeout > 30*time.Minute || opts.Timeout%time.Second != 0 {
+		return fmt.Errorf("agent sandbox timeout must use positive whole seconds and be at most 30m")
 	}
 	if opts.OutputLimitBytes < 4<<10 || opts.OutputLimitBytes > 1<<20 {
 		return fmt.Errorf("agent sandbox output limit must be between 4096 and 1048576")
