@@ -203,6 +203,8 @@ type Service struct {
 	requestConfirms           map[string]struct{}
 	requestDone               map[string]chan struct{}
 	requestCleanups           map[string]struct{}
+	cleanupContext            context.Context
+	stopCleanup               context.CancelFunc
 	requestsConfigured        bool
 	stopping                  bool
 	requestWG                 sync.WaitGroup
@@ -218,6 +220,7 @@ type Service struct {
 // NewService builds a Service. dataDir is the fetcher output directory holding
 // jobs/*.json and the *_state.json files.
 func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
+	cleanupContext, stopCleanup := context.WithCancel(context.Background())
 	s := &Service{
 		cfg: cfg, dataDir: dataDir, ai: ai,
 		previewStore: newPreviewStore(dataDir),
@@ -228,6 +231,7 @@ func NewService(cfg *project.Config, dataDir string, ai AIConfig) *Service {
 		requestCancels: map[string]context.CancelFunc{}, requestConfirms: map[string]struct{}{}, requestDone: map[string]chan struct{}{}, requestCleanups: map[string]struct{}{}, requestNotifyCancels: map[string]context.CancelFunc{},
 		requestTimeout: defaultRequestTimeout, requestStateWriter: statefile.WritePrivateJSONDurable,
 		fixActionsEnabled: true,
+		cleanupContext:    cleanupContext, stopCleanup: stopCleanup,
 	}
 	s.sourceVerifier = actionverify.Verify
 	s.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {

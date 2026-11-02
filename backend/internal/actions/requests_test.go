@@ -738,7 +738,7 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- service.Wait(context.Background()) }()
 	stopServer()
-	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	final := waitRequest(t, service, created.ID, "alice", RequestCancelling)
 	if final.Preview != nil {
 		t.Fatalf("shutdown final=%+v", final)
 	}
@@ -758,8 +758,15 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 	fake.mu.Lock()
 	refs := slices.Clone(fake.refs)
 	fake.mu.Unlock()
-	if len(refs) != 1 || refs[0].Name != "shutdown-task" || refs[0].UID != "shutdown-uid" || refs[0].ExecutionID != created.ID {
-		t.Fatalf("cleanup refs = %+v", refs)
+	if len(refs) != 0 {
+		t.Fatalf("cleanup started after shutdown: %+v", refs)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	reloaded.ConfigureAsyncRequests(time.Minute, nil)
+	waitRequest(t, reloaded, created.ID, "alice", RequestFailed)
+	if err := reloaded.Wait(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1763,15 +1770,30 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "old-uid", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "old-uid", ExecutionID: id}, RequestHash: "identity-hash",
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestFailed || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
+	if err != nil || view.Status != RequestCancelling || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
 		view.Failure == nil || view.Failure.Category != AnalysisFixFailureSafetyIntegrity {
 		t.Fatalf("view=%+v err=%v", view, err)
 	}
-	if _, err = service.CancelRequest(context.Background(), id, "alice"); err == nil {
-		t.Fatal("failed identity-change cleanup was reported as cancelled")
+	if view, err = service.CancelRequest(context.Background(), id, "alice"); err != nil || view.Status != RequestCancelling {
+		t.Fatalf("blocked cancellation view=%+v err=%v", view, err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	reloaded.ConfigureAsyncRequests(time.Minute, nil)
+	if err := reloaded.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	record := reloaded.requests.Requests[id]
+	if record == nil || record.Status != RequestCancelling || record.Runtime == nil || record.Runtime.UID != "old-uid" || record.Cleanup == nil || !record.Cleanup.Blocked {
+		t.Fatalf("blocked cleanup obligation = %+v", record)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.refs) != 1 {
+		t.Fatalf("identity mismatch retried: %+v", fake.refs)
 	}
 }
 

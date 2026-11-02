@@ -24,6 +24,7 @@ import (
 )
 
 type actionCleanupState struct {
+	Blocked     bool                    `json:"blocked,omitempty"`
 	FinalStatus string                  `json:"final_status"`
 	Reason      string                  `json:"reason,omitempty"`
 	ReasonCode  ReasonCode              `json:"reason_code,omitempty"`
@@ -502,13 +503,22 @@ func (s *Service) expireRequestsLocked(now time.Time) bool {
 			continue
 		}
 		if request.Status == RequestPending || request.Status == RequestCancelling {
+			if request.Status == RequestCancelling && request.Cleanup != nil && request.Cleanup.FinalStatus == RequestExpired {
+				continue
+			}
 			if request.Status == RequestPending {
 				request.Status = RequestCancelling
 				if cancel := s.requestCancels[id]; cancel != nil {
 					cancel()
 				}
 			}
-			request.Cleanup = &actionCleanupState{FinalStatus: RequestExpired, Reason: "action request expired during runtime cleanup", RequestedAt: now.Format(time.RFC3339)}
+			cleanup := actionCleanupState{RequestedAt: now.Format(time.RFC3339)}
+			if request.Cleanup != nil {
+				cleanup = *request.Cleanup
+			}
+			cleanup.FinalStatus = RequestExpired
+			cleanup.Reason = "action request expired during runtime cleanup"
+			request.Cleanup = &cleanup
 			request.UpdatedAt = now.Format(time.RFC3339)
 			changed = true
 			if s.requestsConfigured && s.registerCleanupLocked(id) {

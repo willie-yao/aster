@@ -11,6 +11,10 @@ import (
 )
 
 func (s *Service) registerCleanupLocked(id string) bool {
+	request := s.requests.Requests[id]
+	if s.stopping || request == nil || request.Status != RequestCancelling || request.Cleanup != nil && request.Cleanup.Blocked {
+		return false
+	}
 	if s.requestCleanups == nil {
 		s.requestCleanups = map[string]struct{}{}
 	}
@@ -47,24 +51,30 @@ func (s *Service) launchCleanup(id string) {
 	go func() {
 		defer s.releaseCleanup(id)
 		backoff := 250 * time.Millisecond
-		for {
-			ctx, cancel := context.WithTimeout(context.Background(), defaultRuntimeCleanupTimeout)
-			view, err := s.cleanupRequest(ctx, id)
-			cancel()
+		for s.cleanupContext.Err() == nil {
+			view, err := s.cleanupRequest(s.cleanupContext, id)
 			current := s.currentRequestView(id)
 			if current.Status != RequestCancelling && view.Status != RequestCancelling {
 				return
 			}
 			if errors.Is(err, runtime.ErrWorkIdentityChanged) {
-				if s.markCleanupBlocked(id) {
-					return
-				}
-				err = runtime.ErrCleanupPending
+				s.markCleanupBlocked(id)
+				return
 			}
 			if err != nil {
+				if s.cleanupContext.Err() != nil {
+					return
+				}
+				s.markCleanupPending(id)
 				log.Printf("action request %s: runtime cleanup retry: %v", id, err)
 			}
-			time.Sleep(backoff)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-s.cleanupContext.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 			if backoff < 5*time.Second {
 				backoff *= 2
 				if backoff > 5*time.Second {
@@ -75,34 +85,55 @@ func (s *Service) launchCleanup(id string) {
 	}()
 }
 
-func (s *Service) markCleanupBlocked(id string) bool {
+func (s *Service) markCleanupPending(id string) {
 	s.rmu.Lock()
+	defer s.rmu.Unlock()
 	request := s.requests.Requests[id]
-	if request == nil || request.Status != RequestCancelling {
-		s.rmu.Unlock()
-		return true
+	if request == nil || request.Status != RequestCancelling || request.Cleanup != nil && request.Cleanup.Blocked {
+		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	const message = "Runtime cleanup is pending. The server will retry while it is running."
+	if request.Error == message {
+		return
+	}
 	previous := *request
-	cleanup := &actionCleanupState{FinalStatus: RequestFailed, Reason: "runtime work identity changed during cleanup", RequestedAt: now}
-	if request.Kind == requestKindAnalysisFix {
-		cleanup.ReasonCode = ReasonGenerationFailed
-		cleanup.Failure = &AnalysisFixFailureView{Category: AnalysisFixFailureSafetyIntegrity}
-	}
-	request.Cleanup = cleanup
-	request.UpdatedAt = now
+	request.Error = message
+	request.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.saveRequestsLocked(); err != nil {
 		*request = previous
+		log.Printf("action request %s: persist pending cleanup: %v", id, err)
+	}
+}
+
+func (s *Service) markCleanupBlocked(id string) {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	request := s.requests.Requests[id]
+	if request == nil || request.Status != RequestCancelling {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	cleanup := actionCleanupState{FinalStatus: RequestCancelled, RequestedAt: now}
+	if request.Cleanup != nil {
+		cleanup = *request.Cleanup
+	}
+	cleanup.Blocked = true
+	request.Error = "Runtime cleanup is blocked because the work identity changed. An operator must inspect the retained cleanup record."
+	if request.Kind == requestKindAnalysisFix {
+		request.ReasonCode = ReasonGenerationFailed
+		if validReasonCode(cleanup.ReasonCode) {
+			request.ReasonCode = cleanup.ReasonCode
+		}
+		request.Failure = cloneAnalysisFixFailureView(cleanup.Failure)
+		if request.Failure == nil {
+			request.Failure = &AnalysisFixFailureView{Category: AnalysisFixFailureSafetyIntegrity}
+		}
+	}
+	request.Cleanup = &cleanup
+	request.UpdatedAt = now
+	if err := s.saveRequestsLocked(); err != nil {
 		log.Printf("action request %s: persist identity-change cleanup: %v", id, err)
-		s.rmu.Unlock()
-		return false
 	}
-	s.rmu.Unlock()
-	if _, err := s.finalizeCleanup(id); err != nil {
-		log.Printf("action request %s: finalize identity-change cleanup: %v", id, err)
-		return false
-	}
-	return true
 }
 
 func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestView, error) {
@@ -110,14 +141,19 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeout(ctx, defaultRuntimeCleanupTimeout)
 	defer cancel()
+	stop := context.AfterFunc(s.cleanupContext, cancel)
+	defer stop()
 	for {
+		if err := ctx.Err(); err != nil {
+			return s.currentRequestView(id), err
+		}
 		s.rmu.Lock()
 		request := s.requests.Requests[id]
 		if request == nil {
 			s.rmu.Unlock()
 			return ActionRequestView{}, ErrRequestNotFound
 		}
-		if request.Status != RequestCancelling {
+		if request.Status != RequestCancelling || request.Cleanup != nil && request.Cleanup.Blocked {
 			view := request.ActionRequestView
 			s.rmu.Unlock()
 			return view, nil
@@ -282,6 +318,7 @@ func (s *Service) transitionToCleanupWithFailure(
 func (s *Service) stopActiveRequests() {
 	s.rmu.Lock()
 	s.stopping = true
+	s.stopCleanup()
 	var ids []string
 	var cancels []context.CancelFunc
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -306,9 +343,6 @@ func (s *Service) stopActiveRequests() {
 	for _, cancel := range cancels {
 		cancel()
 	}
-	for _, id := range ids {
-		s.startCleanup(id)
-	}
 }
 
 // cleanupCancellingRequest cleans up a cancelling request inline and hands it to
@@ -331,7 +365,12 @@ func (s *Service) cleanupCancellingRequest(ctx context.Context, id string) (Acti
 	}()
 	view, err := s.cleanupRequest(ctx, id)
 	if err != nil && s.currentRequestView(id).Status == RequestCancelling {
-		retry = !errors.Is(err, runtime.ErrWorkIdentityChanged) || !s.markCleanupBlocked(id)
+		if errors.Is(err, runtime.ErrWorkIdentityChanged) {
+			s.markCleanupBlocked(id)
+		} else {
+			s.markCleanupPending(id)
+			retry = s.cleanupContext.Err() == nil
+		}
 		// Report the state observed before any retry starts so the response does
 		// not depend on how quickly the retry goroutine runs.
 		view, err = s.currentRequestView(id), nil

@@ -272,19 +272,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: an existing action for this failure has an unknown GitHub outcome", ErrPreviewOutcomeUnknown)
 	}
-	pending := 0
-	active := 0
-	for existingID, existing := range s.requests.Requests {
-		if existingID == supersedesID {
-			continue
-		}
-		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
-			pending++
-		}
-		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
-			active++
-		}
-	}
+	pending, active := s.admissionCountsLocked(owner, kind, supersedesID)
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
@@ -444,19 +432,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 			}
 		}
 	}
-	pending := 0
-	active := 0
-	for _, existing := range s.requests.Requests {
-		if existing == nil {
-			continue
-		}
-		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
-			pending++
-		}
-		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
-			active++
-		}
-	}
+	pending, active := s.admissionCountsLocked(owner, requestKindAnalysisFix, "")
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
@@ -493,6 +469,26 @@ func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 		clone.ProposedRevision = &revision
 	}
 	return &clone
+}
+
+func (s *Service) admissionCountsLocked(owner, kind, supersedesID string) (pending, active int) {
+	for id, request := range s.requests.Requests {
+		if request == nil || id == supersedesID {
+			continue
+		}
+		cleanupOnlyFix := request.Status == RequestCancelling &&
+			(request.Kind == "propose-fix" || request.Kind == requestKindAnalysisFix) && s.requestDone[id] == nil
+		if kind == "create-issue" && cleanupOnlyFix {
+			continue
+		}
+		if (request.Status == RequestPending || request.Status == RequestCancelling) && request.Owner == owner {
+			pending++
+		}
+		if request.Status == RequestPending || request.Status == RequestCancelling || request.Status == RequestReady || request.Status == RequestUnknown {
+			active++
+		}
+	}
+	return pending, active
 }
 
 // GetRequest returns one request only to its owning admin.
