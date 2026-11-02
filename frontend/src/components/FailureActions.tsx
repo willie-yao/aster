@@ -974,8 +974,7 @@ export function FailureActions({
                     Stopping runtime work
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
-                    This request remains active until the server confirms that
-                    its runtime work has stopped.
+                    {actionRequestProgressDetail(request, isFix)}
                   </Typography>
                 </Box>
               </Stack>

@@ -204,17 +204,22 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		}
 	}
 
-	if ctx.Err() != nil || errors.Is(err, runtime.ErrCleanupPending) {
+	s.rmu.Lock()
+	request = s.requests.Requests[id]
+	hasRuntime := request != nil && request.Runtime != nil
+	s.rmu.Unlock()
+	if ctx.Err() != nil || errors.Is(err, runtime.ErrCleanupPending) || err != nil && hasRuntime {
 		if analysisRequest && input.analysisFix != nil {
 			_ = s.previewStore.revoke(input.owner, idempotentPreviewToken(input.owner, input.analysisFix.PreviewRequestHash))
 		}
 		failure := analysisFixFailureView(err)
-		reason := "draft runtime cleanup did not complete"
+		reasonCode := ReasonCodeOf(err)
+		reason := generationFailureMessage(analysisRequest, reasonCode, failure, err)
 		if ctx.Err() != nil || failure != nil && failure.Category == AnalysisFixFailureTimedOut {
 			reason = "draft generation timed out"
 		}
-		reasonCode := ReasonGenerationFailed
 		if ctx.Err() != nil {
+			reasonCode = ReasonGenerationFailed
 			if failure == nil {
 				failure = &AnalysisFixFailureView{}
 			}
@@ -224,7 +229,11 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		logGenerationFailure(id, reasonCode, failure, err)
 		_, transitionErr := s.transitionToCleanupWithFailure(id, RequestFailed, reason, reasonCode, failure)
 		if transitionErr == nil {
-			needsCleanup = true
+			if errors.Is(err, runtime.ErrWorkIdentityChanged) {
+				s.markCleanupBlocked(id)
+			} else {
+				needsCleanup = true
+			}
 		} else {
 			log.Printf("action request %s: persist timeout cleanup: %v", id, transitionErr)
 		}

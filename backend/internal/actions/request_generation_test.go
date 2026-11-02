@@ -9,14 +9,96 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 )
+
+func TestGenerationFailureRetainsRuntimeCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		hasRuntime bool
+		identity   bool
+	}{
+		{name: "without runtime"},
+		{name: "cleanup API error", hasRuntime: true},
+		{name: "identity mismatch", hasRuntime: true, identity: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, pattern := requestTestService(t)
+			const id = "generation-failure"
+			request := savedCleanupRequest(id, pattern.ID, "alice")
+			request.Status, request.Runtime, request.Cleanup = RequestPending, nil, nil
+			service.requests.Requests[id] = request
+			service.requestDone[id] = make(chan struct{})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			service.ConfigureAsyncRequestsWithContext(ctx, time.Minute, nil)
+			fake := &fakeManagedAgentRuntime{}
+			var available atomic.Bool
+			service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) {
+				if !available.Load() {
+					return nil, runtime.ErrUnavailable
+				}
+				return fake, nil
+			}
+			cause := errors.New("cleanup API read failed")
+			if tc.identity {
+				cause = runtime.ErrWorkIdentityChanged
+			}
+			failure := withReason(ReasonSourceVerificationInconclusive, cause, "")
+			service.generateRequestWith(id, "token", func(ctx context.Context, _, _, _, _ string, _ *issues.IssueSpec, _, _ string) (PreviewResult, *previewEntry, error) {
+				if tc.hasRuntime {
+					if err := service.observeRuntimeWork(id)(ctx, runtime.WorkRef{Backend: "agent-sandbox", Namespace: "sandbox", Name: "fix-" + id, UID: "uid-" + id, ExecutionID: id}); err != nil {
+						return PreviewResult{}, nil, err
+					}
+				}
+				return PreviewResult{}, nil, failure
+			})
+			if tc.hasRuntime {
+				assertCleanupDebt(t, service, id)
+				service.rmu.Lock()
+				cleanup := *service.requests.Requests[id].Cleanup
+				service.rmu.Unlock()
+				if cleanup.ReasonCode != ReasonSourceVerificationInconclusive || cleanup.Reason != ReasonMessage(ReasonSourceVerificationInconclusive) || cleanup.Blocked != tc.identity {
+					t.Fatalf("generation diagnosis lost: %+v", cleanup)
+				}
+				if tc.identity {
+					cancel()
+					waitForCleanupWorkers(t, service)
+					reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+					assertCleanupDebt(t, reloaded, id)
+					if !reloaded.requests.Requests[id].Cleanup.Blocked {
+						t.Fatal("identity mismatch was not retained")
+					}
+					return
+				}
+				available.Store(true)
+			}
+			view := waitRequest(t, service, id, "alice", RequestFailed)
+			if view.ReasonCode != ReasonSourceVerificationInconclusive || view.Error != ReasonMessage(ReasonSourceVerificationInconclusive) {
+				t.Fatalf("final generation diagnosis = %+v", view)
+			}
+			cancel()
+			waitForCleanupWorkers(t, service)
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			want := 0
+			if tc.hasRuntime {
+				want = 1
+			}
+			if len(fake.refs) != want {
+				t.Fatalf("cleanup refs = %+v, want %d", fake.refs, want)
+			}
+		})
+	}
+}
 
 type timeoutPreviewPRClient struct {
 	*ghpr.Client

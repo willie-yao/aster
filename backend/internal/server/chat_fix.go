@@ -162,6 +162,8 @@ func previewChatFixHandler(timeout time.Duration, run ChatFixRunner) http.Handle
 func writeChatFixError(w http.ResponseWriter, sessionID, login string, err error) {
 	status, message := http.StatusInternalServerError, "fix proposal could not be generated"
 	switch {
+	case errors.Is(err, actions.ErrActionStateUnavailable):
+		status, message = http.StatusServiceUnavailable, "GitHub write actions are unavailable"
 	case errors.Is(err, actions.ErrNotFound), errors.Is(err, analysischat.ErrAnalysisNotFound),
 		errors.Is(err, analysischat.ErrPatternNotFound), errors.Is(err, analysischat.ErrSessionNotFound),
 		errors.Is(err, analysischat.ErrRequestNotFound):

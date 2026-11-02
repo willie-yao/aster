@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -47,6 +49,7 @@ var ErrPreviewSourceUnavailable = errors.New("fix preview source check unavailab
 // prClient is the subset of *ghpr.Client the manager needs.
 type prClient interface {
 	OpenPR(ctx context.Context, req ghpr.Request) (string, error)
+	GetPullRequest(ctx context.Context, owner, repo string, number int) (ghpr.PullRequest, error)
 	SearchOpenPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	SearchAnyPR(ctx context.Context, owner, repo, queryToken, confirmMarker string) (int, string, bool, error)
 	ResolveBase(ctx context.Context, owner, repo, branch string) (ghpr.Base, error)
@@ -532,8 +535,8 @@ func sameFileContents(left, right map[string]string) bool {
 }
 
 // OpenFromPreview opens the draft PR for a previously generated fix, applying
-// the same dedup guard as Reconcile: skip if the subject is already tracked or
-// an open fix PR already exists. It returns the PR URL and records tracking
+// the same dedup guard as Reconcile: reuse tracked open or merged pattern PRs,
+// or a matching existing PR. It returns the PR URL and records tracking
 // state; the caller saves state.
 func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string, error) {
 	if gf == nil {
@@ -544,7 +547,17 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	}
 	key := gf.key
 	if t, tracked := m.state.Tracked[key]; tracked {
-		return t.URL, nil
+		if !strings.HasPrefix(key, keyPrefix) {
+			return t.URL, nil
+		}
+		closed, err := m.trackedPatternPRClosed(ctx, t.URL)
+		if err != nil {
+			return "", err
+		}
+		if !closed {
+			return t.URL, nil
+		}
+		delete(m.state.Tracked, key)
 	}
 	search := m.pr.SearchOpenPR
 	if strings.HasPrefix(key, "fix-build::") || strings.HasPrefix(key, "fix-analysis::") {
@@ -577,6 +590,44 @@ func (m *Manager) OpenFromPreview(ctx context.Context, gf *GeneratedFix) (string
 	}
 	m.state.Tracked[key] = trackedGeneratedFix(url, gf)
 	return url, nil
+}
+
+func (m *Manager) trackedPatternPRClosed(ctx context.Context, trackedURL string) (bool, error) {
+	parsed, err := url.Parse(trackedURL)
+	if err != nil {
+		return false, fmt.Errorf("parse tracked fix PR URL: %w", err)
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil ||
+		len(parts) != 4 || !strings.EqualFold(parts[0], m.opts.SourceOwner) ||
+		!strings.EqualFold(parts[1], m.opts.SourceName) || parts[2] != "pull" {
+		return false, fmt.Errorf("tracked fix PR URL does not identify a pull request in %s/%s", m.opts.SourceOwner, m.opts.SourceName)
+	}
+	number, err := strconv.Atoi(parts[3])
+	if err != nil || number <= 0 {
+		return false, fmt.Errorf("tracked fix PR URL has an invalid pull request number")
+	}
+	pull, err := m.pr.GetPullRequest(ctx, m.opts.SourceOwner, m.opts.SourceName, number)
+	if err != nil {
+		return false, fmt.Errorf("check tracked fix PR #%d: %w", number, err)
+	}
+	if pull.Number != number {
+		return false, fmt.Errorf("tracked fix PR #%d lookup returned a different pull request", number)
+	}
+	switch pull.State {
+	case "open":
+		if !pull.Merged && pull.MergedAt.IsZero() {
+			return false, nil
+		}
+	case "closed":
+		if pull.Merged {
+			return false, nil
+		}
+		if pull.MergedAt.IsZero() {
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("tracked fix PR #%d has an unknown lifecycle", number)
 }
 
 func (m *Manager) validatePreviewBase(ctx context.Context, base ghpr.Base, files map[string]string) error {

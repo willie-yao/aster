@@ -862,7 +862,7 @@ func TestPreviewAnalysisFixRejectsUnsafeMaintainerInstruction(t *testing.T) {
 func TestValidatedAnalysisPreviewRejectsDestructiveGeneratedPatch(t *testing.T) {
 	fix := fixpr.RestoreGeneratedFix(&fixpr.GeneratedFixSnapshot{
 		Subject: "TestCluster", Rationale: "fix",
-		Diff:   "--- a/controller.go\n+++ b/controller.go\n+Remove the conversion webhook before upgrade.\n",
+		Diff:   "diff --git a/controller.go b/controller.go\n--- a/controller.go\n+++ b/controller.go\n@@ -0,0 +1 @@\n+Remove the conversion webhook before upgrade.\n",
 		Files:  map[string]string{"controller.go": "package controllers\n"},
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped},
 		Title:  "fix: test", Description: "safe description", Body: "safe body",

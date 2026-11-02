@@ -129,6 +129,9 @@ func (s *Service) ConfigureAsyncRequests(timeout time.Duration, notifier Request
 
 // ConfigureAsyncRequestsWithContext also stops active requests during shutdown.
 func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout time.Duration, notifier RequestReadyNotifier) {
+	if s.InitializationError() != nil {
+		return
+	}
 	if timeout > 0 {
 		s.requestTimeout = timeout
 	}
@@ -168,6 +171,9 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 
 // CreateRequest persists a pending request and starts draft generation.
 func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, supersedesID string) (ActionRequestView, error) {
+	if err := s.InitializationError(); err != nil {
+		return ActionRequestView{}, err
+	}
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	if owner == "" || userToken == "" {
 		return ActionRequestView{}, fmt.Errorf("authenticated owner and token are required")
@@ -266,19 +272,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: an existing action for this failure has an unknown GitHub outcome", ErrPreviewOutcomeUnknown)
 	}
-	pending := 0
-	active := 0
-	for existingID, existing := range s.requests.Requests {
-		if existingID == supersedesID {
-			continue
-		}
-		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
-			pending++
-		}
-		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
-			active++
-		}
-	}
+	pending, active := s.admissionCountsLocked(owner, kind, supersedesID)
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
@@ -341,6 +335,9 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 // CreateAnalysisFixRequest persists one exact failure chat-to-fix preview request
 // and starts generation independently of the initiating HTTP request.
 func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFixInput, owner, userToken, instruction string, replacesRequestIDs ...string) (ActionRequestView, error) {
+	if err := s.InitializationError(); err != nil {
+		return ActionRequestView{}, err
+	}
 	owner = normalizeActionOwner(owner)
 	instruction = strings.TrimSpace(instruction)
 	if s.cfg != nil {
@@ -435,19 +432,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 			}
 		}
 	}
-	pending := 0
-	active := 0
-	for _, existing := range s.requests.Requests {
-		if existing == nil {
-			continue
-		}
-		if (existing.Status == RequestPending || existing.Status == RequestCancelling) && existing.Owner == owner {
-			pending++
-		}
-		if existing.Status == RequestPending || existing.Status == RequestCancelling || existing.Status == RequestReady || existing.Status == RequestUnknown {
-			active++
-		}
-	}
+	pending, active := s.admissionCountsLocked(owner, requestKindAnalysisFix, "")
 	if pending >= maxPendingPerOwner {
 		s.rmu.Unlock()
 		return ActionRequestView{}, fmt.Errorf("%w: too many pending action requests", ErrRequestLimit)
@@ -486,8 +471,31 @@ func cloneAnalysisFixInput(input AnalysisFixInput) *AnalysisFixInput {
 	return &clone
 }
 
+func (s *Service) admissionCountsLocked(owner, kind, supersedesID string) (pending, active int) {
+	for id, request := range s.requests.Requests {
+		if request == nil || id == supersedesID {
+			continue
+		}
+		cleanupOnlyFix := request.Status == RequestCancelling &&
+			(request.Kind == "propose-fix" || request.Kind == requestKindAnalysisFix) && s.requestDone[id] == nil
+		if kind == "create-issue" && cleanupOnlyFix {
+			continue
+		}
+		if (request.Status == RequestPending || request.Status == RequestCancelling) && request.Owner == owner {
+			pending++
+		}
+		if request.Status == RequestPending || request.Status == RequestCancelling || request.Status == RequestReady || request.Status == RequestUnknown {
+			active++
+		}
+	}
+	return pending, active
+}
+
 // GetRequest returns one request only to its owning admin.
 func (s *Service) GetRequest(id, owner string) (ActionRequestView, error) {
+	if err := s.InitializationError(); err != nil {
+		return ActionRequestView{}, err
+	}
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
 	if s.expireRequestsLocked(time.Now().UTC()) {
@@ -504,6 +512,9 @@ func (s *Service) GetRequest(id, owner string) (ActionRequestView, error) {
 
 // ConfirmRequest posts the exact persisted draft using the current admin token.
 func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken string) (string, error) {
+	if err := s.InitializationError(); err != nil {
+		return "", err
+	}
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	s.rmu.Lock()
 	if s.expireRequestsLocked(time.Now().UTC()) {
@@ -677,6 +688,9 @@ func (s *Service) ConfirmRequest(ctx context.Context, id, owner, userToken strin
 
 // CancelRequest stops generation and confirms external runtime cleanup.
 func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRequestView, error) {
+	if err := s.InitializationError(); err != nil {
+		return ActionRequestView{}, err
+	}
 	owner = strings.ToLower(strings.TrimSpace(owner))
 	s.rmu.Lock()
 	if s.expireRequestsLocked(time.Now().UTC()) {

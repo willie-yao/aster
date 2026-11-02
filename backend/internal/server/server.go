@@ -583,6 +583,10 @@ func writeActionReason(w http.ResponseWriter, status int, code actions.ReasonCod
 func writeActionError(w http.ResponseWriter, id, login string, err error) {
 	code := actions.ReasonCodeOf(err)
 	log.Printf("action failed for %s (by %s, reason=%s): %s", id, login, code, safeOperatorError(err))
+	if errors.Is(err, actions.ErrActionStateUnavailable) {
+		http.Error(w, "GitHub write actions are unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if errors.Is(err, actions.ErrNotFound) || errors.Is(err, actions.ErrPreviewNotFound) || errors.Is(err, actions.ErrRequestNotFound) {
 		writeActionReason(w, http.StatusNotFound, code)
 		return

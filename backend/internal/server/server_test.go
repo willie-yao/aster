@@ -21,6 +21,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/auth"
 	"github.com/willie-yao/aster/backend/internal/output"
+	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
@@ -1448,6 +1449,7 @@ func TestHandlerActionRequestErrorContract(t *testing.T) {
 		status  int
 		message string
 	}{
+		{"unavailable state", actions.ErrActionStateUnavailable, http.StatusServiceUnavailable, "GitHub write actions are unavailable"},
 		{"pending", actions.ErrPreviewPending, http.StatusConflict, "action request is already being processed"},
 		{"superseded", actions.ErrPreviewSuperseded, http.StatusConflict, "action request was replaced by a newer attempt"},
 		{"unknown", actions.ErrPreviewOutcomeUnknown, http.StatusConflict, "GitHub action outcome is unknown"},
@@ -1659,4 +1661,53 @@ func TestHandlerDisablesFixRoutesAndCapabilityIndependently(t *testing.T) {
 		t.Fatalf("issue status=%d body=%s", issue.StatusCode, readBody(t, issue))
 	}
 	_ = issue.Body.Close()
+}
+
+func TestActionStateFailurePreservesDashboardAndChat(t *testing.T) {
+	for _, filename := range []string{"action_request_state.json", "action_preview_state.json"} {
+		t.Run(filename, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "dashboard.json", `{"jobs":[]}`)
+			writeFile(t, dir, filename, `{"private-invalid-state":`)
+			runner := actions.NewService(&project.Config{}, dir, actions.AIConfig{})
+			if !errors.Is(runner.InitializationError(), actions.ErrActionStateUnavailable) {
+				t.Fatalf("initialization error = %v", runner.InitializationError())
+			}
+			handler, err := Handler(Options{
+				DataDir: dir, Capabilities: DefaultCapabilities(), Auth: fakeAuth{}, AuthMode: "dev",
+				Actions: runner, AnalysisChat: &fakeAnalysisChatRunner{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				method, path, body string
+				status             int
+			}{
+				{http.MethodGet, "/data/dashboard.json", "", http.StatusOK},
+				{http.MethodGet, "/api/analysis-chat/sessions/session-1", "", http.StatusOK},
+				{http.MethodPost, "/api/analysis-chat/sessions", `{"job_id":"job","build_id":"1","test_name":"Test","analysis_generated_at":"2026-07-23T12:00:00Z"}`, http.StatusCreated},
+				{http.MethodPost, "/api/failures/failure/create-issue/preview", `{}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/failures/failure/propose-fix/preview", `{}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/failures/failure/create-issue/requests", `{}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/failures/failure/propose-fix/requests", `{}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/actions/confirm", `{"token":"preview-token"}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/action-requests/request/confirm", `{}`, http.StatusServiceUnavailable},
+				{http.MethodPost, "/api/action-requests/request/cancel", `{}`, http.StatusServiceUnavailable},
+			} {
+				req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				req.Header.Set("Authorization", "ok")
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set(analysisChatIdempotencyHeader, "request-state-failure")
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, req)
+				if recorder.Code != tc.status {
+					t.Fatalf("%s status=%d body=%q", tc.path, recorder.Code, recorder.Body.String())
+				}
+				if tc.status == http.StatusServiceUnavailable && recorder.Body.String() != "GitHub write actions are unavailable\n" {
+					t.Fatalf("unsafe response = %q", recorder.Body.String())
+				}
+			}
+		})
+	}
 }

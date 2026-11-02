@@ -462,8 +462,7 @@ function ActionRequestReview({ requestID }: { requestID: string }) {
                     Stopping runtime work
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
-                    The request remains active until the server confirms that
-                    its runtime work has stopped.
+                    {actionRequestProgressDetail(request, isFix)}
                   </Typography>
                 </Box>
               </Stack>

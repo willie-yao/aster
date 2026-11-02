@@ -270,7 +270,7 @@ func TestPatternFixPreviewEntryUsesCurrentVerificationVersion(t *testing.T) {
 
 func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	tok, err := s.stash("owner-token", &previewEntry{kind: "issue"})
+	tok, err := s.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestPreviewCache_TokenOwnershipAndConsumption(t *testing.T) {
 
 func TestPreviewCache_Expiry(t *testing.T) {
 	s := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	tok, err := s.stash("owner-token", &previewEntry{kind: "issue"})
+	tok, err := s.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestSafeFixPreviewErrorPreservesContextSentinels(t *testing.T) {
 func TestPreviewConfirmationLifecycleIsRecoverableAcrossServices(t *testing.T) {
 	dataDir := t.TempDir()
 	first := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := first.stash("Alice", &previewEntry{kind: "issue"})
+	token, err := first.stash("Alice", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func TestPreviewConfirmationLifecycleIsRecoverableAcrossServices(t *testing.T) {
 func TestPreviewConfirmationFailureCanRetryAcrossServices(t *testing.T) {
 	dataDir := t.TempDir()
 	first := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := first.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := first.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestFixPreviewSnapshotPersistsAcrossServices(t *testing.T) {
 func TestPreviewConfirmationLeaseFencesStaleAttempt(t *testing.T) {
 	dataDir := t.TempDir()
 	first := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := first.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := first.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestFailedPreviewConfirmationRefreshesRetryWindow(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-			token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+			token, err := service.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -587,7 +587,7 @@ func TestFailedPreviewConfirmationRefreshesRetryWindow(t *testing.T) {
 
 func TestUnknownPreviewBecomesRetryableAfterConsistencyWindow(t *testing.T) {
 	service := NewService(&project.Config{}, t.TempDir(), AIConfig{})
-	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +691,7 @@ func TestPreviewStoreEvictsOldestNonRunningPreviewToFit(t *testing.T) {
 func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *testing.T) {
 	dataDir := t.TempDir()
 	service := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,8 @@ func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *test
 	if err := service.previewStore.update(func(state *previewState, now time.Time) (bool, error) {
 		for i := 1; i < maxPersistedPreviews; i++ {
 			state.Previews[fmt.Sprintf("confirmed-%03d", i)] = &persistedPreview{
-				Owner:     "owner",
+				Owner: tokenHash("owner-token"), InitiatedBy: "owner-token", InitiatedAt: now.Format(time.RFC3339Nano),
+				Issue:     &issues.IssueSpec{Key: fmt.Sprintf("confirmed-%03d", i)},
 				Kind:      "issue",
 				CreatedAt: now.Format(time.RFC3339Nano),
 				Status:    previewStatusDone,
@@ -722,7 +723,7 @@ func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.stash("owner-token", &previewEntry{kind: "issue"}); err == nil {
+	if _, err := service.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}}); err == nil {
 		t.Fatal("preview count pressure was accepted")
 	}
 	after, err := os.ReadFile(statePath)
@@ -741,7 +742,7 @@ func TestPreviewStoreRejectsCountPressureWithoutEvictingConfirmedResults(t *test
 func TestPreviewStoreRejectsSizePressureWithoutEvictingConfirmedResult(t *testing.T) {
 	dataDir := t.TempDir()
 	service := NewService(&project.Config{}, dataDir, AIConfig{})
-	token, err := service.stash("owner-token", &previewEntry{kind: "issue"})
+	token, err := service.stash("owner-token", &previewEntry{kind: "issue", spec: issues.IssueSpec{Key: "test-issue"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -933,35 +934,31 @@ func TestPatternWithoutEvidenceIsNotActionable(t *testing.T) {
 	}
 }
 
-func TestNoncurrentPreviewStateResetsFresh(t *testing.T) {
+func TestNoncurrentPreviewStateFailsClosed(t *testing.T) {
 	for _, version := range []int{4, previewStateVersion + 1} {
 		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
 			store := newPreviewStore(t.TempDir())
-			state := &previewState{Version: version, Previews: map[string]*persistedPreview{
-				tokenHash("preview-token"): {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusReady, Issue: &issues.IssueSpec{Key: "pattern::ready"}},
-				"unknown":                  {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusUnknown, Issue: &issues.IssueSpec{Key: "pattern::unknown"}},
-				"done":                     {Owner: tokenHash("user-token"), Kind: "issue", TargetRepo: "owner/repo", Status: previewStatusDone, ResultURL: "https://github.com/o/r/issues/1", Issue: &issues.IssueSpec{Key: "pattern::done"}},
-			}}
+			state := freshPreviewState()
+			state.Version = version
+			state.Previews["unknown"] = &persistedPreview{Status: previewStatusUnknown}
 			if err := statefile.WriteJSONDurable(store.path, state); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, _, _, err := store.begin("alice", "preview-token", time.Hour); !errors.Is(err, ErrPreviewNotFound) {
-				t.Fatalf("preview confirmation error = %v", err)
-			}
-			data, err := os.ReadFile(store.path)
+			before, err := os.ReadFile(store.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var reset previewState
-			if err := json.Unmarshal(data, &reset); err != nil {
-				t.Fatal(err)
+			if _, _, _, _, err := store.begin("alice", "preview-token", time.Hour); err == nil {
+				t.Fatal("unsupported preview state allowed confirmation")
 			}
-			if reset.Version != previewStateVersion || len(reset.Previews) != 0 {
-				t.Fatalf("reset state = %+v", reset)
+			after, err := os.ReadFile(store.path)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("unsupported state changed: err=%v", err)
 			}
 		})
 	}
 }
+
 func TestPreviewStateWritesCurrentVersion(t *testing.T) {
 	store := newPreviewStore(t.TempDir())
 	if _, err := store.stash("alice", &previewEntry{kind: "issue", targetRepo: "o/r", spec: issues.IssueSpec{Key: "pattern::current"}}); err != nil {
@@ -2411,7 +2408,8 @@ func TestPreviewStoreInvalidatesLegacyVerificationVersion(t *testing.T) {
 	store := newPreviewStore(t.TempDir())
 	state := previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{
 		"legacy": {
-			Owner: "owner", Kind: gfKind, FailureID: "failure", PatternHash: "hash",
+			Owner: tokenHash("alice"), InitiatedBy: "alice", InitiatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Kind: gfKind, FailureID: "failure", PatternHash: "hash",
 			TargetRepo: "example/repo", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: previewStatusReady,
 			VerificationVersion: sourceVerificationVersion - 1,
 			Fix:                 &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"},
@@ -2665,6 +2663,7 @@ func TestPreviewStoreRejectsUnidentifiedOrUnverifiedFix(t *testing.T) {
 			store := newPreviewStore(t.TempDir())
 			state := previewState{Version: previewStateVersion, Previews: map[string]*persistedPreview{
 				"legacy": {
+					Owner: tokenHash("alice"), InitiatedBy: "alice", InitiatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 					Kind: gfKind, Status: previewStatusReady, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 					FailureID: testCase.failureID, PatternHash: testCase.patternHash, VerificationVersion: testCase.verificationVersion,
 					Fix: &fixpr.GeneratedFixSnapshot{Key: "legacy-fix"},

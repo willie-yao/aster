@@ -80,6 +80,15 @@ test("unknown outcomes remain confirmable without a visible preview", () => {
   assert.equal(actionRequestCanConfirm("cancelling", true), false);
 });
 
+test("cleanup progress retains the server diagnostic while the obligation is active", () => {
+  const message = "Runtime cleanup is blocked because the work identity changed. An operator must inspect the retained cleanup record.";
+  const blocked = request("blocked", "cancelling", { error: message });
+  assert.equal(actionRequestProgressDetail(blocked, true), message);
+  assert.equal(actionRequestIsActive(blocked, 0), true);
+  assert.equal(actionRequestCanConfirm(blocked.status, false), false);
+  assert.match(actionRequestProgressDetail(request("pending-cleanup", "cancelling"), true), /until the server confirms/);
+});
+
 test("source verification progress is distinct from draft generation", () => {
   const verifying = request("verifying", "pending", {
     stage: "verifying_remediation",

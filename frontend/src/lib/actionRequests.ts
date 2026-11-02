@@ -129,6 +129,9 @@ export function actionRequestProgressDetail(
   request: ActionRequest | null,
   isFix: boolean,
 ): string {
+  if (request?.status === "cancelling") {
+    return request.error || "The request remains active until the server confirms that its runtime work has stopped.";
+  }
   if (isFix) {
     if (!request || request.stage !== "drafting") {
       return "The dashboard validates the action subject and pins the allowed repository base before runtime work starts.";

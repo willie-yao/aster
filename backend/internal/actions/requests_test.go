@@ -292,38 +292,29 @@ func TestCreateAnalysisFixRequestRejectsInvalidInputBeforePersistence(t *testing
 	}
 }
 
-func TestActionRequestStateNoncurrentVersionsResetToV7(t *testing.T) {
+func TestActionRequestStateNoncurrentVersionsFailClosed(t *testing.T) {
 	for _, version := range []int{6, actionRequestStateVersion + 1} {
 		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
 			service, _ := requestTestService(t)
-			now := time.Now().UTC()
-			state := actionRequestState{Version: version, Requests: map[string]*actionRequest{
-				"existing": {ActionRequestView: ActionRequestView{
-					ID: "existing", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestFailed,
-					CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
-				}},
-			}}
-			if err := statefile.WritePrivateJSONDurable(service.requestStatePath(), state); err != nil {
-				t.Fatal(err)
-			}
-			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
-			if _, err := reloaded.GetRequest("existing", "alice"); !errors.Is(err, ErrRequestNotFound) {
-				t.Fatalf("GetRequest error = %v", err)
-			}
-			data, err := os.ReadFile(reloaded.requestStatePath())
+			state := validUnknownRequestState(time.Now().UTC())
+			state.Version = version
+			writeActionRequestState(t, service.dataDir, state, 0o600)
+			before, err := os.ReadFile(service.requestStatePath())
 			if err != nil {
 				t.Fatal(err)
 			}
-			var reset actionRequestState
-			if err := json.Unmarshal(data, &reset); err != nil {
-				t.Fatal(err)
+			reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+			if _, err := reloaded.GetRequest("unknown", "alice"); !errors.Is(err, ErrActionStateUnavailable) {
+				t.Fatalf("GetRequest error = %v", err)
 			}
-			if reset.Version != actionRequestStateVersion || len(reset.Requests) != 0 {
-				t.Fatalf("reset state = %+v", reset)
+			after, err := os.ReadFile(service.requestStatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("unsupported state changed: err=%v", err)
 			}
 		})
 	}
 }
+
 func TestReadyAnalysisFixRequestReloads(t *testing.T) {
 	service, _ := analysisRequestTestService(t)
 	input, err := service.prepareAnalysisFix(t.Context(), exactAnalysisRequestInput(), "alice", "")
@@ -439,6 +430,8 @@ func TestCancellingReadyAnalysisFixRequestRevokesPreviewToken(t *testing.T) {
 		state.Previews[tokenHash(token)] = &persistedPreview{
 			Owner: tokenHash("alice"), InitiatedBy: "alice", InitiatedAt: now.Format(time.RFC3339Nano),
 			Kind: gfKind, Status: previewStatusReady, CreatedAt: now.Format(time.RFC3339Nano),
+			FailureID: "failure", PatternHash: "hash", VerificationVersion: sourceVerificationVersion,
+			Fix: &fixpr.GeneratedFixSnapshot{Key: "analysis-fix"},
 		}
 		return true, nil
 	}); err != nil {
@@ -745,7 +738,7 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- service.Wait(context.Background()) }()
 	stopServer()
-	final := waitRequest(t, service, created.ID, "alice", RequestFailed)
+	final := waitRequest(t, service, created.ID, "alice", RequestCancelling)
 	if final.Preview != nil {
 		t.Fatalf("shutdown final=%+v", final)
 	}
@@ -765,8 +758,15 @@ func TestActiveAnalysisFixRequestFailsClosedOnShutdown(t *testing.T) {
 	fake.mu.Lock()
 	refs := slices.Clone(fake.refs)
 	fake.mu.Unlock()
-	if len(refs) != 1 || refs[0].Name != "shutdown-task" || refs[0].UID != "shutdown-uid" || refs[0].ExecutionID != created.ID {
-		t.Fatalf("cleanup refs = %+v", refs)
+	if len(refs) != 0 {
+		t.Fatalf("cleanup started after shutdown: %+v", refs)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	reloaded.ConfigureAsyncRequests(time.Minute, nil)
+	waitRequest(t, reloaded, created.ID, "alice", RequestFailed)
+	if err := reloaded.Wait(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1161,7 +1161,7 @@ func TestPendingRequestBecomesFailedAfterRestart(t *testing.T) {
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-1": {ActionRequestView: ActionRequestView{
-			ID: "request-1", Owner: "alice", Status: RequestPending,
+			ID: "request-1", FailureID: "failure", Kind: "create-issue", Owner: "alice", Status: RequestPending,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 		}},
 	}}
@@ -1181,7 +1181,7 @@ func TestPendingRefinementRestoresSafeFallbackAfterRestart(t *testing.T) {
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-refine": {
 			ActionRequestView: ActionRequestView{
-				ID: "request-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				ID: "request-refine", FailureID: "failure", Owner: "alice", Status: RequestPending, Kind: "create-issue",
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			},
 			BaseIssue: base, BaseTargetRepo: "o/r",
@@ -1218,7 +1218,7 @@ func TestPendingRefinementRejectsUnsafeFallbackAfterRestart(t *testing.T) {
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-unsafe-refine": {
 			ActionRequestView: ActionRequestView{
-				ID: "request-unsafe-refine", Owner: "alice", Status: RequestPending, Kind: "create-issue",
+				ID: "request-unsafe-refine", FailureID: "failure", Owner: "alice", Status: RequestPending, Kind: "create-issue",
 				CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339),
 			},
 			BaseIssue: base, BaseTargetRepo: "o/r",
@@ -1378,7 +1378,7 @@ func TestConfigureAsyncRequestsSkipsExpiredReadyEmail(t *testing.T) {
 	now := time.Now().UTC()
 	state := actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{
 		"request-expired": {ActionRequestView: ActionRequestView{
-			ID: "request-expired", Owner: "alice", Kind: "create-issue", Status: RequestReady,
+			ID: "request-expired", FailureID: "failure", Owner: "alice", Kind: "create-issue", Status: RequestReady,
 			CreatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), UpdatedAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
 			ExpiresAt: now.Add(-time.Hour).Format(time.RFC3339),
 			Preview:   &PreviewResult{Kind: "issue", Title: "Expired", Body: "Body"},
@@ -1770,15 +1770,30 @@ func TestCancelRequestFailsWhenIdentityChanges(t *testing.T) {
 	service.requests.Requests[id] = &actionRequest{
 		ActionRequestView: ActionRequestView{ID: id, FailureID: pattern.ID, Kind: requestKindAnalysisFix, Owner: "alice", Status: RequestReady,
 			CreatedAt: now.Format(time.RFC3339), UpdatedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339)},
-		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "old-uid", ExecutionID: id},
+		Runtime: &runtime.WorkRef{Backend: "agent-sandbox", Name: "fix-task", UID: "old-uid", ExecutionID: id}, RequestHash: "identity-hash",
 	}
 	view, err := service.CancelRequest(context.Background(), id, "alice")
-	if err != nil || view.Status != RequestFailed || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
+	if err != nil || view.Status != RequestCancelling || view.Error == "" || view.ReasonCode != ReasonGenerationFailed ||
 		view.Failure == nil || view.Failure.Category != AnalysisFixFailureSafetyIntegrity {
 		t.Fatalf("view=%+v err=%v", view, err)
 	}
-	if _, err = service.CancelRequest(context.Background(), id, "alice"); err == nil {
-		t.Fatal("failed identity-change cleanup was reported as cancelled")
+	if view, err = service.CancelRequest(context.Background(), id, "alice"); err != nil || view.Status != RequestCancelling {
+		t.Fatalf("blocked cancellation view=%+v err=%v", view, err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+	reloaded.ConfigureAsyncRequests(time.Minute, nil)
+	if err := reloaded.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	record := reloaded.requests.Requests[id]
+	if record == nil || record.Status != RequestCancelling || record.Runtime == nil || record.Runtime.UID != "old-uid" || record.Cleanup == nil || !record.Cleanup.Blocked {
+		t.Fatalf("blocked cleanup obligation = %+v", record)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.refs) != 1 {
+		t.Fatalf("identity mismatch retried: %+v", fake.refs)
 	}
 }
 

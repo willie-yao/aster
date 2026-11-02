@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
 	prescalation "github.com/willie-yao/aster/backend/internal/pullrequest/escalation"
+	"github.com/willie-yao/aster/backend/internal/redact"
 	"github.com/willie-yao/aster/backend/internal/server"
 	"github.com/willie-yao/aster/backend/internal/sourceinvestigation"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -160,6 +161,9 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 		Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
 		UsageRecorder: usageRecorder,
 	})
+	if err := actionService.InitializationError(); err != nil {
+		log.Printf("⚠️ GitHub write actions unavailable: %s", redact.OperatorText(err.Error()))
+	}
 	actionService.ConfigureFixActions(fixActions)
 	opts.DisableFixActions = !fixActions
 	opts.Actions = actionService
