@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,185 +36,147 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
-// preV5NoListFS models the rollback server's hiding rules. Its basename list
-// intentionally does not know about the new action-write audit ledger.
-type preV5NoListFS struct{ fs http.FileSystem }
-
-func (f preV5NoListFS) Open(name string) (http.File, error) {
-	if invalidDataPath(name) || hiddenDataPath(name) || hiddenDataBasename(name) {
-		return nil, os.ErrNotExist
-	}
-	file, err := f.fs.Open(name)
+func TestHandler_PublicDataContract(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "output", "testdata", "public_paths.json"))
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-	info, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, err
+	var cases []struct {
+		Name   string
+		Path   string
+		Public bool
 	}
-	if info.IsDir() {
-		file.Close()
-		return nil, os.ErrNotExist
+	if err := json.Unmarshal(fixture, &cases); err != nil {
+		t.Fatal(err)
 	}
-	return file, nil
-}
-
-func TestActionWriteAuditPathIsHiddenByPreV5Rules(t *testing.T) {
 	dataDir := t.TempDir()
-	writeFile(t, dataDir, ".action-write-audit/state.json", `{"records":{}}`)
-	writeFile(t, dataDir, "action_write_audit.json", `{"legacy":"exposed"}`)
-	legacy := preV5NoListFS{fs: http.Dir(dataDir)}
-
-	if file, err := legacy.Open("/.action-write-audit/state.json"); !errors.Is(err, os.ErrNotExist) {
-		if file != nil {
-			file.Close()
+	for _, tc := range cases {
+		if tc.Public {
+			writeFile(t, dataDir, tc.Path, tc.Path)
 		}
-		t.Fatalf("dot-prefixed audit path was visible to pre-v5 rules: %v", err)
 	}
-	file, err := legacy.Open("/action_write_audit.json")
+	for _, name := range []string{
+		"private_state.json", "issue_state.json", "issue_state.json.lock",
+		"dashboard.json.lock", "dashboard.json.tmp-123",
+		".private/dashboard.json", ".fetch-status/status.json",
+		"jobs/periodic-x.json", "jobs/nested/Zg.json", "jobs/Zh.json",
+		"jobs/Zg.json.lock", "pull-requests/0123.json",
+	} {
+		writeFile(t, dataDir, name, "private")
+	}
+	handler, err := Handler(Options{DataDir: dataDir})
 	if err != nil {
-		t.Fatalf("root audit fixture should demonstrate the old exposure: %v", err)
+		t.Fatal(err)
 	}
-	file.Close()
-}
-
-// TestHandler_DataReadParity verifies that /data/* returns the fetcher output
-// files byte-for-byte, including the jobs/ subdirectory.
-func TestHandler_DataReadParity(t *testing.T) {
-	dataDir := t.TempDir()
-	files := map[string]string{
-		"manifest.json":        `{"id":"demo"}`,
-		"dashboard.json":       `{"jobs":[]}`,
-		"flakiness.json":       `{"tests":[]}`,
-		"search-index.json":    `{"entries":[]}`,
-		"jobs/periodic-x.json": `{"job_id":"periodic-x"}`,
-	}
-	for rel, content := range files {
-		writeFile(t, dataDir, rel, content)
-	}
-
-	h, err := Handler(Options{DataDir: dataDir, Capabilities: DefaultCapabilities()})
-	if err != nil {
-		t.Fatalf("Handler: %v", err)
-	}
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-
-	for rel, want := range files {
-		resp, err := http.Get(srv.URL + "/data/" + rel)
-		if err != nil {
-			t.Fatalf("GET %s: %v", rel, err)
-		}
-		body := readBody(t, resp)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s: status %d", rel, resp.StatusCode)
-		}
-		if body != want {
-			t.Errorf("GET %s: body = %q, want %q", rel, body, want)
-		}
-	}
-}
-
-type spyFileSystem struct {
-	opened []string
-}
-
-func (s *spyFileSystem) Open(name string) (http.File, error) {
-	s.opened = append(s.opened, name)
-	return nil, os.ErrNotExist
-}
-
-func mixedCase(name string) string {
-	var b strings.Builder
-	upper := true
-	for _, r := range name {
-		if r >= 'a' && r <= 'z' {
-			if upper {
-				r -= 'a' - 'A'
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			target := (&url.URL{Path: "/data/" + tc.Path}).String()
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			want := http.StatusNotFound
+			if tc.Public {
+				want = http.StatusOK
+				if recorder.Body.String() != tc.Path {
+					t.Fatalf("body = %q, want %q", recorder.Body.String(), tc.Path)
+				}
 			}
-			upper = !upper
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-func encodedUppercaseName(name string) string {
-	upper := strings.ToUpper(name)
-	for i := range len(upper) {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			return upper[:i] + "%" + fmt.Sprintf("%02X", upper[i]) + upper[i+1:]
-		}
-	}
-	return upper
-}
-
-func TestNoListFSRejectsPrivatePathVariantsBeforeOpen(t *testing.T) {
-	for _, name := range output.NonPublishedFiles {
-		name := name
-		t.Run(name, func(t *testing.T) {
-			mixed := mixedCase(name)
-			variants := []struct {
-				name        string
-				method      string
-				path        string
-				rangeHeader string
-			}{
-				{name: "lowercase", method: http.MethodGet, path: "/data/" + strings.ToLower(name)},
-				{name: "uppercase", method: http.MethodGet, path: "/data/" + strings.ToUpper(name)},
-				{name: "mixed_case", method: http.MethodGet, path: "/data/" + mixed},
-				{name: "head", method: http.MethodHead, path: "/data/" + mixed},
-				{name: "range", method: http.MethodGet, path: "/data/" + mixed, rangeHeader: "bytes=0-3"},
-				{name: "encoded_case", method: http.MethodGet, path: "/data/" + encodedUppercaseName(name)},
-				{name: "unicode_case_fold", method: http.MethodGet, path: "/data/" + strings.Replace(name, "s", "ſ", 1)},
-				{name: "backslash", method: http.MethodGet, path: "/data/%5C" + mixed},
-				{name: "nested_backslash", method: http.MethodGet, path: "/data/jobs%5C" + mixed},
-				{name: "nested", method: http.MethodGet, path: "/data/jobs/" + mixed},
-				{name: "dot_directory", method: http.MethodGet, path: "/data/.private/" + mixed},
-				{name: "encoded_dot_directory", method: http.MethodGet, path: "/data/%2Eprivate/" + mixed},
-			}
-			for _, variant := range variants {
-				variant := variant
-				t.Run(variant.name, func(t *testing.T) {
-					spy := &spyFileSystem{}
-					handler := http.StripPrefix("/data/", http.FileServer(noListFS{fs: spy}))
-					req := httptest.NewRequest(variant.method, variant.path, nil)
-					if variant.rangeHeader != "" {
-						req.Header.Set("Range", variant.rangeHeader)
-					}
-					recorder := httptest.NewRecorder()
-					handler.ServeHTTP(recorder, req)
-					if recorder.Code != http.StatusNotFound {
-						t.Fatalf("status = %d, want 404", recorder.Code)
-					}
-					if len(spy.opened) != 0 {
-						t.Fatalf("underlying filesystem opened %v", spy.opened)
-					}
-				})
+			if recorder.Code != want {
+				t.Fatalf("status = %d, want %d", recorder.Code, want)
 			}
 		})
 	}
 }
 
-func TestNoListFSRejectsMalformedPathsBeforeOpen(t *testing.T) {
-	for _, target := range []string{
-		"/data/%00dashboard.json",
-		"/data/%09dashboard.json",
-		"/data/%7Fdashboard.json",
-		"/data/%FFdashboard.json",
-	} {
-		spy := &spyFileSystem{}
-		handler := http.StripPrefix("/data/", http.FileServer(noListFS{fs: spy}))
-		req := httptest.NewRequest(http.MethodGet, target, nil)
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, req)
-		if recorder.Code != http.StatusNotFound && recorder.Code != http.StatusBadRequest {
-			t.Errorf("%s status = %d, want 400 or 404", target, recorder.Code)
-		}
-		if len(spy.opened) != 0 {
-			t.Errorf("%s opened underlying filesystem paths %v", target, spy.opened)
-		}
+func TestHandler_PublicDataHTTP(t *testing.T) {
+	dataDir := t.TempDir()
+	writeFile(t, dataDir, "dashboard.json", "public-data")
+	info, err := os.Stat(filepath.Join(dataDir, "dashboard.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := Handler(Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, method, header, value, body string
+		status                            int
+	}{
+		{name: "get", method: http.MethodGet, body: "public-data", status: http.StatusOK},
+		{name: "head", method: http.MethodHead, status: http.StatusOK},
+		{name: "range", method: http.MethodGet, header: "Range", value: "bytes=0-5", body: "public", status: http.StatusPartialContent},
+		{name: "conditional", method: http.MethodGet, header: "If-Modified-Since", value: info.ModTime().UTC().Format(http.TimeFormat), status: http.StatusNotModified},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/data/dashboard.json", nil)
+			if tc.header != "" {
+				req.Header.Set(tc.header, tc.value)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != tc.status || recorder.Body.String() != tc.body {
+				t.Fatalf("response = %d %q, want %d %q", recorder.Code, recorder.Body.String(), tc.status, tc.body)
+			}
+			if recorder.Header().Get("Cache-Control") != "no-cache" {
+				t.Fatal("public data must revalidate")
+			}
+		})
+	}
+}
+
+func TestHandler_PublicDataRejectsSymlinks(t *testing.T) {
+	for _, name := range []string{"dashboard.json", "jobs/Zg.json", "pull-requests/123.json", "jobs", "pull-requests"} {
+		t.Run(name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			privateDir := t.TempDir()
+			writeFile(t, privateDir, "private.json", "private")
+			writeFile(t, privateDir, "Zg.json", "private")
+			writeFile(t, privateDir, "123.json", "private")
+			target := filepath.Join(privateDir, "private.json")
+			request := name
+			if name == "jobs" || name == "pull-requests" {
+				target = privateDir
+				if name == "jobs" {
+					request = "jobs/Zg.json"
+				} else {
+					request = "pull-requests/123.json"
+				}
+			}
+			link := filepath.Join(dataDir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			handler, err := Handler(Options{DataDir: dataDir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/data/"+request, nil))
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("symlink response = %d, want 404", recorder.Code)
+			}
+		})
+	}
+}
+
+func TestHandler_PublicDataRejectsDirectories(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dataDir, "dashboard.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := Handler(Options{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/data/dashboard.json", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("directory response = %d, want 404", recorder.Code)
 	}
 }
 
@@ -758,6 +721,20 @@ func TestHandler_NoDirectoryListing(t *testing.T) {
 }
 
 func TestHandler_MissingDataDir(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Handler(Options{DataDir: file}); err == nil {
+		t.Fatal("expected error for non-directory data path")
+	}
+	link := filepath.Join(t.TempDir(), "data")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Handler(Options{DataDir: link}); err == nil {
+		t.Fatal("expected error for symlink data directory")
+	}
 	if _, err := Handler(Options{DataDir: filepath.Join(t.TempDir(), "nope")}); err == nil {
 		t.Fatal("expected error for missing data dir")
 	}
