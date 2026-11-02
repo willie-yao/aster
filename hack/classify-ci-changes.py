@@ -174,6 +174,13 @@ HELM_SUPPORT_PATHS = (
     "hack/test-kubernetes-verification-failures.sh",
 )
 
+PUBLIC_DATA_CONTRACT_PATHS = {
+    "backend/internal/output/public_paths.go",
+    "backend/internal/output/public_paths.json",
+    "backend/internal/output/public_paths_test.go",
+    "backend/internal/output/testdata/public_paths.json",
+}
+
 RELEASE_SHARED_PATHS = (
     ".gitattributes",
     "Makefile",
@@ -243,6 +250,8 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
         if under(path, "backend"):
             result["backend"] = True
             matched = True
+            if path in PUBLIC_DATA_CONTRACT_PATHS:
+                result["frontend"] = True
             if path in {"backend/go.mod", "backend/go.sum"}:
                 for name in (
                     "remote_fixer",
@@ -261,6 +270,8 @@ def classify(paths: list[str], force_full: bool = False) -> dict[str, bool]:
         if under(path, "frontend"):
             result["frontend"] = True
             result["remote_fixer"] = True
+            if under(path, "frontend/tests/fixtures"):
+                result["backend"] = True
             matched = True
 
         if under(path, "configs"):
@@ -364,9 +375,54 @@ def self_test() -> None:
             {"backend", "remote_fixer", "fix_executor"},
         ),
         (
-            "frontend",
+            "frontend component",
             ["frontend/src/App.tsx"],
             {"frontend", "remote_fixer"},
+        ),
+        (
+            "public data path implementation",
+            ["backend/internal/output/public_paths.go"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "public data path specification",
+            ["backend/internal/output/public_paths.json"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "public data path Go contract test",
+            ["backend/internal/output/public_paths_test.go"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "shared public data path cases",
+            ["backend/internal/output/testdata/public_paths.json"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "shared low pass rate wire fixture",
+            ["frontend/tests/fixtures/low-pass-rate.json"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "shared pull request checks wire fixture",
+            ["frontend/tests/fixtures/pull-request-checks.json"],
+            {"backend", "frontend", "remote_fixer"},
+        ),
+        (
+            "ordinary backend output",
+            ["backend/internal/output/output.go"],
+            {"backend", "remote_fixer"},
+        ),
+        (
+            "unclassified public data staging script",
+            ["hack/stage-public-data.mjs"],
+            set(CLASSES),
+        ),
+        (
+            "unclassified public data staging test",
+            ["hack/stage-public-data.test.mjs"],
+            set(CLASSES),
         ),
         (
             "embedded prompt-author skill",
@@ -567,6 +623,11 @@ def self_test() -> None:
     ):
         if f"run: {command}\n" not in backend_job:
             raise AssertionError(f"backend job does not run {command}")
+    frontend_job = workflow[frontend_start:workflow.index("\n  helm:", frontend_start)]
+    if "if: needs.changes.outputs.frontend == 'true'\n" not in frontend_job:
+        raise AssertionError("frontend job does not use the frontend classification")
+    if "run: node --test hack/stage-public-data.test.mjs\n" not in frontend_job:
+        raise AssertionError("frontend job does not test the public data path contract")
 
     namespace_moves = (
         (
