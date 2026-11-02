@@ -250,20 +250,61 @@ expect_fail escalation-replicas "$replica_error" \
   --set server.actions.mode=proxy
 grep -Fq "$replica_error" "$tmp/escalation-replicas.out"
 
-# Escalation must not leak a GitHub read token into a server that cannot use it.
-helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
-  --set ai.enabled=true \
-  --set ai.endpoint=https://model.example.test/v1/chat/completions \
-  --set ai.model=fixture-model \
-  --set ai.token=test-token \
-  --set ai.githubReadTokenSecretName=read-token \
-  --set server.chat.enabled=true \
-  --set server.actions.mode=proxy \
-  --show-only templates/server-deployment.yaml > "$tmp/escalation-off.yaml"
-if grep -Fq 'name: PULL_REQUEST_ESCALATION_ENABLED' "$tmp/escalation-off.yaml" || grep -Fq 'name: GITHUB_READ_TOKEN' "$tmp/escalation-off.yaml"; then
-  echo 'chat-only render leaked escalation environment' >&2
-  exit 1
-fi
+# Chat and escalation use the read token without enabling write actions.
+for feature in chat escalation combined disabled; do
+  chat=false
+  escalation=false
+  case "$feature" in
+    chat) chat=true ;;
+    escalation) escalation=true ;;
+    combined) chat=true; escalation=true ;;
+  esac
+  for credential in inline existing unset; do
+    read_token=""
+    read_token_secret=""
+    secret_name=test-prow-ai-dashboard-github-read
+    case "$credential" in
+      inline) read_token=fixture-read-token ;;
+      existing)
+        read_token_secret=fixture-github-read
+        secret_name=fixture-github-read
+        ;;
+    esac
+    rendered="$tmp/read-token-$feature-$credential.yaml"
+    helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+      --set ai.enabled=true \
+      --set ai.endpoint=https://model.example.test/v1/chat/completions \
+      --set ai.model=fixture-model \
+      --set ai.token=test-token \
+      --set ai.githubReadTokenSecretKey=source-token \
+      --set server.chat.enabled="$chat" \
+      --set server.pullRequestEscalation.enabled="$escalation" \
+      --set server.actions.mode=proxy \
+      --set ai.githubReadToken="$read_token" \
+      --set ai.githubReadTokenSecretName="$read_token_secret" \
+      --show-only templates/server-deployment.yaml > "$rendered"
+    if [[ "$feature" != disabled && "$credential" != unset ]]; then
+      test "$(grep -Fc 'name: GITHUB_READ_TOKEN' "$rendered")" -eq 1
+      grep -A4 -F 'name: GITHUB_READ_TOKEN' "$rendered" | grep -Fq "name: $secret_name"
+      grep -A4 -F 'name: GITHUB_READ_TOKEN' "$rendered" | grep -Fq 'key: source-token'
+      if grep -Fq 'optional: true' "$rendered"; then
+        echo "read token Secret is optional: $feature/$credential" >&2
+        exit 1
+      fi
+    elif grep -Fq 'name: GITHUB_READ_TOKEN' "$rendered"; then
+      echo "unused or unconfigured read token rendered: $feature/$credential" >&2
+      exit 1
+    fi
+    if grep -Fq 'name: BOT_TOKEN' "$rendered" || grep -Fq 'name: ACTIONS_ENABLED' "$rendered"; then
+      echo "read-only features rendered write-action credentials: $feature/$credential" >&2
+      exit 1
+    fi
+    if [[ "$escalation" == false ]] && grep -Fq 'name: PULL_REQUEST_ESCALATION_ENABLED' "$rendered"; then
+      echo "disabled escalation environment rendered: $feature/$credential" >&2
+      exit 1
+    fi
+  done
+done
 
 expect_fail escalation-without-ai 'server.pullRequestEscalation.enabled requires ai.enabled' --set server.pullRequestEscalation.enabled=true --set server.actions.mode=proxy
 expect_fail escalation-raw-env 'server.extraEnv must not set PULL_REQUEST_ESCALATION_ENABLED' \

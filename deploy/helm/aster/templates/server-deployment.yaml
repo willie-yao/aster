@@ -283,8 +283,8 @@ spec:
               value: {{ .Values.ai.contextWindowTokens | quote }}
             {{- end }}
             {{- end }}
-            {{- /* Read-only GitHub token: escalation reads the pull request's changed files. */}}
-            {{- if and $escalation (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName) }}
+            {{- /* Read-only GitHub token for chat and pull request source context. */}}
+            {{- if and (or $chat $escalation) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName) }}
             - name: GITHUB_READ_TOKEN
               valueFrom:
                 secretKeyRef:
