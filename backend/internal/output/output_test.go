@@ -140,6 +140,83 @@ func TestWriteJobDetail(t *testing.T) {
 	}
 }
 
+func TestWriteJobDetailPublishesArraysWithoutMutatingInput(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		runs     []models.BuildResult
+		retained []models.BuildResult
+	}{
+		{name: "nil runs"},
+		{
+			name: "nil test cases",
+			runs: []models.BuildResult{{BuildInfo: models.BuildInfo{BuildID: "100"}}},
+		},
+		{
+			name: "retained metadata and populated tests",
+			runs: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{BuildID: "101"},
+				TestCases: []models.TestCase{{Name: "TestA", Status: "passed"}},
+			}},
+			retained: []models.BuildResult{{
+				BuildInfo: models.BuildInfo{BuildID: "99"}, TestsTotal: 4, TestsPassed: 4,
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			detail := models.JobDetail{
+				Name: "periodic-example", JobID: "example/periodic-example",
+				JobType: models.JobTypePeriodic, Repo: "example/project", CurrentStatus: models.JobCurrentUnknown,
+				Runs: test.runs, RetainedRuns: test.retained,
+			}
+			before, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteJobDetail(dir, detail); err != nil {
+				t.Fatal(err)
+			}
+			after, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("WriteJobDetail mutated its input")
+			}
+			path := filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID))
+			var written models.JobDetail
+			readJSON(t, path, &written)
+			if written.Runs == nil || len(written.Runs) != len(test.runs) || len(written.RetainedRuns) != len(test.retained) {
+				t.Fatalf("published runs = %+v, retained = %+v", written.Runs, written.RetainedRuns)
+			}
+			for _, runs := range [][]models.BuildResult{written.Runs, written.RetainedRuns} {
+				for _, run := range runs {
+					if run.TestCases == nil {
+						t.Errorf("build %s test_cases is null, want an array", run.BuildID)
+					}
+				}
+			}
+			if len(test.retained) > 0 {
+				retained := written.RetainedRuns[0]
+				if retained.BuildID != "99" || retained.TestsTotal != 4 || retained.TestsPassed != 4 || len(retained.TestCases) != 0 {
+					t.Fatalf("retained metadata changed: %+v", retained)
+				}
+				if !reflect.DeepEqual(written.Runs[0].TestCases, test.runs[0].TestCases) {
+					t.Fatalf("populated tests changed: %+v", written.Runs[0].TestCases)
+				}
+			}
+			if test.name == "nil runs" {
+				var published, fixture map[string]any
+				readJSON(t, path, &published)
+				readJSON(t, "../../../frontend/tests/fixtures/empty-job-detail.json", &fixture)
+				if !reflect.DeepEqual(published, fixture) {
+					t.Fatalf("published job differs from frontend fixture:\ngot  %+v\nwant %+v", published, fixture)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteAllPreservesRunDurationsWithoutDuplicateHistory(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)

@@ -39,6 +39,15 @@ func WriteDashboard(dir string, dashboard models.Dashboard) error {
 // WriteJobDetail writes a per-job detail file under dir/jobs.
 // Keying by JobID prevents same-named jobs from overwriting each other.
 func WriteJobDetail(dir string, detail models.JobDetail) error {
+	detail.Runs = append([]models.BuildResult{}, detail.Runs...)
+	detail.RetainedRuns = append([]models.BuildResult{}, detail.RetainedRuns...)
+	for _, runs := range [][]models.BuildResult{detail.Runs, detail.RetainedRuns} {
+		for i := range runs {
+			if runs[i].TestCases == nil {
+				runs[i].TestCases = []models.TestCase{}
+			}
+		}
+	}
 	detail.PatternAnalyses, _ = models.BackfillPatternIdentities(detail.PatternAnalyses)
 	return writeJSON(filepath.Join(dir, "jobs", models.JobDataFilename(detail.JobID)), detail)
 }

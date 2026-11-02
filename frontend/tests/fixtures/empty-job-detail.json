@@ -1,0 +1,9 @@
+{
+  "name": "periodic-example",
+  "job_id": "example/periodic-example",
+  "job_type": "periodic",
+  "repo": "example/project",
+  "current_status": "UNKNOWN",
+  "pass_rate_recent": null,
+  "runs": []
+}
