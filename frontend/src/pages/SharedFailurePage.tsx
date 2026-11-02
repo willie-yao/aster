@@ -350,7 +350,7 @@ export function SharedFailurePage() {
           {title}
         </Typography>
         <Typography component="p" color="textSecondary" sx={{ m: 0, mt: 0.75, ...overviewTypography.secondaryBody }}>
-          Failing on {sharedFailureScope(failure)}
+          {sharedFailureScope(failure)}
           {" · "}
           {linkToJob ? (
             <Link component={RouterLink} to={jobPath(failure.job_id)} underline="none">

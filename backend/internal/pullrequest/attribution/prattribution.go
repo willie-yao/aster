@@ -203,11 +203,14 @@ func Annotate(details []models.PullRequestDetail, baselines map[string]Baseline,
 	}
 }
 
-// pullsByFailure indexes which pull requests report each failing job and test.
+// pullsByFailure indexes current-head observations of each failing job and test.
 func pullsByFailure(details []models.PullRequestDetail) map[failureKey][]int {
 	index := map[failureKey][]int{}
 	for _, detail := range details {
 		for _, check := range detail.Checks {
+			if check.Stale {
+				continue
+			}
 			for _, failure := range check.Failures {
 				key := failureKey{
 					baseRef: detail.BaseRef, jobName: check.JobName, testName: failure.Name,

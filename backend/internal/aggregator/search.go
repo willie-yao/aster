@@ -1,30 +1,18 @@
 package aggregator
 
 import (
+	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
-// setupTeardownPrefixes lists test name substrings that indicate
-// setup/teardown tests which should be excluded unless they failed.
-var setupTeardownPrefixes = []string{
-	"SynchronizedBeforeSuite",
-	"SynchronizedAfterSuite",
-	"BeforeSuite",
-	"AfterSuite",
-}
+var setupTeardownRegex = regexp.MustCompile(`(?i)beforesuite|aftersuite`)
 
 // isSetupTeardown returns true if the test name looks like a setup/teardown test.
 func isSetupTeardown(name string) bool {
-	for _, prefix := range setupTeardownPrefixes {
-		if strings.Contains(name, prefix) {
-			return true
-		}
-	}
-	return false
+	return setupTeardownRegex.MatchString(name)
 }
 
 // BuildSearchIndex creates a searchable index of unique tests across jobs.

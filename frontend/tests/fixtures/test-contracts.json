@@ -1,0 +1,26 @@
+{
+  "setup_cases": [
+    { "name": "BeforeSuite", "status": "passed", "visible": false },
+    { "name": "[beforesuite] init", "status": "passed", "visible": false },
+    { "name": "suite SynchronizedAfterSuite cleanup", "status": "passed", "visible": false },
+    { "name": "prefix BEFOREsuite suffix", "status": "passed", "visible": false },
+    { "name": "Beforeſuite", "status": "passed", "visible": false },
+    { "name": "BEFORESUİTE", "status": "passed", "visible": true },
+    { "name": "[AfterSuite] cleanup failed", "status": "failed", "visible": true },
+    { "name": "synchronizedbeforesuite setup failed", "status": "failed", "visible": true },
+    { "name": "BeforeSuite skipped", "status": "skipped", "visible": false },
+    { "name": "ordinary test", "status": "passed", "visible": true },
+    { "name": "ordinary failure", "status": "failed", "visible": true }
+  ],
+  "messages": [
+    { "name": "timestamp", "input": "failed at 2026-03-15T10:30:00.123Z after 12 attempts", "normalized": "failed at <timestamp> after <num> attempts" },
+    { "name": "space timestamp", "input": "2026-03-15 10:30:00+01:00 timed out", "normalized": "<timestamp> timed out" },
+    { "name": "numbers and decimals", "input": "status 503, elapsed 12.5 and -42", "normalized": "status <num>, elapsed <num> and -<num>" },
+    { "name": "identifier boundaries", "input": "pod123 failed after 3600.001s at node-42", "normalized": "pod123 failed after <num>001s at node-<num>" },
+    { "name": "hex identifiers", "input": "0xdeadBEEF deadbeef12345678 abcdef0123456789", "normalized": "0xdeadBEEF deadbeef12345678 abcdef0123456789" },
+    { "name": "ASCII whitespace", "input": " \tfailed\n  with\r\nstatus\f503 \t", "normalized": "failed with status <num>" },
+    { "name": "Unicode whitespace", "input": "\u0085\u00a0failed\u00a0with\u2003status 503\u202f", "normalized": "failed\u00a0with\u2003status <num>" },
+    { "name": "vertical tab", "input": "\u000bfailed\u000bstatus\u000b", "normalized": "failed\u000bstatus" },
+    { "name": "BOM is not Go whitespace", "input": "\ufefffailed\ufeff", "normalized": "\ufefffailed\ufeff" }
+  ]
+}

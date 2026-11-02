@@ -5,29 +5,26 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTheme } from "@mui/material/styles";
 import { Link as RouterLink } from "react-router-dom";
 import type { PullRequestSummary } from "../types/pullRequests";
-import { shortSHA } from "../lib/pullRequests";
+import { pullRequestStateLabel, shortSHA } from "../lib/pullRequests";
 import { pullRequestPath } from "../lib/routes";
 import { timeAgo } from "../lib/utils";
 import { StatusChip } from "./StatusChip";
 import { overviewLayout, overviewTypography } from "../theme/overview";
 
 const wideBreakpoint = "@media (min-width: 1200px)";
-const compactColumns = "72px minmax(220px, 2fr) 104px 72px 112px 96px 82px";
-const wideColumns = "84px minmax(300px, 2.4fr) 120px 72px 164px 112px 88px";
-const headers = ["Pull", "Title", "Base", "Checks", "Failing", "Updated", "State"];
+const compactColumns = "72px minmax(220px, 2fr) 104px 72px 112px 96px 100px";
+const wideColumns = "84px minmax(300px, 2.4fr) 120px 72px 164px 112px 100px";
+const headers = ["Pull", "Title", "Base", "Observed", "Failing", "PR updated", "State"];
 
 // UNKNOWN has no dashboard status equivalent, so it renders as a neutral chip.
 function stateChip(pull: PullRequestSummary) {
-  if (pull.ci_state === "UNKNOWN") {
-    return <StatusChip status="UNKNOWN" label="No runs" sx={{ height: 26, fontSize: "13px" }} />;
-  }
-  const label = pull.ci_state === "PENDING" ? "Pending" : undefined;
+  const label = pullRequestStateLabel(pull);
   const status = pull.ci_state === "PENDING" ? "RUNNING" : pull.ci_state;
   return <StatusChip status={status} label={label} sx={{ height: 26, fontSize: "13px" }} />;
 }
 
 function checksValue(pull: PullRequestSummary): string {
-  return pull.checks_observed === 0 ? "None" : String(pull.checks_observed);
+  return String(pull.checks_observed);
 }
 
 function failingValue(pull: PullRequestSummary): string {
@@ -214,9 +211,9 @@ function MobileRow({ pull }: { pull: PullRequestSummary }) {
       </Box>
       <Box sx={{ gridArea: "meta", display: "flex", minWidth: 0, alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
         <Metric label="Base" value={pull.base_ref || "Not set"} />
-        <Metric label="Checks" value={checksValue(pull)} />
+        <Metric label="Observed" value={checksValue(pull)} />
         <Metric label="Failing" value={failingValue(pull)} />
-        <Metric label="Updated" value={timeAgo(pull.updated_at)} />
+        <Metric label="PR updated" value={timeAgo(pull.updated_at)} />
       </Box>
     </Box>
   );

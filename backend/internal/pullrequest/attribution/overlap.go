@@ -137,7 +137,7 @@ func changedCodeAttribution(base *models.FailureAttribution, tc models.TestCase,
 	return &models.FailureAttribution{
 		Verdict:    models.AttributionUnexplained,
 		Confidence: baseConfidence(base),
-		Summary:    "This test fails in a file this pull request does not change, so the change is unlikely to be the reason. It still needs investigation.",
+		Summary:    "No changed-file overlap found for the reported failure location. This does not rule out the pull request as a cause; the failure still needs investigation.",
 		Evidence: appendEvidence(base, models.AttributionEvidence{
 			Kind:     models.AttributionEvidenceUnchangedCode,
 			Detail:   "The reported failure location is in " + humanList(sites) + ", which this pull request does not modify.",

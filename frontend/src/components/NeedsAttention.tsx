@@ -8,6 +8,7 @@ import Typography from "@mui/material/Typography";
 import { useEffect, useMemo, useState } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
 import { useResolved } from "../hooks/useData";
+import { ResolutionStatus } from "./ResolutionStatus";
 import { useManifest } from "../hooks/useManifest";
 import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
@@ -487,6 +488,7 @@ interface AttentionRowProps {
   summary: string;
   detail?: string;
   count?: string;
+  wrapCount?: boolean;
   signal?: string;
   statusColor?: "success" | "warning" | "error";
   muted?: boolean;
@@ -499,6 +501,7 @@ export function AttentionRow({
   summary,
   detail,
   count,
+  wrapCount = false,
   signal,
   statusColor,
   muted = false,
@@ -600,7 +603,8 @@ export function AttentionRow({
         sx={{
           gridArea: "count",
           display: "none",
-          whiteSpace: "nowrap",
+          whiteSpace: wrapCount ? "normal" : "nowrap",
+          ...(wrapCount && { minWidth: 0, maxWidth: 180, overflowWrap: "anywhere" }),
           ...overviewTypography.data,
           [attentionDesktopBreakpoint]: { display: "block" },
         }}
@@ -639,7 +643,7 @@ export function AttentionRow({
               variant="data"
               component="span"
               color="textSecondary"
-              sx={overviewTypography.data}
+              sx={{ ...overviewTypography.data, ...(wrapCount && { minWidth: 0, overflowWrap: "anywhere" }) }}
             >
               {count}
             </Typography>
@@ -813,7 +817,8 @@ export function NeedsAttention({
 }: NeedsAttentionProps) {
   const manifest = useManifest();
   const filePrefix = manifest.short_name_prefix ?? "";
-  const { data: resolved, refetch: refetchResolved } = useResolved();
+  const { data: resolved, availability: resolutionAvailability, refetch: refetchResolved } = useResolved();
+  const resolutionKnown = resolutionAvailability === "available";
   const { features } = useCapabilities();
   const { status } = useAuth();
   const canReopen = Boolean(features.actions) && status === "authenticated";
@@ -834,7 +839,7 @@ export function NeedsAttention({
 
   const recurring = useMemo<PatternAnalysis[]>(
     () =>
-      rankRecurringPatterns(
+      resolutionKnown && resolved ? rankRecurringPatterns(
         (report?.recurring_patterns ?? []).filter(
           (pattern) =>
             pattern.job_id &&
@@ -842,32 +847,32 @@ export function NeedsAttention({
             !patternFullyResolved(pattern, resolved),
         ),
         jobsByID,
-      ).slice(0, MAX_OVERVIEW_PATTERNS),
-    [jobsByID, report, resolved],
+      ).slice(0, MAX_OVERVIEW_PATTERNS) : [],
+    [jobsByID, report, resolved, resolutionKnown],
   );
 
   const resolvedPatterns = useMemo<PatternAnalysis[]>(
     () =>
-      (report?.recurring_patterns ?? []).filter(
+      resolutionKnown && resolved ? (report?.recurring_patterns ?? []).filter(
         (pattern) =>
           pattern.job_id &&
           patternLifecycleActive(pattern.lifecycle) &&
           patternFullyResolved(pattern, resolved),
-      ),
-    [report, resolved],
+      ) : [],
+    [report, resolved, resolutionKnown],
   );
 
   // Dismissals whose pattern has left the active recurring set, and resolved
   // causes no published pattern still shows. The overview stops showing both, so
   // without this it offers no way to reopen one.
   const unlisted = useMemo(
-    () => unlistedPatternResolutions(report, resolved, canReopen),
-    [canReopen, report, resolved],
+    () => resolutionKnown && resolved ? unlistedPatternResolutions(report, resolved, canReopen) : [],
+    [canReopen, report, resolved, resolutionKnown],
   );
 
   const unlistedCauses = useMemo(
-    () => unlistedCauseResolutions(report, resolved, canReopen),
-    [canReopen, report, resolved],
+    () => resolutionKnown && resolved ? unlistedCauseResolutions(report, resolved, canReopen) : [],
+    [canReopen, report, resolved, resolutionKnown],
   );
 
   const groups = useMemo<AttentionGroup[]>(
@@ -884,11 +889,12 @@ export function NeedsAttention({
     ? groups.reduce((sum, group) => sum + group.items.length, 0)
     : null;
   const summary = needsAttentionSummary(
-    report ? recurring.length : null,
+    report && resolutionKnown ? recurring.length : null,
     testAlerts,
     loading,
     Boolean(error) || (!loading && !report),
     shared.length,
+    resolutionAvailability === "loading",
   );
   const featured = recurring.slice(0, FEATURED_PATTERNS);
   const additional = recurring.slice(FEATURED_PATTERNS);
@@ -906,12 +912,13 @@ export function NeedsAttention({
         summary={testName}
         detail={baseBranchNote(failure, (jobName) => shortJobName(jobName, filePrefix))}
         count={sharedFailureScope(failure)}
+        wrapCount
         signal="Shared"
         statusColor="error"
       />
     );
   };
-  const noActiveAlerts = Boolean(report && !hasActiveItems);
+  const noActiveAlerts = Boolean(report && resolutionKnown && !hasActiveItems);
 
   return (
     <Box
@@ -972,6 +979,12 @@ export function NeedsAttention({
         <Typography color="textSecondary" sx={{ px: 1.5, py: 2, ...overviewTypography.secondaryBody }}>
           Attention data is unavailable.
         </Typography>
+      )}
+
+      {report && !resolutionKnown && (
+        <Box sx={{ px: 1.5, py: 2 }}>
+          <ResolutionStatus availability={resolutionAvailability} onRetry={refetchResolved} />
+        </Box>
       )}
 
       {noActiveAlerts && (
@@ -1160,7 +1173,7 @@ export function NeedsAttention({
               // A pattern reaches this list either through a pattern-scope
               // resolution or by having every cause resolved, so the note is
               // only there to show in the first case.
-              const entry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+              const entry = pattern.id ? resolved?.resolved[pattern.id] : undefined;
               const subject = shortJobName(pattern.subject, filePrefix);
               return (
                 <AttentionRow

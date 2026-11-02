@@ -143,11 +143,27 @@ test("a build-level failure is named by its job, not its generic test name", () 
 });
 
 test("the scope states how many pull requests and which branch", () => {
-  assert.equal(sharedFailureScope(failure()), "2 pull requests targeting main");
+  assert.equal(sharedFailureScope(failure()), "Observed on 2 pull requests targeting main");
   assert.equal(
     sharedFailureScope(failure({ pull_requests: [member(1, "2026-05-01T12:00:00Z")] })),
-    "1 pull request targeting main",
+    "Observed on 1 pull request targeting main",
   );
+  assert.equal(sharedFailureScope(failure({ base_ref: "release-1" })), "Observed on 2 pull requests targeting release-1");
+  assert.equal(sharedFailureScope(failure({ base_ref: "" })), "Observed on 2 pull requests");
+  assert.equal(sharedFailureScope(failure({ base_ref: "", pull_requests: [] })), "Observed on 0 pull requests");
+});
+
+test("shared scope distinguishes older-revision results from the total observations", () => {
+  const mixed = failure({ pull_requests: [
+    member(1, "2026-05-01T12:00:00Z"),
+    member(2, "2026-05-01T12:00:00Z", { stale: true }),
+    member(3, "2026-05-01T12:00:00Z", { stale: true }),
+  ] });
+  assert.equal(sharedFailureScope(mixed), "Observed on 3 pull requests targeting main; 2 results from older revisions");
+  assert.equal(sharedFailureScope({ ...mixed, pull_requests: mixed.pull_requests.map((pull) => ({ ...pull, stale: true })) }),
+    "Observed on 3 pull requests targeting main; 3 results from older revisions");
+  assert.equal(sharedFailureScope({ ...mixed, pull_requests: [mixed.pull_requests[1]] }),
+    "Observed on 1 pull request targeting main; 1 result from older revisions");
 });
 
 test("the base-branch note names where the test already fails", () => {

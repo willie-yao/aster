@@ -85,7 +85,7 @@ export function SharedFailureLedger({ failures }: { failures: SharedFailure[] })
               color="error"
               sx={{ justifySelf: { xs: "start", sm: "end" }, whiteSpace: "nowrap", ...overviewTypography.data }}
             >
-              {failure.pull_requests.length} PRs
+              {failure.pull_requests.length} observed PRs
             </Typography>
           </Link>
         ))}

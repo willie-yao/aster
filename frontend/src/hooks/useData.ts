@@ -1,8 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useReducer, useRef } from "react";
 import type {
   Dashboard,
   JobDetail,
-  ResolvedState,
   SearchIndex,
 } from "../types/dashboard";
 import type {
@@ -13,6 +12,7 @@ import type {
 import { jobDataFilename } from "../lib/utils";
 import { searchIndexPath } from "../lib/search";
 import { normalizeFlakinessReport, type FlakinessReportWire } from "../lib/flakinessReport";
+import { initialResolvedRead, readResolvedState, resolvedReadState, resolutionAvailability } from "../lib/resolvedState";
 
 const DATA_BASE =
   import.meta.env.VITE_DATA_URL ?? `${import.meta.env.BASE_URL}data`;
@@ -95,59 +95,27 @@ export function usePullRequestDetail(number: string | undefined) {
   return useJSON<PullRequestDetail>(safe ? `pull-requests/${safe}.json` : null);
 }
 
-// resolvedReadAttempts bounds the retries of one resolved-state read. A read
-// that follows a dismissal write must eventually land: leaving the pre-mutation
-// set in place would show a stale control until the view is remounted.
-const resolvedReadAttempts = 5;
-
-function emptyResolved(): ResolvedState {
-  return { resolved: {}, causes: {} };
-}
-
 export function useResolved() {
-  const [data, setData] = useState<ResolvedState>(emptyResolved);
-  const [loading, setLoading] = useState(true);
+  const [state, dispatch] = useReducer(resolvedReadState, initialResolvedRead);
   const [nonce, setNonce] = useState(0);
+  const activeRead = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    let attempt = 0;
-
-    function load() {
-      fetch(`${DATA_BASE}/resolved.json`, { cache: "no-store" })
-        .then((r) => {
-          // A missing file (static mode, or nothing resolved yet) is normal:
-          // treat it as an empty set rather than an error.
-          if (r.status === 404) return emptyResolved();
-          if (!r.ok) throw new Error(`resolved.json: ${r.status}`);
-          return r.json() as Promise<ResolvedState>;
-        })
-        .then((d: ResolvedState) => {
-          if (cancelled) return;
-          // causes is omitted entirely when nothing is resolved at that scope,
-          // so it is filled in here and consumers never guard the lookup.
-          setData(d?.resolved ? { resolved: d.resolved, causes: d.causes ?? {} } : emptyResolved());
-          setLoading(false);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          // Keep what we already have rather than reporting an empty set, and
-          // retry so a transient failure resolves itself.
-          if (attempt >= resolvedReadAttempts - 1) {
-            setLoading(false);
-            return;
-          }
-          timer = window.setTimeout(load, Math.min(8000, 500 * 2 ** attempt++));
-        });
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
+    const controller = new AbortController();
+    activeRead.current = controller;
+    void readResolvedState({
+      url: `${DATA_BASE}/resolved.json`, signal: controller.signal, onResult: dispatch,
+    });
+    return () => controller.abort();
   }, [nonce]);
 
-  return { data, loading, refetch: () => setNonce((n) => n + 1) };
+  return {
+    ...state,
+    availability: resolutionAvailability(state),
+    refetch: () => {
+      activeRead.current?.abort();
+      dispatch({ type: "loading" });
+      setNonce((n) => n + 1);
+    },
+  };
 }

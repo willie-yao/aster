@@ -111,7 +111,7 @@ export function PullRequestsPage() {
           Pull Request Triage
         </Typography>
         <Typography variant="data" color="textSecondary" sx={{ justifySelf: "end", ...overviewTypography.data }}>
-          Updated {timeAgo(data.generated_at)}
+          Analysis snapshot {timeAgo(data.generated_at)}
         </Typography>
       </Box>
 

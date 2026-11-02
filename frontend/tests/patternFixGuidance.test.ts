@@ -378,7 +378,7 @@ test("pattern resolution is reachable on the causal-group results the engine pub
   assert.match(banner, /\{showFailureActions && pattern\.id && \(/);
   assert.doesNotMatch(banner, /!analysisOnly[^\n]*<FailureActions/);
   // The resolved state has to render for the same patterns it can be set on.
-  assert.match(banner, /const resolvedEntry = pattern\.id \? resolved\.resolved\[pattern\.id\] : undefined/);
+  assert.match(banner, /const resolvedEntry = resolutionKnown && pattern\.id \? resolved\?\.resolved\[pattern\.id\] : undefined/);
   // A resolved pattern keeps its Reopen control even once a fresh resolution
   // would be refused.
   assert.match(banner, /draftable \|\| fixable \|\| canResolve \|\| Boolean\(resolvedEntry\)/);
@@ -407,7 +407,7 @@ test("per-cause resolution is offered per causal group and keyed by signature", 
   assert.match(banner, /<CauseResolution\s+signature=\{group\.signature\}/);
   assert.match(banner, /resolvedEntry=\{causeResolutions\[index\]\}/);
   assert.match(banner, /resolvable=\{causeResolvableFlags\[index\]\}/);
-  assert.match(banner, /group\.signature \? resolved\.causes\[group\.signature\] : undefined/);
+  assert.match(banner, /resolutionKnown && group\.signature \? resolved\?\.causes\[group\.signature\] : undefined/);
   // An unsigned group has no durable key, so it is never offered the control.
   assert.match(eligibility, /group\.signature\?\.trim\(\) &&/);
   // Reopening stays available once a fresh resolution would be refused.
@@ -445,17 +445,6 @@ test("reopening a pattern never falls back to a resolution the server would refu
   assert.doesNotMatch(actions, /useResolved/);
   assert.match(banner, /isResolved=\{Boolean\(resolvedEntry\)\}/);
   assert.match(banner, /onResolvedChange=\{refetchResolved\}/);
-
-  // The read that follows a resolution write keeps prior state and retries, so
-  // a transient failure cannot leave a stale control until remount.
-  const data = source("src/hooks/useData.ts");
-  assert.match(data, /if \(r\.status === 404\) return emptyResolved\(\);/);
-  assert.match(data, /if \(!r\.ok\) throw new Error\(`resolved\.json: \$\{r\.status\}`\);/);
-  assert.match(data, /timer = window\.setTimeout\(load, Math\.min\(8000/);
-  assert.match(data, /const resolvedReadAttempts = \d+;/);
-  // causes is omitted when empty, so it is filled in before any consumer reads
-  // it and none of them has to guard the lookup.
-  assert.match(data, /causes: d\.causes \?\? \{\}/);
 });
 
 test("guidance keeps a contained mobile action and points to the nearby test ledger", () => {

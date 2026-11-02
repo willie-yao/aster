@@ -1,0 +1,114 @@
+{
+  "indexes": [
+    {
+      "generated_at": "2026-08-17T10:00:00Z",
+      "truncated": false,
+      "repo": "example/project",
+      "pull_requests": [
+        {
+          "number": 7,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 0,
+          "checks_failing": 0,
+          "checks_unobserved": 0,
+          "failing_tests": 0
+        },
+        {
+          "number": 8,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 0,
+          "checks_failing": 0,
+          "checks_unobserved": 1,
+          "failing_tests": 0
+        },
+        {
+          "number": 9,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 1,
+          "checks_failing": 0,
+          "checks_unobserved": 1,
+          "failing_tests": 0
+        }
+      ]
+    },
+    {
+      "generated_at": "2026-08-17T10:00:00Z",
+      "truncated": true,
+      "repo": "example/project",
+      "pull_requests": [
+        {
+          "number": 7,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 0,
+          "checks_failing": 0,
+          "checks_unobserved": 0,
+          "failing_tests": 0
+        },
+        {
+          "number": 8,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 0,
+          "checks_failing": 0,
+          "checks_unobserved": 1,
+          "failing_tests": 0
+        },
+        {
+          "number": 9,
+          "title": "",
+          "author": "",
+          "repo": "example/project",
+          "base_ref": "",
+          "head_sha": "",
+          "html_url": "",
+          "created_at": "0001-01-01T00:00:00Z",
+          "updated_at": "0001-01-01T00:00:00Z",
+          "ci_state": "UNKNOWN",
+          "checks_observed": 1,
+          "checks_failing": 0,
+          "checks_unobserved": 1,
+          "failing_tests": 0
+        }
+      ]
+    }
+  ]
+}

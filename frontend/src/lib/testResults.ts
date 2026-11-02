@@ -1,5 +1,9 @@
 import type { BuildResult } from "../types/dashboard";
 
+export function isSetupTeardown(name: string): boolean {
+  return /beforesuite|aftersuite/iu.test(name);
+}
+
 export interface EmptyTestResultsPresentation {
   kind: "pending" | "failed" | "unavailable" | "unreadable" | "empty" | "retained";
   title: string;

@@ -7,6 +7,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
+import { resolvedFixturePlugin, type ResolvedFixture } from "./helpers/resolved.js";
 import { failedJUnitRun } from "./helpers/failedJUnitRun.js";
 import {
   patternFullyResolved,
@@ -17,7 +18,8 @@ import type { BuildResult, FlakinessReport, PatternAnalysis, PatternRefreshStatu
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 
-const { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme } = await withSSR(async (vite) => {
+const { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme, resolvedFixture } = await withSSR(async (vite) => {
+  const { resolvedFixture } = await vite.ssrLoadModule("/src/hooks/useData.ts") as { resolvedFixture: ResolvedFixture };
   const { PatternBanner } = (await vite.ssrLoadModule("/src/components/PatternBanner.tsx")) as {
     PatternBanner: (props: {
       pattern: PatternAnalysis;
@@ -42,8 +44,8 @@ const { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, 
     AuthContext: React.Context<AuthState>;
   };
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-  return { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme };
-});
+  return { PatternBanner, UnlistedResolutionRow, CapabilitiesContext, AuthContext, defaultTheme, resolvedFixture };
+}, [resolvedFixturePlugin]);
 
 function source(file: string): string {
   return readFileSync(resolvePath(process.cwd(), file), "utf8");
@@ -109,6 +111,64 @@ function render(
   );
   return renderToStaticMarkup(tree);
 }
+
+for (const availability of ["loading", "unavailable"] as const) {
+  test(`pattern analysis remains readable while resolution state is ${availability}`, () => {
+    const previous = resolvedFixture.state;
+    resolvedFixture.state = {
+      data: { resolved: { "pattern-1": resolution() }, causes: { "sig-a": resolution() } },
+      loading: availability === "loading", error: availability === "unavailable" ? "offline" : null, availability,
+    };
+    try {
+      const html = render(causalGroupPattern({
+        causal_groups: [{ builds: ["100", "250"], root_cause: "etcd leader election times out", confidence: "high", signature: "sig-a" }],
+      }));
+      assert.match(html, /etcd leader election times out/);
+      assert.match(html, new RegExp(`Resolution status is ${availability}`));
+      assert.doesNotMatch(html, /Resolve pattern|Reopen pattern|Resolve failure|Reopen failure|Resolved by/);
+      assert.equal(html.includes("Retry resolution status"), availability === "unavailable");
+      const readOnly = render(causalGroupPattern(), admin, { mode: "static", features: { actions: false } });
+      assert.match(readOnly, new RegExp(`Resolution status is ${availability}`));
+      assert.match(readOnly, /etcd leader election times out/);
+    } finally {
+      resolvedFixture.state = previous;
+    }
+  });
+}
+
+test("known pattern resolutions show their status and reopen control", () => {
+  const previous = resolvedFixture.state;
+  resolvedFixture.state = {
+    data: { resolved: { "pattern-1": resolution() }, causes: {} },
+    loading: false, error: null, availability: "available",
+  };
+  try {
+    const html = render(causalGroupPattern());
+    assert.match(html, /Resolved by willie-yao/);
+    assert.match(html, /Reopen pattern/);
+    assert.doesNotMatch(html, /Resolve pattern|Resolution status is/);
+  } finally {
+    resolvedFixture.state = previous;
+  }
+});
+
+test("known cause resolutions collapse the cause and suppress active resolve controls", () => {
+  const previous = resolvedFixture.state;
+  resolvedFixture.state = {
+    data: { resolved: {}, causes: { "sig-a": resolution() } },
+    loading: false, error: null, availability: "available",
+  };
+  try {
+    const html = render(causalGroupPattern({
+      causal_groups: [{ builds: ["100", "250"], root_cause: "etcd leader election times out", confidence: "high", signature: "sig-a" }],
+    }));
+    assert.match(html, />Resolved</);
+    assert.match(html, /aria-expanded="false" aria-controls="cause-body-pattern-1-/);
+    assert.doesNotMatch(html, /Resolve failure|Resolve pattern|Resolution status is/);
+  } finally {
+    resolvedFixture.state = previous;
+  }
+});
 
 test("an admin can dismiss the causal-group patterns the engine actually publishes", () => {
   const html = render(causalGroupPattern());

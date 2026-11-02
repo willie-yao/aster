@@ -9,6 +9,7 @@ import { jobRunPath, testPath } from "../lib/routes";
 import { shortDate, shortTestName } from "../lib/utils";
 import { Panel } from "./Panel";
 import { junitTestCases } from "../lib/buildFailures";
+import { isSetupTeardown } from "../lib/testResults";
 import {
   gridCellAccessibleName,
   gridStatusSymbol,
@@ -31,8 +32,6 @@ interface GridRow {
   cells: GridCellStatus[];
 }
 
-const setupPatterns =
-  /^(SynchronizedBeforeSuite|SynchronizedAfterSuite|BeforeSuite|AfterSuite)$/i;
 const rowBatchSize = 50;
 const runBatchSize = 12;
 
@@ -70,7 +69,7 @@ export function TestResultsGrid({ runs, jobID }: TestResultsGridProps) {
 
       // Filter out skipped-only tests and setup/teardown unless failed.
       if (!hasPass && !hasFail) continue;
-      if (setupPatterns.test(testName) && !hasFail) continue;
+      if (isSetupTeardown(testName) && !hasFail) continue;
 
       rows.push({ testName, failCount, cells });
     }

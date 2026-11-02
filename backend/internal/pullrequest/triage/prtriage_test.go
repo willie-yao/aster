@@ -3,6 +3,7 @@ package triage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -258,6 +259,63 @@ func TestCollectDoesNotReportPassingWithUnreadableChecks(t *testing.T) {
 			}
 			if got := index.PullRequests[1]; got.CIState != models.PullRequestCIPassing || got.ChecksObserved != 1 {
 				t.Errorf("other pull summary = %+v, want PASSING with one observed check", got)
+			}
+		})
+	}
+}
+
+func TestCollectPublishesObservationCompleteness(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		builds     []buildSpec
+		unreadable bool
+		observed   int
+		unobserved int
+	}{
+		{name: "known empty"},
+		{name: "all unread", builds: []buildSpec{{job: "pull-e2e", pullNumber: 7, buildID: "200", passed: true}}, unreadable: true, unobserved: 1},
+		{name: "passed and unread", builds: []buildSpec{
+			{job: "pull-unit", pullNumber: 7, buildID: "100", passed: true},
+			{job: "pull-e2e", pullNumber: 7, buildID: "200", passed: true},
+		}, unreadable: true, observed: 1, unobserved: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := writeBucket(t, tc.builds)
+			if tc.unreadable {
+				backend = finishedErrorBackend{Backend: backend, job: "pull-e2e"}
+			}
+			index, details := collect(t, backend,
+				&fakeLister{pulls: []ghpr.PullRequest{pull(7, "main", headSHA)}},
+				catalogOf(presubmit("pull-unit"), presubmit("pull-e2e")))
+			for _, summary := range []models.PullRequestSummary{index.PullRequests[0], details[0].PullRequestSummary} {
+				if summary.ChecksObserved != tc.observed || summary.ChecksUnobserved != tc.unobserved || summary.CIState != models.PullRequestCIUnknown {
+					t.Errorf("summary = %+v, want UNKNOWN with %d observed and %d unobserved", summary, tc.observed, tc.unobserved)
+				}
+			}
+			for _, value := range []any{index, details[0]} {
+				data, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Contains(data, fmt.Appendf(nil, `"checks_unobserved":%d`, tc.unobserved)) {
+					t.Errorf("wire missing unobserved count: %s", data)
+				}
+			}
+		})
+	}
+}
+
+func TestCollectPublishesIndexTruncation(t *testing.T) {
+	for _, truncated := range []bool{false, true} {
+		t.Run(fmt.Sprint(truncated), func(t *testing.T) {
+			index, _ := collect(t, writeBucket(t, nil),
+				&fakeLister{truncated: truncated}, catalogOf())
+			data, err := json.Marshal(index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if index.Truncated != truncated || !bytes.Contains(data, fmt.Appendf(nil, `"truncated":%t`, truncated)) {
+				t.Errorf("wire missing explicit truncation: %s", data)
 			}
 		})
 	}

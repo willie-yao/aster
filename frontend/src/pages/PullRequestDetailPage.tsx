@@ -14,7 +14,7 @@ import { LoadingState } from "../components/LoadingState";
 import { RunMetadata } from "../components/RunMetadata";
 import { StatusChip } from "../components/StatusChip";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { useDashboard, usePullRequestDetail, useSharedFailures } from "../hooks/useData";
+import { useDashboard, usePullRequestDetail, usePullRequestIndex, useSharedFailures } from "../hooks/useData";
 import { useManifest } from "../hooks/useManifest";
 import {
   attributionLabel,
@@ -25,6 +25,8 @@ import {
   checkSummaryLine,
   isPublishedPresubmitJob,
   needsInvestigation,
+  notInCurrentOpenSnapshot,
+  pullRequestStateLabel,
   shortSHA,
   staleCheckCount,
   unexplainedCount,
@@ -530,12 +532,17 @@ function ChecksSection({
   if (detail.checks.length === 0) {
     return (
       <Box component="section" sx={{ minWidth: 0, bgcolor: "surface.container" }}>
-        <DetailSectionBand title="Presubmit checks" metadata="None observed" />
+        <DetailSectionBand title="Presubmit checks" metadata="0 observed" />
         <Box sx={{ px: { xs: 1.5, sm: 2 }, py: 3, borderTop: "1px solid", borderColor: "divider" }}>
           <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
-            No presubmit builds were found for this pull request. Prow removes build
-            artifacts after its retention window, so GitHub may still show statuses
-            for runs whose artifacts are gone.
+            {pullRequestStateLabel(detail) === "No runs" ? (
+              <>No presubmit builds were found for this pull request. Prow removes build
+                artifacts after its retention window, so GitHub may still show statuses
+                for runs whose artifacts are gone.</>
+            ) : (
+              <>No readable presubmit checks are available in this snapshot. Observation
+                is incomplete or its completeness is unknown; runs may still exist.</>
+            )}
           </Typography>
         </Box>
       </Box>
@@ -568,6 +575,7 @@ export function PullRequestDetailPage() {
   const includePresubmits = manifest.discovery?.include_presubmits ?? false;
   const { data: dashboard } = useDashboard();
   const pullRequestsEnabled = manifest.pull_requests?.enabled ?? false;
+  const { data: currentIndex, loading: indexLoading, error: indexError } = usePullRequestIndex(pullRequestsEnabled);
   // Shared failures are supporting context, so a missing or failed load simply
   // omits the cluster links rather than blocking the page.
   const { data: shared } = useSharedFailures(pullRequestsEnabled);
@@ -616,14 +624,8 @@ export function PullRequestDetailPage() {
   }
   if (!data) return null;
 
-  const stateLabel =
-    data.ci_state === "UNKNOWN"
-      ? "No runs"
-      : data.ci_state === "PENDING"
-        ? "Pending"
-        : data.ci_state === "PASSING"
-          ? "Passing"
-          : "Failing";
+  const stateLabel = pullRequestStateLabel(data);
+  const outsideCurrentSnapshot = !indexLoading && !indexError && notInCurrentOpenSnapshot(data, currentIndex);
 
   return (
     <Stack spacing={{ xs: 2.5, sm: 3.5 }} sx={{ minWidth: 0, maxWidth: "100%", overflowX: "clip" }}>
@@ -681,12 +683,20 @@ export function PullRequestDetailPage() {
           { label: "Base branch", value: data.base_ref || "Not available" },
           { label: "Head commit", value: shortSHA(data.head_sha) || "Not available" },
           { label: "Checks observed", value: String(data.checks_observed) },
+          { label: "Checks unavailable", value: String(data.checks_unobserved ?? "Unknown") },
           { label: "Checks failing", value: String(data.checks_failing) },
           { label: "Failing tests", value: String(data.failing_tests) },
-          { label: "Updated", value: formatTimestamp(data.updated_at) },
+          { label: "Analysis snapshot", value: formatTimestamp(data.generated_at) },
+          { label: "PR updated", value: formatTimestamp(data.updated_at) },
         ]}
         links={[]}
       />
+
+      {outsideCurrentSnapshot && (
+        <Typography color="textSecondary" sx={overviewTypography.secondaryBody}>
+          Not in current open snapshot. This retained analysis describes the snapshot shown above.
+        </Typography>
+      )}
 
       <ChecksSection
         detail={data}

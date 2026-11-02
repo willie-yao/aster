@@ -76,6 +76,9 @@ func TestFailureOutsideChangedFilesStaysUnexplained(t *testing.T) {
 	if !hasEvidence(got, models.AttributionEvidenceUnchangedCode) {
 		t.Fatalf("evidence = %+v, want an unchanged-code citation", got.Evidence)
 	}
+	if !strings.Contains(got.Summary, "No changed-file overlap found") || strings.Contains(got.Summary, "unlikely") {
+		t.Errorf("summary must describe overlap without excluding causation: %q", got.Summary)
+	}
 }
 
 // Overlap says nothing about baseline coverage, so it must not upgrade the

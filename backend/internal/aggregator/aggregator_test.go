@@ -1,13 +1,35 @@
 package aggregator
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/models"
 )
+
+func TestNormalizeErrorMessageSharedContract(t *testing.T) {
+	raw, err := os.ReadFile("../../../frontend/tests/fixtures/test-contracts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Messages []struct{ Name, Input, Normalized string } `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range fixture.Messages {
+		t.Run(test.Name, func(t *testing.T) {
+			if got := NormalizeErrorMessage(test.Input); got != test.Normalized {
+				t.Errorf("normalized = %q, want %q", got, test.Normalized)
+			}
+		})
+	}
+}
 
 // makeBuild creates a BuildResult with sensible defaults.
 func makeBuild(id string, started time.Time, passed bool, tests []models.TestCase) models.BuildResult {

@@ -42,6 +42,7 @@ import { overviewTypography } from "../theme/overview";
 import { CausalGroupNextStep } from "./CausalGroupNextStep";
 import { CausalGroupFixButton } from "./CausalGroupFixRouting";
 import { CauseResolution } from "./CauseResolution";
+import { ResolutionStatus } from "./ResolutionStatus";
 import { causeResolutionAvailable } from "../lib/resolution";
 import { PatternFixGuidance } from "./PatternFixGuidance";
 import { causalGroupEvidencePresent, causalGroupFixTarget, causalGroupIsEarlier, causalGroupNextStep, orderCausalGroups, externalCause, patternExternalCause, patternFixGuidanceBuildID } from "../lib/patternFixGuidance";
@@ -83,7 +84,8 @@ export function PatternBanner({
   refreshStatus?: PatternRefreshStatus;
   recurrence?: FailureRecurrence[];
 }) {
-  const { data: resolved, refetch: refetchResolved } = useResolved();
+  const { data: resolved, availability: resolutionAvailability, refetch: refetchResolved } = useResolved();
+  const resolutionKnown = resolutionAvailability === "available";
   const { features } = useCapabilities();
   const { status: authStatus } = useAuth();
   // Explicit per-cause expansion overrides. Absent entries fall back to the
@@ -168,7 +170,7 @@ export function PatternBanner({
   const fixGuidanceBuildID = patternFixGuidanceBuildID(pattern, runs);
   const patternUpstreamCause = patternExternalCause(pattern);
   const showFixGuidance = Boolean(jobID && fixGuidanceBuildID && fixCapable && !hasCausalFixTarget);
-  const resolvedEntry = pattern.id ? resolved.resolved[pattern.id] : undefined;
+  const resolvedEntry = resolutionKnown && pattern.id ? resolved?.resolved[pattern.id] : undefined;
   const hasEvidenceBuild = patternChatHasEvidenceBuild(
     pattern,
     runs.map((run) => run.build_id),
@@ -202,10 +204,10 @@ export function PatternBanner({
   const lifecycle = pattern.lifecycle;
   const lifecycleActive = patternLifecycleActive(lifecycle);
   const causeResolutions = causalGroups.map((group) =>
-    group.signature ? resolved.causes[group.signature] : undefined,
+    resolutionKnown && group.signature ? resolved?.causes[group.signature] : undefined,
   );
   const causeResolvableFlags = causalGroups.map((group) =>
-    causeResolvable(pattern, group, refreshStatus),
+    resolutionKnown && causeResolvable(pattern, group, refreshStatus),
   );
   // The bar draws a rule above itself, so it renders only where at least one of
   // the two controls will. Both gates are asked the same way their components
@@ -226,7 +228,7 @@ export function PatternBanner({
   // every cause, so a maintainer is never offered two acknowledgements with
   // different blast radii for the same pattern.
   const causeResolutionCovers = patternResolutionCovered(pattern, refreshStatus);
-  const canResolve = patternResolvable(pattern, refreshStatus) && !causeResolutionCovers;
+  const canResolve = resolutionKnown && patternResolvable(pattern, refreshStatus) && !causeResolutionCovers;
   // Issue drafting follows the remediation contract. Manual Fix drafting only
   // needs a legacy pattern identity; causal-group parents remain excluded.
   const draftable = patternDraftable(pattern, refreshStatus);
@@ -237,7 +239,7 @@ export function PatternBanner({
   // render for a signed-in one, because it carries the sign-in prompt. That
   // covers causes that are already resolved as well as freshly resolvable ones,
   // since a resolved cause still offers Reopen after it stops qualifying.
-  const causeControlsPresent = causeResolutionCovers || causeResolutions.some(Boolean);
+  const causeControlsPresent = resolutionKnown && (causeResolutionCovers || causeResolutions.some(Boolean));
   const showFailureActions =
     draftable || fixable || canResolve || Boolean(resolvedEntry) ||
     (authStatus === "anonymous" && causeControlsPresent);
@@ -327,6 +329,9 @@ export function PatternBanner({
         </Stack>
       )}
     </Alert>
+  ) : null;
+  const resolutionNotice = !resolutionKnown ? (
+    <ResolutionStatus availability={resolutionAvailability} onRetry={refetchResolved} />
   ) : null;
   const mobileNotice = staleNotice || lifecycleNotice ? (
     <Stack spacing={1}>
@@ -602,12 +607,12 @@ export function PatternBanner({
                           showBuild={fixTargetNeedsBuild[index]}
                         />
                       )}
-                      <CauseResolution
+                      {resolutionKnown && <CauseResolution
                         signature={group.signature}
                         resolvedEntry={causeResolutions[index]}
                         resolvable={causeResolvableFlags[index]}
                         onResolvedChange={refetchResolved}
-                      />
+                      />}
                     </Stack>
                   )}
                 </Box>
@@ -690,8 +695,9 @@ export function PatternBanner({
     </>
   ) : undefined;
 
-  const actions = showFixGuidance || chatRef || showFailureActions ? (
+  const actions = resolutionNotice || showFixGuidance || chatRef || showFailureActions ? (
     <Stack spacing={1.25}>
+      {resolutionNotice}
       {showFixGuidance && jobID && fixGuidanceBuildID && (
         <PatternFixGuidance jobID={jobID} buildID={fixGuidanceBuildID} externalCause={patternUpstreamCause} chatAvailable={Boolean(chatRef)} />
       )}
@@ -707,6 +713,7 @@ export function PatternBanner({
       {showFailureActions && pattern.id && (
         <FailureActions
           failureID={pattern.id}
+          resolvable={resolutionKnown}
           canResolve={canResolve}
           isResolved={Boolean(resolvedEntry)}
           draftable={draftable}
