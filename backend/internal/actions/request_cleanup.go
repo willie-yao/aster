@@ -153,10 +153,15 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 			s.rmu.Unlock()
 			return ActionRequestView{}, ErrRequestNotFound
 		}
-		if request.Status != RequestCancelling || request.Cleanup != nil && request.Cleanup.Blocked {
+		if request.Status != RequestCancelling {
 			view := request.ActionRequestView
 			s.rmu.Unlock()
 			return view, nil
+		}
+		if request.Cleanup != nil && request.Cleanup.Blocked {
+			view := request.ActionRequestView
+			s.rmu.Unlock()
+			return view, runtime.ErrWorkIdentityChanged
 		}
 		var work *runtime.WorkRef
 		if request.Runtime != nil {
@@ -229,6 +234,9 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 	}
 	if request.Status != RequestCancelling {
 		return request.ActionRequestView, nil
+	}
+	if request.Cleanup != nil && request.Cleanup.Blocked {
+		return request.ActionRequestView, runtime.ErrWorkIdentityChanged
 	}
 	finalStatus := RequestCancelled
 	reason := ""

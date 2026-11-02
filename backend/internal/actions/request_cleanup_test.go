@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/runtime"
@@ -40,6 +41,75 @@ func waitForCleanupWorkers(t *testing.T, service *Service) {
 	defer cancel()
 	if err := service.Wait(ctx); err != nil {
 		t.Fatalf("cleanup workers did not stop: %v", err)
+	}
+}
+
+func TestCleanupWorkerStopsWhenIdentityBecomesBlocked(t *testing.T) {
+	for _, phase := range []string{"backoff", "in-flight success"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				service, pattern := requestTestService(t)
+				const id = "blocked-worker"
+				request := savedCleanupRequest(id, pattern.ID, "alice")
+				request.Cleanup.FinalStatus = RequestFailed
+				request.Cleanup.Reason = "draft generation failed"
+				service.requests.Requests[id] = request
+				work := *request.Runtime
+				cleanup := *request.Cleanup
+				fake := &fakeManagedAgentRuntime{err: runtime.ErrUnavailable}
+				if phase == "in-flight success" {
+					fake.err = nil
+					fake.release = make(chan struct{})
+				}
+				service.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+				defer func() {
+					service.stopCleanup()
+					_ = service.Wait(context.Background())
+				}()
+				service.startCleanup(id)
+				synctest.Wait()
+				fake.mu.Lock()
+				calls := len(fake.refs)
+				fake.mu.Unlock()
+				if calls != 1 {
+					t.Fatalf("cleanup attempts before identity block = %d", calls)
+				}
+				if phase == "backoff" && service.currentRequestView(id).Error == "" {
+					t.Fatal("cleanup did not reach transient retry backoff")
+				}
+				service.markCleanupBlocked(id)
+				if fake.release != nil {
+					close(fake.release)
+				}
+				waitForCleanupWorkers(t, service)
+				service.rmu.Lock()
+				_, running := service.requestCleanups[id]
+				service.rmu.Unlock()
+				if running {
+					t.Fatal("blocked cleanup retained its single-flight slot")
+				}
+				service.startCleanup(id)
+				waitForCleanupWorkers(t, service)
+				reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+				for _, current := range []*Service{service, reloaded} {
+					assertCleanupDebt(t, current, id)
+					retained := current.requests.Requests[id]
+					if *retained.Runtime != work || !retained.Cleanup.Blocked ||
+						retained.Cleanup.FinalStatus != cleanup.FinalStatus || retained.Cleanup.Reason != cleanup.Reason ||
+						retained.Cleanup.RequestedAt != cleanup.RequestedAt {
+						t.Fatalf("blocked cleanup lost its obligation: runtime=%+v cleanup=%+v", retained.Runtime, retained.Cleanup)
+					}
+				}
+				reloaded.managedRuntime = func() (runtime.ManagedAgentRuntime, error) { return fake, nil }
+				reloaded.ConfigureAsyncRequests(time.Minute, nil)
+				waitForCleanupWorkers(t, reloaded)
+				fake.mu.Lock()
+				defer fake.mu.Unlock()
+				if len(fake.refs) != 1 || fake.refs[0] != work {
+					t.Fatalf("identity-blocked cleanup retried: %+v", fake.refs)
+				}
+			})
+		})
 	}
 }
 
