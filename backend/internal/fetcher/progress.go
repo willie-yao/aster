@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 )
 
@@ -135,7 +134,7 @@ func (p *pipeline) configureProgressAnalysisMetadata() {
 	}
 	source := p.aiProject.AnalysisSource
 	mode := "anonymous"
-	if credentialenv.GitHubReadToken() != "" {
+	if p.githubReadAuth.Configured() {
 		mode = "authenticated"
 	}
 	configured := source.Owner != "" && source.Name != ""

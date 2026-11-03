@@ -23,6 +23,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -134,7 +135,7 @@ func LoadProject(projectDir string, cfg *project.Config, deployment DeploymentCo
 // Options configure reusable model and Tool runtime state.
 type Options struct {
 	Token           string
-	GitHubReadToken string
+	GitHubReadAuth  *githubapp.ReadAuth
 	DataDir         string
 	Project         *Project
 	UsageRecorder   *aiusage.Recorder
@@ -152,7 +153,7 @@ type Runtime struct {
 	ContextWindowTokens int
 	RequestTokenBudget  int
 	MaxOutputTokens     int
-	GitHubReadToken     string
+	GitHubReadAuth      *githubapp.ReadAuth
 	Project             *Project
 	UsageRecorder       *aiusage.Recorder
 	UsageOrigin         aiusage.Origin
@@ -213,7 +214,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		ContextWindowTokens: budgets.ContextWindowTokens,
 		RequestTokenBudget:  budgets.RequestTokenBudget,
 		MaxOutputTokens:     opts.MaxOutputTokens,
-		GitHubReadToken:     opts.GitHubReadToken,
+		GitHubReadAuth:      opts.GitHubReadAuth,
 		Project:             opts.Project,
 		UsageRecorder:       opts.UsageRecorder,
 		UsageOrigin:         opts.UsageOrigin,
@@ -262,7 +263,6 @@ type ServiceOptions struct {
 	Backend             storage.Backend
 	ConsecutiveFailures map[string]int
 	TraceStore          *ai.TraceStore
-	GitHubReadToken     string
 	// Module overrides the analysis module. Nil selects the universal module
 	// the dashboard pass uses. A different module gets its own agentic cache
 	// namespace because the module name is part of the cache key.
@@ -317,7 +317,7 @@ func (r *Runtime) newAnalysisChatAgent(backend storage.Backend, requestedTimeout
 			GCSByteBudget: analysisChatGCSByteBudget, ContextByteBudget: r.ContextByteBudget,
 			Timeout: timeout, SingleToolCall: effective.SingleToolCall,
 			SourceRepoOwner: r.Project.AnalysisSource.Owner, SourceRepoName: r.Project.AnalysisSource.Name,
-			GitHubReadToken: r.GitHubReadToken,
+			GitHubReadAuth: r.GitHubReadAuth,
 		},
 	)
 }
@@ -380,7 +380,7 @@ func (r *Runtime) NewService(opts ServiceOptions) (*ai.Service, error) {
 		Skills:          r.Project.SkillSet,
 		SourceRepoOwner: sourceRepo.Owner,
 		SourceRepoName:  sourceRepo.Name,
-		GitHubReadToken: opts.GitHubReadToken,
+		GitHubReadAuth:  r.GitHubReadAuth,
 		TraceStore:      opts.TraceStore,
 		UsageRecorder:   r.UsageRecorder,
 		UsageOrigin:     r.UsageOrigin,

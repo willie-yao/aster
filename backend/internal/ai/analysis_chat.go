@@ -19,6 +19,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -214,7 +215,7 @@ type AnalysisChatOptions struct {
 	SingleToolCall    bool
 	SourceRepoOwner   string
 	SourceRepoName    string
-	GitHubReadToken   string
+	GitHubReadAuth    *githubapp.ReadAuth
 }
 
 func (o AnalysisChatOptions) normalized() AnalysisChatOptions {
@@ -292,7 +293,7 @@ func (a *AnalysisChatAgent) resolveCauseSources(
 	state.HistoricalRevision = historical.Revision
 	sources := []tools.RepoSource{{
 		ID: tools.PrimarySourceID, Owner: historical.Owner, Name: historical.Name, Revision: historical.Revision,
-		Reader: NewGitHubRepoReader(historical.Owner, historical.Name, historical.Revision, a.opts.GitHubReadToken),
+		Reader: NewGitHubRepoReader(historical.Owner, historical.Name, historical.Revision, a.opts.GitHubReadAuth),
 	}}
 	historicalCatalog := func() (*tools.SourceCatalog, error) {
 		return tools.NewSourceCatalog(tools.PrimarySourceID, sources)
@@ -307,7 +308,7 @@ func (a *AnalysisChatAgent) resolveCauseSources(
 		return catalog, state, err
 	}
 	state.Branch = branch
-	currentReader := NewGitHubRepoReader(historical.Owner, historical.Name, branch, a.opts.GitHubReadToken).(*githubRepoReader)
+	currentReader := NewGitHubRepoReader(historical.Owner, historical.Name, branch, a.opts.GitHubReadAuth).(*githubRepoReader)
 	if err := currentReader.ResolveRef(ctx); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, state, ctxErr
@@ -357,7 +358,7 @@ func analysisChatDefaultSource(
 	if err != nil || branch == testedBranch {
 		return tools.RepoSource{}, "", err
 	}
-	reader := NewGitHubRepoReader(repo.owner, repo.repo, branch, repo.token).(*githubRepoReader)
+	reader := NewGitHubRepoReader(repo.owner, repo.repo, branch, repo.auth).(*githubRepoReader)
 	if err := reader.ResolveRef(ctx); err != nil {
 		return tools.RepoSource{}, "", err
 	}

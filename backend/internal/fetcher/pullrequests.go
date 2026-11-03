@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/githubapp"
@@ -33,10 +32,10 @@ func (p *pipeline) pullRequestsEnabled() bool {
 // which a single pass over a busy repository exhausts, and the resulting 403s
 // only surface as a view that stops updating.
 func (p *pipeline) warnPullRequestTokenMissing() {
-	if !p.pullRequestsEnabled() || credentialenv.GitHubReadToken() != "" {
+	if !p.pullRequestsEnabled() || p.githubReadAuth.Configured() {
 		return
 	}
-	log.Println("⚠ Pull request triage is enabled but neither GITHUB_READ_TOKEN nor GITHUB_TOKEN is set. " +
+	log.Println("⚠ Pull request triage is enabled but no GitHub App, GITHUB_READ_TOKEN, or GITHUB_TOKEN is configured. " +
 		"GitHub reads are anonymous and capped at 60 requests per hour, which one triage pass can exhaust.")
 }
 
@@ -93,7 +92,7 @@ func (p *pipeline) refreshPullRequests(ctx context.Context, res *refreshResult) 
 		BuildsPerJob:    p.cfg.PullRequests.BuildsPerJob,
 		Workers:         p.opts.Workers,
 	}
-	client := ghpr.NewClient(p.client, credentialenv.GitHubReadToken())
+	client := ghpr.NewReadClient(p.client, p.githubReadAuth)
 	result, err := prtriage.Collect(ctx, p.backend, client, p.jobCatalog, opts)
 	if err != nil {
 		return triageOutcome{}, err

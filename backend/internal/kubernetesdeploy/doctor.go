@@ -662,6 +662,22 @@ func checkDesiredServiceAccounts(ctx context.Context, add func(string, Kubernete
 func checkSecretReferences(ctx context.Context, add func(string, KubernetesDoctorStatus, string, string), cluster clusterReader, opts Options, values kubernetesDoctorValues) {
 	type secretRef struct{ namespace, name, purpose string }
 	var refs []secretRef
+	if values.GitHubApp.ExistingSecret != "" {
+		refs = append(refs, secretRef{opts.Namespace, values.GitHubApp.ExistingSecret, "GitHub App"})
+	}
+	if values.AI.GitHubReadTokenSecretName != "" {
+		refs = append(refs, secretRef{opts.Namespace, values.AI.GitHubReadTokenSecretName, "GitHub read token"})
+	}
+	for _, entries := range [][]doctorEnvValues{values.Fetcher.ExtraEnv, values.Server.ExtraEnv} {
+		for _, env := range entries {
+			if env.Name != "ASTER_APP_ID" && env.Name != "ASTER_APP_PRIVATE_KEY" {
+				continue
+			}
+			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name != "" && !env.ValueFrom.SecretKeyRef.Optional {
+				refs = append(refs, secretRef{opts.Namespace, env.ValueFrom.SecretKeyRef.Name, "GitHub App"})
+			}
+		}
+	}
 	if values.AI.ExistingSecret != "" {
 		refs = append(refs, secretRef{opts.Namespace, values.AI.ExistingSecret, "application AI"})
 	}
@@ -679,7 +695,13 @@ func checkSecretReferences(ctx context.Context, add func(string, KubernetesDocto
 		add("Secret references", KubernetesDoctorPass, "no configured existing Secret references require live verification", "")
 		return
 	}
+	seen := map[string]bool{}
 	for _, ref := range refs {
+		key := ref.namespace + "/" + ref.name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		if _, err := cluster.SecretMetadata(ctx, ref.namespace, ref.name); err != nil {
 			add(ref.purpose+" Secret", KubernetesDoctorFail, fmt.Sprintf("Secret metadata %s/%s is unavailable: %v", ref.namespace, ref.name, err), "Have the Secret manager provision the referenced Secret name.")
 			continue
@@ -2666,11 +2688,20 @@ type doctorFixRuntimeValues struct {
 }
 
 type doctorEnvValues struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
+	Name      string `yaml:"name"`
+	Value     string `yaml:"value"`
+	ValueFrom *struct {
+		SecretKeyRef *struct {
+			Name     string `yaml:"name"`
+			Optional bool   `yaml:"optional"`
+		} `yaml:"secretKeyRef"`
+	} `yaml:"valueFrom"`
 }
 
 type kubernetesDoctorValues struct {
+	GitHubApp struct {
+		ExistingSecret string `yaml:"existingSecret"`
+	} `yaml:"githubApp"`
 	Global struct {
 		ImageTag string `yaml:"imageTag"`
 	} `yaml:"global"`

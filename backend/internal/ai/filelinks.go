@@ -426,7 +426,7 @@ func (s *Service) verifyGitHubFileAtRef(ctx context.Context, client *http.Client
 			}
 		}
 	}
-	verification := s.probeGitHubFile(ctx, client, probeURL, useAPI)
+	verification := s.probeGitHubFile(ctx, client, probeURL, useAPI, owner, repo)
 	// Memoize every outcome for the run so one degraded endpoint cannot turn
 	// each citing analysis into another request, but persist only definite
 	// answers so an unverified probe never outlives this pass.
@@ -442,7 +442,7 @@ func (s *Service) verifyGitHubFileAtRef(ctx context.Context, client *http.Client
 // linkProbeURL returns the existence-check URL for one file and whether it
 // addresses the authenticated contents API rather than the raw content host.
 func (s *Service) linkProbeURL(owner, repo, ref, inRepoPath string) (string, bool) {
-	if s.githubReadToken == "" {
+	if !s.githubReadAuth.Configured() {
 		return rawContentBase + "/" + owner + "/" + repo + "/" + ref + "/" + inRepoPath, false
 	}
 	segments := strings.Split(inRepoPath, "/")
@@ -454,7 +454,7 @@ func (s *Service) linkProbeURL(owner, repo, ref, inRepoPath string) (string, boo
 }
 
 // probeGitHubFile issues one bounded existence check.
-func (s *Service) probeGitHubFile(ctx context.Context, client *http.Client, probeURL string, useAPI bool) linkVerification {
+func (s *Service) probeGitHubFile(ctx context.Context, client *http.Client, probeURL string, useAPI bool, owner, repo string) linkVerification {
 	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	method := http.MethodHead
@@ -466,10 +466,9 @@ func (s *Service) probeGitHubFile(ctx context.Context, client *http.Client, prob
 		return linkUnverified
 	}
 	if useAPI {
-		req.Header.Set("Authorization", "Bearer "+s.githubReadToken)
 		req.Header.Set("Accept", "application/vnd.github.raw+json")
 	}
-	resp, err := client.Do(req)
+	resp, err := s.githubReadAuth.Do(client, req, owner, repo, "contents")
 	if err != nil {
 		return linkUnverified
 	}

@@ -169,7 +169,7 @@ ai:
   token: ""
   existingSecret: ""
   tokenSecretKey: AI_TOKEN
-  # The read-only GitHub token, used by two independent features and rendered
+  # Static GitHub read token, used when githubApp is not configured and rendered
   # whether or not ai.enabled is true.
   #   - Analysis source grounding on ai.source_repo. Optional for public
   #     repositories, which fall back to anonymous GitHub reads.
@@ -182,6 +182,14 @@ ai:
   githubReadToken: ""
   githubReadTokenSecretName: ""
   githubReadTokenSecretKey: GITHUB_READ_TOKEN
+
+# GitHub App credentials for automatically renewed read authentication. The
+# existing Secret must hold both keys. App authentication takes precedence over
+# static read tokens and requires installation on every repository Aster reads.
+githubApp:
+  existingSecret: ""
+  appIDKey: ASTER_APP_ID
+  privateKeyKey: ASTER_APP_PRIVATE_KEY
 
 fetcher:
   # Cron schedule for the fetch. Default: every 6 hours. (mode: cron)
@@ -212,21 +220,9 @@ fetcher:
   # EMAIL_SMTP_PASSWORD). Use Secret references for credentials; inline
   # values are only for non-secret settings. Standard core/v1 EnvVar entries.
   #
-  # Commenting on new pull requests (pull_requests.comment.enabled in
-  # project.yaml) is wired here too, via ASTER_APP_ID and
-  # ASTER_APP_PRIVATE_KEY. It authenticates as a GitHub App so the comment
-  # comes from a bot account rather than a person, and the App needs
-  # issues:write on branding.source_repo, plus pull requests read-only if that
-  # repository is private. Commenting stays in dry run until
-  # pull_requests.comment.dry_run is explicitly false, so mounting these is
-  # safe on its own. For example:
-  #   extraEnv:
-  #     - name: ASTER_APP_ID
-  #       valueFrom:
-  #         secretKeyRef: {name: aster-comment-app, key: app-id}
-  #     - name: ASTER_APP_PRIVATE_KEY
-  #       valueFrom:
-  #         secretKeyRef: {name: aster-comment-app, key: private-key}
+  # githubApp also supplies the existing App identity for optional pull request
+  # comments. Comments require issues:write on branding.source_repo and remain
+  # in dry run until pull_requests.comment.dry_run is explicitly false.
   extraEnv: []
   resources: {}
   nodeSelector: {}

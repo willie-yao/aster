@@ -28,6 +28,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/buildsource"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	fixruntime "github.com/willie-yao/aster/backend/internal/fix/runtime"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/patternstate"
@@ -87,7 +88,7 @@ type AIConfig struct {
 	ReasoningEffort ai.ReasoningEffort
 	ServiceTier     string
 	Headers         map[string]string
-	SourceToken     string
+	SourceAuth      *githubapp.ReadAuth
 	UsageRecorder   *aiusage.Recorder
 }
 
@@ -737,7 +738,7 @@ func (s *Service) verifyRemediationProposal(ctx context.Context, subject *Action
 	revision = strings.ToLower(revision)
 	slices.Sort(files)
 	files = slices.Compact(files)
-	rawReader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, revision, s.ai.SourceToken)
+	rawReader := ai.NewGitHubRepoReader(repo.Owner, repo.Name, revision, s.ai.SourceAuth)
 	reader, ok := rawReader.(actionverify.Reader)
 	if !ok {
 		return inconclusive(ReasonSourceVerificationInconclusive, "pinned source archive reader is unavailable", nil)

@@ -169,11 +169,13 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --set server.actions.mode=proxy \
   --set server.actions.admins[0]=fixture \
   --set server.actions.proxy.botToken=test-token \
+  --set ai.githubReadTokenSecretName=fixture-github-read \
   --show-only templates/server-deployment.yaml > "$tmp/actions-only.yaml"
 grep -Fq 'replicas: 1' "$tmp/actions-only.yaml"
 grep -A1 -F 'strategy:' "$tmp/actions-only.yaml" | grep -Fq 'type: Recreate'
 grep -A1 -F 'name: ACTIONS_ENABLED' "$tmp/actions-only.yaml" | grep -Fq 'value: "true"'
 grep -Fq 'name: BOT_TOKEN' "$tmp/actions-only.yaml"
+grep -A4 -F 'name: GITHUB_READ_TOKEN' "$tmp/actions-only.yaml" | grep -Fq 'name: fixture-github-read'
 if grep -Fq 'name: ANALYSIS_CHAT_ENABLED' "$tmp/actions-only.yaml"; then
   echo 'actions-only server enabled chat' >&2
   exit 1
@@ -775,6 +777,32 @@ helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
   --show-only templates/worker-deployment.yaml > "$tmp/triage-worker-existing-off.yaml"
 if grep -Fq 'GITHUB_READ_TOKEN' "$tmp/triage-worker-existing-off.yaml"; then
   echo 'ai.existingSecret was referenced for the read token while AI is disabled' >&2
+  exit 1
+fi
+
+# App credentials reach every read process without an AI provider or write actions.
+for template in worker-deployment server-deployment fetcher-cronjob; do
+  mode=watch
+  [[ "$template" != fetcher-cronjob ]] || mode=cron
+  rendered="$tmp/github-app-$template.yaml"
+  helm template test "$chart" -n dashboard-test -f "$tmp/values.yaml" \
+    --set mode="$mode" --set ai.enabled=false \
+    --set githubApp.existingSecret=fixture-github-app \
+    --set githubApp.appIDKey=app-id --set githubApp.privateKeyKey=private-key \
+    --show-only "templates/$template.yaml" > "$rendered"
+  for variable in ASTER_APP_ID ASTER_APP_PRIVATE_KEY; do
+    test "$(grep -Fc "name: $variable" "$rendered")" -eq 1
+    grep -A4 -F "name: $variable" "$rendered" | grep -Fq 'name: fixture-github-app'
+  done
+  grep -A4 -F 'name: ASTER_APP_ID' "$rendered" | grep -Fq 'key: app-id'
+  grep -A4 -F 'name: ASTER_APP_PRIVATE_KEY' "$rendered" | grep -Fq 'key: private-key'
+  if grep -Fq 'optional: true' "$rendered" || grep -Fq 'name: AI_TOKEN' "$rendered" || grep -Fq 'name: BOT_TOKEN' "$rendered"; then
+    echo "App reads included optional or unrelated credentials: $template" >&2
+    exit 1
+  fi
+done
+if grep -Fq 'name: ASTER_APP_' "$tmp/default.yaml"; then
+  echo 'App credentials rendered without githubApp.existingSecret' >&2
   exit 1
 fi
 

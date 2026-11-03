@@ -13,6 +13,8 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
@@ -319,7 +321,11 @@ func discover(ctx context.Context, cfg *project.Config, includePresubmits bool) 
 		}
 		return JobSweep{Jobs: jobs}, err
 	}
-	jobs, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, client, cfg, "")
+	auth, err := githubapp.NewReadAuthFromEnv(client, credentialenv.GitHubReadToken())
+	if err != nil {
+		return JobSweep{}, err
+	}
+	jobs, catalog, err := jobconfig.FetchJobConfigsAndCatalog(ctx, client, auth, cfg, "")
 	if err != nil {
 		return JobSweep{}, err
 	}

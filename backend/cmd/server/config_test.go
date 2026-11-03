@@ -1,12 +1,19 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
@@ -284,6 +291,87 @@ func TestAnalysisChatHistoryRetentionRejectsInvalidDuration(t *testing.T) {
 			t.Setenv("ANALYSIS_CHAT_HISTORY_RETENTION", value)
 			if _, err := analysisChatServiceOptionsFromEnv(t.TempDir(), time.Minute); err == nil {
 				t.Fatal("invalid history retention accepted")
+			}
+		})
+	}
+}
+
+func TestGitHubReadAuthStaticPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, read, bot, generic, source, wantRead, wantSource string
+	}{
+		{name: "read token", read: "read", bot: "bot", generic: "generic", wantRead: "read", wantSource: "read"},
+		{name: "bot fallback", bot: "bot", generic: "generic", wantRead: "bot", wantSource: "bot"},
+		{name: "generic fallback", generic: "generic", wantRead: "generic", wantSource: "generic"},
+		{name: "source override", read: "read", source: "source", wantRead: "read", wantSource: "source"},
+		{name: "anonymous"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ASTER_APP_ID", "")
+			t.Setenv("ASTER_APP_PRIVATE_KEY", "")
+			t.Setenv("GITHUB_READ_TOKEN", tc.read)
+			t.Setenv("BOT_TOKEN", tc.bot)
+			t.Setenv("GITHUB_TOKEN", tc.generic)
+			t.Setenv("SOURCE_INVESTIGATION_GITHUB_TOKEN", tc.source)
+			read, source, err := githubReadAuthFromEnv(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, check := range []struct {
+				auth *githubapp.ReadAuth
+				want string
+			}{{read, tc.wantRead}, {source, tc.wantSource}} {
+				client := &http.Client{Transport: sourceReadTransport(func(r *http.Request) (*http.Response, error) {
+					want := ""
+					if check.want != "" {
+						want = "Bearer " + check.want
+					}
+					if r.Header.Get("Authorization") != want {
+						t.Error("wrong read credential selected")
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}, nil
+				})}
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://api.github.com/repos/o/r", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp, err := check.auth.Do(client, req, "o", "r", "metadata")
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+			}
+		})
+	}
+}
+
+func TestGitHubReadAuthAppIsSharedWithFixSource(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ASTER_APP_ID", "1")
+	t.Setenv("ASTER_APP_PRIVATE_KEY", string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})))
+	t.Setenv("GITHUB_READ_TOKEN", "read")
+	t.Setenv("SOURCE_INVESTIGATION_GITHUB_TOKEN", "source")
+	read, source, err := githubReadAuthFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !read.Configured() || read != source {
+		t.Fatal("server and Fix source did not share App read authentication")
+	}
+}
+
+func TestGitHubReadAuthRejectsIncompleteAppWithStaticFallback(t *testing.T) {
+	for _, creds := range [][2]string{{"1", ""}, {"", "not-a-key"}, {"1", "not-a-key"}} {
+		t.Run(creds[0]+"/"+creds[1], func(t *testing.T) {
+			t.Setenv("ASTER_APP_ID", creds[0])
+			t.Setenv("ASTER_APP_PRIVATE_KEY", creds[1])
+			t.Setenv("GITHUB_READ_TOKEN", "read")
+			t.Setenv("SOURCE_INVESTIGATION_GITHUB_TOKEN", "source")
+			if _, _, err := githubReadAuthFromEnv(nil); err == nil {
+				t.Fatal("invalid App credentials fell back to static credentials")
 			}
 		})
 	}

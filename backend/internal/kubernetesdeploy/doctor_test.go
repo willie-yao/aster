@@ -199,6 +199,7 @@ func TestInlineCredentialFieldsExtraEnv(t *testing.T) {
 		name, envName, fields string
 		wantInline            bool
 	}{
+		{"App private key", "ASTER_APP_PRIVATE_KEY", "      value: placeholder-for-test-only\n", true},
 		{"token", "AI_TOKEN", "      value: placeholder-for-test-only\n", true},
 		{"lowercase secret", "client_secret", "      value: placeholder-for-test-only\n", true},
 		{"mixed case password", "Email_Password", "      value: placeholder-for-test-only\n", true},
@@ -995,6 +996,40 @@ func TestKubernetesDoctorSecretMetadataOnly(t *testing.T) {
 	}
 	if !foundMetadata {
 		t.Fatalf("metadata-only Secret lookup not observed: %v", cluster.calls)
+	}
+}
+
+func TestKubernetesDoctorGitHubAppSecretMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		values  string
+		present bool
+	}{
+		{name: "chart reference", values: "githubApp:\n  existingSecret: github-app\n", present: true},
+		{name: "missing Secret", values: "githubApp:\n  existingSecret: github-app\n"},
+		{name: "optional workload override", values: "githubApp:\n  existingSecret: github-app\nfetcher:\n  extraEnv:\n    - name: ASTER_APP_PRIVATE_KEY\n      valueFrom:\n        secretKeyRef:\n          name: missing-optional\n          key: pem\n          optional: true\nserver:\n  extraEnv:\n    - name: ASTER_APP_PRIVATE_KEY\n      valueFrom:\n        secretKeyRef:\n          name: missing-optional\n          key: pem\n          optional: true\n", present: true},
+		{name: "workload references", values: "fetcher:\n  extraEnv:\n    - name: ASTER_APP_ID\n      valueFrom:\n        secretKeyRef:\n          name: github-app\n          key: id\nserver:\n  extraEnv:\n    - name: ASTER_APP_PRIVATE_KEY\n      valueFrom:\n        secretKeyRef:\n          name: github-app\n          key: pem\n", present: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var values kubernetesDoctorValues
+			if err := yaml.Unmarshal([]byte(tc.values), &values); err != nil {
+				t.Fatal(err)
+			}
+			cluster := baselineCluster(false)
+			cluster.secretNames["sample/github-app"] = tc.present
+			var checks []KubernetesDoctorCheck
+			checkSecretReferences(t.Context(), func(name string, status KubernetesDoctorStatus, detail, action string) {
+				checks = append(checks, KubernetesDoctorCheck{Name: name, Status: status, Detail: detail, Action: action})
+			}, cluster, Options{Namespace: "sample"}, values)
+			want := KubernetesDoctorPass
+			if !tc.present {
+				want = KubernetesDoctorFail
+			}
+			assertDoctorCheck(t, KubernetesDoctorReport{Checks: checks}, "GitHub App Secret", want)
+			if !slices.Equal(cluster.calls, []string{"metadata secrets sample/github-app"}) {
+				t.Fatalf("expected one metadata-only lookup, got %v", cluster.calls)
+			}
+		})
 	}
 }
 

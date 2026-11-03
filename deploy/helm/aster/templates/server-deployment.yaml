@@ -155,7 +155,7 @@ spec:
             {{- if $interactive }}
             - -project-dir={{ .Values.project.mountPath }}
             {{- end }}
-          {{- if or $interactive .Values.server.security.hsts.enabled .Values.server.extraEnv }}
+          {{- if or $interactive .Values.server.security.hsts.enabled .Values.server.extraEnv .Values.githubApp.existingSecret }}
           env:
             {{- if .Values.server.security.hsts.enabled }}
             - name: HSTS_ENABLED
@@ -283,8 +283,8 @@ spec:
               value: {{ .Values.ai.contextWindowTokens | quote }}
             {{- end }}
             {{- end }}
-            {{- /* Read-only GitHub token for chat and pull request source context. */}}
-            {{- if and (or $chat $escalation) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName) }}
+            {{- /* Static GitHub token for source reads. */}}
+            {{- if and (or $actions $chat $escalation) (or .Values.ai.githubReadToken .Values.ai.githubReadTokenSecretName) }}
             - name: GITHUB_READ_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -292,6 +292,7 @@ spec:
                   key: {{ .Values.ai.githubReadTokenSecretKey }}
             {{- end }}
             {{- end }}
+            {{- include "aster.githubAppEnv" . | nindent 12 }}
             {{- with .Values.server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

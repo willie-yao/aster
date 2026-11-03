@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 )
@@ -78,13 +79,14 @@ func TestNewServiceAppliesConfig(t *testing.T) {
 	registry := tools.NewRegistry()
 	enabled := []string{"read_artifact"}
 	traces := NewTraceStore()
+	auth := githubapp.StaticReadAuth("token")
 
 	service := NewService(ServiceConfig{
 		Client: client, Module: module, SystemPrompt: "sys",
 		ConsecutiveFailures: consecutive, CacheGeneration: "generation",
 		AgenticOptions: AgenticOptions{MaxIters: 3}, BrowserFactory: factory,
 		ToolRegistry: registry, EnabledTools: enabled,
-		SourceRepoOwner: "owner", SourceRepoName: "repo", GitHubReadToken: "token",
+		SourceRepoOwner: "owner", SourceRepoName: "repo", GitHubReadAuth: auth,
 		TraceStore: traces,
 	})
 
@@ -92,7 +94,7 @@ func TestNewServiceAppliesConfig(t *testing.T) {
 		service.consecutiveMap["job::test"] != 2 || service.cacheGeneration != "generation" ||
 		service.agenticOpts.MaxIters != 3 || service.browserFactory != factory || service.registry != registry ||
 		len(service.enabledTools) != 1 || service.enabledTools[0] != "read_artifact" ||
-		service.sourceRepoOwner != "owner" || service.sourceRepoName != "repo" || service.githubReadToken != "token" ||
+		service.sourceRepoOwner != "owner" || service.sourceRepoName != "repo" || service.githubReadAuth != auth ||
 		service.traceStore != traces || service.patternNow == nil || service.patternFailureCooldown != defaultPatternFailureCooldown {
 		t.Fatalf("service config was not applied: %+v", service)
 	}

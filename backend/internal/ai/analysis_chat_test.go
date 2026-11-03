@@ -22,6 +22,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -3563,7 +3564,7 @@ func TestAnalysisChatCauseSourcesResolveHistoricalCurrentAndDefault(t *testing.T
 			agent := newAnalysisChatAgentWithRepoToolsForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{
 				MaxIters: 2, Timeout: 10 * time.Second,
 				SourceRepoOwner: "kubernetes-sigs", SourceRepoName: "cluster-api-provider-azure",
-				GitHubReadToken: "read-token",
+				GitHubReadAuth: githubapp.StaticReadAuth("read-token"),
 			})
 			turn := causeAnalysisChatTurn()
 			turn.Build.RepoRefs = map[string]string{

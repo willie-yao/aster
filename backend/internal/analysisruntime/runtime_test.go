@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/ai/tools/filesystem"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/storage"
@@ -505,7 +507,7 @@ func TestRuntimeAppliesOptionalComparisonOutputLimit(t *testing.T) {
 	}
 }
 
-func TestRuntimeCarriesGitHubReadToken(t *testing.T) {
+func TestRuntimeCarriesGitHubReadAuth(t *testing.T) {
 	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
 	configured := &Project{
 		Config: &project.Config{AI: &project.AI{}},
@@ -514,12 +516,13 @@ func TestRuntimeCarriesGitHubReadToken(t *testing.T) {
 		},
 		AnalysisSource: project.SourceRepo{Owner: "example", Name: "project"},
 	}
-	runtime, err := New(t.Context(), Options{Project: configured, GitHubReadToken: "read-token"})
+	auth := githubapp.StaticReadAuth("read-token")
+	runtime, err := New(t.Context(), Options{Project: configured, GitHubReadAuth: auth})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GitHubReadToken != "read-token" {
-		t.Fatalf("GitHub read token = %q", runtime.GitHubReadToken)
+	if runtime.GitHubReadAuth != auth {
+		t.Fatal("GitHub read credential provider was not retained")
 	}
 }
 
@@ -534,7 +537,7 @@ func TestAnalysisChatContractFingerprintIncludesSourceIdentityNotToken(t *testin
 				},
 				AnalysisSource: project.SourceRepo{Owner: owner, Name: name},
 			},
-			GitHubReadToken: token,
+			GitHubReadAuth: githubapp.StaticReadAuth(token),
 		}
 	}
 	first := newRuntime("example", "project", "token-one")
@@ -546,5 +549,65 @@ func TestAnalysisChatContractFingerprintIncludesSourceIdentityNotToken(t *testin
 	}
 	if first.AnalysisChatContractFingerprint() == newRuntime("example", "other", "token-one").AnalysisChatContractFingerprint() {
 		t.Fatal("fingerprint ignored source repository identity")
+	}
+}
+
+type readAuthRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f readAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestRuntimeServicesInheritReadAuthForPublishedSourceLinks(t *testing.T) {
+	t.Setenv("AI_CONTEXT_WINDOW_TOKENS", "200000")
+	configured := &Project{
+		Config:         &project.Config{AI: &project.AI{}},
+		Provider:       project.AIProvider{API: ai.APIChatCompletions, Endpoint: "https://model.invalid/v1/chat/completions", Model: "model"},
+		AnalysisSource: project.SourceRepo{Owner: "example", Name: "project"},
+	}
+	runtime, err := New(t.Context(), Options{Project: configured, GitHubReadAuth: githubapp.StaticReadAuth("read-token")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.NewLocalBackend(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	calls := 0
+	client := &http.Client{Transport: readAuthRoundTripper(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.URL.Host != "api.github.com" || req.URL.Path != "/repos/example/project/contents/pkg/source.go" ||
+			(req.URL.Query().Get("ref") != revision && req.URL.Query().Get("ref") != strings.Repeat("a", 40)) || req.Header.Get("Authorization") != "Bearer read-token" {
+			t.Errorf("unexpected source-link request: %s %s authenticated=%t", req.Method, req.URL, req.Header.Get("Authorization") == "Bearer read-token")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("package source")), Request: req}, nil
+	})}
+	for _, revision := range []string{revision, strings.Repeat("a", 40)} {
+		service, err := runtime.NewService(ServiceOptions{Backend: backend})
+		if err != nil {
+			t.Fatal(err)
+		}
+		failure := models.TestCase{
+			Name: "failure", FailureMessage: "failed", FailureBody: "test failed",
+			AISummary: &models.AISummary{Summary: "cached"},
+			AIAnalysis: &models.AIAnalysis{
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339), Mode: ai.AgenticMode,
+				Disposition: models.AnalysisDispositionCitationsVerified,
+				ToolCalls:   100, GCSBytes: 1_000_000_000, CritiquePassed: true, CritiqueVersion: ai.CurrentCritiqueVersion(),
+				RelevantFiles: []string{"pkg/source.go"},
+			},
+		}
+		if service.NeedsAnalysis(&failure) {
+			t.Fatal("fixture unexpectedly needs a model call")
+		}
+		build := &models.BuildResult{BuildInfo: models.BuildInfo{BuildID: "1", RepoRefs: map[string]string{"example/project": "main:" + revision}}}
+		service.Analyze(t.Context(), client, "job", "logs/job/1", build, &failure)
+		if failure.AIAnalysis.FileLinks["pkg/source.go"] != "https://github.com/example/project/blob/"+revision+"/pkg/source.go" {
+			t.Fatalf("verified source link = %q", failure.AIAnalysis.FileLinks["pkg/source.go"])
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("source-link requests = %d, want 2", calls)
 	}
 }

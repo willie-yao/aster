@@ -383,4 +383,33 @@ agentSandbox:
 VALUES
 expect_fail invalid-agent-sandbox-max-effort "$tmp/invalid-agent-sandbox-max-effort.yaml" /agentSandbox/fixRuntime/modelProvider/reasoningEffort
 
+
+cat > "$tmp/github-app.yaml" <<'VALUES'
+githubApp:
+  existingSecret: github-app
+  appIDKey: app-id
+  privateKeyKey: private-key
+VALUES
+expect_pass github-app "$tmp/github-app.yaml"
+for field in existingSecret appIDKey privateKeyKey; do
+  cat > "$tmp/invalid-github-app.yaml" <<VALUES
+githubApp:
+  $field: "invalid value"
+VALUES
+  expect_fail "invalid-github-app-$field" "$tmp/invalid-github-app.yaml" "$field"
+done
+for field in appIDKey privateKeyKey; do
+  cat > "$tmp/empty-github-app-key.yaml" <<VALUES
+githubApp:
+  existingSecret: github-app
+  $field: ""
+VALUES
+  expect_fail "empty-github-app-$field" "$tmp/empty-github-app-key.yaml" "$field"
+done
+cat > "$tmp/inline-github-app.yaml" <<'VALUES'
+githubApp:
+  privateKey: forbidden-inline-key
+VALUES
+expect_fail inline-github-app "$tmp/inline-github-app.yaml" privateKey
+
 echo 'Helm values schema checks passed.'

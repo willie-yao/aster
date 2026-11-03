@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/aggregator"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
 	"github.com/willie-yao/aster/backend/internal/project"
@@ -262,7 +264,7 @@ func TestWarnPullRequestTokenMissing(t *testing.T) {
 				log.SetFlags(flags)
 			})
 
-			(&pipeline{cfg: tc.cfg}).warnPullRequestTokenMissing()
+			(&pipeline{cfg: tc.cfg, githubReadAuth: githubapp.StaticReadAuth(credentialenv.GitHubReadToken())}).warnPullRequestTokenMissing()
 
 			got := strings.Contains(buf.String(), "GITHUB_READ_TOKEN")
 			if got != tc.wantWarn {

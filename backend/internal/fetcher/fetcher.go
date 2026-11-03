@@ -24,7 +24,9 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/junit"
 	"github.com/willie-yao/aster/backend/internal/models"
@@ -65,6 +67,7 @@ type pipeline struct {
 	opts                 Options
 	cfg                  *project.Config
 	client               *http.Client
+	githubReadAuth       *githubapp.ReadAuth
 	backend              storage.Backend
 	enableAI             bool
 	aiToken              string
@@ -151,6 +154,10 @@ func setupPipeline(opts Options) (*pipeline, error) {
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
+	readAuth, err := githubapp.NewReadAuthFromEnv(client, credentialenv.GitHubReadToken())
+	if err != nil {
+		return nil, err
+	}
 	backend, err := storage.New(cfg.StorageConfig(), client)
 	if err != nil {
 		return nil, fmt.Errorf("configuring storage: %w", err)
@@ -164,6 +171,7 @@ func setupPipeline(opts Options) (*pipeline, error) {
 		opts:              opts,
 		cfg:               cfg,
 		client:            client,
+		githubReadAuth:    readAuth,
 		backend:           backend,
 		enableAI:          enableAI,
 		aiToken:           aiToken,
@@ -243,7 +251,7 @@ func (p *pipeline) discover(ctx context.Context) ([]models.ProwJob, error) {
 			targetRepo = repo.Owner + "/" + repo.Name
 		}
 		var catalog *jobconfig.Catalog
-		jobs, catalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, cfg, targetRepo)
+		jobs, catalog, err = jobconfig.FetchJobConfigsAndCatalog(ctx, p.client, p.githubReadAuth, cfg, targetRepo)
 		if err != nil {
 			return nil, fmt.Errorf("fetching job configs: %w", err)
 		}
