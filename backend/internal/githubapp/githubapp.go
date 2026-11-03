@@ -82,9 +82,10 @@ type Client struct {
 }
 
 type tokenRequest struct {
-	done  chan struct{}
-	token string
-	err   error
+	done           chan struct{}
+	token          string
+	err            error
+	leaderCanceled bool
 }
 
 type cachedToken struct {
@@ -203,41 +204,48 @@ func (c *Client) InstallationToken(ctx context.Context, owner, repo string) (str
 }
 
 func (c *Client) installationToken(ctx context.Context, owner, repo, permission string) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
 	key := strings.ToLower(owner + "/" + repo)
 	if permission != "" {
 		key = "read:" + permission + ":" + key
 	}
-	c.mu.Lock()
-	if cached, ok := c.tokens[key]; ok && c.now().Add(tokenRefreshSkew).Before(cached.expiresAt) {
-		c.mu.Unlock()
-		return cached.token, nil
-	}
-	if pending := c.pending[key]; pending != nil {
-		c.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-pending.done:
-			return pending.token, pending.err
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
-	}
-	pending := &tokenRequest{done: make(chan struct{})}
-	c.pending[key] = pending
-	c.mu.Unlock()
+		c.mu.Lock()
+		if cached, ok := c.tokens[key]; ok && c.now().Add(tokenRefreshSkew).Before(cached.expiresAt) {
+			c.mu.Unlock()
+			return cached.token, nil
+		}
+		if pending := c.pending[key]; pending != nil {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-pending.done:
+				if pending.leaderCanceled {
+					continue
+				}
+				return pending.token, pending.err
+			}
+		}
+		pending := &tokenRequest{done: make(chan struct{})}
+		c.pending[key] = pending
+		c.mu.Unlock()
 
-	token, err := c.mintInstallationToken(ctx, owner, repo, permission)
-	c.mu.Lock()
-	if err == nil {
-		c.tokens[key] = token
+		token, err := c.mintInstallationToken(ctx, owner, repo, permission)
+		contextErr := ctx.Err()
+		c.mu.Lock()
+		if err == nil {
+			c.tokens[key] = token
+		}
+		pending.token, pending.err = token.token, err
+		pending.leaderCanceled = contextErr != nil && errors.Is(err, contextErr)
+		delete(c.pending, key)
+		close(pending.done)
+		c.mu.Unlock()
+		return token.token, err
 	}
-	pending.token, pending.err = token.token, err
-	delete(c.pending, key)
-	close(pending.done)
-	c.mu.Unlock()
-	return token.token, err
 }
 
 func (c *Client) mintInstallationToken(ctx context.Context, owner, repo, permission string) (cachedToken, error) {

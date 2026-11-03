@@ -315,19 +315,24 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, auth *githuba
 	return all, catalog, nil
 }
 
-// downloadRaw fetches a single file from raw.githubusercontent.com pinned to
-// the given commit SHA so the snapshot stays consistent with the tree listing.
+// downloadRaw fetches a pinned file through the public CDN or, in App mode,
+// the authenticated Contents API.
 func downloadRaw(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, sha, file string) ([]byte, error) {
 	endpoint := rawBaseURL + sha + "/" + file
-	if auth.Configured() {
+	if auth.UsesApp() {
 		endpoint = apiBaseURL + "contents/" + file + "?ref=" + url.QueryEscape(sha)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github.raw+json")
-	resp, err := auth.Do(client, req, "kubernetes", "test-infra", "contents")
+	var resp *http.Response
+	if auth.UsesApp() {
+		req.Header.Set("Accept", "application/vnd.github.raw+json")
+		resp, err = auth.Do(client, req, "kubernetes", "test-infra", "contents")
+	} else {
+		resp, err = client.Do(req)
+	}
 	if err != nil {
 		return nil, err
 	}

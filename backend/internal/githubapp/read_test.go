@@ -312,3 +312,122 @@ func TestReadTokensDoNotReuseWriteTokens(t *testing.T) {
 		t.Fatal("read replaced write token")
 	}
 }
+
+func TestReadAuthRenewalWaiterSurvivesLeaderCancellation(t *testing.T) {
+	pem := pkcs1PEM(t, testKey(t))
+	for _, deadline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deadline=%t", deadline), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				now := time.Now()
+				var exchanges atomic.Int32
+				client := &http.Client{Transport: readRoundTripper(func(req *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(req.URL.Path, "/installation") {
+						return readResponse(req, 200, `{"id":7}`), nil
+					}
+					if exchanges.Add(1) == 1 {
+						<-req.Context().Done()
+						return nil, req.Context().Err()
+					}
+					return readResponse(req, 201, fmt.Sprintf(`{"token":"renewed","expires_at":%q}`, now.Add(time.Hour).Format(time.RFC3339))), nil
+				})}
+				app, err := New(client, Credentials{AppID: "1", PrivateKey: pem})
+				if err != nil {
+					t.Fatal(err)
+				}
+				app.now = func() time.Time { return now }
+				app.tokens["read:contents:o/r"] = cachedToken{token: "old", expiresAt: now.Add(4 * time.Minute)}
+				leaderCtx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				wantErr := context.Canceled
+				if deadline {
+					leaderCtx, cancel = context.WithTimeout(t.Context(), time.Second)
+					defer cancel()
+					wantErr = context.DeadlineExceeded
+				}
+				leaderDone := make(chan error, 1)
+				go func() {
+					token, err := app.installationToken(leaderCtx, "o", "r", "contents")
+					if token != "" {
+						t.Error("cancelled leader returned a token")
+					}
+					leaderDone <- err
+				}()
+				synctest.Wait()
+				waiterDone := make(chan error, 1)
+				go func() {
+					token, err := app.installationToken(t.Context(), "o", "r", "contents")
+					if token != "renewed" {
+						t.Error("live waiter did not renew")
+					}
+					waiterDone <- err
+				}()
+				synctest.Wait()
+				if exchanges.Load() != 1 {
+					t.Fatalf("initial exchanges=%d, want 1", exchanges.Load())
+				}
+				if deadline {
+					time.Sleep(time.Second)
+				} else {
+					cancel()
+				}
+				if err := <-leaderDone; !errors.Is(err, wantErr) {
+					t.Fatalf("leader error=%v", err)
+				}
+				if err := <-waiterDone; err != nil {
+					t.Fatalf("waiter error=%v", err)
+				}
+				if exchanges.Load() != 2 {
+					t.Fatalf("renewal exchanges=%d, want 2", exchanges.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestReadAuthRenewalWaiterDoesNotRetryClientTimeout(t *testing.T) {
+	pem := pkcs1PEM(t, testKey(t))
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now()
+		var exchanges atomic.Int32
+		client := &http.Client{Timeout: time.Second, Transport: readRoundTripper(func(req *http.Request) (*http.Response, error) {
+			if strings.HasSuffix(req.URL.Path, "/installation") {
+				return readResponse(req, 200, `{"id":7}`), nil
+			}
+			if exchanges.Add(1) == 1 {
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			return readResponse(req, 201, fmt.Sprintf(`{"token":"unexpected-retry","expires_at":%q}`, now.Add(time.Hour).Format(time.RFC3339))), nil
+		})}
+		app, err := New(client, Credentials{AppID: "1", PrivateKey: pem})
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.now = func() time.Time { return now }
+		leaderCtx := t.Context()
+		results := make(chan error, 2)
+		request := func() {
+			token, err := app.installationToken(leaderCtx, "o", "r", "contents")
+			if token != "" {
+				t.Error("timeout returned a token")
+			}
+			results <- err
+		}
+		go request()
+		synctest.Wait()
+		go request()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		for range 2 {
+			if err := <-results; !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("timeout error=%v", err)
+			}
+		}
+		if err := leaderCtx.Err(); err != nil {
+			t.Fatalf("caller context ended: %v", err)
+		}
+		if exchanges.Load() != 1 {
+			t.Fatalf("client timeout triggered %d exchanges, want 1", exchanges.Load())
+		}
+	})
+}

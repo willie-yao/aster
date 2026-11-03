@@ -41,6 +41,9 @@ func StaticReadAuth(token string) *ReadAuth {
 // Configured reports whether requests require authentication.
 func (a *ReadAuth) Configured() bool { return a != nil }
 
+// UsesApp reports whether reads use renewable installation tokens.
+func (a *ReadAuth) UsesApp() bool { return a != nil && a.app != nil }
+
 // Do authenticates one read, renewing installation tokens before they expire.
 // Redirects must stay within the repository, including GitHub archive downloads.
 func (a *ReadAuth) Do(client *http.Client, req *http.Request, owner, repo, permission string) (*http.Response, error) {

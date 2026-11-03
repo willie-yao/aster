@@ -84,6 +84,23 @@ aster onboard doctor -project-dir ./my-dashboard
 
 Doctor validates the workflow mappings but cannot read the values stored in GitHub repository variables or Secrets.
 
+## GitHub read authentication
+
+Without App credentials, the reusable workflow supplies the Actions `GITHUB_TOKEN` for GitHub metadata and pull request reads. Job-discovery YAML downloads use the unauthenticated raw-content CDN.
+
+To use automatically renewed App installation tokens, pass both App secrets:
+
+```yaml
+secrets:
+  AI_TOKEN: ${{ secrets.AI_TOKEN }}
+  ASTER_APP_ID: ${{ secrets.ASTER_APP_ID }}
+  ASTER_APP_PRIVATE_KEY: ${{ secrets.ASTER_APP_PRIVATE_KEY }}
+```
+
+Configured `ASTER_APP_*` credentials select App authentication for reads even when `pull_requests.comment.enabled` is false. Install the App on every repository the fetcher reads, including `kubernetes/test-infra` for TestGrid discovery and the configured source repositories. Installing only on the consumer or comment repository is insufficient. Grant Contents read and Pull requests read where triage is enabled, and obtain any required organization approval before supplying the secrets.
+
+App authentication takes precedence over the Actions token. Missing installation access, denied permissions, or renewal failure fails the affected read without falling back to `GITHUB_TOKEN` or anonymous access. In App mode, job-discovery YAML downloads use the authenticated Contents API. See [GitHub read authentication](github-read-auth.md) for permissions, precedence, and key rotation.
+
 ## Engine version
 
 The workflow ref controls both the reusable workflow and the engine checkout. Pin a currently published version exactly:
@@ -196,4 +213,4 @@ The SMTP host must be reachable from the selected runner. Keep `notifications.em
 
 A static Pages site has no authenticated action API, so the guarded dashboard actions are all [Kubernetes-native](kubernetes.md) server features: interactive chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md), which additionally requires the Agent Sandbox runtime. Of those, File Issue and Fix PR generation are the GitHub writes; chat is read-only and Mark Resolved updates local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages consumer's `project.yaml` has nothing to act on.
 
-One unattended write does run here, because it happens in the fetch step rather than the server: the optional bot comment on newly opened pull requests, which posts only when `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` are supplied as secrets. It is off by default and stays in dry run until `dry_run` is explicitly false. See [Pull request triage](pull-request-triage.md#optional-bot-comment).
+The optional bot comment on newly opened pull requests runs in the fetch step. It requires `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY`, `pull_requests.comment.enabled: true`, and `dry_run: false` to post. Commenting is off by default and otherwise stays in dry run. Supplying the App secrets still selects App reads when commenting is disabled. See [Pull request triage](pull-request-triage.md#optional-bot-comment).

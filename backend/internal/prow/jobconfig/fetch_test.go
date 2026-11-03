@@ -155,8 +155,16 @@ func TestDiscoveryRequestsUseGitHubReadToken(t *testing.T) {
 			t.Setenv("GITHUB_READ_TOKEN", tc.read)
 			t.Setenv("GITHUB_TOKEN", tc.generic)
 			t.Setenv("BOT_TOKEN", "server-only-token")
-			var calls atomic.Int64
+			var calls, rawCalls atomic.Int64
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/raw/"+fakeSHA+"/config/jobs/discovery.yaml" {
+					rawCalls.Add(1)
+					if r.Header.Get("Authorization") != "" {
+						t.Error("public YAML download carried a credential")
+					}
+					_, _ = w.Write([]byte(periodicJob("periodic-example", "example")))
+					return
+				}
 				calls.Add(1)
 				if r.Header.Get("Authorization") != tc.want {
 					t.Error("discovery request used the wrong GitHub credential")
@@ -165,7 +173,7 @@ func TestDiscoveryRequestsUseGitHubReadToken(t *testing.T) {
 				case "/commits/master":
 					_, _ = w.Write([]byte(fakeSHA))
 				case "/git/trees/" + fakeSHA:
-					_, _ = w.Write([]byte(`{"tree":[]}`))
+					_, _ = w.Write([]byte(`{"tree":[{"path":"config/jobs/discovery.yaml","type":"blob"}]}`))
 				default:
 					t.Errorf("unexpected discovery path: %s", r.URL.Path)
 					http.NotFound(w, r)
@@ -174,12 +182,13 @@ func TestDiscoveryRequestsUseGitHubReadToken(t *testing.T) {
 			defer upstream.Close()
 			setURLs(t, upstream.URL+"/raw/", upstream.URL+"/repos/kubernetes/test-infra/")
 			auth := githubapp.StaticReadAuth(credentialenv.GitHubReadToken())
-			sha, err := resolveMasterSHA(t.Context(), upstream.Client(), auth)
+			cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "example"}}
+			jobs, err := FetchJobConfigs(t.Context(), upstream.Client(), auth, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := listConfigJobsYAMLs(t.Context(), upstream.Client(), auth, sha); err != nil {
-				t.Fatal(err)
+			if len(jobs) != 1 || rawCalls.Load() != 1 {
+				t.Fatalf("jobs = %d, CDN downloads = %d, want 1 each", len(jobs), rawCalls.Load())
 			}
 			if calls.Load() != 2 {
 				t.Fatalf("discovery requests = %d, want 2", calls.Load())
