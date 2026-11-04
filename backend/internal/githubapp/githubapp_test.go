@@ -274,8 +274,8 @@ func TestInstallationTokenUnparsableExpiryDoesNotCache(t *testing.T) {
 	client := server.client(t)
 
 	for range 2 {
-		if _, err := client.InstallationToken(context.Background(), "o", "r"); err != nil {
-			t.Fatalf("InstallationToken: %v", err)
+		if token, err := client.InstallationToken(context.Background(), "o", "r"); err == nil || token != "" {
+			t.Fatal("invalid expiry must not return a token")
 		}
 	}
 	if server.tokenCalls != 2 {

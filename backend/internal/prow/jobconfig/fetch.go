@@ -8,11 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 
-	"github.com/willie-yao/aster/backend/internal/credentialenv"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
@@ -34,24 +35,24 @@ const downloadWorkers = 10
 
 // FetchJobConfigs discovers all of a project's Prow job YAMLs from the
 // kubernetes/test-infra repository and returns the parsed jobs.
-func FetchJobConfigs(ctx context.Context, client *http.Client, cfg *project.Config) ([]models.ProwJob, error) {
-	jobs, _, err := FetchJobConfigsAndCatalog(ctx, client, cfg, "")
+func FetchJobConfigs(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, cfg *project.Config) ([]models.ProwJob, error) {
+	jobs, _, err := FetchJobConfigsAndCatalog(ctx, client, auth, cfg, "")
 	return jobs, err
 }
 
 // FetchCatalog returns every Prow job definition from one pinned
 // kubernetes/test-infra snapshot. It performs no artifact discovery.
-func FetchCatalog(ctx context.Context, client *http.Client) (*Catalog, error) {
-	sha, err := resolveMasterSHA(ctx, client)
+func FetchCatalog(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth) (*Catalog, error) {
+	sha, err := resolveMasterSHA(ctx, client, auth)
 	if err != nil {
 		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
 	}
-	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	files, err := listConfigJobsYAMLs(ctx, client, auth, sha)
 	if err != nil {
 		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
-	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, "", true)
+	_, catalog, err := downloadAndParseAll(ctx, client, auth, sha, files, nil, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -61,20 +62,20 @@ func FetchCatalog(ctx context.Context, client *http.Client) (*Catalog, error) {
 // FetchCatalogForRepo returns job definitions that test targetRepo from one
 // pinned kubernetes/test-infra snapshot. It does not require a TestGrid
 // dashboard and performs no artifact discovery.
-func FetchCatalogForRepo(ctx context.Context, client *http.Client, targetRepo string) (*Catalog, error) {
+func FetchCatalogForRepo(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, targetRepo string) (*Catalog, error) {
 	if strings.TrimSpace(targetRepo) == "" {
 		return nil, fmt.Errorf("target repository is required")
 	}
-	sha, err := resolveMasterSHA(ctx, client)
+	sha, err := resolveMasterSHA(ctx, client, auth)
 	if err != nil {
 		return nil, fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
 	}
-	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	files, err := listConfigJobsYAMLs(ctx, client, auth, sha)
 	if err != nil {
 		return nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
-	_, catalog, err := downloadAndParseAll(ctx, client, sha, files, nil, targetRepo, false)
+	_, catalog, err := downloadAndParseAll(ctx, client, auth, sha, files, nil, targetRepo, false)
 	if err != nil {
 		return nil, err
 	}
@@ -83,19 +84,19 @@ func FetchCatalogForRepo(ctx context.Context, client *http.Client, targetRepo st
 
 // FetchJobConfigsAndCatalog returns dashboard jobs plus definitions that test
 // targetRepo. Both results come from one pinned test-infra snapshot.
-func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
-	sha, err := resolveConfiguredRevision(ctx, client, cfg.Discovery.TestInfraRevision)
+func FetchJobConfigsAndCatalog(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, cfg *project.Config, targetRepo string) ([]models.ProwJob, *Catalog, error) {
+	sha, err := resolveConfiguredRevision(ctx, client, auth, cfg.Discovery.TestInfraRevision)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	files, err := listConfigJobsYAMLs(ctx, client, sha)
+	files, err := listConfigJobsYAMLs(ctx, client, auth, sha)
 	if err != nil {
 		return nil, nil, fmt.Errorf("listing config/jobs/ at %s: %w", sha[:7], err)
 	}
 	log.Printf("  discovered %d candidate YAMLs under %s at test-infra@%s", len(files), configJobsPrefix, sha[:7])
 
-	allJobs, catalog, err := downloadAndParseAll(ctx, client, sha, files, cfg, targetRepo, false)
+	allJobs, catalog, err := downloadAndParseAll(ctx, client, auth, sha, files, cfg, targetRepo, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -114,14 +115,14 @@ func validCommitSHA(value string) bool {
 	return err == nil
 }
 
-func resolveConfiguredRevision(ctx context.Context, client *http.Client, configured string) (string, error) {
+func resolveConfiguredRevision(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, configured string) (string, error) {
 	if configured != "" {
 		if !validCommitSHA(configured) {
 			return "", fmt.Errorf("configured test-infra revision must be a lowercase 40-character commit SHA")
 		}
 		return configured, nil
 	}
-	sha, err := resolveMasterSHA(ctx, client)
+	sha, err := resolveMasterSHA(ctx, client, auth)
 	if err != nil {
 		return "", fmt.Errorf("resolving kubernetes/test-infra master SHA: %w", err)
 	}
@@ -132,7 +133,7 @@ func resolveConfiguredRevision(ctx context.Context, client *http.Client, configu
 // master branch. Pinning to a single SHA for both tree-listing and raw
 // downloads gives every fetcher run a consistent snapshot, so a file that
 // appears in the tree won't 404 mid-run because someone pushed a rename.
-func resolveMasterSHA(ctx context.Context, client *http.Client) (string, error) {
+func resolveMasterSHA(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"commits/master", nil)
 	if err != nil {
 		return "", err
@@ -140,9 +141,8 @@ func resolveMasterSHA(ctx context.Context, client *http.Client) (string, error) 
 	// The vnd.github.sha media type returns the plain commit SHA as the
 	// response body instead of the full commit JSON.
 	req.Header.Set("Accept", "application/vnd.github.sha")
-	addGitHubAuth(req)
 
-	resp, err := client.Do(req)
+	resp, err := auth.Do(client, req, "kubernetes", "test-infra", "contents")
 	if err != nil {
 		return "", err
 	}
@@ -173,16 +173,15 @@ type gitTreeResponse struct {
 // listConfigJobsYAMLs returns sorted repo-relative YAML paths under
 // configJobsPrefix. Truncated responses are a hard error so job discovery never
 // silently misses part of the tree.
-func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) ([]string, error) {
+func listConfigJobsYAMLs(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, sha string) ([]string, error) {
 	url := apiBaseURL + "git/trees/" + sha + "?recursive=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	addGitHubAuth(req)
 
-	resp, err := client.Do(req)
+	resp, err := auth.Do(client, req, "kubernetes", "test-infra", "contents")
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +224,7 @@ func listConfigJobsYAMLs(ctx context.Context, client *http.Client, sha string) (
 // ParseJobConfig, which keeps only jobs whose testgrid-dashboards annotation
 // contains cfg.Discovery.TestGridDashboard. The first file-level error cancels every
 // in-flight goroutine and is returned to the caller.
-func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, files []string, cfg *project.Config, targetRepo string, includeAllDefinitions bool) ([]models.ProwJob, *Catalog, error) {
+func downloadAndParseAll(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, sha string, files []string, cfg *project.Config, targetRepo string, includeAllDefinitions bool) ([]models.ProwJob, *Catalog, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -256,7 +255,7 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 				return
 			}
 
-			body, err := downloadRaw(ctx, client, sha, f)
+			body, err := downloadRaw(ctx, client, auth, sha, f)
 			if err != nil {
 				if ctx.Err() == nil {
 					recordErr(fmt.Errorf("fetching %s: %w", f, err))
@@ -316,14 +315,24 @@ func downloadAndParseAll(ctx context.Context, client *http.Client, sha string, f
 	return all, catalog, nil
 }
 
-// downloadRaw fetches a single file from raw.githubusercontent.com pinned to
-// the given commit SHA so the snapshot stays consistent with the tree listing.
-func downloadRaw(ctx context.Context, client *http.Client, sha, file string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawBaseURL+sha+"/"+file, nil)
+// downloadRaw fetches a pinned file through the public CDN or, in App mode,
+// the authenticated Contents API.
+func downloadRaw(ctx context.Context, client *http.Client, auth *githubapp.ReadAuth, sha, file string) ([]byte, error) {
+	endpoint := rawBaseURL + sha + "/" + file
+	if auth.UsesApp() {
+		endpoint = apiBaseURL + "contents/" + file + "?ref=" + url.QueryEscape(sha)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	var resp *http.Response
+	if auth.UsesApp() {
+		req.Header.Set("Accept", "application/vnd.github.raw+json")
+		resp, err = auth.Do(client, req, "kubernetes", "test-infra", "contents")
+	} else {
+		resp, err = client.Do(req)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -336,14 +345,6 @@ func downloadRaw(ctx context.Context, client *http.Client, sha, file string) ([]
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet(body))
 	}
 	return body, nil
-}
-
-// addGitHubAuth prefers GITHUB_READ_TOKEN, falling back to GITHUB_TOKEN.
-// Without either token, local discovery remains anonymous.
-func addGitHubAuth(req *http.Request) {
-	if token := credentialenv.GitHubReadToken(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 }
 
 // snippet returns at most 256 bytes of body so error messages stay readable

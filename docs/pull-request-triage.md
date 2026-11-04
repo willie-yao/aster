@@ -44,9 +44,9 @@ Triage reads the GitHub API on every pass.
 | Deployment | Credential |
 | --- | --- |
 | GitHub Pages | The reusable workflow supplies `GITHUB_TOKEN`. |
-| Kubernetes | Configure `ai.githubReadTokenSecretName` and, when needed, `ai.githubReadTokenSecretKey`; or supply `GITHUB_READ_TOKEN`. |
+| Kubernetes | Prefer `githubApp.existingSecret` for automatically renewed reads. Static `ai.githubReadTokenSecretName` and `ai.githubReadTokenSecretKey`, or `GITHUB_READ_TOKEN`, remain supported without App credentials. |
 
-For a public repository, the credential needs no repository privileges. It is used to avoid the low anonymous rate limit. Private repositories require the minimum read access needed for repository metadata and changed files. The credential is required whether or not AI analysis is enabled.
+App authentication needs an installation on every read repository, including `kubernetes/test-infra`, with the permissions described in [GitHub read authentication](github-read-auth.md). A static token needs no repository privileges for a public repository and avoids the low anonymous rate limit. Private repositories require repository metadata and pull request read access. Read credentials apply whether or not AI analysis is enabled.
 
 `aster onboard doctor` warns when triage is enabled without an authenticated GitHub read credential. See [Pull request triage stops updating](troubleshooting.md#pull-request-triage-stops-updating) for the operational symptom.
 
@@ -119,7 +119,7 @@ pull_requests:
 
 ### GitHub App identity
 
-Comments use a repository-installed GitHub App, not a user token or a shared Aster bot. Create an App with only:
+Comments use a repository-installed GitHub App, not a user token or a shared Aster bot. For comments, the App needs:
 
 - **Issues: Read and write**, because pull request comments use the issues API;
 - **Pull requests: Read-only**, needed to inspect private pull requests;
@@ -127,7 +127,7 @@ Comments use a repository-installed GitHub App, not a user token or a shared Ast
 
 Install the App on `branding.source_repo`, record its App ID, and create a private key. Installation requires repository administration or the corresponding organization approval.
 
-Supply `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` as repository secrets on Pages, or as Secret-backed `fetcher.extraEnv` entries on Kubernetes. The fetcher logs the resolved bot identity before the pass. Review dry-run output before setting `dry_run: false`.
+Supply `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` as repository secrets on Pages, or with `githubApp.existingSecret` on Kubernetes. These credentials also enable App authentication for reads, so install the App on all read repositories and grant Contents read as described in [GitHub read authentication](github-read-auth.md). The fetcher logs the resolved bot identity before the pass. Review dry-run output before setting `dry_run: false`.
 
 ### Comment selection and deduplication
 
@@ -158,7 +158,7 @@ server:
     enabled: true
 ```
 
-The `server.pullRequestEscalation.enabled` chart value requires `ai.enabled`, `pull_requests.enabled`, and authenticated server settings. Escalation is read-only, does not enable GitHub writes, and does not require `BOT_TOKEN`. Configure the GitHub read token so source and changed files are fetched without anonymous rate limits. Static Pages never exposes the escalation API.
+The `server.pullRequestEscalation.enabled` chart value requires `ai.enabled`, `pull_requests.enabled`, and authenticated server settings. Escalation is read-only, does not enable GitHub writes, and does not require `BOT_TOKEN`. Configure [GitHub read authentication](github-read-auth.md) so source and changed files are fetched without anonymous rate limits. Static Pages never exposes the escalation API.
 
 The server reserves admission before reading GitHub or artifacts, runs one pull request or shared-failure escalation at a time, bounds the queue and total lifetime, and shares a result between authenticated maintainers. Provider errors, timeouts, and interrupted work remain retryable.
 

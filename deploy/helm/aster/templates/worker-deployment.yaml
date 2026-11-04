@@ -100,6 +100,7 @@ spec:
                   name: {{ include "aster.githubReadSecret" . }}
                   key: {{ .Values.ai.githubReadTokenSecretKey }}
             {{- end }}
+            {{- include "aster.githubAppEnv" . | nindent 12 }}
             {{- with .Values.fetcher.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

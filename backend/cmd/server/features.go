@@ -23,6 +23,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/chatfix"
 	fixruntime "github.com/willie-yao/aster/backend/internal/fix/runtime"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/modelprovider"
 	"github.com/willie-yao/aster/backend/internal/notify"
 	"github.com/willie-yao/aster/backend/internal/output"
@@ -54,6 +55,10 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 		return fmt.Errorf("loading project config: %w", err)
 	}
 	features, err := interactiveFeaturesFromEnv()
+	if err != nil {
+		return err
+	}
+	readAuth, sourceAuth, err := githubReadAuthFromEnv(nil)
 	if err != nil {
 		return err
 	}
@@ -89,20 +94,20 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	opts.TrustedOrigins = trustedOrigins(os.Getenv("OAUTH_REDIRECT_URL"), os.Getenv("TRUSTED_ORIGINS"))
 	var actionService *actions.Service
 	if features.Actions {
-		actionService, err = enableActions(ctx, opts, cfg, dataDir, usageRecorder)
+		actionService, err = enableActions(ctx, opts, cfg, dataDir, usageRecorder, sourceAuth)
 		if err != nil {
 			return err
 		}
 	}
 	var chatService *analysischat.Service
 	if features.AnalysisChat {
-		chatService, err = enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir, usageRecorder)
+		chatService, err = enableAnalysisChat(ctx, opts, cfg, projectDir, dataDir, usageRecorder, readAuth)
 		if err != nil {
 			return err
 		}
 	}
 	if features.PullRequestEscalation {
-		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir, usageRecorder); err != nil {
+		if err := enablePullRequestEscalation(ctx, opts, cfg, projectDir, dataDir, usageRecorder, readAuth); err != nil {
 			return err
 		}
 	}
@@ -123,7 +128,7 @@ func enableInteractiveFeatures(ctx context.Context, opts *server.Options, projec
 	return nil
 }
 
-func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder) (*actions.Service, error) {
+func enableActions(ctx context.Context, opts *server.Options, cfg *project.Config, dataDir string, usageRecorder *aiusage.Recorder, sourceAuth *githubapp.ReadAuth) (*actions.Service, error) {
 	fixConfig := cfg.EffectiveFixPRs()
 	if fixConfig.Enabled {
 		if _, err := newFixRuntime(fixConfig.AgentRuntime); err != nil {
@@ -158,7 +163,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	actionService := actions.NewService(cfg, dataDir, actions.AIConfig{
 		Token: os.Getenv("AI_TOKEN"), API: provider.API, Endpoint: provider.Endpoint,
 		Model: provider.Model, ReasoningEffort: provider.ReasoningEffort, ServiceTier: provider.ServiceTier,
-		Headers: provider.Headers, SourceToken: actionSourceTokenFromEnv(),
+		Headers: provider.Headers, SourceAuth: sourceAuth,
 		UsageRecorder: usageRecorder,
 	})
 	if err := actionService.InitializationError(); err != nil {
@@ -171,7 +176,7 @@ func enableActions(ctx context.Context, opts *server.Options, cfg *project.Confi
 	return actionService, nil
 }
 
-func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string, usageRecorder *aiusage.Recorder) (*analysischat.Service, error) {
+func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.Config, projectDir, dataDir string, usageRecorder *aiusage.Recorder, readAuth *githubapp.ReadAuth) (*analysischat.Service, error) {
 	timeout, err := analysisChatTimeoutFromEnv()
 	if err != nil {
 		return nil, err
@@ -197,7 +202,7 @@ func enableAnalysisChat(ctx context.Context, opts *server.Options, cfg *project.
 		return nil, err
 	}
 	runtime, err := analysisruntime.New(context.Background(), analysisruntime.Options{
-		Token: token, GitHubReadToken: githubReadTokenFromEnv(), DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
+		Token: token, GitHubReadAuth: readAuth, DataDir: dataDir, Project: projectRuntime, MaxOutputTokens: maxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configuring analysis chat runtime: %w", err)
@@ -287,6 +292,7 @@ func enablePullRequestEscalation(
 	cfg *project.Config,
 	projectDir, dataDir string,
 	usageRecorder *aiusage.Recorder,
+	readAuth *githubapp.ReadAuth,
 ) error {
 	token := os.Getenv("AI_TOKEN")
 	if token == "" {
@@ -308,7 +314,7 @@ func enablePullRequestEscalation(
 		return err
 	}
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
-		Token: token, DataDir: dataDir, Project: loaded, MaxOutputTokens: maxOutputTokens,
+		Token: token, GitHubReadAuth: readAuth, DataDir: dataDir, Project: loaded, MaxOutputTokens: maxOutputTokens,
 		UsageRecorder: usageRecorder, UsageOrigin: aiusage.OriginServer,
 	})
 	if err != nil {
@@ -319,20 +325,18 @@ func enablePullRequestEscalation(
 		return fmt.Errorf("configuring pull request escalation storage: %w", err)
 	}
 	repo := cfg.Branding.SourceRepo
-	githubToken := githubReadTokenFromEnv()
 	resolver := &prescalation.DataResolver{
 		DataDir: dataDir, Backend: backend,
 		Repo:  repo.Owner + "/" + repo.Name,
 		Owner: repo.Owner, Name: repo.Name,
-		Lister:          escalationChangedFiles{client: ghpr.NewClient(nil, githubToken)},
+		Lister:          escalationChangedFiles{client: ghpr.NewReadClient(nil, readAuth)},
 		CacheGeneration: loaded.CacheGenerationFingerprint,
 	}
 	runner := &prescalation.AnalysisRunner{
 		NewAnalyzer: func(subject pullrequest.Subject) (ai.FailureAnalyzer, error) {
 			return runtime.NewService(analysisruntime.ServiceOptions{
-				Backend:         backend,
-				GitHubReadToken: githubToken,
-				Module:          pullrequest.New(subject),
+				Backend: backend,
+				Module:  pullrequest.New(subject),
 			})
 		},
 	}
@@ -357,9 +361,8 @@ func enablePullRequestEscalation(
 	clusterRunner := &prescalation.ClusterAnalysisRunner{
 		NewAnalyzer: func(subject sharedfailure.Subject) (ai.FailureAnalyzer, error) {
 			return runtime.NewService(analysisruntime.ServiceOptions{
-				Backend:         backend,
-				GitHubReadToken: githubToken,
-				Module:          sharedfailure.New(subject),
+				Backend: backend,
+				Module:  sharedfailure.New(subject),
 			})
 		},
 	}

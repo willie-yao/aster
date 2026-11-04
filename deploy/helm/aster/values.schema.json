@@ -1311,6 +1311,31 @@
         }
       },
       "additionalProperties": true
+    },
+    "githubApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+        },
+        "appIDKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        },
+        "privateKeyKey": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[-._a-zA-Z0-9]+$"
+        }
+      },
+      "required": [
+        "existingSecret",
+        "appIDKey",
+        "privateKeyKey"
+      ]
     }
   },
   "required": [

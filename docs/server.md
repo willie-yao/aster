@@ -89,9 +89,12 @@ Core settings:
 | `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_REDIRECT_URL` | GitHub OAuth App coordinates. |
 | `AUTH_PROXY_HEADER` | Trusted identity header in proxy mode. |
 | `BOT_TOKEN` | Optional server-held GitHub write credential. It is not required for read-only chat. |
-| `GITHUB_READ_TOKEN` | GitHub source reads prefer this token, then `BOT_TOKEN`, then `GITHUB_TOKEN`. |
-| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | Overrides that read-token preference for action source checks and verification. |
+| `ASTER_APP_ID`, `ASTER_APP_PRIVATE_KEY` | Automatically renewed GitHub App read authentication. Takes precedence over static tokens. |
+| `GITHUB_READ_TOKEN` | Without App credentials, source reads prefer this token, then `BOT_TOKEN`, then `GITHUB_TOKEN`. |
+| `SOURCE_INVESTIGATION_GITHUB_TOKEN` | Overrides the static read-token preference for action source checks and verification, below configured App authentication. |
 | `TRUSTED_ORIGINS` | Additional exact public origins accepted for state-changing requests. |
+
+See [GitHub read authentication](github-read-auth.md) for App installation permissions, Secret wiring, precedence, and renewal failures.
 
 Register the OAuth callback as the dashboard origin plus `/api/auth/callback`. `OAUTH_REDIRECT_URL` must match it exactly.
 

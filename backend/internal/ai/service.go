@@ -18,6 +18,7 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/redact"
 )
@@ -38,7 +39,7 @@ type ServiceConfig struct {
 
 	SourceRepoOwner       string
 	SourceRepoName        string
-	GitHubReadToken       string
+	GitHubReadAuth        *githubapp.ReadAuth
 	AnalysisSourceCatalog *tools.SourceCatalog
 	LinkVerificationStore LinkVerificationStore
 
@@ -79,7 +80,7 @@ type Service struct {
 
 	sourceRepoOwner       string
 	sourceRepoName        string
-	githubReadToken       string
+	githubReadAuth        *githubapp.ReadAuth
 	analysisSourceCatalog *tools.SourceCatalog
 
 	// linkVerifyCache memoizes GitHub file-existence checks across all
@@ -119,7 +120,7 @@ func NewService(config ServiceConfig) *Service {
 		skillSet:               config.Skills,
 		sourceRepoOwner:        config.SourceRepoOwner,
 		sourceRepoName:         config.SourceRepoName,
-		githubReadToken:        config.GitHubReadToken,
+		githubReadAuth:         config.GitHubReadAuth,
 		analysisSourceCatalog:  config.AnalysisSourceCatalog,
 		linkVerifyStore:        config.LinkVerificationStore,
 		traceStore:             config.TraceStore,
@@ -284,7 +285,7 @@ func (s *Service) sourceCatalogForBuild(run *models.BuildResult) (*tools.SourceC
 	if !ok {
 		return nil, nil
 	}
-	reader := NewGitHubRepoReader(source.Owner, source.Name, source.Revision, s.githubReadToken)
+	reader := NewGitHubRepoReader(source.Owner, source.Name, source.Revision, s.githubReadAuth)
 	return tools.NewPrimarySourceCatalog(source.Owner, source.Name, source.Revision, reader)
 }
 

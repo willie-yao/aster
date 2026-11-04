@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/willie-yao/aster/backend/internal/analysischat"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
 
@@ -186,4 +188,15 @@ func actionSourceTokenFromEnv() string {
 		return token
 	}
 	return githubReadTokenFromEnv()
+}
+
+func githubReadAuthFromEnv(client *http.Client) (read, source *githubapp.ReadAuth, err error) {
+	read, err = githubapp.NewReadAuthFromEnv(client, githubReadTokenFromEnv())
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, configured := githubapp.CredentialsFromEnv(); configured {
+		return read, read, nil
+	}
+	return read, githubapp.StaticReadAuth(actionSourceTokenFromEnv()), nil
 }

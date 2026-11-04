@@ -196,6 +196,22 @@ Name of the Secret holding the AI token.
 {{- end -}}
 {{- end -}}
 
+{{/* Required App credentials shared by GitHub read clients. */}}
+{{- define "aster.githubAppEnv" -}}
+{{- if .Values.githubApp.existingSecret -}}
+- name: ASTER_APP_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.githubApp.existingSecret }}
+      key: {{ .Values.githubApp.appIDKey }}
+- name: ASTER_APP_PRIVATE_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.githubApp.existingSecret }}
+      key: {{ .Values.githubApp.privateKeyKey }}
+{{- end -}}
+{{- end -}}
+
 {{- define "aster.validateAI" -}}
 {{- if not (has .Values.ai.api (list "chat_completions" "responses")) -}}
 {{- fail "ai.api must be chat_completions or responses" -}}

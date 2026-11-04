@@ -192,6 +192,8 @@ const (
 	// readTokenOptionalSecret means the token can only come from a Secret key
 	// mounted with optional: true, so an absent key is silently ignored.
 	readTokenOptionalSecret
+	readTokenAppConfigured
+	readTokenAppInvalid
 )
 
 // doctorProfile is the deployment-derived state that profile checks hand to the
@@ -250,6 +252,10 @@ func checkPullRequestReadToken(add func(string, DoctorStatus, string, string), s
 	switch source {
 	case readTokenUnknown:
 		// No deployment profile was inspected, or it runs no fetch at all.
+	case readTokenAppConfigured:
+		add(name, DoctorPass, "the deployment supplies automatically renewed GitHub App read authentication", "")
+	case readTokenAppInvalid:
+		add(name, DoctorFail, "GitHub App read authentication is incomplete or optional", "Supply both required App credentials. A configured App failure does not fall back to a static token or anonymous reads.")
 	case readTokenConfigured:
 		add(name, DoctorPass, "the deployment supplies a read-only GitHub token", "")
 	case readTokenOptionalSecret:
@@ -260,7 +266,7 @@ func checkPullRequestReadToken(add func(string, DoctorStatus, string, string), s
 			"Remove the empty GITHUB_READ_TOKEN or GITHUB_TOKEN entry from fetcher.extraEnv, or give it a value.")
 	default:
 		add(name, DoctorWarn, "pull request triage is enabled with no read-only GitHub token, so it reads GitHub anonymously at 60 requests per hour",
-			"Set ai.githubReadToken or ai.githubReadTokenSecretName so the fetcher receives GITHUB_READ_TOKEN. A token with no repository privileges is enough for a public source_repo.")
+			"Set githubApp.existingSecret for automatically renewed reads, or ai.githubReadTokenSecretName for a static token. App authentication requires installation on every read repository.")
 	}
 }
 
@@ -457,6 +463,7 @@ type doctorNetworkPolicyValues struct {
 }
 
 type doctorKubernetesValues struct {
+	GitHubApp   doctorGitHubAppValues `yaml:"githubApp"`
 	Persistence struct {
 		Enabled       *bool  `yaml:"enabled"`
 		ExistingClaim string `yaml:"existingClaim"`
@@ -507,7 +514,9 @@ type doctorExtraEnv struct {
 	Value     string `yaml:"value"`
 	ValueFrom *struct {
 		SecretKeyRef *struct {
-			Optional *bool `yaml:"optional"`
+			Name     string `yaml:"name"`
+			Key      string `yaml:"key"`
+			Optional *bool  `yaml:"optional"`
 		} `yaml:"secretKeyRef"`
 	} `yaml:"valueFrom"`
 }
@@ -520,6 +529,7 @@ const (
 	envTokenMissing envTokenState = iota
 	envTokenOptional
 	envTokenPresent
+	envTokenInvalid
 )
 
 // state reports what the entry supplies. A name with neither a value nor a
@@ -561,6 +571,12 @@ func chartReadTokenState(values doctorKubernetesValues) envTokenState {
 // variable is resolved separately because GITHUB_TOKEN is only a fallback, not
 // an override of GITHUB_READ_TOKEN.
 func kubernetesReadTokenSource(values doctorKubernetesValues) doctorReadTokenSource {
+	switch state, _ := kubernetesAppState(values, values.Fetcher.ExtraEnv); state {
+	case appConfigured:
+		return readTokenAppConfigured
+	case appInvalid:
+		return readTokenAppInvalid
+	}
 	chart := chartReadTokenState(values)
 	read, fallback := chart, envTokenMissing
 	// The chart appends fetcher.extraEnv after its own entries and the last
@@ -597,6 +613,8 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 		return
 	}
 	profile.readToken = kubernetesReadTokenSource(values)
+	checkKubernetesGitHubApp(add, "fetcher", values, values.Fetcher.ExtraEnv)
+	checkKubernetesGitHubApp(add, "server", values, values.Server.ExtraEnv)
 	rawExistingClaim := values.Persistence.ExistingClaim
 	rawStorageClass := values.Persistence.StorageClass
 	existingClaim := strings.TrimSpace(rawExistingClaim)
@@ -661,6 +679,12 @@ func checkKubernetes(report *DoctorReport, valuesYAML []byte, cfg *project.Confi
 // reads. It mirrors the chart's own GITHUB_READ_TOKEN block, the BOT_TOKEN that
 // enabled actions always render, and githubReadTokenFromEnv's preference order.
 func serverReadTokenState(values doctorKubernetesValues) envTokenState {
+	switch state, _ := kubernetesAppState(values, values.Server.ExtraEnv); state {
+	case appConfigured:
+		return envTokenPresent
+	case appInvalid:
+		return envTokenInvalid
+	}
 	read, bot, github := chartReadTokenState(values), envTokenMissing, envTokenMissing
 	// The chart refuses to install enabled actions without a bot token, and the
 	// server mounts that key without optional, so the pod cannot start without it.
@@ -707,12 +731,14 @@ func checkKubernetesPullRequestEscalation(add func(string, DoctorStatus, string,
 		return
 	}
 	switch serverReadTokenState(values) {
+	case envTokenInvalid:
+		add(name, DoctorFail, "the server has incomplete or optional GitHub App credentials", "Supply both required App credentials. Static tokens cannot replace a configured App failure.")
 	case envTokenMissing:
-		add(name, DoctorWarn, "no GitHub read token reaches the server", "Set ai.githubReadTokenSecretName so escalation reads changed files authenticated rather than at the anonymous 60 requests per hour limit.")
+		add(name, DoctorWarn, "no GitHub read token reaches the server", "Set githubApp.existingSecret or ai.githubReadTokenSecretName so escalation reads changed files with authentication.")
 	case envTokenOptional:
 		add(name, DoctorWarn, "the server's GitHub read token comes from an optional Secret key that may not exist", "Make the Secret key required or set ai.githubReadTokenSecretName. A missing optional key silently falls back to anonymous reads.")
 	default:
-		add(name, DoctorPass, "escalation has a model, pull request triage, and a GitHub read token", "")
+		add(name, DoctorPass, "escalation has a model, pull request triage, and GitHub read authentication", "")
 	}
 }
 

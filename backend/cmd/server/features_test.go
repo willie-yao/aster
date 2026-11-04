@@ -20,6 +20,7 @@ import (
 
 	"github.com/willie-yao/aster/backend/internal/actions"
 	fixruntime "github.com/willie-yao/aster/backend/internal/fix/runtime"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/server"
@@ -83,7 +84,7 @@ func TestEnableActionsAuthenticatesSourceChecks(t *testing.T) {
 				Enabled: true, AgentRuntime: &project.FixAgentRuntime{Type: "agent-sandbox"},
 			}}}
 			ctx, cancel := context.WithCancel(t.Context())
-			service, err := enableActions(ctx, &server.Options{}, cfg, t.TempDir(), nil)
+			service, err := enableActions(ctx, &server.Options{}, cfg, t.TempDir(), nil, githubapp.StaticReadAuth(actionSourceTokenFromEnv()))
 			if err != nil {
 				cancel()
 				t.Fatal(err)
@@ -139,7 +140,7 @@ func TestEnableActionsConfiguresGenerationTimeouts(t *testing.T) {
 			}}}
 			opts := &server.Options{}
 			ctx, cancel := context.WithCancel(context.Background())
-			service, err := enableActions(ctx, opts, cfg, t.TempDir(), nil)
+			service, err := enableActions(ctx, opts, cfg, t.TempDir(), nil, nil)
 			defer func() {
 				cancel()
 				if service != nil {
@@ -324,7 +325,7 @@ func TestEnableActionsRetainsServiceOnStateFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := &server.Options{}
-	service, err := enableActions(t.Context(), opts, &project.Config{}, dir, nil)
+	service, err := enableActions(t.Context(), opts, &project.Config{}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("server action setup failed: %v", err)
 	}
@@ -333,5 +334,18 @@ func TestEnableActionsRetainsServiceOnStateFailure(t *testing.T) {
 	}
 	if err := service.Wait(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInteractiveSetupRejectsInvalidReadAppWithFeaturesDisabled(t *testing.T) {
+	for name, value := range map[string]string{
+		"ACTIONS_ENABLED": "false", "ANALYSIS_CHAT_ENABLED": "false", "PULL_REQUEST_ESCALATION_ENABLED": "false",
+		"ASTER_APP_ID": "1", "ASTER_APP_PRIVATE_KEY": "", "GITHUB_READ_TOKEN": "static",
+	} {
+		t.Setenv(name, value)
+	}
+	err := enableInteractiveFeatures(t.Context(), &server.Options{}, "../../../configs/example", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "private key") {
+		t.Fatalf("interactive setup = %v, want invalid App credentials", err)
 	}
 }

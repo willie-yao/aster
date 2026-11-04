@@ -292,7 +292,7 @@ func (s *Service) analysisRevisionClient() analysisSourceRevisionClient {
 	if s.sourceRevisionClient != nil {
 		return s.sourceRevisionClient
 	}
-	return ghpr.NewClient(nil, s.ai.SourceToken)
+	return ghpr.NewReadClient(nil, s.ai.SourceAuth)
 }
 
 func (s *Service) verifyAnalysisSourceCompatibility(

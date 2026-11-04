@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 	"github.com/willie-yao/aster/backend/internal/prow/jobconfig"
@@ -98,7 +100,11 @@ type prowCatalogClient struct {
 }
 
 func (c prowCatalogClient) Catalog(ctx context.Context) (*jobconfig.Catalog, error) {
-	return jobconfig.FetchCatalog(ctx, c.client)
+	auth, err := githubapp.NewReadAuthFromEnv(c.client, credentialenv.GitHubReadToken())
+	if err != nil {
+		return nil, err
+	}
+	return jobconfig.FetchCatalog(ctx, c.client, auth)
 }
 
 // Discover performs repository-first discovery without rendering or mutation.

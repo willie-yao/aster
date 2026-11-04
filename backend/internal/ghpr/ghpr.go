@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
@@ -60,10 +61,12 @@ func isResponseStatus(err error, status int) bool {
 	return errors.As(err, &responseErr) && responseErr.statusCode == status
 }
 
-// Client opens PRs against a GitHub repo with a single token identity.
+// Client performs GitHub repository operations.
 type Client struct {
 	httpClient *http.Client
 	token      string
+	readAuth   *githubapp.ReadAuth
+	readOnly   bool
 	base       string
 }
 
@@ -73,6 +76,13 @@ func NewClient(httpClient *http.Client, token string) *Client {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &Client{httpClient: httpClient, token: token, base: apiBase}
+}
+
+// NewReadClient builds a repository-scoped client that cannot perform writes.
+func NewReadClient(httpClient *http.Client, auth *githubapp.ReadAuth) *Client {
+	client := NewClient(httpClient, "")
+	client.readAuth, client.readOnly = auth, true
+	return client
 }
 
 // Request describes a PR to open: a file-set committed to a new branch off the
@@ -530,6 +540,9 @@ func (c *Client) post(ctx context.Context, url string, body, out any) error {
 }
 
 func (c *Client) do(ctx context.Context, method, url string, body, out any, okStatuses ...int) error {
+	if c.readOnly && method != http.MethodGet {
+		return fmt.Errorf("GitHub read client cannot perform %s", method)
+	}
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -551,7 +564,22 @@ func (c *Client) do(ctx context.Context, method, url string, body, out any, okSt
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := c.httpClient.Do(req)
+	var resp *http.Response
+	if c.readOnly {
+		parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+		if len(parts) < 3 || parts[0] != "repos" {
+			return fmt.Errorf("GitHub read client requires a repository endpoint")
+		}
+		permission := "contents"
+		if len(parts) == 3 {
+			permission = "metadata"
+		} else if parts[3] == "pulls" {
+			permission = "pull_requests"
+		}
+		resp, err = c.readAuth.Do(c.httpClient, req, parts[1], parts[2], permission)
+	} else {
+		resp, err = c.httpClient.Do(req)
+	}
 	if err != nil {
 		return &transportError{err: err}
 	}

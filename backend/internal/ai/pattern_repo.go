@@ -17,22 +17,17 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai/tools"
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/buildsource"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 )
 
 // githubRepoReader is a bound tools.RepoReader over one GitHub repo at a ref.
 // It backs the pattern agent's repotree tools so the correlation model can grep
 // and read real source files before naming a fix target.
-//
-// ListTree uses the recursive git-trees API (one call, memoized by the tool
-// Cache), so it needs a token to clear GitHub's 60/hr anonymous limit on a busy
-// run. ReadFile uses the raw.githubusercontent.com CDN, which serves public
-// files without a token or API-rate limit, so file reads never spend the token
-// budget.
 type githubRepoReader struct {
 	owner  string
 	repo   string
 	ref    string
-	token  string
+	auth   *githubapp.ReadAuth
 	client *http.Client
 	mu     sync.Mutex
 
@@ -54,13 +49,10 @@ func (r *githubRepoReader) defaultBranch(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
-	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "aster")
-	resp, err := r.client.Do(req)
+	resp, err := r.auth.Do(r.client, req, r.owner, r.repo, "metadata")
 	if err != nil {
 		return "", err
 	}
@@ -97,11 +89,8 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
-	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := r.client.Do(req)
+	resp, err := r.auth.Do(r.client, req, r.owner, r.repo, "contents")
 	if err != nil {
 		return err
 	}
@@ -126,12 +115,11 @@ func (r *githubRepoReader) ResolveRef(ctx context.Context) error {
 func (r *githubRepoReader) resolvedRef() string { r.mu.Lock(); defer r.mu.Unlock(); return r.ref }
 
 var githubAPIBase = "https://api.github.com"
-var githubArchiveHost = "codeload.github.com"
 
 // NewGitHubRepoReader binds a reader to owner/repo at ref. Empty ref means the
-// default branch (HEAD). Empty token falls back to anonymous access. The
+// default branch (HEAD). Nil auth uses anonymous access. The
 // returned reader grounds the pattern agent's repotree tools.
-func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
+func NewGitHubRepoReader(owner, repo, ref string, auth *githubapp.ReadAuth) tools.RepoReader {
 	if ref == "" {
 		ref = "HEAD"
 	}
@@ -139,7 +127,7 @@ func NewGitHubRepoReader(owner, repo, ref, token string) tools.RepoReader {
 		owner:  owner,
 		repo:   repo,
 		ref:    ref,
-		token:  token,
+		auth:   auth,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -154,13 +142,10 @@ func (r *githubRepoReader) ListTree(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
-	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "aster")
-	resp, err := r.client.Do(req)
+	resp, err := r.auth.Do(r.client, req, r.owner, r.repo, "contents")
 	if err != nil {
 		return nil, err
 	}
@@ -205,20 +190,19 @@ func (r *githubRepoReader) ReadFile(ctx context.Context, path string) (string, b
 	}
 	escaped := strings.Join(mapSegments(strings.Split(path, "/"), url.PathEscape), "/")
 	u := fmt.Sprintf("%s/%s/%s/%s/%s", rawContentBase, r.owner, r.repo, url.PathEscape(r.resolvedRef()), escaped)
-	if r.token != "" {
+	if r.auth.Configured() {
 		u = fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", githubAPIBase, r.owner, r.repo, escaped, url.QueryEscape(r.resolvedRef()))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", false, err
 	}
-	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
+	if r.auth.Configured() {
 		req.Header.Set("Accept", "application/vnd.github.raw+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
 	req.Header.Set("User-Agent", "aster")
-	resp, err := r.client.Do(req)
+	resp, err := r.auth.Do(r.client, req, r.owner, r.repo, "contents")
 	if err != nil {
 		return "", false, err
 	}
@@ -267,35 +251,10 @@ func (r *githubRepoReader) readSourceArchive(ctx context.Context) (actionverify.
 	if err != nil {
 		return actionverify.Archive{}, err
 	}
-	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
-	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "aster")
-	client := *r.client
-	previousRedirect := client.CheckRedirect
-	client.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("stopped after 10 source archive redirects")
-		}
-		if previousRedirect != nil {
-			if err := previousRedirect(redirect, via); err != nil {
-				return err
-			}
-		}
-		if r.token == "" || len(via) == 0 {
-			return nil
-		}
-		targetHost := redirect.URL.Hostname()
-		sameOrigin := strings.EqualFold(redirect.URL.Scheme, via[0].URL.Scheme) && strings.EqualFold(redirect.URL.Host, via[0].URL.Host)
-		if !sameOrigin && (redirect.URL.Scheme != "https" || !strings.EqualFold(targetHost, githubArchiveHost)) {
-			return fmt.Errorf("refusing authenticated source archive redirect to %s", redirect.URL.Host)
-		}
-		redirect.Header.Set("Authorization", "Bearer "+r.token)
-		return nil
-	}
-	resp, err := client.Do(req)
+	resp, err := r.auth.Do(r.client, req, r.owner, r.repo, "contents")
 	if err != nil {
 		return actionverify.Archive{}, err
 	}

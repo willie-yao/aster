@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 )
 
 func TestGitHubRepoReaderAnonymousPublicAccess(t *testing.T) {
@@ -34,7 +36,7 @@ func TestGitHubRepoReaderAnonymousPublicAccess(t *testing.T) {
 	githubAPIBase, rawContentBase = srv.URL, srv.URL
 	t.Cleanup(func() { githubAPIBase, rawContentBase = oldAPI, oldRaw })
 
-	reader := NewGitHubRepoReader("owner", "repo", "", "")
+	reader := NewGitHubRepoReader("owner", "repo", "", nil)
 	paths, err := reader.ListTree(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +73,7 @@ func TestGitHubRepoReaderAuthenticatedPrivateAccess(t *testing.T) {
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = oldAPI })
 
-	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token)
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", githubapp.StaticReadAuth(token))
 	if _, err := reader.ListTree(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +95,7 @@ func TestGitHubRepoReaderRejectsOversizedFile(t *testing.T) {
 	rawContentBase = srv.URL
 	t.Cleanup(func() { rawContentBase = oldRaw })
 
-	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", nil)
 	if _, _, err := reader.ReadFile(context.Background(), "config/source.yaml"); err == nil || !strings.Contains(err.Error(), "exceeds verification limit") {
 		t.Fatalf("ReadFile error = %v", err)
 	}
@@ -120,7 +122,7 @@ func TestGitHubRepoReaderReadsBoundedSourceArchive(t *testing.T) {
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = oldAPI })
 
-	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", githubapp.StaticReadAuth(token)).(*githubRepoReader)
 	archive, err := reader.ReadSourceArchive(context.Background())
 	if err != nil || !archive.Paths["go.mod"] || !archive.Paths["pkg/fix.go"] || archive.GoFiles["pkg/fix.go"] != "package fix\n" {
 		t.Fatalf("archive=%v err=%v", archive, err)
@@ -169,15 +171,26 @@ func TestGitHubRepoReaderForwardsPrivateTokenToCodeload(t *testing.T) {
 	}
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiAuth = r.Header.Get("Authorization")
-		http.Redirect(w, r, archiveServer.URL+"/archive.tar.gz", http.StatusFound)
+		http.Redirect(w, r, "https://codeload.github.com/owner/private/archive.tar.gz", http.StatusFound)
 	}))
 	defer apiServer.Close()
 
-	oldAPI, oldArchiveHost := githubAPIBase, githubArchiveHost
-	githubAPIBase, githubArchiveHost = apiServer.URL, archiveURL.Hostname()
-	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
-	reader := NewGitHubRepoReader("owner", "private", "commit-sha", token).(*githubRepoReader)
+	apiURL, err := url.Parse(apiServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", githubapp.StaticReadAuth(token)).(*githubRepoReader)
 	reader.client = archiveServer.Client()
+	transport := reader.client.Transport
+	reader.client.Transport = sourceReadRoundTripper(func(req *http.Request) (*http.Response, error) {
+		routed := req.Clone(req.Context())
+		if req.URL.Hostname() == "codeload.github.com" {
+			routed.URL.Scheme, routed.URL.Host = archiveURL.Scheme, archiveURL.Host
+		} else {
+			routed.URL.Scheme, routed.URL.Host = apiURL.Scheme, apiURL.Host
+		}
+		return transport.RoundTrip(routed)
+	})
 	archiveResult, err := reader.ReadSourceArchive(context.Background())
 	if err != nil || !archiveResult.Paths["go.mod"] {
 		t.Fatalf("archive=%v err=%v", archiveResult, err)
@@ -198,12 +211,12 @@ func TestGitHubRepoReaderRejectsUnexpectedPrivateArchiveRedirect(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	oldAPI, oldArchiveHost := githubAPIBase, githubArchiveHost
-	githubAPIBase, githubArchiveHost = apiServer.URL, "codeload.github.com"
-	t.Cleanup(func() { githubAPIBase, githubArchiveHost = oldAPI, oldArchiveHost })
-	reader := NewGitHubRepoReader("owner", "private", "commit-sha", "read-token-value").(*githubRepoReader)
+	oldAPI := githubAPIBase
+	githubAPIBase = apiServer.URL
+	t.Cleanup(func() { githubAPIBase = oldAPI })
+	reader := NewGitHubRepoReader("owner", "private", "commit-sha", githubapp.StaticReadAuth("read-token-value")).(*githubRepoReader)
 	reader.client = archiveServer.Client()
-	if _, err := reader.ReadSourceArchive(context.Background()); err == nil || !strings.Contains(err.Error(), "refusing authenticated source archive redirect") {
+	if _, err := reader.ReadSourceArchive(context.Background()); err == nil || !strings.Contains(err.Error(), "redirect") {
 		t.Fatalf("ReadSourceArchive error = %v", err)
 	}
 	if redirected {
@@ -223,7 +236,7 @@ func TestGitHubRepoReaderMemoizesSuccessfulSourceArchive(t *testing.T) {
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = oldAPI })
 
-	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "").(*githubRepoReader)
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", nil).(*githubRepoReader)
 	for range 2 {
 		archive, err := reader.ReadSourceArchive(t.Context())
 		if err != nil || !archive.Paths["pkg/fix.go"] {
@@ -243,7 +256,7 @@ func TestGitHubRepoReaderRejectsTruncatedTree(t *testing.T) {
 	oldAPI := githubAPIBase
 	githubAPIBase = srv.URL
 	t.Cleanup(func() { githubAPIBase = oldAPI })
-	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", "")
+	reader := NewGitHubRepoReader("owner", "repo", "commit-sha", nil)
 	if _, err := reader.ListTree(t.Context()); err == nil || !strings.Contains(err.Error(), "truncated") {
 		t.Fatalf("ListTree error = %v", err)
 	}
@@ -285,7 +298,7 @@ func TestGitHubRepoReaderResolveRef(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			before := len(calls)
-			reader := NewGitHubRepoReader("owner", "repo", testCase.ref, "read-token").(*githubRepoReader)
+			reader := NewGitHubRepoReader("owner", "repo", testCase.ref, githubapp.StaticReadAuth("read-token")).(*githubRepoReader)
 			reader.client = srv.Client()
 			err := reader.ResolveRef(t.Context())
 			if (err != nil) != testCase.wantErr {

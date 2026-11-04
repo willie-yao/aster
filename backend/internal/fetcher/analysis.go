@@ -14,7 +14,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/aiusage"
 	"github.com/willie-yao/aster/backend/internal/analysisruntime"
-	"github.com/willie-yao/aster/backend/internal/credentialenv"
 	"github.com/willie-yao/aster/backend/internal/fetchprogress"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/output"
@@ -175,7 +174,6 @@ func (p *pipeline) analyzeFailuresWithAI(ctx context.Context, details []models.J
 			Backend:             p.backend,
 			ConsecutiveFailures: consecutiveMap,
 			TraceStore:          traceStore,
-			GitHubReadToken:     credentialenv.GitHubReadToken(),
 		})
 		if err != nil {
 			log.Printf("⚠ AI service setup failed: %v", err)
@@ -345,7 +343,7 @@ func (p *pipeline) ensureAnalysisRuntime(ctx context.Context) (*analysisruntime.
 		return p.aiRuntime, nil
 	}
 	runtime, err := analysisruntime.New(ctx, analysisruntime.Options{
-		Token: p.aiToken, GitHubReadToken: credentialenv.GitHubReadToken(), DataDir: p.opts.OutDir, Project: p.aiProject,
+		Token: p.aiToken, GitHubReadAuth: p.githubReadAuth, DataDir: p.opts.OutDir, Project: p.aiProject,
 		UsageRecorder: p.usageRecorder, UsageOrigin: aiusage.OriginFetcher,
 		MaxOutputTokens: p.opts.AIMaxOutputTokens,
 	})

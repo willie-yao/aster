@@ -2,16 +2,24 @@ package jobconfig
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/credentialenv"
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
@@ -147,30 +155,40 @@ func TestDiscoveryRequestsUseGitHubReadToken(t *testing.T) {
 			t.Setenv("GITHUB_READ_TOKEN", tc.read)
 			t.Setenv("GITHUB_TOKEN", tc.generic)
 			t.Setenv("BOT_TOKEN", "server-only-token")
-			var calls atomic.Int64
+			var calls, rawCalls atomic.Int64
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/raw/"+fakeSHA+"/config/jobs/discovery.yaml" {
+					rawCalls.Add(1)
+					if r.Header.Get("Authorization") != "" {
+						t.Error("public YAML download carried a credential")
+					}
+					_, _ = w.Write([]byte(periodicJob("periodic-example", "example")))
+					return
+				}
 				calls.Add(1)
 				if r.Header.Get("Authorization") != tc.want {
 					t.Error("discovery request used the wrong GitHub credential")
 				}
-				switch r.URL.Path {
+				switch strings.TrimPrefix(r.URL.Path, "/repos/kubernetes/test-infra") {
 				case "/commits/master":
 					_, _ = w.Write([]byte(fakeSHA))
 				case "/git/trees/" + fakeSHA:
-					_, _ = w.Write([]byte(`{"tree":[]}`))
+					_, _ = w.Write([]byte(`{"tree":[{"path":"config/jobs/discovery.yaml","type":"blob"}]}`))
 				default:
 					t.Errorf("unexpected discovery path: %s", r.URL.Path)
 					http.NotFound(w, r)
 				}
 			}))
 			defer upstream.Close()
-			setURLs(t, upstream.URL+"/raw/", upstream.URL+"/")
-			sha, err := resolveMasterSHA(t.Context(), upstream.Client())
+			setURLs(t, upstream.URL+"/raw/", upstream.URL+"/repos/kubernetes/test-infra/")
+			auth := githubapp.StaticReadAuth(credentialenv.GitHubReadToken())
+			cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "example"}}
+			jobs, err := FetchJobConfigs(t.Context(), upstream.Client(), auth, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := listConfigJobsYAMLs(t.Context(), upstream.Client(), sha); err != nil {
-				t.Fatal(err)
+			if len(jobs) != 1 || rawCalls.Load() != 1 {
+				t.Fatalf("jobs = %d, CDN downloads = %d, want 1 each", len(jobs), rawCalls.Load())
 			}
 			if calls.Load() != 2 {
 				t.Fatalf("discovery requests = %d, want 2", calls.Load())
@@ -208,7 +226,7 @@ func TestFetchJobConfigs_DiscoversAcrossDirectoriesAndNames(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
-	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
 	}
@@ -256,7 +274,7 @@ func TestFetchJobConfigs_OnlyConfigJobsYAMLsAreDownloaded(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
-	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs: %v", err)
 	}
@@ -279,7 +297,7 @@ func TestFetchJobConfigs_TruncatedTreeIsError(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err == nil {
 		t.Fatal("expected error for truncated tree, got nil")
 	}
@@ -300,7 +318,7 @@ func TestFetchJobConfigs_TreeHTTPErrorSurfacesBody(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err == nil {
 		t.Fatal("expected HTTP 403 to surface, got nil")
 	}
@@ -320,7 +338,7 @@ func TestFetchJobConfigs_CommitResolutionFails(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err == nil {
 		t.Fatal("expected error when commit resolution fails, got nil")
 	}
@@ -389,7 +407,7 @@ func TestFetchJobConfigs_RawDownloadFailureCancelsBatch(t *testing.T) {
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
 	go func() {
 		defer close(done)
-		_, err := FetchJobConfigs(ctx, http.DefaultClient, cfg)
+		_, err := FetchJobConfigs(ctx, http.DefaultClient, nil, cfg)
 		result <- err
 	}()
 
@@ -432,7 +450,7 @@ func TestFetchJobConfigs_ZeroMatchErrors(t *testing.T) {
 	setToken(t, "fake-token")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "wanted"}}
-	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	_, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err == nil {
 		t.Fatal("expected zero-match error, got nil")
 	}
@@ -452,7 +470,7 @@ func TestFetchJobConfigs_AnonymousIsAllowed(t *testing.T) {
 	setToken(t, "")
 
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "d"}}
-	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, cfg)
+	jobs, err := FetchJobConfigs(context.Background(), http.DefaultClient, nil, cfg)
 	if err != nil {
 		t.Fatalf("FetchJobConfigs without token: %v", err)
 	}
@@ -531,7 +549,7 @@ func TestFetchCatalogWithoutTargetKeepsOnlyDashboardJobs(t *testing.T) {
 	defer stop()
 	setURLs(t, raw, api)
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: dashboard}}
-	_, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
+	_, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, nil, cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +580,7 @@ presubmits:
 	defer stop()
 	setURLs(t, raw, api)
 
-	catalog, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, "example/project")
+	catalog, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, nil, "example/project")
 	if err != nil {
 		t.Fatalf("FetchCatalogForRepo: %v", err)
 	}
@@ -580,7 +598,7 @@ presubmits:
 }
 
 func TestFetchCatalogForRepo_RequiresRepository(t *testing.T) {
-	if _, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, ""); err == nil {
+	if _, err := FetchCatalogForRepo(context.Background(), http.DefaultClient, nil, ""); err == nil {
 		t.Fatal("expected an error for an empty repository")
 	}
 }
@@ -588,7 +606,7 @@ func TestFetchCatalogForRepo_RequiresRepository(t *testing.T) {
 func TestDownloadAndParseAll_PropagatesCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, err := downloadAndParseAll(ctx, http.DefaultClient, fakeSHA, nil, nil, "example/project", false)
+	_, _, err := downloadAndParseAll(ctx, http.DefaultClient, nil, fakeSHA, nil, nil, "example/project", false)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -625,7 +643,7 @@ postsubmits:
 	defer stop()
 	setURLs(t, raw, api)
 
-	catalog, err := FetchCatalog(context.Background(), http.DefaultClient)
+	catalog, err := FetchCatalog(context.Background(), http.DefaultClient, nil)
 	if err != nil {
 		t.Fatalf("FetchCatalog: %v", err)
 	}
@@ -656,7 +674,7 @@ func TestFetchJobConfigs_UsesConfiguredRevisionWithoutResolvingMaster(t *testing
 	cfg := &project.Config{
 		Discovery: project.Discovery{TestGridDashboard: dashboard, TestInfraRevision: fakeSHA},
 	}
-	jobs, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, cfg, "")
+	jobs, catalog, err := FetchJobConfigsAndCatalog(context.Background(), http.DefaultClient, nil, cfg, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +688,7 @@ func TestFetchJobConfigs_UsesConfiguredRevisionWithoutResolvingMaster(t *testing
 
 func TestResolveConfiguredRevisionRejectsInvalidPin(t *testing.T) {
 	for _, revision := range []string{"short", strings.Repeat("A", 40), strings.Repeat("z", 40), "../" + strings.Repeat("a", 37)} {
-		if _, err := resolveConfiguredRevision(t.Context(), http.DefaultClient, revision); err == nil {
+		if _, err := resolveConfiguredRevision(t.Context(), http.DefaultClient, nil, revision); err == nil {
 			t.Errorf("revision %q was accepted", revision)
 		}
 	}
@@ -682,7 +700,89 @@ func TestFetchJobConfigs_RejectsInvalidResolvedRevision(t *testing.T) {
 	defer stop()
 	setURLs(t, raw, api)
 	cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "dashboard"}}
-	if _, err := FetchJobConfigs(t.Context(), http.DefaultClient, cfg); err == nil || !strings.Contains(err.Error(), "unexpected SHA response") {
+	if _, err := FetchJobConfigs(t.Context(), http.DefaultClient, nil, cfg); err == nil || !strings.Contains(err.Error(), "unexpected SHA response") {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDiscoveryUsesAppForMetadataAndYAML(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(githubapp.EnvAppID, "1")
+	t.Setenv(githubapp.EnvPrivateKey, string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})))
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing installation=%t", missing), func(t *testing.T) {
+			var reads, mints atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/kubernetes/test-infra/installation":
+					if missing {
+						http.NotFound(w, r)
+						return
+					}
+					_, _ = io.WriteString(w, `{"id":9}`)
+				case "/app/installations/9/access_tokens":
+					mints.Add(1)
+					var body struct {
+						Repositories []string          `json:"repositories"`
+						Permissions  map[string]string `json:"permissions"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if len(body.Repositories) != 1 || body.Repositories[0] != "test-infra" || len(body.Permissions) != 1 || body.Permissions["contents"] != "read" {
+						t.Error("discovery token scope mismatch")
+					}
+					_, _ = fmt.Fprintf(w, `{"token":"installation","expires_at":%q}`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+				default:
+					reads.Add(1)
+					if r.Header.Get("Authorization") != "Bearer installation" {
+						t.Error("discovery did not use App credential")
+					}
+					switch r.URL.Path {
+					case "/repos/kubernetes/test-infra/commits/master":
+						_, _ = io.WriteString(w, fakeSHA)
+					case "/repos/kubernetes/test-infra/git/trees/" + fakeSHA:
+						_, _ = io.WriteString(w, `{"tree":[{"path":"config/jobs/test.yaml","type":"blob"}]}`)
+					case "/repos/kubernetes/test-infra/contents/config/jobs/test.yaml":
+						if r.URL.Query().Get("ref") != fakeSHA || r.Header.Get("Accept") != "application/vnd.github.raw+json" {
+							t.Error("YAML read not pinned or not raw")
+						}
+						_, _ = io.WriteString(w, periodicJob("periodic-example", "example"))
+					default:
+						t.Errorf("unexpected request %s", r.URL.Path)
+						http.NotFound(w, r)
+					}
+				}
+			}))
+			defer upstream.Close()
+			target, _ := url.Parse(upstream.URL)
+			client := &http.Client{Transport: jobConfigTransport(func(req *http.Request) (*http.Response, error) {
+				req = req.Clone(req.Context())
+				req.URL.Scheme = target.Scheme
+				req.URL.Host = target.Host
+				return upstream.Client().Transport.RoundTrip(req)
+			})}
+			setURLs(t, "https://raw.githubusercontent.com/kubernetes/test-infra/", "https://api.github.com/repos/kubernetes/test-infra/")
+			auth, err := githubapp.NewReadAuthFromEnv(client, "must-not-fallback")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := &project.Config{Discovery: project.Discovery{TestGridDashboard: "example"}}
+			jobs, err := FetchJobConfigs(t.Context(), client, auth, cfg)
+			if missing {
+				if err == nil || !strings.Contains(err.Error(), "not installed") || reads.Load() != 0 || mints.Load() != 0 {
+					t.Fatalf("missing installation: reads=%d mints=%d err=%v", reads.Load(), mints.Load(), err)
+				}
+			} else if err != nil || len(jobs) != 1 || reads.Load() != 3 || mints.Load() != 1 {
+				t.Fatalf("jobs=%d reads=%d mints=%d err=%v", len(jobs), reads.Load(), mints.Load(), err)
+			}
+		})
+	}
+}
+
+type jobConfigTransport func(*http.Request) (*http.Response, error)
+
+func (f jobConfigTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

@@ -155,7 +155,9 @@ The usual cause is anonymous GitHub reads. Triage calls the GitHub API on every 
 Look for this line in the startup logs, which is emitted once per process:
 
 ```
-⚠ Pull request triage is enabled but neither GITHUB_READ_TOKEN nor GITHUB_TOKEN is set.
+⚠ Pull request triage is enabled but no GitHub App, GITHUB_READ_TOKEN, or GITHUB_TOKEN is configured.
 ```
 
-Fix it by setting `ai.githubReadToken` or `ai.githubReadTokenSecretName`, which apply whether or not `ai.enabled` is true. For a public `branding.source_repo` the token needs no repository privileges. `aster onboard doctor` reports the same gap as `pull request triage credential`. The Pages path already receives the Actions `GITHUB_TOKEN` from the reusable workflow, so this does not apply there. See [Pull request triage](pull-request-triage.md).
+Configure automatically renewed App authentication with `githubApp.existingSecret`, or a static token with `ai.githubReadTokenSecretName`; both apply whether or not `ai.enabled` is true. Static tokens need no repository privileges for a public `branding.source_repo`. `aster onboard doctor` reports the missing-credential gap as `pull request triage credential`.
+
+Configured `ASTER_APP_*` credentials select App reads even when commenting is disabled. Verify installation access to every read repository, including `kubernetes/test-infra` for TestGrid discovery, with Contents read and Pull requests read where triage is enabled. A consumer-only or comment-only installation is insufficient. App failures never fall back to another token or anonymous access. Pages receives the Actions `GITHUB_TOKEN` by default, but configured App credentials take precedence there too. See [GitHub read authentication](github-read-auth.md) and [Pull request triage](pull-request-triage.md).

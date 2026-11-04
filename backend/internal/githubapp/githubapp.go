@@ -26,8 +26,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/willie-yao/aster/backend/internal/textutil"
 )
 
 // apiBase is the GitHub REST API root, overridable per Client for tests.
@@ -48,7 +46,7 @@ const jwtBackdate = 60 * time.Second
 // discarded, so a token cannot lapse mid-request.
 const tokenRefreshSkew = 5 * time.Minute
 
-// Credentials identify the GitHub App the engine posts as.
+// Credentials identify a GitHub App.
 type Credentials struct {
 	// AppID is the App's numeric identifier, as shown on its settings page.
 	AppID string
@@ -77,9 +75,17 @@ type Client struct {
 	mu    sync.Mutex
 	login string
 	// tokens caches installation tokens keyed by "owner/repo".
-	tokens map[string]cachedToken
+	tokens  map[string]cachedToken
+	pending map[string]*tokenRequest
 	// now is a seam for tests.
 	now func() time.Time
+}
+
+type tokenRequest struct {
+	done           chan struct{}
+	token          string
+	err            error
+	leaderCanceled bool
 }
 
 type cachedToken struct {
@@ -107,6 +113,7 @@ func New(httpClient *http.Client, creds Credentials) (*Client, error) {
 		appID:      appID,
 		key:        key,
 		tokens:     map[string]cachedToken{},
+		pending:    map[string]*tokenRequest{},
 		now:        time.Now,
 	}, nil
 }
@@ -193,47 +200,80 @@ func (c *Client) Login(ctx context.Context) (string, error) {
 // InstallationToken returns a token scoped to owner/repo, minting one when no
 // unexpired token is cached.
 func (c *Client) InstallationToken(ctx context.Context, owner, repo string) (string, error) {
-	key := owner + "/" + repo
+	return c.installationToken(ctx, owner, repo, "")
+}
 
-	c.mu.Lock()
-	cached, ok := c.tokens[key]
-	c.mu.Unlock()
-	if ok && c.now().Add(tokenRefreshSkew).Before(cached.expiresAt) {
-		return cached.token, nil
+func (c *Client) installationToken(ctx context.Context, owner, repo, permission string) (string, error) {
+	key := strings.ToLower(owner + "/" + repo)
+	if permission != "" {
+		key = "read:" + permission + ":" + key
 	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		c.mu.Lock()
+		if cached, ok := c.tokens[key]; ok && c.now().Add(tokenRefreshSkew).Before(cached.expiresAt) {
+			c.mu.Unlock()
+			return cached.token, nil
+		}
+		if pending := c.pending[key]; pending != nil {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-pending.done:
+				if pending.leaderCanceled {
+					continue
+				}
+				return pending.token, pending.err
+			}
+		}
+		pending := &tokenRequest{done: make(chan struct{})}
+		c.pending[key] = pending
+		c.mu.Unlock()
 
+		token, err := c.mintInstallationToken(ctx, owner, repo, permission)
+		contextErr := ctx.Err()
+		c.mu.Lock()
+		if err == nil {
+			c.tokens[key] = token
+		}
+		pending.token, pending.err = token.token, err
+		pending.leaderCanceled = contextErr != nil && errors.Is(err, contextErr)
+		delete(c.pending, key)
+		close(pending.done)
+		c.mu.Unlock()
+		return token.token, err
+	}
+}
+
+func (c *Client) mintInstallationToken(ctx context.Context, owner, repo, permission string) (cachedToken, error) {
 	id, err := c.installationID(ctx, owner, repo)
 	if err != nil {
-		return "", err
+		return cachedToken{}, err
 	}
 	var out struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.base, id)
-	// Scope the token to the one repository it is minted for. An installation
-	// may cover many repositories, and an unscoped token would carry write
-	// access to every one of them.
 	body := map[string]any{"repositories": []string{repo}}
+	if permission != "" {
+		body["permissions"] = map[string]string{permission: "read"}
+	}
 	if err := c.appRequest(ctx, http.MethodPost, url, body, &out); err != nil {
-		return "", fmt.Errorf("githubapp: minting installation token for %s: %w", key, err)
+		return cachedToken{}, fmt.Errorf("githubapp: minting installation token for %s/%s: %w", owner, repo, err)
 	}
 	token := strings.TrimSpace(out.Token)
 	if token == "" {
-		return "", fmt.Errorf("githubapp: installation token response for %s was empty", key)
+		return cachedToken{}, fmt.Errorf("githubapp: installation token response for %s/%s was empty", owner, repo)
 	}
 	expiresAt, err := time.Parse(time.RFC3339, out.ExpiresAt)
-	if err != nil {
-		// An unreadable expiry must not be treated as long-lived. Expire the
-		// entry immediately so the next call re-mints rather than reusing a
-		// token whose lifetime is unknown.
-		expiresAt = c.now()
+	if err != nil || !c.now().Add(tokenRefreshSkew).Before(expiresAt) {
+		return cachedToken{}, fmt.Errorf("githubapp: installation token for %s/%s has an invalid or imminent expiry", owner, repo)
 	}
-
-	c.mu.Lock()
-	c.tokens[key] = cachedToken{token: token, expiresAt: expiresAt}
-	c.mu.Unlock()
-	return token, nil
+	return cachedToken{token: token, expiresAt: expiresAt}, nil
 }
 
 // installationID resolves the App's installation on one repository. A 404 means
@@ -293,7 +333,8 @@ func (c *Client) appRequest(ctx context.Context, method, url string, body, out a
 		return &statusError{
 			statusCode: resp.StatusCode,
 			status:     resp.Status,
-			body:       textutil.Truncate(string(payload), 300),
+			// Authentication response bodies may contain credentials.
+			body: "GitHub App authentication failed",
 		}
 	}
 	if out == nil {

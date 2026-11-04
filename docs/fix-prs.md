@@ -116,7 +116,7 @@ Previews and confirmations use the server-held `BOT_TOKEN`. It must be a PAT for
 
 Use the narrowest credential that supports the selected mode. Do not put `BOT_TOKEN`, the model provider credential, OAuth credentials, or a general operator PAT inside Agent Sandbox.
 
-Action source checks prefer `SOURCE_INVESTIGATION_GITHUB_TOKEN`, then `GITHUB_READ_TOKEN`, `BOT_TOKEN`, and `GITHUB_TOKEN`. A failed GitHub source check keeps the preview available for confirmation retry; unsafe target drift or changed failure evidence invalidates it.
+Action source checks use configured [GitHub App read authentication](github-read-auth.md) first. Without an App, they prefer `SOURCE_INVESTIGATION_GITHUB_TOKEN`, then `GITHUB_READ_TOKEN`, `BOT_TOKEN`, and `GITHUB_TOKEN`. A failed GitHub source check keeps the preview available for confirmation retry; unsafe target drift or changed failure evidence invalidates it.
 
 ## Required project configuration
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/githubapp"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -25,7 +26,7 @@ func NewFileLinkResolver(owner, repo string, token ...string) *FileLinkResolver 
 	r.service.sourceRepoOwner = owner
 	r.service.sourceRepoName = repo
 	if len(token) > 0 {
-		r.service.githubReadToken = token[0]
+		r.service.githubReadAuth = githubapp.StaticReadAuth(token[0])
 	}
 	return r
 }
