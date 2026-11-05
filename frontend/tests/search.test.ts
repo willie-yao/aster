@@ -2,18 +2,21 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { ThemeProvider, type Theme } from "@mui/material/styles";
-import { createElement } from "react";
+import { createTheme, decomposeColor, getContrastRatio, ThemeProvider, type Theme } from "@mui/material/styles";
+import { createElement, type ComponentType, type Context } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import { withSSR } from "./helpers/ssr.js";
 
 import { createSearchFuse, searchIndexPath } from "../src/lib/search.js";
 import type { SearchEntry } from "../src/types/dashboard.js";
+import type { Manifest } from "../src/types/manifest.js";
 
-const { searchBar, defaultTheme } = await withSSR(async (vite) => {
+const { searchBar, defaultTheme, ManifestContext } = await withSSR(async (vite) => {
   const searchBar = (await vite.ssrLoadModule(
     "/src/components/SearchBar.tsx",
   )) as {
+    SearchBar: ComponentType;
     SearchResultButton: ((props: {
       entry: SearchEntry;
       filePrefix: string;
@@ -24,9 +27,12 @@ const { searchBar, defaultTheme } = await withSSR(async (vite) => {
     };
   };
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as {
-    defaultTheme: Theme;
+    defaultTheme: Theme & { colorSchemes: Record<"light" | "dark", { palette: Theme["palette"] }> };
   };
-  return { searchBar, defaultTheme };
+  const { ManifestContext } = await vite.ssrLoadModule("/src/hooks/useManifest.ts") as {
+    ManifestContext: Context<Manifest | null>;
+  };
+  return { searchBar, defaultTheme, ManifestContext };
 });
 
 const { SearchResultButton } = searchBar;
@@ -229,3 +235,46 @@ test("mobile search uses the full remaining viewport", () => {
   assert.match(source, /maxHeight: mobileExpanded \? "calc\(100dvh - 64px\)" : 400/);
   assert.match(source, /Try a job, test, branch, or failure term\./);
 });
+
+function emittedStyle(html: string, selectorSuffix: string): Record<string, string> {
+  const css = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gu)]
+    .map((match) => match[1]).join("\n");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)]
+    .filter((match) => match[1].trim().endsWith(selectorSuffix));
+  assert.ok(rules.length > 0, `missing emitted ${selectorSuffix} styles`);
+  return Object.fromEntries(rules.flatMap((match) =>
+    match[2].split(";").filter(Boolean).map((declaration) => {
+      const colon = declaration.indexOf(":");
+      return [declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim()];
+    }),
+  ));
+}
+
+for (const mode of ["light", "dark"] as const) {
+  test(`SearchBar placeholder meets normal-text contrast in ${mode} mode`, () => {
+    const theme = createTheme({ palette: { ...defaultTheme.colorSchemes[mode].palette, mode } });
+    const manifest: Manifest = {
+      id: "test", name: "Test",
+      storage: { provider: "gcs", bucket: "test" },
+      branding: {
+        title: "Test", base_path: "/", site_url: "", source_repo: { owner: "test", name: "test" },
+      },
+    };
+    const html = renderToStaticMarkup(createElement(
+      ThemeProvider, { theme },
+      createElement(MemoryRouter, null,
+        createElement(ManifestContext.Provider, { value: manifest }, createElement(searchBar.SearchBar))),
+    ));
+    assert.match(html, /<input\b[^>]*placeholder="Search jobs and tests…"/u);
+    const placeholder = emittedStyle(html, ".MuiInputBase-input::placeholder");
+    const input = emittedStyle(html, ".MuiOutlinedInput-root");
+    const foreground = decomposeColor(placeholder.color).values;
+    const background = decomposeColor(input["background-color"]).values;
+    const opacity = Number(placeholder.opacity ?? 1) * (foreground[3] ?? 1);
+    const composited = background.slice(0, 3).map((channel, index) =>
+      foreground[index] * opacity + channel * (1 - opacity),
+    );
+    const ratio = getContrastRatio(`rgb(${composited.join(",")})`, input["background-color"]);
+    assert.ok(ratio >= 4.5, `${mode} search placeholder contrast ${ratio.toFixed(2)} is below 4.5:1`);
+  });
+}

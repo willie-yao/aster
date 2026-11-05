@@ -7,6 +7,7 @@ import InputAdornment from "@mui/material/InputAdornment";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListSubheader from "@mui/material/ListSubheader";
+import Modal from "@mui/material/Modal";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -181,16 +182,17 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setActivated(true);
-        setMobileExpanded(true);
-        globalThis.setTimeout(() => inputRef.current?.focus(), 0);
+        if (mobileExpanded) inputRef.current?.focus();
+        else setMobileExpanded(true);
       }
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [mobileExpanded]);
 
-  // Close the dropdown on outside clicks.
+  // Close the inline dropdown on outside clicks.
   useEffect(() => {
+    if (mobileExpanded) return;
     function handleClick(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -199,10 +201,11 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
+  }, [mobileExpanded]);
 
-  // Close the dropdown on Escape.
+  // Close the inline dropdown on Escape.
   useEffect(() => {
+    if (mobileExpanded || !open) return;
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setOpen(false);
@@ -212,7 +215,7 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [mobileExpanded, open]);
 
   function handleSelect(entry: SearchEntry) {
     navigate(searchResultPath(entry));
@@ -221,60 +224,8 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
     setMobileExpanded(false);
   }
 
-  return (
-    <Box
-      ref={containerRef}
-      sx={{
-        position: "relative",
-        display: "flex",
-        alignItems: "center",
-        ...(rail && { flexDirection: "column", width: "100%" }),
-      }}
-    >
-      <IconButton
-        type="button"
-        onClick={() => {
-          setActivated(true);
-          setMobileExpanded(true);
-          setTimeout(() => inputRef.current?.focus(), 50);
-        }}
-        aria-label="Search jobs and tests"
-        size="small"
-        sx={{
-          display: rail ? "flex" : { xs: "inline-flex", md: "none" },
-          ...(rail
-            ? {
-                flexDirection: "column",
-                gap: 0.375,
-                width: "100%",
-                height: 54,
-                borderRadius: 0,
-              }
-            : { width: 44, height: 44, minWidth: 44, borderRadius: "4px" }),
-          flexShrink: 0,
-          p: 0,
-          alignItems: "center",
-          justifyContent: "center",
-          color: "text.secondary",
-          "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
-          "&.Mui-focusVisible": {
-            outline: "2px solid",
-            outlineColor: "primary.main",
-            outlineOffset: rail ? -2 : 1,
-          },
-        }}
-      >
-        <Search sx={{ fontSize: 20 }} />
-        {rail && (
-          <Box
-            component="span"
-            sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
-          >
-            Search
-          </Box>
-        )}
-      </IconButton>
-
+  const searchContent = (
+    <>
       <Box
         sx={[
           mobileExpanded
@@ -298,6 +249,7 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
         <Box sx={{ flex: 1, width: { xs: "100%", md: 256, lg: 320 } }}>
           <TextField
             inputRef={inputRef}
+            autoFocus={mobileExpanded}
             type="text"
             value={query}
             onChange={(e) => {
@@ -362,7 +314,7 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
                 "&:hover fieldset": { borderColor: "text.secondary" },
                 "&.Mui-focused fieldset": { borderColor: "primary.main", borderWidth: 1 },
               },
-              "& .MuiInputBase-input::placeholder": { color: "text.secondary", opacity: 0.6 },
+              "& .MuiInputBase-input::placeholder": { color: "text.secondary", opacity: 1 },
             }}
           />
         </Box>
@@ -376,7 +328,6 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
               setQuery("");
             }}
             sx={{
-              display: rail ? "inline-flex" : { xs: "inline-flex", md: "none" },
               flexShrink: 0,
               minWidth: 0,
               px: 0.5,
@@ -466,6 +417,84 @@ export function SearchBar({ variant = "inline" }: { variant?: "inline" | "rail" 
           </Box>
         </Panel>
       )}
+    </>
+  );
+
+  return (
+    <Box
+      ref={containerRef}
+      sx={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        ...(rail && { flexDirection: "column", width: "100%" }),
+      }}
+    >
+      <IconButton
+        type="button"
+        onClick={() => {
+          setActivated(true);
+          setMobileExpanded(true);
+        }}
+        aria-label="Search jobs and tests"
+        size="small"
+        sx={{
+          display: rail ? "flex" : { xs: "inline-flex", md: "none" },
+          ...(rail
+            ? {
+                flexDirection: "column",
+                gap: 0.375,
+                width: "100%",
+                height: 54,
+                borderRadius: 0,
+              }
+            : { width: 44, height: 44, minWidth: 44, borderRadius: "4px" }),
+          flexShrink: 0,
+          p: 0,
+          alignItems: "center",
+          justifyContent: "center",
+          color: "text.secondary",
+          "&:hover": { color: "text.primary", bgcolor: "surface.containerHigh" },
+          "&.Mui-focusVisible": {
+            outline: "2px solid",
+            outlineColor: "primary.main",
+            outlineOffset: rail ? -2 : 1,
+          },
+        }}
+      >
+        <Search sx={{ fontSize: 20 }} />
+        {rail && (
+          <Box
+            component="span"
+            sx={{ fontSize: "0.6875rem", fontWeight: 600, lineHeight: 1.2, letterSpacing: "0.01em" }}
+          >
+            Search
+          </Box>
+        )}
+      </IconButton>
+
+      {mobileExpanded ? (
+        <Modal
+          open
+          onClose={() => {
+            setMobileExpanded(false);
+            setOpen(false);
+          }}
+        >
+          <Box
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search jobs and tests"
+            tabIndex={-1}
+            onFocus={(event) => {
+              if (event.target === event.currentTarget) inputRef.current?.focus();
+            }}
+            sx={{ position: "fixed", inset: 0, bgcolor: "surface.container", outline: 0 }}
+          >
+            {searchContent}
+          </Box>
+        </Modal>
+      ) : searchContent}
     </Box>
   );
 }
