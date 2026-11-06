@@ -44,7 +44,9 @@ function VerifyBadge({
   status?: string;
   summary?: string;
 }) {
-  if (status !== "passed" && status !== "failed") return null;
+  if (status !== "passed" && status !== "failed") {
+    return <Typography variant="body2" sx={{ color: "text.secondary" }}>No configured checks ran.</Typography>;
+  }
   const passed = status === "passed";
   const accent: SoftColor = passed ? "success" : "error";
   return (
@@ -73,8 +75,8 @@ function VerifyBadge({
       <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
         <Box component="span" sx={(theme) => ({ fontWeight: 600, ...accentLabelSx(theme, accent) })}>
           {passed
-            ? "Automated verification passed"
-            : "Automated verification failed"}
+            ? "Configured checks passed"
+            : "Configured checks failed"}
         </Box>
         {summary && (
           <Box component="span" sx={{ color: "text.secondary" }}>
@@ -82,11 +84,11 @@ function VerifyBadge({
             {summary}
           </Box>
         )}
-        {!passed && (
-          <Box component="span" sx={{ color: "text.secondary" }}>
-            {". The change likely does not build as-is; treat it as a lead."}
-          </Box>
-        )}
+        <Box component="span" sx={{ display: "block", color: "text.secondary" }}>
+          {passed
+            ? "Passing checks do not establish that the change achieves the requested outcome."
+            : "Review the failed command and output before using this change."}
+        </Box>
       </Typography>
     </Box>
   );
@@ -134,7 +136,7 @@ export function ActionDraftPreview({ preview }: { preview: ActionPreview }) {
           />
           {preview.verify_status === "failed" && preview.verify_output && (
             <Box>
-              <Typography sx={dialogRegionLabelSx}>Verification output</Typography>
+              <Typography sx={dialogRegionLabelSx}>Command output</Typography>
               <Box
                 component="pre"
                 sx={{

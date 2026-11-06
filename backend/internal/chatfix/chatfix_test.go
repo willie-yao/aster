@@ -101,6 +101,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		Pattern: models.PatternAnalysis{
 			ID: "pattern", JobID: "periodic-x", SharedBuilds: []string{"123"}, SharedRootCause: "snapshot cause",
 		},
+		UserRequest:       "Prevent the repeated timeout.",
 		AssistantAnswer:   "selected answer",
 		ProposedRevision:  &analysischat.Revision{RootCause: "new cause", SuggestedFix: "new fix"},
 		ArtifactCitations: []analysischat.Citation{{Path: "build-log.txt", LineStart: 4, LineEnd: 5, Quote: "failure"}},
@@ -125,7 +126,7 @@ func TestPreviewChatFixBuildsSelectedContext(t *testing.T) {
 		t.Fatalf("target=%+v instruction=%q", fixes.target, fixes.instruction)
 	}
 	context := fixes.generationContext
-	if context.AssistantAnswer != "selected answer" || context.ProposedRevision == nil || len(context.ArtifactCitations) != 1 {
+	if context.UserRequest != "Prevent the repeated timeout." || context.AssistantAnswer != "selected answer" || context.ProposedRevision == nil || len(context.ArtifactCitations) != 1 {
 		t.Fatalf("generation context = %+v", context)
 	}
 }
@@ -234,6 +235,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 			Scope: analysischat.ScopeTest, JobID: "periodic-capz", BuildID: "123", TestName: "TestCluster",
 			SuiteName: "CAPZ", ClassName: "e2e", JUnitFile: "junit.xml", AnalysisGeneratedAt: "2026-08-13T01:00:00Z",
 		},
+		UserRequest:       "Persist the terminal state instead of retrying.",
 		AssistantAnswer:   "The artifact supports changing the terminal branch.",
 		ArtifactCitations: []analysischat.Citation{{Path: "artifacts/junit.xml", LineStart: 10, LineEnd: 12, Quote: "expected Ready"}},
 		EvidenceWarnings:  []string{"citation 2 was omitted"},
@@ -253,7 +255,7 @@ func TestCreateAnalysisFixRequestUsesExactJUnitAnalysisWithoutPatternAuthority(t
 		input.AnalysisContentHash != "analysis-hash" || input.SourceRepository.Name != "repo" ||
 		input.FailureRevision != "" ||
 		input.GenerationBaseRevision != "" ||
-		input.SourceBranch != "main" ||
+		input.SourceBranch != "main" || input.UserRequest != "Persist the terminal state instead of retrying." ||
 		len(input.ArtifactCitations) != 1 || !slices.Equal(input.EvidenceWarnings, []string{"citation 2 was omitted"}) ||
 		input.ProposedRevision == nil || fixes.userToken != "write-token" {
 		t.Fatalf("analysis input = %+v", input)

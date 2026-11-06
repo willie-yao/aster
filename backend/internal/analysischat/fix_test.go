@@ -78,7 +78,7 @@ func TestServiceFixCandidateSelectsBoundedAnswer(t *testing.T) {
 		candidate.Pattern.ID != fixCandidatePattern().ID || candidate.Pattern.SharedBuilds[0] != "123" {
 		t.Fatalf("candidate identity = %+v", candidate)
 	}
-	if candidate.AssistantAnswer != "The retry path keeps treating the terminal condition as recoverable." ||
+	if candidate.UserRequest != "Could the retry path be wrong?" || candidate.AssistantAnswer != "The retry path keeps treating the terminal condition as recoverable." ||
 		candidate.ProposedRevision == nil || len(candidate.ArtifactCitations) != 1 {
 		t.Fatalf("candidate answer = %+v", candidate)
 	}

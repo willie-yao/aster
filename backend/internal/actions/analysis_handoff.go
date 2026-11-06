@@ -201,7 +201,7 @@ func (s *Service) validateAnalysisPreview(ctx context.Context, owner string, bin
 
 func analysisFixContext(input AnalysisFixInput) fixpr.GenerationContext {
 	return fixpr.GenerationContext{
-		AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
+		UserRequest: input.UserRequest, AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
 		AssistantUnverifiedReason: input.AssistantUnverifiedReason, ProposedRevision: input.ProposedRevision,
 		ArtifactCitations: input.ArtifactCitations, EvidenceWarnings: input.EvidenceWarnings,
 	}
@@ -226,7 +226,7 @@ func (s *Service) FindAnalysisFixRequest(sessionID, requestID, owner string, tar
 	}
 	for _, request := range s.requests.Requests {
 		if request != nil && request.Kind == requestKindAnalysisFix && request.Owner == owner && request.RequestHash == hash && analysisFixRequestReusable(request) {
-			return request.ActionRequestView, true, nil
+			return cloneActionRequestView(request.ActionRequestView), true, nil
 		}
 	}
 	return ActionRequestView{}, false, nil

@@ -3,11 +3,16 @@ package runtime
 import (
 	"context"
 	"testing"
+
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 )
 
 type critiqueClient struct{}
 
-func (critiqueClient) Complete(context.Context, string, string) (string, error) { return "", nil }
+func (critiqueClient) CompleteStructuredWithMetadata(context.Context, string, string, transport.ResponseFormat, ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
+	return ai.StructuredCompletionMetadata{}, nil
+}
 
 func TestCritiqueFailsClosedWithoutReviewer(t *testing.T) {
 	retries := 1

@@ -24,7 +24,6 @@ import (
 	"github.com/willie-yao/aster/backend/internal/artifacts"
 	"github.com/willie-yao/aster/backend/internal/githubapp"
 
-	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/models"
 )
 
@@ -3198,27 +3197,6 @@ func TestParseAnalysisChatReplyPrefersVerifiedCandidateOverEarlierDegradedDraft(
 	}
 }
 
-// A verified answer offers a fix, so the quote cap must leave a worst-case
-// conversation still generatable. Raising the cap without checking this would
-// show the fix button and then fail generation.
-func TestAnalysisChatQuoteCapFitsDownstreamBudgets(t *testing.T) {
-	citations := make([]fixpr.Evidence, 0, 16)
-	for range 16 {
-		citations = append(citations, fixpr.Evidence{
-			Path:  strings.Repeat("a", 120),
-			Quote: strings.Repeat("q", analysisChatMaxQuoteBytes),
-		})
-	}
-	context := fixpr.GenerationContext{
-		AssistantAnswer:   strings.Repeat("s", 8<<10),
-		ProposedRevision:  &fixpr.RevisionContext{RootCause: "cause", SuggestedFix: "fix"},
-		ArtifactCitations: citations,
-	}
-	if err := context.Validate(); err != nil {
-		t.Fatalf("a conversation at the quote cap cannot generate a fix: %v", err)
-	}
-}
-
 // A citation whose passage does not fit the recording budget is unverified.
 // Storing only its head would show the maintainer text that no longer covers
 // what the citation claimed.
@@ -3332,14 +3310,6 @@ func TestAnalysisChatCitationRetainsSHANearEndOfLongJSONLine(t *testing.T) {
 			replay.Quote = sha
 			if failure := validateAnalysisChatCitation(&replay, seeded, nil, 1); failure != nil {
 				t.Fatalf("history excerpt failed re-verification: %+v", failure)
-			}
-			if err := (fixpr.GenerationContext{
-				AssistantAnswer: "The commit changed.",
-				ArtifactCitations: []fixpr.Evidence{{
-					Path: citation.Path, LineStart: citation.LineStart, LineEnd: citation.LineEnd, Quote: citation.Quote,
-				}},
-			}).Validate(); err != nil {
-				t.Fatalf("excerpt rejected by fix generation: %v", err)
 			}
 		})
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
@@ -546,6 +547,7 @@ func capturedHandoff(t *testing.T, service *Service, now func() time.Time) (*ana
 	input := exactAnalysisRequestInput()
 	input.ChatSessionID, input.ChatRequestID, input.ChatResponseHash = candidate.SessionID, candidate.RequestID, candidate.ResponseHash
 	input.Origin = analysischat.FixOrigin{Analysis: candidate.Analysis, Original: candidate.Original, FixTarget: candidate.FixTarget}
+	input.UserRequest = candidate.UserRequest
 	input.AssistantAnswer = candidate.AssistantAnswer
 	input.AssistantUnverified, input.AssistantUnverifiedReason = candidate.AssistantUnverified, candidate.AssistantUnverifiedReason
 	input.ArtifactCitations = nil
@@ -553,7 +555,7 @@ func capturedHandoff(t *testing.T, service *Service, now func() time.Time) (*ana
 	return chat, input
 }
 
-func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, owner string, calls *atomic.Int32) (PreviewResult, error) {
+func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, owner string, calls *atomic.Int32, reviews ...*fixpr.ReviewResult) (PreviewResult, error) {
 	t.Helper()
 	token, existing, acquired, err := service.previewStore.reserveIdempotent(owner, input.PreviewRequestHash, input.HandoffHash, time.Minute)
 	if err != nil {
@@ -575,6 +577,9 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped}, Title: "fix: investigate terminal state", Description: "Investigative patch.", Body: "Investigative patch.",
 		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.TargetBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
 	})
+	if len(reviews) > 0 {
+		fix.Review = fixpr.CloneReviewResult(reviews[0])
+	}
 	fix.SetWarnings(warningMessages(analysisQualityWarnings(input)))
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, fix: fix,
@@ -587,6 +592,62 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 	preview, err := validatedPreviewEntry(entry)
 	preview.Token = token
 	return preview, err
+}
+
+func TestAnalysisFixReviewMetadataPersistsAndIsCloned(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	review := &fixpr.ReviewResult{
+		Status: fixpr.ReviewUnavailable,
+		Metadata: ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{
+			Phase: "fix_review", Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeInvalidJSON,
+		}}},
+	}
+	var calls atomic.Int32
+	service.analysisRequestGenerator = func(_ context.Context, input AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
+		return handoffTestPreview(t, service, input, owner, &calls, review)
+	}
+	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if ready.Review == nil || ready.Preview == nil || ready.Preview.Review == nil ||
+		ready.Review.Status != fixpr.ReviewUnavailable || ready.Preview.Review.Status != fixpr.ReviewUnavailable ||
+		ready.Preview.VerifyStatus != string(fixpr.VerifySkipped) {
+		t.Fatalf("review and verification = %+v", ready)
+	}
+	ready.Review.Metadata.Attempts[0].Outcome = ai.StructuredOutcomeAccepted
+	ready.Preview.Review.Metadata.Attempts[0].Outcome = ai.StructuredOutcomeAccepted
+	fresh, err := service.GetRequest(created.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON ||
+		fresh.Preview.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON {
+		t.Fatal("an outward view changed the retained review attempts")
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	restored, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || restored.Status != RequestReady || restored.Review == nil || restored.Preview.Review == nil ||
+		restored.Review.Status != fixpr.ReviewUnavailable || restored.Preview.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON {
+		t.Fatalf("restored review = %+v, %v", restored, err)
+	}
+	state, _, err := reloaded.previewStore.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := state.Previews[tokenHash(restored.Preview.Token)]
+	if canonical == nil || canonical.Fix == nil || canonical.Fix.Review == nil || canonical.Fix.Review.Status != fixpr.ReviewUnavailable {
+		t.Fatalf("canonical review = %+v", canonical)
+	}
+	record := reloaded.requests.Requests[created.ID]
+	record.Review.Status = fixpr.ReviewPassed
+	if _, err := validatedReadyPreview(record); err == nil {
+		t.Fatal("a changed request review remained consistent with the preview")
+	}
 }
 
 func installHandoffTestGenerator(t *testing.T, service *Service, calls *atomic.Int32) {
@@ -657,7 +718,7 @@ func TestActionOwnedHandoffSurvivesChatLifecycle(t *testing.T) {
 			}
 			record := reloaded.requests.Requests[request.ID]
 			handoff := record.AnalysisFix
-			if handoff == nil || !handoff.AssistantUnverified || handoff.AssistantUnverifiedReason != input.AssistantUnverifiedReason || len(handoff.ArtifactCitations) != 0 || !slices.Equal(handoff.EvidenceWarnings, input.EvidenceWarnings) {
+			if handoff == nil || handoff.UserRequest != "Explain the failure." || !handoff.AssistantUnverified || handoff.AssistantUnverifiedReason != input.AssistantUnverifiedReason || len(handoff.ArtifactCitations) != 0 || !slices.Equal(handoff.EvidenceWarnings, input.EvidenceWarnings) {
 				t.Fatalf("handoff = %+v", handoff)
 			}
 			if err := reloaded.validateAnalysisPreview(t.Context(), "alice", AnalysisPreviewBinding{Handoff: handoff}); err != nil {
@@ -1108,6 +1169,7 @@ func TestAnalysisFixHandoffRejectsTamperingAndIncompleteState(t *testing.T) {
 		func(i *AnalysisFixInput) { i.SourceHints = append(i.SourceHints, "extra.go") },
 		func(i *AnalysisFixInput) { i.SourceBranch = "" },
 		func(i *AnalysisFixInput) { i.AssistantAnswer = "Different selected response" },
+		func(i *AnalysisFixInput) { i.UserRequest = "Different requested outcome" },
 		func(i *AnalysisFixInput) { i.AssistantUnverified = !i.AssistantUnverified },
 		func(i *AnalysisFixInput) { i.ArtifactCitations = nil },
 		func(i *AnalysisFixInput) { i.EvidenceWarnings = []string{"different qualification"} },
@@ -1129,6 +1191,46 @@ func TestAnalysisFixHandoffRejectsTamperingAndIncompleteState(t *testing.T) {
 	ready.AnalysisFix.HandoffHash = analysisFixHandoffHash(*ready.AnalysisFix)
 	if _, err := validatedReadyPreview(ready); err == nil {
 		t.Fatal("accepted ready version-4 exact Fix handoff")
+	}
+}
+
+func TestAnalysisFixPreservesBoundedUserRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		request string
+		wantErr bool
+	}{
+		{name: "absent"},
+		{name: "bounded", request: strings.Repeat("q", 4096)},
+		{name: "oversized", request: strings.Repeat("q", 4097), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := analysisRequestTestService(t)
+			input := exactAnalysisRequestInput()
+			input.UserRequest = tc.request
+			admitted, err := service.prepareAnalysisFix(t.Context(), input, "alice", "Preserve exact version pins.")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("oversized user request was admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cloned := cloneAnalysisFixInput(admitted)
+			if cloned.UserRequest != tc.request || cloned.Instruction != "Preserve exact version pins." {
+				t.Fatalf("cloned task = %+v", cloned)
+			}
+			subject, err := service.resolveAnalysisFixTarget(*cloned, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generation := analysisFailureForGeneration(subject, *cloned)
+			if generation.UserRequest != tc.request || analysisFixContext(*cloned).UserRequest != tc.request {
+				t.Fatalf("generation dropped the user request: %+v", generation)
+			}
+		})
 	}
 }
 

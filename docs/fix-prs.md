@@ -16,7 +16,7 @@ The engine requires a current, unambiguous supported subject and an accessible c
 4. Stage the patch and run the configured exact validators inside the executor.
 5. Return the patch and ordered command results to the dashboard.
 6. Reconstruct the canonical patch independently and reject unexpected files, paths, identities, commands, or results.
-7. Run one warning-only Fix critique when the dashboard AI client is available, then show the exact draft, diff, warnings, validation results, and target.
+7. Run one warning-only structured Fix review when the dashboard AI client is available, then show the exact draft, diff, warnings, configured checks, and target.
 8. Open the draft pull request only after explicit confirmation of that preview.
 
 A preview is a review artifact, not proof that the patch fixes the failure. Agent Sandbox validators, source verification, Prow CI, and human review are separate gates. The engine never approves or merges the pull request.
@@ -25,13 +25,15 @@ A preview is a review artifact, not proof that the patch fixes the failure. Agen
 
 Every Fix entry point gives the coding agent the same rule:
 
+- Establish an observable success criterion from the human request and any newer maintainer instruction. Treat assistant recommendations as hypotheses, not authorization.
 - First look for a minimal change that makes the failed operation succeed, such as correcting a value, version, path, or repository choice this code made. Verify the causal code path against the repository and cite it by file and line.
 - Well-documented external facts, such as which distribution releases a vendor publishes packages for, may support the change. State them in the summary as assumptions with how to validate them.
 - Treat the published suggested fix as one candidate, not the default.
-- If no resolving change is identifiable, a fail-fast guard is acceptable only when it gives a clearer, earlier error than today. Start the summary with `Guard only:` and say what still needs fixing.
+- Check the proposed behavior under the original failure condition. A fail-fast guard is appropriate for requested diagnostics or partial mitigation, but does not complete a request for resolution. Label it `Guard only:` and say what still needs fixing. If resolution requires missing evidence or policy, make no change and identify that prerequisite.
+- Add or adapt a behavioral test for the requested outcome. Distinguish tests added from tests actually executed. Preserve required coverage, version policy, and assertions; do not infer permission for downgrades or broader changes.
 - Make no change when no repository code is causally involved, for example when the fix belongs in another repository or the cause is purely operational. Do not edit unrelated code or skip or weaken the failing test to produce a patch.
 
-The agent ends with a short summary of its change, the causal code path, and its caveats. The draft's **Proposed change** uses that summary, never the published suggested fix. If the summary is missing or fails draft-text validation, it lists the changed files instead.
+The agent ends with a short summary of the requested outcome, whether the change resolves the cause, mitigates impact, or improves diagnostics, its behavior under the original trigger, and validation performed or still missing. The draft's **Proposed change** uses that summary, never the published suggested fix. If the summary is missing or fails draft-text validation, it lists the changed files instead.
 
 Fix PR bodies link the failed build to its recorded Prow URL, or list up to five builds for a pattern with a count of the rest. Builds without a recorded URL remain plain text. Verification results, investigation warnings, and any backport suggestion use plain text rather than GitHub callouts. An engine-owned footer repeats the build sources and discloses that an AI coding agent in Aster generated the change. These footer links, verification results, and backport suggestions survive repository-template filling. The footer links Aster to the configured dashboard when available and reminds reviewers to verify the change before merging.
 
@@ -42,6 +44,8 @@ When the agent returns a patch, quality concerns become warnings on the ready pr
 - failed or timed-out validators, also shown as the verification verdict;
 - concrete concerns from the Fix critique, or a warning that critique was unavailable;
 - analysis, evidence qualification, and eligibility concerns.
+
+Authenticated preview and action-request responses retain structured `review` status (`passed`, `concerns`, or `unavailable`) and bounded attempt metadata. These diagnostics distinguish provider, empty-response, and validation failures without retaining prompts or raw responses. Review remains separate from command verification and does not authorize a write.
 
 These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, unsafe exact-analysis target drift described below, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
 
@@ -58,13 +62,13 @@ After a completed response, **Use this finding in a fix proposal** admits a sepa
 - for the tested-branch target, the failure revision is the head of that branch or an ancestor of it;
 - the target branch still contains the pinned generation base and has not changed a file the patch touches.
 
-The coding agent receives the available failure details, selected answer, retained citations, and optional source hints. It investigates the repository before editing. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified; they are not relabeled as verified because a proposal was requested.
+The coding agent receives the selected human question, available failure details, selected answer, retained citations, and optional source hints. The human question is bounded to 4096 bytes; engine-prepared questions are not treated as human instructions. Newer explicit Fix instructions remain separate and take precedence within repository constraints. The patch reviewer receives the same request and instruction, plus the generated rationale and authentic command results. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified.
 
 The preparation workspace shows the selected finding beside the target branch and optional maintainer instruction. Expand **Validated evidence** to read the retained citations. On phones, the panels stack; **Generate fix preview** stays in the bottom action bar. Generating a preview does not open a pull request.
 
 By default the generation base is the current head of the branch the build reports, so a failure on a release branch is investigated and patched against that release branch. When the repository's default branch differs from that tested branch, the dialog also offers the default branch as the target. That target pins the default branch's current head at admission and skips the ancestry check, since the default branch has its own history. The coding agent is told where the failure was observed and to make no change if the causal logic is absent on the default branch. The PR names both branches and suggests `/cherry-pick <tested branch>` after merge. Request identity, deduplication, and regeneration keep the two targets separate. If Aster cannot determine the exact source commit this build tested, it says a Fix proposal cannot be pinned (`source_revision_unknown`). A tested-branch failure whose commit has diverged from its branch head, or a build that reports no resolvable branch, is rejected before the provider call with a reason code (`source_revision_diverged` or `source_branch_unknown`). These reasons are returned in `X-Analysis-Chat-Reason` and recorded in the server log. Repository-access and generation-base errors remain failures, not analysis warnings.
 
-At admission, the action captures an immutable bounded snapshot of the selected answer, its qualifications, originating test or cause, exact failure target, published analysis and source hints, retained citations, repository, tested branch, target branch, and generation base. A selected answer may reuse citations validated by earlier turns, but later turns do not alter the snapshot. Only retained validated citations are carried as verified artifact evidence. The action generates from that captured context and rechecks current cause membership and content, exact failed test or build evidence, and source/base identity before accepting a generated result and before confirmation. Regenerating the analysis text alone does not revoke an admitted Fix; changed failure evidence or cause content requires a new preview.
+At admission, the action captures an immutable bounded snapshot of the selected human request, answer, and its qualifications, originating test or cause, exact failure target, published analysis and source hints, retained citations, repository, tested branch, target branch, and generation base. A selected answer may reuse citations validated by earlier turns, but later turns do not alter the snapshot. Only retained validated citations are carried as verified artifact evidence. The action generates from that captured context and rechecks current cause membership and content, exact failed test or build evidence, and source/base identity before accepting a generated result and before confirmation. Regenerating the analysis text alone does not revoke an admitted Fix; changed failure evidence or cause content requires a new preview.
 
 Deleting or expiring chat does not revoke an admitted Fix or a Fix request that has already captured its selected answer. Deleting chat before capture prevents a new admission. Use explicit action cancellation to cancel a pending or ready Fix. Existing owner-bound requests can be retrieved without chat; repeated admission reconnects to an existing request instead of silently repinning it. Handoffs must use the current version. Unknown write outcomes retain reconciliation-only recovery and cannot use an incomplete handoff for another write.
 
@@ -74,7 +78,7 @@ Exact-analysis previews tolerate target-branch advances that leave patched files
 
 ### Preview, warnings, regeneration, and confirmation
 
-The ready preview shows the exact source revision, changed files, canonical diff, validator results, pull-request title and body, and engine-generated warnings. Warnings never authorize a write and cannot be hidden by model prose.
+The ready preview shows the exact source revision, changed files, canonical diff, configured command results, pull-request title and body, and engine-generated warnings. Passing checks establish only what those commands tested, not whether the requested outcome was achieved. Warnings never authorize a write and cannot be hidden by model prose.
 
 The review fills the window with the diff first. **J** and **K** move between diff hunks, **/** focuses the revision instruction, and **Cmd+Enter** (**Ctrl+Enter**) opens the draft PR, or regenerates when pressed in the revision field.
 

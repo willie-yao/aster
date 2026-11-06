@@ -248,7 +248,7 @@ function MarkdownBody({ text }: { text: string }) {
 
 function Verification({ preview }: { preview: ActionPreview }) {
   if (preview.verify_status !== "passed" && preview.verify_status !== "failed") {
-    return <Typography sx={{ ...overviewTypography.description, color: "text.secondary" }}>No automated verification ran.</Typography>;
+    return <Typography sx={{ ...overviewTypography.description, color: "text.secondary" }}>No configured checks ran.</Typography>;
   }
   const passed = preview.verify_status === "passed";
   const accent = passed ? "success" : "error";
@@ -258,18 +258,18 @@ function Verification({ preview }: { preview: ActionPreview }) {
       <Icon sx={(theme) => ({ fontSize: 18, mt: "1px", ...accentLabelSx(theme, accent) })} />
       <Box sx={{ minWidth: 0 }}>
         <Typography sx={(theme) => ({ ...overviewTypography.secondaryBody, fontWeight: 650, ...accentLabelSx(theme, accent) })}>
-          {passed ? "Verification passed" : "Verification failed"}
+          {passed ? "Configured checks passed" : "Configured checks failed"}
         </Typography>
         {preview.verify_summary && (
           <Typography sx={{ ...overviewTypography.description, color: "text.secondary", mt: 0.25, overflowWrap: "anywhere" }}>
             {preview.verify_summary}
           </Typography>
         )}
-        {!passed && (
-          <Typography sx={{ ...overviewTypography.description, color: "text.secondary", mt: 0.25 }}>
-            The change likely does not build as-is; treat it as a lead.
-          </Typography>
-        )}
+        <Typography sx={{ ...overviewTypography.description, color: "text.secondary", mt: 0.25 }}>
+          {passed
+            ? "Passing checks do not establish that the change achieves the requested outcome."
+            : "Review the failed command and output before using this change."}
+        </Typography>
       </Box>
     </Box>
   );
@@ -277,8 +277,8 @@ function Verification({ preview }: { preview: ActionPreview }) {
 
 // verificationState summarizes the validator result for the header button.
 function verificationState(preview: ActionPreview) {
-  if (preview.verify_status === "passed") return { accent: "success" as const, Icon: CheckCircleOutlined, label: "Checks passed" };
-  if (preview.verify_status === "failed") return { accent: "error" as const, Icon: ErrorOutlined, label: "Checks failed" };
+  if (preview.verify_status === "passed") return { accent: "success" as const, Icon: CheckCircleOutlined, label: "Configured checks passed" };
+  if (preview.verify_status === "failed") return { accent: "error" as const, Icon: ErrorOutlined, label: "Configured checks failed" };
   return { accent: null, Icon: CheckCircleOutlined, label: "No checks" };
 }
 
@@ -311,7 +311,7 @@ function VerificationChecksButton({ preview }: { preview: ActionPreview }) {
         transformOrigin={{ vertical: "top", horizontal: "right" }}
         slotProps={{ paper: { sx: { ...overlayPaperSx, mt: 0.75, p: 2, maxWidth: 380 } } }}
       >
-        <Typography component="h3" sx={dialogRegionLabelSx}>Automated verification</Typography>
+        <Typography component="h3" sx={dialogRegionLabelSx}>Configured checks</Typography>
         <Verification preview={preview} />
       </Popover>
     </Box>
@@ -496,7 +496,7 @@ export function FixReviewWorkspace(props: FixReviewProps) {
           ) : null}
           {preview.verify_status === "failed" && preview.verify_output && (
             <Box component="section">
-              <Typography component="h3" sx={dialogRegionLabelSx}>Verification output</Typography>
+              <Typography component="h3" sx={dialogRegionLabelSx}>Command output</Typography>
               <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 200, overflow: "auto", borderRadius: 1, border: "1px solid", borderColor: "divider", bgcolor: "surface.containerLow", fontFamily: mono, fontSize: "12.5px" }}>
                 {preview.verify_output}
               </Box>

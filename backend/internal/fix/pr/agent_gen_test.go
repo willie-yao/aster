@@ -324,12 +324,12 @@ func TestFixInstructionsShareRepositoryChangeGuidance(t *testing.T) {
 				"correcting a value, version, path, or repository choice this code made",
 				"Verify the causal code path against the repository and cite it by file and line",
 				"Well-documented external facts",
-				"which distribution releases a vendor publishes packages for",
-				"State them in the summary as assumptions with how to validate them",
+				"State assumptions and how to validate them",
+				"State an observable success criterion",
 				"The published suggested fix is one candidate, not the default",
-				"If no resolving change is identifiable",
-				"a fail-fast guard is acceptable only when it gives a clearer, earlier error than today",
-				`Start the summary with "Guard only:" and say what still needs fixing`,
+				"Do not substitute a guard for a requested resolving change",
+				"Replay the original triggering condition",
+				`Start its summary with "Guard only:" and state the remaining failure`,
 				"Make no change when no code in this repository is causally involved",
 				"Do not edit unrelated code",
 				"do not skip or weaken the failing test, just to produce a patch",
@@ -397,6 +397,15 @@ func TestFixPreviewsCritiqueOnceWithoutRegeneration(t *testing.T) {
 					if reviewer.lastSystem != critiqueSystemPrompt ||
 						!strings.Contains(reviewer.lastUser, "FILE AFTER CHANGE: templates/cluster.yaml") {
 						t.Fatalf("review did not receive the patch: system=%q user=%q", reviewer.lastSystem, reviewer.lastUser)
+					}
+					wantReview := ReviewPassed
+					if tc.name == "concerns" {
+						wantReview = ReviewConcerns
+					} else if tc.err != nil || tc.name == "invalid review" {
+						wantReview = ReviewUnavailable
+					}
+					if fix.Review == nil || fix.Review.Status != wantReview || fix.Review.Validate() != nil {
+						t.Fatalf("review = %+v, want %s", fix.Review, wantReview)
 					}
 					if tc.warning == "" {
 						if len(fix.Warnings) != 0 {

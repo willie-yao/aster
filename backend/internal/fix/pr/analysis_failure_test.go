@@ -851,7 +851,7 @@ func TestAnalysisPreviewTargetsDefaultBranchAndSuggestsBackport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(fix.Description, "cherry-pick") || strings.Contains(agent.spec.Instruction, "make no change") {
+	if strings.Contains(fix.Description, "cherry-pick") || strings.Contains(agent.spec.Instruction, `If the causal logic is not present on branch`) {
 		t.Fatalf("same-branch target suggested a backport: %s\n%s", fix.Description, agent.spec.Instruction)
 	}
 }
