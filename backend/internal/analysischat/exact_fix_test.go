@@ -153,6 +153,70 @@ func exactFixServiceRunnerWithTest(t *testing.T, reply Reply, runnerErr error, a
 	return service, session, requestID, runner
 }
 
+func TestServiceInvestigationQuestionSurvivesStreamReloadAndFixHandoff(t *testing.T) {
+	const inferredGoal = "Keep intended Kubernetes coverage while avoiding incompatible dependency selection."
+	for _, tc := range []struct {
+		name    string
+		outcome string
+	}{
+		{name: "explicit outcome", outcome: "Prevent published dependency delays from breaking this test."},
+		{name: "inferred outcome"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			goal := tc.outcome
+			if goal == "" {
+				goal = "Infer and clearly label the goal from this failure and conversation. An inferred goal does not authorize policy changes."
+			}
+			question := "Investigate a fix for this failure.\n\nDesired outcome: " + goal
+			answer := "Goal (inferred): " + inferredGoal + "\n\nRecommendation: verify compatible dependency selection without weakening the test.\n\nVerification: replay the original missing-dependency condition."
+			service, session, _, runner := exactFixServiceRunner(t, Reply{Answer: answer}, nil)
+			requestID := testRequestID(t)
+			if _, err := service.Stream(t.Context(), session.ID, "Alice", requestID, question, func(Progress) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := service.Wait(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := NewService(t.Context(), service.dataDir, runner, service.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reloaded.ConfigureSourceRepository(sourceinvestigation.Repository{Owner: "example", Name: "repo"}); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := reloaded.Get(session.ID, "Alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			user := restored.Messages[len(restored.Messages)-2]
+			if user.Role != "user" || user.Actor != "alice" || user.Prepared || user.Content != question {
+				t.Fatalf("restored operator request = %+v", user)
+			}
+			candidate, err := reloaded.AnalysisFixCandidate(session.ID, "Alice", requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if candidate.UserRequest != question || candidate.AssistantAnswer != answer || strings.Contains(candidate.UserRequest, inferredGoal) {
+				t.Fatalf("Fix handoff replaced operator intent: %+v", candidate)
+			}
+			if _, err := reloaded.Stream(t.Context(), session.ID, "Alice", requestID, question, func(Progress) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			runner.mu.Lock()
+			turns := slices.Clone(runner.turns)
+			runner.mu.Unlock()
+			if len(turns) != 2 || turns[1].Question != question {
+				t.Fatalf("investigation or replay started another turn: %+v", turns)
+			}
+			for _, name := range []string{"action_request_state.json", "action_preview_state.json"} {
+				if _, err := os.Stat(filepath.Join(service.dataDir, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("investigation created Fix action state %s: %v", name, err)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceAnalysisFixCandidateSupportsBuildFailure(t *testing.T) {
 	failure := analyzedTest("Prow job execution", "", "2026-08-13T01:00:00Z")
 	failure.Source, failure.SuiteName, failure.ClassName = models.TestCaseSourceBuild, "Prow", "job"

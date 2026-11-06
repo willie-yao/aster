@@ -50,6 +50,8 @@ These still reject the attempt because they protect the repository, the credenti
 
 Authenticated server deployments can turn one exact failed JUnit test or build-level analysis into a fix proposal from the analysis chat. Build-level targets use the job, build, `source: build`, failure name, optional suite/class, and analysis timestamp, without a JUnit file. There is one conversation: ask questions, and any completed nonempty answer can start a proposal, including an uncited or unverified answer. Asking a question never creates a patch, branch, or pull request, and never depends on source verification. The server pins the immutable repository and generation base when the proposal is requested.
 
+Use **Investigate a fix** in a test, build-failure, or cause chat when you want Aster to find a supported change direction. The optional desired outcome states what should be different; leaving it blank keeps the inferred goal provisional. The selected investigation question and any supplied outcome are retained as the operator request, while the model's inferred goal and recommendation remain assistant evidence.
+
 After a completed response, **Use this finding in a fix proposal** admits a separate persistent asynchronous preview request. It requires:
 
 - the exact failed test or build-level failure and its published analysis remain available and unchanged, and the run has not passed;

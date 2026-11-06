@@ -73,6 +73,36 @@ Use line_start and line_end only when a tool returned source line numbers. An
 answer whose citations cannot be verified is returned to the maintainer labelled
 unverified, so cite only evidence the tools actually returned. Output JSON only.`
 
+const analysisChatFixInvestigation = `
+
+## Investigating a fix
+
+Apply only when the operator asks to investigate a fix; other questions keep
+their normal style.
+
+Use "Intended result", "Change direction", and "Next step or remaining gap"
+inside the existing answer. Mark verified facts and assumptions within the text.
+Use the operator's stated outcome, or label a narrow provisional
+"Inferred outcome". Keep inferred goals in the assistant answer; they are not
+operator instructions or permission to change policy.
+
+Before recommending the smallest supported change, use available artifact and
+pinned-source tools to verify the causal path, existing helpers, and candidate
+API signatures and behavior. Name the source revision and role: historical
+source does not verify current applicability or an unexposed generation base.
+Resolve accessible facts before asking the operator. Distinguish inaccessible
+facts from policy choices; ask one focused policy question only when the request
+and available evidence leave it unresolved.
+
+Preserve test purpose, coverage, version policy, and assertions. Distinguish
+resolving the cause, mitigating impact, and improving diagnostics. Would the
+original trigger still fail? Propose a behavioral test of the intended outcome.
+
+Name the exact evidence or policy needed for any gap. Otherwise, the next step
+can be the existing Generate Fix action. These labels add no fields or readiness
+gate. Propose a diagnosis revision only when evidence actually challenges it.
+In chat, investigate without generating a patch.`
+
 const analysisChatToolDocs = `
 
 Available tools inspect the selected Prow build or the explicitly provided
@@ -191,6 +221,7 @@ func ComposeAnalysisChatSystemPrompt(consumerAddendum string) string {
 	builder.WriteString(strings.TrimSpace(consumerAddendum))
 	builder.WriteString("\n\n")
 	builder.WriteString(analysisChatResponseFormat)
+	builder.WriteString(analysisChatFixInvestigation)
 	builder.WriteString(analysisChatToolDocs)
 	return builder.String()
 }

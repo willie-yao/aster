@@ -50,6 +50,7 @@ import {
   analysisChatTurnLimitMessage,
   analysisChatTurnUsage,
   AnalysisChatAPIError,
+  buildFixInvestigationQuestion,
   cancelAnalysisChatRequest,
   clearAnalysisChatPendingIntent,
   createAnalysisChatSession,
@@ -62,6 +63,7 @@ import {
   limitAnalysisChatQuestion,
   loadAnalysisChatPendingIntent,
   markAnalysisChatTurnLimitReached,
+  maxFixInvestigationOutcomeBytes,
   newAnalysisChatRequestID,
   reconcileAnalysisChatTurn,
   resumeAnalysisChatTurn,
@@ -655,8 +657,11 @@ export function AnalysisChat({
   // Several chats render on one page, so the panel each toggle controls needs
   // an id unique to that instance.
   const chatContentId = useId();
+  const composerInputId = useId();
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
+  const [fixInvestigation, setFixInvestigation] = useState(false);
+  const [desiredOutcome, setDesiredOutcome] = useState("");
   const [draftContentHeight, setDraftContentHeight] = useState<number | null>(null);
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -676,6 +681,8 @@ export function AnalysisChat({
   const [resetting, setResetting] = useState(false);
   const clearComposer = useCallback(() => {
     setQuestion("");
+    setFixInvestigation(false);
+    setDesiredOutcome("");
     setDraftContentHeight(null);
   }, []);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
@@ -1038,15 +1045,28 @@ export function AnalysisChat({
   const composerLocked = busy || restoring || pendingTurn !== null || Boolean(session?.active);
   // Not composerLocked: a pending turn locks the field but leaves the button
   // live, because that button is what resumes it.
-  const sendBlocked = busy || restoring || Boolean(session?.active) || (pendingTurn?.question ?? question).trim() === "";
+  const draftQuestion = fixInvestigation ? buildFixInvestigationQuestion(desiredOutcome) : question;
+  const investigationAvailable = !patternScope && authStatus === "authenticated" && !session?.read_only;
+  const investigationLocked = composerLocked || resetting || continueMode;
+  const outcomeBytesRemaining = maxFixInvestigationOutcomeBytes - new TextEncoder().encode(desiredOutcome).byteLength;
+  const sendBlocked = busy || restoring || Boolean(session?.active) ||
+    (fixInvestigation && !investigationAvailable) || (pendingTurn?.question ?? draftQuestion).trim() === "";
   const questions = causeScope ? causeSuggestedQuestions(baselineBuildID, session) : patternScope ? patternSuggestedQuestions : suggestedQuestions;
   const exactFailureAnalysis = !multiBuildScope &&
     (analysisRef.source === "build" || Boolean(analysisRef.junit_file));
   const causeFixEnabled = causeScope && Boolean(fixTarget);
   const exactFixEnabled = fixable && Boolean(features.junit_chat_fix) && (exactFailureAnalysis || causeFixEnabled);
 
+  function toggleFixInvestigation() {
+    if (investigationLocked) return;
+    setFixInvestigation((current) => !current);
+    setDraftContentHeight(null);
+    composerInputRef.current?.focus();
+  }
+
   async function submit(nextQuestion?: string) {
-    const value = (nextQuestion ?? pendingTurn?.question ?? question).trim();
+    const value = (nextQuestion ?? pendingTurn?.question ?? draftQuestion).trim();
+    if (fixInvestigation && !investigationAvailable) return;
     if (!value || busy || restoring || turnLimitReached || session?.active) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Select Continue before asking another question.");
@@ -1058,6 +1078,11 @@ export function AnalysisChat({
     }
     if (authStatus !== "authenticated") return;
 
+    if (fixInvestigation) {
+      setFixInvestigation(false);
+      setDesiredOutcome("");
+      setQuestion(value);
+    }
     setContinueMode(false);
     controllerRef.current?.abort();
     const controller = new AbortController();
@@ -1718,6 +1743,26 @@ export function AnalysisChat({
                 },
               }}
             >
+              {investigationAvailable && !turnLimitReached && (
+                <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 0.75, mb: 0.5 }}>
+                  {fixInvestigation && <Typography variant="body2" sx={{ fontWeight: 650 }}>Investigate a fix</Typography>}
+                  <Button
+                    type="button"
+                    size="small"
+                    color="inherit"
+                    onClick={toggleFixInvestigation}
+                    aria-disabled={investigationLocked || undefined}
+                    sx={{ ...touchTargetSx, color: "text.secondary", ...(investigationLocked && { opacity: 0.6 }) }}
+                  >
+                    {fixInvestigation ? "Back to question" : "Investigate a fix"}
+                  </Button>
+                </Box>
+              )}
+              {fixInvestigation && (
+                <Typography component="label" htmlFor={composerInputId} variant="body2" sx={{ display: "block", mb: 0.5 }}>
+                  Desired outcome (optional)
+                </Typography>
+              )}
               {turnLimitReached ? (
                 // Replacing the composer unmounts whatever the operator had
                 // focused, so this takes the focus and says why input is gone.
@@ -1739,13 +1784,18 @@ export function AnalysisChat({
                     minRows={1}
                     maxRows={5}
                     inputRef={composerInputRef}
-                    value={question}
+                    id={composerInputId}
+                    value={fixInvestigation ? desiredOutcome : question}
                     onChange={(event) => {
                       setDraftContentHeight((current) =>
                         current ?? chatContentRef.current?.getBoundingClientRect().height ?? null
                       );
                       setContinueMode(false);
-                      setQuestion(limitAnalysisChatQuestion(event.target.value));
+                      if (fixInvestigation) {
+                        setDesiredOutcome(limitAnalysisChatQuestion(event.target.value, maxFixInvestigationOutcomeBytes));
+                      } else {
+                        setQuestion(limitAnalysisChatQuestion(event.target.value));
+                      }
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -1756,7 +1806,7 @@ export function AnalysisChat({
                     // Read-only rather than disabled. Disabling the focused
                     // field drops focus to the document body, which strands the
                     // operator and puts Cancel out of reach.
-                    placeholder="Ask why, challenge the cause, or test another hypothesis..."
+                    placeholder={fixInvestigation ? "What should change when the fix works?" : "Ask why, challenge the cause, or test another hypothesis..."}
                     slotProps={{
                       input: {
                         readOnly: composerLocked,
@@ -1771,16 +1821,17 @@ export function AnalysisChat({
                         },
                       },
                       htmlInput: {
-                        "aria-label": "Ask about this analysis",
+                        "aria-label": fixInvestigation ? "Desired outcome (optional)" : "Ask about this analysis",
+                        "aria-describedby": fixInvestigation ? `${composerInputId}-outcome-hint` : undefined,
                         "aria-disabled": composerLocked || undefined,
                       },
                     }}
                   />
-                  <Tooltip title={pendingTurn || continueMode ? "Continue" : "Send question"}>
+                  <Tooltip title={pendingTurn || continueMode ? "Continue" : fixInvestigation ? "Send fix investigation" : "Send question"}>
                     <span>
                       <IconButton
                         color="primary"
-                        aria-label={pendingTurn || continueMode ? "Continue" : "Send question"}
+                        aria-label={pendingTurn || continueMode ? "Continue" : fixInvestigation ? "Send fix investigation" : "Send question"}
                         onClick={() => {
                           if (!sendBlocked) void submit();
                         }}
@@ -1817,6 +1868,11 @@ export function AnalysisChat({
                     </Tooltip>
                   )}
                 </Stack>
+              )}
+              {fixInvestigation && (
+                <Typography id={`${composerInputId}-outcome-hint`} variant="caption" component="p" sx={{ mt: 0.5, mb: 0, color: "text.secondary" }}>
+                  Leave blank to infer and label a goal. {outcomeBytesRemaining} bytes remaining for the outcome.
+                </Typography>
               )}
               {session && (
                 <Stack

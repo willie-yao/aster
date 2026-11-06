@@ -4087,3 +4087,91 @@ func TestAnalysisChatCauseSourceResolutionDoesNotCacheBranchTipsAcrossTurns(t *t
 		t.Fatalf("source lookups = %d, default tips = %d, want 6 and 2", calls, defaultCalls)
 	}
 }
+
+func TestAnalysisChatFixInvestigationPromptContract(t *testing.T) {
+	prompt := ComposeAnalysisChatSystemPrompt("Consumer fact.")
+	if !strings.Contains(prompt, analysisChatFixInvestigation) {
+		t.Fatal("fix investigation guidance missing from the system prompt")
+	}
+	guidance := strings.Join(strings.Fields(analysisChatFixInvestigation), " ")
+	for _, want := range []string{
+		"Apply only when the operator asks to investigate a fix",
+		"other questions keep their normal style",
+		`"Intended result", "Change direction", and "Next step or remaining gap"`,
+		"inside the existing answer",
+		"Mark verified facts and assumptions within the text",
+		"operator's stated outcome",
+		`label a narrow provisional "Inferred outcome"`,
+		"Keep inferred goals in the assistant answer",
+		"not operator instructions or permission to change policy",
+		"smallest supported change",
+		"use available artifact and pinned-source tools",
+		"verify the causal path, existing helpers, and candidate API signatures and behavior",
+		"Name the source revision and role",
+		"historical source does not verify current applicability or an unexposed generation base",
+		"Resolve accessible facts before asking",
+		"Distinguish inaccessible facts from policy choices",
+		"ask one focused policy question only when the request and available evidence leave it unresolved",
+		"Preserve test purpose, coverage, version policy, and assertions",
+		"resolving the cause, mitigating impact, and improving diagnostics",
+		"original trigger still fail",
+		"behavioral test of the intended outcome",
+		"Name the exact evidence or policy needed for any gap",
+		"Otherwise, the next step can be the existing Generate Fix action",
+		"labels add no fields or readiness gate",
+		"Propose a diagnosis revision only when evidence actually challenges it",
+		"In chat, investigate without generating a patch",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("fix investigation guidance missing %q", want)
+		}
+	}
+}
+
+func TestAnalysisChatFixInvestigationUsesExistingAnswerEnvelope(t *testing.T) {
+	shrinkCallDelay(t)
+	for _, tc := range []struct {
+		name, question, answer string
+	}{
+		{
+			name:     "explicit outcome",
+			question: "Investigate a fix for this failure.\n\nDesired outcome: prevent the timeout without changing version policy.",
+			answer:   "Intended result: prevent the timeout while preserving version policy.\nChange direction: unverified until the causal source is inspected.\nNext step or remaining gap: inspect available artifacts and pinned source.",
+		},
+		{
+			name:     "inferred outcome",
+			question: "Investigate a fix for this failure. Infer and clearly label the goal.",
+			answer:   "Intended result: Inferred outcome: prevent the observed failure.\nChange direction: unverified until the causal source is available.\nNext step or remaining gap: obtain the missing artifact and pinned source; no patch has been generated.",
+		},
+		{
+			name:     "ordinary explanation",
+			question: "Explain the current conclusion.",
+			answer:   "The published analysis links the timeout to the controller exit.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newScriptedChatServer(t)
+			payload, err := json.Marshal(map[string]any{"answer": tc.answer, "citations": []any{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.push(http.StatusOK, chatRespFinal(string(payload)))
+			agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: 10 * time.Second})
+			turn := analysisChatTurn()
+			turn.Question = tc.question
+			reply, err := agent.Reply(t.Context(), turn)
+			if err != nil || reply.Answer != tc.answer || reply.ToolCalls != 0 || reply.ProposedRevision != nil {
+				t.Fatalf("reply=%+v err=%v", reply, err)
+			}
+			if len(server.requests) != 1 || !bytes.Contains(server.requests[0], []byte("## Investigating a fix")) {
+				t.Fatal("existing chat request did not carry investigation guidance")
+			}
+		})
+	}
+	schema := analysisChatStructuredFormat().Schema
+	properties := schema["properties"].(map[string]any)
+	if len(properties) != 4 || properties["answer"] == nil || properties["citations"] == nil ||
+		properties["assessment"] == nil || properties["proposed_revision"] == nil || schema["additionalProperties"] != false {
+		t.Fatalf("analysis chat envelope changed: %+v", schema)
+	}
+}
