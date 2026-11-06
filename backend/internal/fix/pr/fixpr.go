@@ -75,13 +75,6 @@ type Options struct {
 	Labels []string
 	// DashboardURL is linked in the PR body for context.
 	DashboardURL string
-	// Critique reviews the proposed change before a PR is opened; nil skips it.
-	// Concerns and review errors become preview warnings.
-	Critique Completer
-	// CritiqueRetries bounds re-prompts to resolve a reviewer's objections.
-	// Zero still reviews once without regenerating.
-	// Runtime validation failures return before critique and are not retried.
-	CritiqueRetries int
 	// PRFiller, when set, reformats the PR description to follow the repo's PR
 	// template. A nil filler (or one that finds no template) is a pass-through.
 	PRFiller PRBodyFiller
@@ -231,15 +224,13 @@ func (m *Manager) generate(ctx context.Context, p models.PatternAnalysis, ref, i
 		aiusage.MarkExternalUnmetered(ctx)
 	}
 	return generateWithAgent(ctx, genParams{
-		critique:        m.opts.Critique,
-		owner:           m.opts.SourceOwner,
-		repo:            m.opts.SourceName,
-		ref:             ref,
-		maxFiles:        m.opts.MaxFiles,
-		critiqueRetries: m.opts.CritiqueRetries,
-		instruction:     instruction,
-		context:         generationContext,
-		agent:           m.opts.Agent,
+		owner:       m.opts.SourceOwner,
+		repo:        m.opts.SourceName,
+		ref:         ref,
+		maxFiles:    m.opts.MaxFiles,
+		instruction: instruction,
+		context:     generationContext,
+		agent:       m.opts.Agent,
 	}, p)
 }
 
@@ -287,7 +278,6 @@ func (m *Manager) openPR(ctx context.Context, title, body string, files map[stri
 // OpenFromPreview to open exactly the previewed PR. The base is pinned at
 // generation time so confirm opens the same diff against the same snapshot.
 type GeneratedFix struct {
-	Review      *ReviewResult
 	Preview     Preview  // Subject, Rationale, Diff, Files, Verify
 	Warnings    []string // bounded public-safe exact-JUnit quality warnings
 	Title       string   // final PR title
@@ -345,7 +335,6 @@ func generatedFixWarningBanner(warnings []string) string {
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
 // the exact files and pinned base needed to open the reviewed draft later.
 type GeneratedFixSnapshot struct {
-	Review                *ReviewResult          `json:"review,omitempty"`
 	Subject               string                 `json:"subject"`
 	Rationale             string                 `json:"rationale"`
 	Diff                  string                 `json:"diff"`
@@ -372,7 +361,6 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		files[path] = content
 	}
 	return &GeneratedFixSnapshot{
-		Review:  CloneReviewResult(gf.Review),
 		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
@@ -391,7 +379,6 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		files[path] = content
 	}
 	return &GeneratedFix{
-		Review: CloneReviewResult(snapshot.Review),
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body, Warnings: slices.Clone(snapshot.Warnings),
@@ -441,7 +428,6 @@ func (m *Manager) generatePreview(
 	v := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description, body := m.renderBody(ctx, p, fix, v, key, builds)
 	generated := &GeneratedFix{
-		Review:                CloneReviewResult(fix.review),
 		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
 		Title:                 prTitle(p),
 		Description:           description,
@@ -486,9 +472,6 @@ func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string
 func (gf *GeneratedFix) ValidateExecutionVerification() error {
 	if gf == nil {
 		return fmt.Errorf("generated fix is missing")
-	}
-	if err := gf.Review.Validate(); err != nil {
-		return fmt.Errorf("review result: %w", err)
 	}
 	if gf.executionVerification == nil {
 		return nil

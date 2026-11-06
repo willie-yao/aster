@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai"
 	"github.com/willie-yao/aster/backend/internal/analysischat"
 	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
@@ -555,7 +554,7 @@ func capturedHandoff(t *testing.T, service *Service, now func() time.Time) (*ana
 	return chat, input
 }
 
-func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, owner string, calls *atomic.Int32, reviews ...*fixpr.ReviewResult) (PreviewResult, error) {
+func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, owner string, calls *atomic.Int32) (PreviewResult, error) {
 	t.Helper()
 	token, existing, acquired, err := service.previewStore.reserveIdempotent(owner, input.PreviewRequestHash, input.HandoffHash, time.Minute)
 	if err != nil {
@@ -577,9 +576,6 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 		Verify: fixpr.VerifyResult{Status: fixpr.VerifySkipped}, Title: "fix: investigate terminal state", Description: "Investigative patch.", Body: "Investigative patch.",
 		Key: "fix-analysis::" + subject.ID, Base: ghpr.Base{Branch: input.TargetBranch, HeadSHA: input.GenerationBaseRevision, TreeSHA: "tree"}, RequireBaseCurrent: true,
 	})
-	if len(reviews) > 0 {
-		fix.Review = fixpr.CloneReviewResult(reviews[0])
-	}
 	fix.SetWarnings(warningMessages(analysisQualityWarnings(input)))
 	entry := &previewEntry{
 		failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, fix: fix,
@@ -592,62 +588,6 @@ func handoffTestPreview(t *testing.T, service *Service, input AnalysisFixInput, 
 	preview, err := validatedPreviewEntry(entry)
 	preview.Token = token
 	return preview, err
-}
-
-func TestAnalysisFixReviewMetadataPersistsAndIsCloned(t *testing.T) {
-	service, _ := analysisRequestTestService(t)
-	review := &fixpr.ReviewResult{
-		Status: fixpr.ReviewUnavailable,
-		Metadata: ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{
-			Phase: "fix_review", Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeInvalidJSON,
-		}}},
-	}
-	var calls atomic.Int32
-	service.analysisRequestGenerator = func(_ context.Context, input AnalysisFixInput, owner, _, _ string) (PreviewResult, error) {
-		return handoffTestPreview(t, service, input, owner, &calls, review)
-	}
-	created, err := service.CreateAnalysisFixRequest(t.Context(), exactAnalysisRequestInput(), "alice", "write-token", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
-	if err := service.Wait(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if ready.Review == nil || ready.Preview == nil || ready.Preview.Review == nil ||
-		ready.Review.Status != fixpr.ReviewUnavailable || ready.Preview.Review.Status != fixpr.ReviewUnavailable ||
-		ready.Preview.VerifyStatus != string(fixpr.VerifySkipped) {
-		t.Fatalf("review and verification = %+v", ready)
-	}
-	ready.Review.Metadata.Attempts[0].Outcome = ai.StructuredOutcomeAccepted
-	ready.Preview.Review.Metadata.Attempts[0].Outcome = ai.StructuredOutcomeAccepted
-	fresh, err := service.GetRequest(created.ID, "alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fresh.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON ||
-		fresh.Preview.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON {
-		t.Fatal("an outward view changed the retained review attempts")
-	}
-	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
-	restored, err := reloaded.GetRequest(created.ID, "alice")
-	if err != nil || restored.Status != RequestReady || restored.Review == nil || restored.Preview.Review == nil ||
-		restored.Review.Status != fixpr.ReviewUnavailable || restored.Preview.Review.Metadata.Attempts[0].Outcome != ai.StructuredOutcomeInvalidJSON {
-		t.Fatalf("restored review = %+v, %v", restored, err)
-	}
-	state, _, err := reloaded.previewStore.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical := state.Previews[tokenHash(restored.Preview.Token)]
-	if canonical == nil || canonical.Fix == nil || canonical.Fix.Review == nil || canonical.Fix.Review.Status != fixpr.ReviewUnavailable {
-		t.Fatalf("canonical review = %+v", canonical)
-	}
-	record := reloaded.requests.Requests[created.ID]
-	record.Review.Status = fixpr.ReviewPassed
-	if _, err := validatedReadyPreview(record); err == nil {
-		t.Fatal("a changed request review remained consistent with the preview")
-	}
 }
 
 func installHandoffTestGenerator(t *testing.T, service *Service, calls *atomic.Int32) {

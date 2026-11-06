@@ -153,8 +153,6 @@ func TestGenerateWithAgent_ValidationFailureIsOneShotAndNotActionable(t *testing
 		err: errors.New("validation command 1 failed"),
 	}
 	gp := agentGenParams(&AgentConfig{Runtime: fa})
-	gp.critique = &fakeCompleter{critique: `{"issues":["retry"]}`}
-	gp.critiqueRetries = 3
 	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
 	if err == nil || !strings.Contains(err.Error(), "validation command 1 failed") {
 		t.Fatalf("fix=%v error=%v", fix, err)
@@ -205,64 +203,6 @@ type errWrap struct{ err error }
 func (e errWrap) Error() string { return "agent: " + e.err.Error() }
 func (e errWrap) Unwrap() error { return e.err }
 
-func TestGenerateWithAgent_CritiqueApproves(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
-		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
-	}}
-	rev := &fakeCompleter{} // empty critique -> approved
-	gp := agentGenParams(&AgentConfig{Runtime: fa})
-	gp.critique = rev
-	gp.critiqueRetries = 1
-
-	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
-	if err != nil {
-		t.Fatalf("generateWithAgent: %v", err)
-	}
-	if fix.files["a.yaml"] != "fixed\n" {
-		t.Errorf("fix not returned: %v", fix.files)
-	}
-}
-
-func TestGenerateWithAgent_CritiqueConcernsWarnAfterRetries(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
-		Files: map[string]string{"a.yaml": "still wrong\n"}, Diff: "diff",
-	}}
-	rev := &fakeCompleter{critique: `{"issues": ["wrong value"]}`}
-	gp := agentGenParams(&AgentConfig{Runtime: fa})
-	gp.critique = rev
-	gp.critiqueRetries = 1
-
-	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fa.calls != 2 || fix.files["a.yaml"] != "still wrong\n" || !slices.Contains(fix.warnings, patchCritiqueWarning("wrong value")) {
-		t.Fatalf("calls=%d fix=%+v", fa.calls, fix)
-	}
-	// The reviewer's objection must be fed back into the retry instruction.
-	if !strings.Contains(fa.spec.Instruction, "wrong value") {
-		t.Errorf("retry instruction missing reviewer feedback: %q", fa.spec.Instruction)
-	}
-}
-
-func TestGenerateWithAgent_CritiqueErrorWarns(t *testing.T) {
-	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{
-		Files: map[string]string{"a.yaml": "fixed\n"}, Diff: "diff",
-	}}
-	rev := &fakeCompleter{critiqueErr: errors.New("review endpoint down")}
-	gp := agentGenParams(&AgentConfig{Runtime: fa})
-	gp.critique = rev
-	gp.critiqueRetries = 1
-
-	fix, err := generateWithAgent(context.Background(), gp, systemicPattern("etcd"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fa.calls != 1 || !slices.Contains(fix.warnings, patchCritiqueUnavailableWarning) {
-		t.Fatalf("calls=%d warnings=%v", fa.calls, fix.warnings)
-	}
-}
-
 func TestGenerateBuildWithAgentPassesRuntimeIdentity(t *testing.T) {
 	fa := &fakeAgentRuntime{res: runtime.ExecutionResult{Files: map[string]string{"a": "b"}, Diff: "diff"}}
 	observer := func(context.Context, runtime.WorkRef) error { return nil }
@@ -285,22 +225,17 @@ func TestGenerateBuildWithAgentWarnsOnTimedOutCommandResults(t *testing.T) {
 		BaseSHA: "ref", Files: map[string]string{"a": "b"}, Diff: "diff", CommandResults: results,
 		AgentSummary: "Guard the retry in `a` so it fails fast.",
 	}}
-	reviewer := &fakeCompleter{critique: `{"issues": ["the guard message is vague"]}`}
 	gp := agentGenParams(&AgentConfig{
 		Runtime: fa, RequireCommandResults: true, CommandPolicy: runtime.CommandPolicy{Commands: commands},
 	})
-	gp.critique = reviewer
-	gp.critiqueRetries = 0
 	fix, err := generateBuildWithAgent(context.Background(), gp, BuildFailure{
 		RootCause: "failed", SuggestedFix: "fix it", SourceFiles: []string{"a"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fa.calls != 1 || reviewer.calls != 1 ||
-		!slices.Contains(fix.warnings, patchVerifyWarning) ||
-		!slices.Contains(fix.warnings, patchCritiqueWarning("the guard message is vague")) {
-		t.Fatalf("calls=%d review calls=%d warnings=%v", fa.calls, reviewer.calls, fix.warnings)
+	if fa.calls != 1 || !slices.Contains(fix.warnings, patchVerifyWarning) {
+		t.Fatalf("calls=%d warnings=%v", fa.calls, fix.warnings)
 	}
 	if fix.rationale != "Guard the retry in `a` so it fails fast." {
 		t.Fatalf("rationale = %q", fix.rationale)
@@ -310,9 +245,9 @@ func TestGenerateBuildWithAgentWarnsOnTimedOutCommandResults(t *testing.T) {
 func TestFixInstructionsShareRepositoryChangeGuidance(t *testing.T) {
 	generationContext := validGenerationContext()
 	instructions := map[string]string{
-		"pattern":  agentInstruction(systemicPattern("etcd"), &generationContext, "", "", 3, false),
-		"build":    buildFailureInstruction(BuildFailure{JobID: "job", BuildID: "1", RootCause: "cause"}, "", "", 3, false),
-		"analysis": analysisFailureInstruction(validAnalysisFailure(), "", "", 3, false),
+		"pattern":  agentInstruction(systemicPattern("etcd"), &generationContext, "", 3, false),
+		"build":    buildFailureInstruction(BuildFailure{JobID: "job", BuildID: "1", RootCause: "cause"}, "", 3, false),
+		"analysis": analysisFailureInstruction(validAnalysisFailure(), "", 3, false),
 	}
 	for name, instruction := range instructions {
 		t.Run(name, func(t *testing.T) {
@@ -353,73 +288,6 @@ func TestFixInstructionsShareRepositoryChangeGuidance(t *testing.T) {
 	}
 }
 
-func TestFixPreviewsCritiqueOnceWithoutRegeneration(t *testing.T) {
-	for _, path := range []string{"pattern", "build", "analysis"} {
-		t.Run(path, func(t *testing.T) {
-			for _, tc := range []struct {
-				name     string
-				response string
-				err      error
-				warning  string
-			}{
-				{name: "approved"},
-				{
-					name: "concerns", response: `{"issues":["the guard does not fix the missing package suite"]}`,
-					warning: patchCritiqueWarning("the guard does not fix the missing package suite"),
-				},
-				{name: "review error", err: errors.New("review endpoint down"), warning: patchCritiqueUnavailableWarning},
-				{name: "invalid review", response: "not JSON", warning: patchCritiqueUnavailableWarning},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					agent := goodAgent()
-					reviewer := &fakeCompleter{critique: tc.response, critiqueErr: tc.err}
-					pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
-					manager := newManager(t, pr, agent, Options{Critique: reviewer})
-					manager.opts.CritiqueRetries = 0
-					var fix *GeneratedFix
-					var err error
-					switch path {
-					case "pattern":
-						fix, err = manager.GeneratePreview(t.Context(), systemicPattern("etcd"), "")
-					case "build":
-						fix, err = manager.GenerateBuildPreview(t.Context(), BuildFailure{
-							ID: "build", JobID: "job", JobName: "job", BuildID: "123", RootCause: "missing package suite",
-						}, "")
-					case "analysis":
-						fix, err = manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
-					}
-					if err != nil {
-						t.Fatal(err)
-					}
-					if agent.calls != 1 || reviewer.calls != 1 || len(pr.opened) != 0 {
-						t.Fatalf("generation=%d review=%d writes=%d", agent.calls, reviewer.calls, len(pr.opened))
-					}
-					if reviewer.lastSystem != critiqueSystemPrompt ||
-						!strings.Contains(reviewer.lastUser, "FILE AFTER CHANGE: templates/cluster.yaml") {
-						t.Fatalf("review did not receive the patch: system=%q user=%q", reviewer.lastSystem, reviewer.lastUser)
-					}
-					wantReview := ReviewPassed
-					if tc.name == "concerns" {
-						wantReview = ReviewConcerns
-					} else if tc.err != nil || tc.name == "invalid review" {
-						wantReview = ReviewUnavailable
-					}
-					if fix.Review == nil || fix.Review.Status != wantReview || fix.Review.Validate() != nil {
-						t.Fatalf("review = %+v, want %s", fix.Review, wantReview)
-					}
-					if tc.warning == "" {
-						if len(fix.Warnings) != 0 {
-							t.Fatalf("warnings = %v, want none", fix.Warnings)
-						}
-					} else if len(fix.Warnings) != 1 || fix.Warnings[0] != tc.warning {
-						t.Fatalf("warnings = %v, want [%s]", fix.Warnings, tc.warning)
-					}
-				})
-			}
-		})
-	}
-}
-
 func TestFixPreviewsDescribeGeneratedChange(t *testing.T) {
 	const summary = "Fail fast when the selected disk type is unavailable (`templates/cluster.yaml:3`)."
 	pattern := systemicPattern("etcd")
@@ -448,15 +316,65 @@ func TestFixPreviewsDescribeGeneratedChange(t *testing.T) {
 	}
 }
 
-func TestPatternPreviewCarriesCritiqueConcernsToPreviewAndBody(t *testing.T) {
-	agent := goodAgent()
-	manager := newManager(t, &fakePR{}, agent, Options{Critique: &fakeCompleter{critique: `{"issues":["the guard ignores zonal SKUs"]}`}, CritiqueRetries: 1})
-	fix, err := manager.GeneratePreview(t.Context(), systemicPattern("etcd"), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	warning := patchCritiqueWarning("the guard ignores zonal SKUs")
-	if agent.calls != 2 || !slices.Contains(fix.Warnings, warning) || !strings.Contains(fix.Body, warning) {
-		t.Fatalf("calls=%d warnings=%v body=%q", agent.calls, fix.Warnings, fix.Body)
+func TestFixPreviewsGenerateOnceAndPreserveVerification(t *testing.T) {
+	for _, path := range []string{"pattern", "build", "analysis"} {
+		t.Run(path, func(t *testing.T) {
+			for _, scenario := range []string{"success", "validator failure", "runtime failure", "integrity failure", "no change"} {
+				t.Run(scenario, func(t *testing.T) {
+					agent := goodAgent()
+					agent.res.BaseSHA = exactAnalysisRevision
+					agent.res.CommandResults = sandboxCommandResults()
+					switch scenario {
+					case "validator failure":
+						agent.res.CommandResults[0].ExitCode = 1
+					case "runtime failure":
+						agent.res.TerminalState = runtime.TerminalFailed
+						agent.err = errors.New("executor safety failure")
+					case "integrity failure":
+						agent.res.CommandResults[0].Argv = []string{"go", "test", "./unexpected"}
+					case "no change":
+						agent.res.Files = nil
+					}
+					pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
+					manager := newManager(t, pr, agent, Options{})
+					manager.opts.Agent.RequireCommandResults = true
+					manager.opts.Agent.CommandPolicy.Commands = sandboxVerificationCommands()
+					var fix *GeneratedFix
+					var err error
+					switch path {
+					case "pattern":
+						fix, err = manager.GeneratePreview(t.Context(), systemicPattern("failure"), "")
+					case "build":
+						fix, err = manager.GenerateBuildPreview(t.Context(), BuildFailure{ID: "build", JobID: "job", BuildID: "123", RootCause: "failed"}, "")
+					case "analysis":
+						fix, err = manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
+					}
+					if agent.calls != 1 || len(pr.opened) != 0 {
+						t.Fatalf("generation calls=%d GitHub writes=%d", agent.calls, len(pr.opened))
+					}
+					if scenario == "runtime failure" || scenario == "integrity failure" || scenario == "no change" {
+						if err == nil || fix != nil {
+							t.Fatalf("invalid attempt returned fix=%+v err=%v", fix, err)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantStatus := VerifyPassed
+					if scenario == "validator failure" {
+						wantStatus = VerifyFailed
+						if !slices.Contains(fix.Warnings, patchVerifyWarning) {
+							t.Fatalf("verification warning missing: %v", fix.Warnings)
+						}
+					} else if len(fix.Warnings) != 0 {
+						t.Fatalf("unexpected warnings: %v", fix.Warnings)
+					}
+					if fix.Preview.Verify.Status != wantStatus || fix.ValidateExecutionVerification() != nil {
+						t.Fatalf("verification=%+v", fix.Preview.Verify)
+					}
+				})
+			}
+		})
 	}
 }

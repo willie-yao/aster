@@ -672,11 +672,6 @@ type FixPRs struct {
 	MaxFiles int `yaml:"max_files,omitempty" json:"max_files,omitempty"`
 	// Labels are applied to every fix PR. Defaults to ["ai-proposed-fix"].
 	Labels []string `yaml:"labels,omitempty" json:"labels,omitempty"`
-	// CritiqueRetries bounds how many times generation is re-prompted to resolve
-	// an LLM reviewer's objections; remaining objections become preview warnings.
-	// Agent Sandbox uses 0: one review without regeneration when AI is available.
-	// Excluded from manifest.json.
-	CritiqueRetries *int `yaml:"critique_retries,omitempty" json:"-"`
 	// AgentRuntime tunes the coding-agent fix generator (a coding-agent CLI in a
 	// real workspace clone). A nil block uses opencode with defaults. Excluded
 	// from manifest.json.
@@ -844,10 +839,6 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 	if len(out.Labels) == 0 {
 		out.Labels = []string{"ai-proposed-fix"}
 	}
-	if out.CritiqueRetries == nil {
-		n := 1
-		out.CritiqueRetries = &n
-	}
 	if out.AgentRuntime == nil {
 		out.AgentRuntime = &FixAgentRuntime{}
 	} else {
@@ -885,8 +876,6 @@ func (c *Config) EffectiveFixPRs() FixPRs {
 				Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m",
 			}}
 		}
-		zero := 0
-		out.CritiqueRetries = &zero
 		if out.AgentRuntime.Timeout == "" {
 			out.AgentRuntime.Timeout = "10m"
 		}
@@ -1521,9 +1510,6 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
-		if f.CritiqueRetries != nil && *f.CritiqueRetries < 0 {
-			return fmt.Errorf("ai.fix_prs.critique_retries must be >= 0 (0 disables regeneration)")
-		}
 		if ar := f.AgentRuntime; ar != nil {
 			runtimeType := strings.TrimSpace(ar.Type)
 			if ar.MaxTurns < 0 {
@@ -1540,9 +1526,6 @@ func (c *Config) Validate() error {
 			}
 			if runtimeType != "" && runtimeType != "agent-sandbox" {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.type %q is not supported (want %q)", ar.Type, "agent-sandbox")
-			}
-			if f.CritiqueRetries != nil && *f.CritiqueRetries != 0 {
-				return fmt.Errorf("ai.fix_prs.critique_retries must be 0 for the one-shot agent-sandbox runtime")
 			}
 			if ar.AllowBash != nil && *ar.AllowBash {
 				return fmt.Errorf("ai.fix_prs.agent_runtime.allow_bash must be false for the agent-sandbox runtime")

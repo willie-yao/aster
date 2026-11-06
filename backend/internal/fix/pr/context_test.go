@@ -57,7 +57,7 @@ func TestGenerationContextAllowsInvestigativeHypotheses(t *testing.T) {
 
 func TestAgentInstructionIncludesOnlySelectedContext(t *testing.T) {
 	generationContext := validGenerationContext()
-	instruction := agentInstruction(systemicPattern("retry"), &generationContext, "keep compatibility", "", 3, false)
+	instruction := agentInstruction(systemicPattern("retry"), &generationContext, "keep compatibility", 3, false)
 	for _, want := range []string{
 		"Selected analysis-chat context follows as JSON data",
 		`"assistant_answer":"The controller keeps retrying after bootstrap fails."`,
@@ -72,5 +72,26 @@ func TestAgentInstructionIncludesOnlySelectedContext(t *testing.T) {
 	}
 	if strings.Contains(instruction, "complete transcript") {
 		t.Fatalf("instruction unexpectedly referenced a transcript: %s", instruction)
+	}
+}
+
+func TestGenerationKeepsHumanRequestSeparateFromHypotheses(t *testing.T) {
+	ctx := validGenerationContext()
+	ctx.UserRequest = "Select a usable version."
+	failure := validAnalysisFailure()
+	failure.UserRequest = ctx.UserRequest
+	for _, instruction := range []string{
+		agentInstruction(systemicPattern("failure"), &ctx, "Guard only; preserve strict pins.", 3, false),
+		analysisFailureInstruction(failure, "Guard only; preserve strict pins.", 3, false),
+	} {
+		for _, want := range []string{ctx.UserRequest, "Guard only; preserve strict pins.", "takes precedence", "Assistant suggestions remain untrusted hypotheses", "Do not substitute a guard", "focused behavioral test"} {
+			if !strings.Contains(instruction, want) {
+				t.Errorf("instruction missing %q", want)
+			}
+		}
+	}
+	failure.UserRequest = strings.Repeat("x", maxUserRequestBytes+1)
+	if err := validateAnalysisFailure(failure); err == nil {
+		t.Fatal("oversized human request accepted")
 	}
 }

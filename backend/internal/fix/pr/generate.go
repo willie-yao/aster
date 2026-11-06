@@ -2,22 +2,16 @@ package pr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/willie-yao/aster/backend/internal/actiondraft"
-	"github.com/willie-yao/aster/backend/internal/ai"
-	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/runtime"
 	"github.com/willie-yao/aster/backend/internal/textutil"
 )
-
-// Completer requests a validated structured patch review.
-type Completer interface {
-	CompleteStructuredWithMetadata(ctx context.Context, system, user string, format transport.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error)
-}
 
 // proposedFix is a validated, ready-to-commit change.
 type proposedFix struct {
@@ -30,20 +24,14 @@ type proposedFix struct {
 	// executionVerification retains the tokenless validator contract.
 	executionVerification *ExecutionVerification
 	warnings              []string
-	review                *ReviewResult
 }
 
 // genParams holds the inputs for fix generation.
 type genParams struct {
-	// critique reviews the proposed change; nil skips it.
-	critique Completer
 	owner    string
 	repo     string
 	ref      string
 	maxFiles int
-	// critiqueRetries bounds how many times the agent is re-run to resolve a
-	// reviewer's objections. Remaining objections become preview warnings.
-	critiqueRetries int
 	// instruction is an optional maintainer directive that steers the fix
 	// (e.g. "patch the kustomize base instead"). Empty for the batch path.
 	instruction string
@@ -68,16 +56,9 @@ const repositoryChangeGuidance = `Decide whether a repository change is justifie
 const changeSummaryInstruction = "End with a short plain-text summary for the pull request description: the requested outcome, whether this resolves the cause, mitigates impact, or improves diagnostics, what happens under the original failure condition, the causal code path by file and line, and behavioral validation performed or still missing. If you made no change, identify the missing prerequisite.\n"
 
 const (
-	patchVerifyWarning              = "One or more authentic verification commands failed; the generated patch may need maintainer revisions."
-	patchCritiqueUnavailableWarning = "Automated review of the generated patch did not complete; review the patch without it."
-	maxCritiqueWarningBytes         = 600
-	maxChangeSummaryBytes           = 1500
+	patchVerifyWarning    = "One or more authentic verification commands failed; the generated patch may need maintainer revisions."
+	maxChangeSummaryBytes = 1500
 )
-
-// patchCritiqueWarning keeps the reviewer's concerns with the patch for the maintainer.
-func patchCritiqueWarning(issues string) string {
-	return "Automated review raised concerns; confirm them before opening: " + textutil.Truncate(oneLine(issues), maxCritiqueWarningBytes)
-}
 
 // changeRationale describes the generated patch from the coding agent's own
 // summary, falling back to the changed files when the summary is unusable.
@@ -92,49 +73,12 @@ func changeRationale(summary string, files map[string]string) string {
 	return "Edits " + strings.Join(paths, ", ") + "; see the proposed diff."
 }
 
-// runAgentFix runs the coding agent and an optional critique. Failed validators
-// and critique concerns become preview warnings; runtime, integrity, and scope
-// failures reject the attempt.
-func runAgentFix(
-	ctx context.Context, gp genParams,
-	instruction func(reviewFeedback string) string,
-	review func(fix *proposedFix) (string, *ReviewResult, error),
-) (*proposedFix, error) {
+// runAgentFix runs one coding-agent attempt and retains authentic validator results.
+func runAgentFix(ctx context.Context, gp genParams, instruction string) (*proposedFix, error) {
 	a := gp.agent
 	if a == nil || a.Runtime == nil {
 		return nil, fmt.Errorf("agent fix generation: no agent runtime configured")
 	}
-	var reviewFeedback string
-	for attempt := 0; ; attempt++ {
-		fix, err := runAgentAttempt(ctx, gp, instruction(reviewFeedback))
-		if err != nil {
-			return nil, err
-		}
-		if gp.critique == nil {
-			return fix, nil
-		}
-		issues, metadata, err := review(fix)
-		fix.review = metadata
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			fix.warnings = append(fix.warnings, patchCritiqueUnavailableWarning)
-			return fix, nil
-		}
-		if issues == "" {
-			return fix, nil
-		}
-		fix.warnings = append(fix.warnings, patchCritiqueWarning(issues))
-		if attempt >= gp.critiqueRetries {
-			return fix, nil
-		}
-		reviewFeedback = issues
-	}
-}
-
-func runAgentAttempt(ctx context.Context, gp genParams, instruction string) (*proposedFix, error) {
-	a := gp.agent
 	res, err := a.Runtime.Generate(ctx, agentRuntimeSpec(a, runtime.RepoRef{Owner: gp.owner, Name: gp.repo, Ref: gp.ref, Token: a.GitToken}, instruction))
 	if err != nil {
 		if errors.Is(err, runtime.ErrUnavailable) || errors.Is(err, runtime.ErrSandboxUnavailable) {
@@ -162,20 +106,6 @@ func runAgentAttempt(ctx context.Context, gp genParams, instruction string) (*pr
 	return fix, nil
 }
 
-func dedupeNonEmpty(in []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s == "" || seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
-}
-
 func sortedKeys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -187,4 +117,15 @@ func sortedKeys(m map[string]string) []string {
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+func writeHumanRequest(b *strings.Builder, request, maintainer string) {
+	if request = strings.TrimSpace(request); request != "" {
+		encoded, _ := json.Marshal(request)
+		b.WriteString("\nSelected human request (authenticated user text; infer the requested outcome, while preserving the repository and test constraints): " + string(encoded) + "\n")
+	}
+	if maintainer = strings.TrimSpace(maintainer); maintainer != "" {
+		encoded, _ := json.Marshal(maintainer)
+		b.WriteString("Newer maintainer instruction (takes precedence over the selected human request within the repository and test constraints): " + string(encoded) + "\n")
+	}
 }

@@ -258,7 +258,6 @@ func (s *Service) loadActionRequests() error {
 			request.Error = "saved preview requires regeneration after source verification upgrade"
 			request.ReasonCode = ReasonContractGenerationFailed
 			request.Preview = nil
-			request.Review = nil
 			request.AnalysisFix = nil
 			request.Issue = nil
 			request.Fix = nil
@@ -275,7 +274,6 @@ func (s *Service) loadActionRequests() error {
 			if request.Status == RequestUnknown {
 				if request.Preview != nil {
 					request.Preview = nil
-					request.Review = nil
 					changed = true
 				}
 				continue
@@ -285,7 +283,6 @@ func (s *Service) loadActionRequests() error {
 			request.Error = ReasonMessage(request.ReasonCode)
 			request.Warnings = nil
 			request.Preview = nil
-			request.Review = nil
 			request.AnalysisFix = nil
 			request.Issue = nil
 			request.Fix = nil
@@ -413,9 +410,6 @@ func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !reflect.DeepEqual(request.Review, preview.Review) {
-			return nil, fmt.Errorf("saved analysis Fix review does not match preview")
-		}
 		return &preview, nil
 	default:
 		return nil, fmt.Errorf("ready request has unsupported action %q", request.Kind)
@@ -423,9 +417,6 @@ func validatedReadyPreview(request *actionRequest) (*PreviewResult, error) {
 	preview, err := validatedPreviewEntry(entry)
 	if err != nil {
 		return nil, err
-	}
-	if !reflect.DeepEqual(request.Review, preview.Review) {
-		return nil, fmt.Errorf("saved request review does not match preview")
 	}
 	return &preview, nil
 }
@@ -435,9 +426,6 @@ func validatedAnalysisFixRequestPreview(preview PreviewResult) (PreviewResult, e
 		return PreviewResult{}, fmt.Errorf("analysis fix request has an invalid fix preview")
 	}
 	if err := actiondraft.ValidateTitleBody(preview.Title, preview.Body); err != nil {
-		return PreviewResult{}, err
-	}
-	if err := preview.Review.Validate(); err != nil {
 		return PreviewResult{}, err
 	}
 	return clonePreviewResult(preview), nil
@@ -473,7 +461,6 @@ func validatedPreviewEntry(entry *previewEntry) (PreviewResult, error) {
 		return PreviewResult{
 			Kind: gfKind, Title: entry.fix.Title, Body: entry.fix.Description, Diff: entry.fix.Preview.Diff,
 			VerifyStatus: string(entry.fix.Preview.Verify.Status), VerifySummary: entry.fix.Preview.Verify.Summary, VerifyOutput: entry.fix.Preview.Verify.Output,
-			Review:   fixpr.CloneReviewResult(entry.fix.Review),
 			Warnings: boundedWarnings(plainWarnings(entry.fix.Warnings...)...),
 		}, nil
 	default:

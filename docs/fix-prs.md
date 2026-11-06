@@ -16,7 +16,7 @@ The engine requires a current, unambiguous supported subject and an accessible c
 4. Stage the patch and run the configured exact validators inside the executor.
 5. Return the patch and ordered command results to the dashboard.
 6. Reconstruct the canonical patch independently and reject unexpected files, paths, identities, commands, or results.
-7. Run one warning-only structured Fix review when the dashboard AI client is available, then show the exact draft, diff, warnings, configured checks, and target.
+7. Show the exact draft, diff, warnings, configured checks, and target for maintainer review.
 8. Open the draft pull request only after explicit confirmation of that preview.
 
 A preview is a review artifact, not proof that the patch fixes the failure. Agent Sandbox validators, source verification, Prow CI, and human review are separate gates. The engine never approves or merges the pull request.
@@ -42,10 +42,7 @@ Fix PR bodies link the failed build to its recorded Prow URL, or list up to five
 When the agent returns a patch, quality concerns become warnings on the ready preview and the maintainer decides whether to open the draft:
 
 - failed or timed-out validators, also shown as the verification verdict;
-- concrete concerns from the Fix critique, or a warning that critique was unavailable;
 - analysis, evidence qualification, and eligibility concerns.
-
-Authenticated preview and action-request responses retain structured `review` status (`passed`, `concerns`, or `unavailable`) and bounded attempt metadata. These diagnostics distinguish provider, empty-response, and validation failures without retaining prompts or raw responses. Review remains separate from command verification and does not authorize a write.
 
 These still reject the attempt because they protect the repository, the credential boundary, or the exact reviewed change: files outside the configured destination, credential exposure, changed Git identity or remotes, a patch that does not reconstruct identically on the pinned generation base, unsafe exact-analysis target drift described below, file deletions or renames (a draft can only add or update files), more files than `max_files`, oversized or malformed executor results, and the remediation safety policy. When the agent makes no change, there is no patch to review; exact-analysis requests report `no_reviewable_patch` with the agent's explanation.
 
@@ -62,7 +59,7 @@ After a completed response, **Use this finding in a fix proposal** admits a sepa
 - for the tested-branch target, the failure revision is the head of that branch or an ancestor of it;
 - the target branch still contains the pinned generation base and has not changed a file the patch touches.
 
-The coding agent receives the selected human question, available failure details, selected answer, retained citations, and optional source hints. The human question is bounded to 4096 bytes; engine-prepared questions are not treated as human instructions. Newer explicit Fix instructions remain separate and take precedence within repository constraints. The patch reviewer receives the same request and instruction, plus the generated rationale and authentic command results. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified.
+The coding agent receives the selected human question, available failure details, selected answer, retained citations, and optional source hints. The human question is bounded to 4096 bytes; engine-prepared questions are not treated as human instructions. Newer explicit Fix instructions remain separate and take precedence within repository constraints. No citation, source link, named symbol, or previously verified implementation target is required. Missing evidence and unverified claims remain explicitly qualified.
 
 The preparation workspace shows the selected finding beside the target branch and optional maintainer instruction. Expand **Validated evidence** to read the retained citations. On phones, the panels stack; **Generate fix preview** stays in the bottom action bar. Generating a preview does not open a pull request.
 
@@ -142,7 +139,7 @@ ai:
 
 Agent Sandbox is the only Fix runtime. The example uses provider-default reasoning effort: pinned OpenCode 1.18.2 ignores explicit effort for GPT-6 on Copilot Responses, so Aster rejects it. Copilot's GPT-5 and later models use Responses except `gpt-5-mini`, which uses Chat Completions. Other Copilot models, including Claude, use Chat Completions; the pinned provider removes the `gpt-5-chat-latest` alias. Non-Copilot endpoints continue to use OpenCode's generic OpenAI-compatible or OpenAI transport.
 
-The runtime defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no regeneration. `critique_retries: 0` still runs one warning-only Fix review when the dashboard AI client is available; review concerns or errors never trigger another Agent Sandbox run. `max_turns` reserves one step per validator, then bounds the coding agent's model steps with one additional wrap-up step. The executor stops runs that exceed the step allowance; the elapsed timeout still applies. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
+The runtime defaults to 30 turns, a 10-minute timeout, a 512 KiB output limit, no shell access, and no automatic regeneration. `max_turns` reserves one step per validator, then bounds the coding agent's model steps with one additional wrap-up step. The executor stops runs that exceed the step allowance; the elapsed timeout still applies. The repository defaults to `branding.source_repo`, fork mode defaults to true, and `max_files` defaults to 3.
 
 For Agent Sandbox, the configured timeout bounds executor work from process startup. It accepts positive whole seconds or minutes up to `30m`, such as `90s` or `10m`; fractions, compound durations, leading zeros, and whitespace are rejected. The Pod deadline adds a fixed 2-minute startup allowance and 15 seconds for result finalization. The server run deadline adds another 5 seconds for result retrieval. Cleanup confirmation has a separate 90-second budget, and Sandbox `shutdownTime` covers the run and cleanup budgets. Startup that exceeds the allowance can still prevent a result. Timed-out results retain a bounded, redacted operator summary and any valid partial command results.
 

@@ -237,22 +237,15 @@ test("absent or skipped configured checks do not show a success verdict", () => 
   }
 });
 
-test("passing configured checks and unavailable automated review remain separate", () => {
-  const warning = "Automated review of the generated patch did not complete; review the patch without it.";
+test("passing configured checks retain analysis evidence warnings", () => {
+  const warning = "The selected diagnosis has incomplete artifact evidence.";
   for (const renderPreview of previewSurfaces) {
     const html = renderPreview({
       ...props().preview,
       verify_summary: "git diff --cached --check passed in Agent Sandbox",
       warnings: [{ message: warning }],
-      review: {
-        status: "unavailable",
-        metadata: {
-          attempts: [{ path: "response_format", outcome: "invalid_json", validator_called: false }],
-        },
-      },
     });
     assert.match(html, /Configured checks passed/);
     assert.ok(html.includes(warning));
-    assert.doesNotMatch(html, /Review passed|review passed/);
   }
 });

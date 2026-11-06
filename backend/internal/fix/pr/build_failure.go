@@ -30,8 +30,8 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 		return nil, fmt.Errorf("resolving %s/%s base: %w", m.opts.SourceOwner, m.opts.SourceName, err)
 	}
 	fix, err := generateBuildWithAgent(ctx, genParams{
-		critique: m.opts.Critique, owner: m.opts.SourceOwner, repo: m.opts.SourceName, ref: base.HeadSHA,
-		maxFiles: m.opts.MaxFiles, critiqueRetries: m.opts.CritiqueRetries, instruction: instruction, agent: m.opts.Agent,
+		owner: m.opts.SourceOwner, repo: m.opts.SourceName, ref: base.HeadSHA,
+		maxFiles: m.opts.MaxFiles, instruction: instruction, agent: m.opts.Agent,
 	}, failure)
 	if err != nil {
 		return nil, err
@@ -44,7 +44,6 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 	}
 	body := buildFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
 	generated := &GeneratedFix{
-		Review:                CloneReviewResult(fix.review),
 		Preview:               Preview{Subject: failure.JobName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
 		Title:                 boundedTitle("fix: address build failure in " + failure.JobName),
 		Description:           description,
@@ -59,17 +58,10 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 
 func generateBuildWithAgent(ctx context.Context, gp genParams, failure BuildFailure) (*proposedFix, error) {
 	allowBash := gp.agent != nil && gp.agent.AllowBash
-	return runAgentFix(ctx, gp,
-		func(reviewFeedback string) string {
-			return buildFailureInstruction(failure, gp.instruction, reviewFeedback, gp.maxFiles, allowBash)
-		},
-		func(fix *proposedFix) (string, *ReviewResult, error) {
-			return critiqueBuildFix(ctx, gp.critique, failure, fix, gp.instruction)
-		},
-	)
+	return runAgentFix(ctx, gp, buildFailureInstruction(failure, gp.instruction, gp.maxFiles, allowBash))
 }
 
-func buildFailureInstruction(failure BuildFailure, maintainer, reviewFeedback string, maxFiles int, allowBash bool) string {
+func buildFailureInstruction(failure BuildFailure, maintainer string, maxFiles int, allowBash bool) string {
 	contextData, _ := json.Marshal(struct {
 		JobID, BuildID, RootCause, SuggestedFix string
 		RelevantFiles, SourceHints              []string
@@ -89,17 +81,7 @@ func buildFailureInstruction(failure BuildFailure, maintainer, reviewFeedback st
 	}
 	b.WriteString(changeSummaryInstruction)
 	writeHumanRequest(&b, "", maintainer)
-	if value := strings.TrimSpace(reviewFeedback); value != "" {
-		b.WriteString("A previous attempt was rejected. Address: " + value + "\n")
-	}
 	return b.String()
-}
-
-func critiqueBuildFix(ctx context.Context, client Completer, failure BuildFailure, fix *proposedFix, maintainer string) (string, *ReviewResult, error) {
-	var user strings.Builder
-	fmt.Fprintf(&user, "Published root-cause hypothesis: %s\nSuggested direction: %s\n", oneLine(failure.RootCause), oneLine(failure.SuggestedFix))
-	writeHumanRequest(&user, "", maintainer)
-	return reviewFix(ctx, client, user.String(), fix)
 }
 
 func buildFailureDescription(failure BuildFailure, fix *proposedFix) string {
