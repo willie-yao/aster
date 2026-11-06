@@ -152,7 +152,11 @@ test("analysis chat contains multiline composer growth inside the transcript", (
   const chat = source("src/components/AnalysisChat.tsx");
   const content = chat.slice(chat.indexOf("id={chatContentId}"), chat.indexOf("<ChatFixDialog"));
 
-  assert.match(chat, /const clearComposer = useCallback\(\(\) => \{\s*setQuestion\(""\);\s*setDraftContentHeight\(null\);\s*\}, \[\]\)/);
+  const clearComposer = chat.slice(chat.indexOf("const clearComposer"), chat.indexOf("const createRequestIDRef"));
+  assert.match(clearComposer, /setQuestion\(""\)/);
+  assert.match(clearComposer, /setFixInvestigation\(false\)/);
+  assert.match(clearComposer, /setDesiredOutcome\(""\)/);
+  assert.match(clearComposer, /setDraftContentHeight\(null\)/);
   assert.match(content, /display: "flex",\s*flexDirection: "column"/);
   assert.match(content, /height: draftContentHeight \?\? "auto"/);
   assert.match(content, /maxHeight: \{ xs: "min\(72vh, 680px\)", sm: "min\(80vh, 800px\)" \}/);

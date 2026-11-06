@@ -1,6 +1,7 @@
 import "./flakinessPage.test.js";
 import "./analysisHealth.test.js";
 import "./analysisChat.test.js";
+import "./fixInvestigation.test.js";
 import "./historyPresentation.test.js";
 import "./chatFix.test.js";
 import "./fixPreparation.test.js";

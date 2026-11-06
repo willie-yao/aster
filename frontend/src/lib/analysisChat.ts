@@ -10,6 +10,20 @@ import type {
 const API_BASE = import.meta.env?.BASE_URL ?? "/";
 const maxQuestionBytes = 4096;
 const utf8Encoder = new TextEncoder();
+const fixInvestigationTask = "Investigate a fix for this failure. Find the smallest change supported by the evidence and source that achieves the desired outcome. Explain whether it resolves the cause, mitigates impact, or improves diagnostics, whether the original failure would still occur, and how to test the outcome. State missing evidence or policy decisions.";
+const fixInvestigationOutcomeLabel = "\n\nDesired outcome: ";
+export const maxFixInvestigationOutcomeBytes = maxQuestionBytes - utf8Encoder.encode(fixInvestigationTask + fixInvestigationOutcomeLabel).byteLength;
+
+export function buildFixInvestigationQuestion(outcome: string): string {
+  const goal = outcome.trim();
+  const question = fixInvestigationTask + (goal
+    ? fixInvestigationOutcomeLabel + goal
+    : "\n\nNo desired outcome supplied. Infer and clearly label the goal from this failure and conversation. An inferred goal does not authorize policy changes.");
+  if (utf8Encoder.encode(question).byteLength > maxQuestionBytes) {
+    throw new RangeError("Fix investigation question exceeds 4096 bytes");
+  }
+  return question;
+}
 
 export function analysisChatScopeLabel(ref: AnalysisChatReference): string {
   if (ref.scope === "cause") return "Cause";
@@ -160,12 +174,12 @@ export function newAnalysisChatRequestID(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function limitAnalysisChatQuestion(value: string): string {
+export function limitAnalysisChatQuestion(value: string, maxBytes = maxQuestionBytes): string {
   let bytes = 0;
   let end = 0;
   for (const character of value) {
     const characterBytes = utf8Encoder.encode(character).byteLength;
-    if (bytes + characterBytes > maxQuestionBytes) break;
+    if (bytes + characterBytes > maxBytes) break;
     bytes += characterBytes;
     end += character.length;
   }
