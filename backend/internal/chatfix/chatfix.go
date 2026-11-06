@@ -71,6 +71,7 @@ func (s *Service) PreviewChatFix(
 		return actions.PreviewResult{}, fmt.Errorf("%w: causal-group results are analysis-only", analysischat.ErrInvalidRequest)
 	}
 	generationContext := fixpr.GenerationContext{
+		UserRequest:               candidate.UserRequest,
 		AssistantAnswer:           candidate.AssistantAnswer,
 		AssistantUnverified:       candidate.AssistantUnverified,
 		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
@@ -150,7 +151,7 @@ func exactAnalysisFixInput(candidate analysischat.FixCandidate, target actions.F
 		SourceRepository:    candidate.SourceRepositorySnapshot,
 		SourceBranch:        candidate.SourceBranch,
 		BranchTarget:        target,
-		AssistantAnswer:     candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
+		UserRequest:         candidate.UserRequest, AssistantAnswer: candidate.AssistantAnswer, ArtifactCitations: artifactEvidence(candidate.ArtifactCitations),
 		AssistantUnverified:       candidate.AssistantUnverified,
 		AssistantUnverifiedReason: candidate.AssistantUnverifiedReason,
 		EvidenceWarnings:          append([]string(nil), candidate.EvidenceWarnings...),

@@ -8,6 +8,7 @@ import (
 
 const (
 	maxContextTextBytes     = 8 << 10
+	maxUserRequestBytes     = 4096
 	maxContextPathBytes     = 1024
 	maxContextQuoteBytes    = 4 << 10
 	maxContextCitations     = 16
@@ -30,6 +31,7 @@ type RevisionContext struct {
 
 // GenerationContext is the selected bounded context added to one fix request.
 type GenerationContext struct {
+	UserRequest               string           `json:"user_request,omitempty"`
 	AssistantAnswer           string           `json:"assistant_answer"`
 	AssistantUnverified       bool             `json:"assistant_unverified,omitempty"`
 	AssistantUnverifiedReason string           `json:"assistant_unverified_reason,omitempty"`
@@ -40,6 +42,9 @@ type GenerationContext struct {
 
 // Validate rejects incomplete or oversized fix context.
 func (c GenerationContext) Validate() error {
+	if len(c.UserRequest) > maxUserRequestBytes {
+		return fmt.Errorf("user request must be at most %d bytes", maxUserRequestBytes)
+	}
 	if strings.TrimSpace(c.AssistantAnswer) == "" || len(c.AssistantAnswer) > maxContextTextBytes {
 		return fmt.Errorf("assistant answer must be 1-%d bytes", maxContextTextBytes)
 	}

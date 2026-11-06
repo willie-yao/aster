@@ -113,8 +113,9 @@ type PreviewResult struct {
 	VerifySummary string `json:"verify_summary,omitempty"`
 	// VerifyOutput is the tail of the failing command's output, set only when
 	// verification failed, so the reviewer sees why before confirming.
-	VerifyOutput string          `json:"verify_output,omitempty"`
-	Warnings     []ActionWarning `json:"warnings,omitempty"`
+	VerifyOutput string              `json:"verify_output,omitempty"`
+	Review       *fixpr.ReviewResult `json:"review,omitempty"`
+	Warnings     []ActionWarning     `json:"warnings,omitempty"`
 }
 
 // previewEntry is a cached draft awaiting confirmation. Exactly one of spec or
@@ -1036,6 +1037,7 @@ func (s *Service) generateFixPreview(ctx context.Context, failureID, userToken, 
 	gf.SetWarnings(warnings)
 	return PreviewResult{Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 			VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary, VerifyOutput: gf.Preview.Verify.Output,
+			Review:   fixpr.CloneReviewResult(gf.Review),
 			Warnings: boundedWarnings(plainWarnings(gf.Warnings...)...)},
 		&previewEntry{failureID: subject.ID, patternHash: subject.ContentHash, kind: gfKind, targetRepo: eff.Repo.Owner + "/" + eff.Repo.Name, targetConfig: fixTargetFingerprint(eff), verificationVersion: sourceVerificationVersion, fix: gf}, nil
 }
@@ -1101,7 +1103,7 @@ func (s *Service) generateFixPreviewForPattern(
 	return PreviewResult{
 		Kind: gfKind, Title: gf.Title, Body: gf.Description, Diff: gf.Preview.Diff,
 		VerifyStatus: string(gf.Preview.Verify.Status), VerifySummary: gf.Preview.Verify.Summary,
-		VerifyOutput: gf.Preview.Verify.Output, Warnings: boundedWarnings(plainWarnings(gf.Warnings...)...),
+		VerifyOutput: gf.Preview.Verify.Output, Review: fixpr.CloneReviewResult(gf.Review), Warnings: boundedWarnings(plainWarnings(gf.Warnings...)...),
 	}, s.patternFixPreviewEntry(pattern, gf, destination), nil
 }
 

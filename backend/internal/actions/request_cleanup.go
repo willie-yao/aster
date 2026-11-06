@@ -154,12 +154,12 @@ func (s *Service) cleanupRequest(ctx context.Context, id string) (ActionRequestV
 			return ActionRequestView{}, ErrRequestNotFound
 		}
 		if request.Status != RequestCancelling {
-			view := request.ActionRequestView
+			view := cloneActionRequestView(request.ActionRequestView)
 			s.rmu.Unlock()
 			return view, nil
 		}
 		if request.Cleanup != nil && request.Cleanup.Blocked {
-			view := request.ActionRequestView
+			view := cloneActionRequestView(request.ActionRequestView)
 			s.rmu.Unlock()
 			return view, runtime.ErrWorkIdentityChanged
 		}
@@ -220,7 +220,7 @@ func (s *Service) currentRequestView(id string) ActionRequestView {
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
 	if request := s.requests.Requests[id]; request != nil {
-		return request.ActionRequestView
+		return cloneActionRequestView(request.ActionRequestView)
 	}
 	return ActionRequestView{}
 }
@@ -233,10 +233,10 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 		return ActionRequestView{}, ErrRequestNotFound
 	}
 	if request.Status != RequestCancelling {
-		return request.ActionRequestView, nil
+		return cloneActionRequestView(request.ActionRequestView), nil
 	}
 	if request.Cleanup != nil && request.Cleanup.Blocked {
-		return request.ActionRequestView, runtime.ErrWorkIdentityChanged
+		return cloneActionRequestView(request.ActionRequestView), runtime.ErrWorkIdentityChanged
 	}
 	finalStatus := RequestCancelled
 	reason := ""
@@ -283,7 +283,7 @@ func (s *Service) finalizeCleanup(id string) (ActionRequestView, error) {
 		*request = previous
 		return ActionRequestView{}, err
 	}
-	return request.ActionRequestView, nil
+	return cloneActionRequestView(request.ActionRequestView), nil
 }
 
 func (s *Service) transitionToCleanup(id, finalStatus, reason string) (context.CancelFunc, error) {

@@ -27,12 +27,15 @@ interface FixReviewProps {
   onConfirm: () => void;
 }
 
-const { FixReviewWorkspace, defaultTheme } = await withSSR(async (vite) => {
+const { FixReviewWorkspace, ActionDraftPreview, defaultTheme } = await withSSR(async (vite) => {
   const { FixReviewWorkspace } = (await vite.ssrLoadModule("/src/components/FixReviewWorkspace.tsx")) as {
     FixReviewWorkspace: (props: FixReviewProps) => ReturnType<typeof createElement>;
   };
   const { defaultTheme } = (await vite.ssrLoadModule("/src/theme/index.ts")) as { defaultTheme: Theme };
-  return { FixReviewWorkspace, defaultTheme };
+  const { ActionDraftPreview } = (await vite.ssrLoadModule("/src/components/ActionDraftPreview.tsx")) as {
+    ActionDraftPreview: (props: { preview: ActionPreview }) => ReturnType<typeof createElement>;
+  };
+  return { FixReviewWorkspace, ActionDraftPreview, defaultTheme };
 });
 
 const twoFileDiff = `diff --git a/pkg/controller.go b/pkg/controller.go
@@ -184,8 +187,8 @@ test("fix review keeps the title, verification, and confirmation in view", () =>
   assert.match(html, /into <code[^>]*>release-1\.26<\/code>/);
   // The header names the result and opens the summary on demand; below md the
   // body shows the summary itself.
-  assert.match(html, /aria-haspopup="dialog"[^>]*>[\s\S]*?Checks passed/);
-  assert.equal(html.match(/Verification passed/g)?.length, 1);
+  assert.match(html, /aria-haspopup="dialog"[^>]*>[\s\S]*?Configured checks passed/);
+  assert.match(html, /Passing checks do not establish that the change achieves the requested outcome/);
   assert.match(html, /\\ No newline at end of file/);
   assert.match(html, />Open draft PR with warnings</);
   assert.match(html, /aria-label="Revision instruction"/);
@@ -193,4 +196,63 @@ test("fix review keeps the title, verification, and confirmation in view", () =>
   const regenerating = render(props({ generating: true, canRevise: false, sentInstruction: "Only touch the template." }));
   assert.match(regenerating, /role="status"[\s\S]*Regenerating the fix preview[\s\S]*Only touch the template\./);
   assert.doesNotMatch(regenerating, /aria-label="Revision instruction"/);
+});
+
+const previewSurfaces = [
+  (preview: ActionPreview) => render(props({ preview })),
+  (preview: ActionPreview) => renderToStaticMarkup(createElement(ThemeProvider, { theme: defaultTheme }, createElement(ActionDraftPreview, { preview }))),
+];
+
+test("diff-only checks preserve the command scope and leave task success unverified", () => {
+  for (const renderPreview of previewSurfaces) {
+    const html = renderPreview({ ...props().preview, verify_summary: "git diff --cached --check passed in Agent Sandbox" });
+    assert.match(html, /Configured checks passed/);
+    assert.match(html, /git diff --cached --check passed in Agent Sandbox/);
+    assert.match(html, /Passing checks do not establish that the change achieves the requested outcome/);
+    assert.doesNotMatch(html, /Automated verification passed|Verification passed/);
+  }
+});
+
+test("failed commands retain their specific result without inferring a build failure", () => {
+  for (const summary of ["go build ./... failed in Agent Sandbox", "go test ./... failed in Agent Sandbox", "validator failed in Agent Sandbox"]) {
+    for (const renderPreview of previewSurfaces) {
+      const html = renderPreview({ ...props().preview, verify_status: "failed", verify_summary: summary, verify_output: "Failed command details" });
+      assert.match(html, /Configured checks failed/);
+      assert.ok(html.includes(summary));
+      assert.match(html, /Review the failed command and output before using this change/);
+      assert.match(html, /Command output/);
+      assert.match(html, /Failed command details/);
+      assert.doesNotMatch(html, /likely does not build|Passing checks/);
+    }
+  }
+});
+
+test("absent or skipped configured checks do not show a success verdict", () => {
+  for (const status of [undefined, "skipped"]) {
+    for (const renderPreview of previewSurfaces) {
+      const html = renderPreview({ ...props().preview, verify_status: status, verify_summary: undefined });
+      assert.match(html, /No configured checks ran/);
+      assert.doesNotMatch(html, /Configured checks passed|Configured checks failed|Passing checks/);
+    }
+  }
+});
+
+test("passing configured checks and unavailable automated review remain separate", () => {
+  const warning = "Automated review of the generated patch did not complete; review the patch without it.";
+  for (const renderPreview of previewSurfaces) {
+    const html = renderPreview({
+      ...props().preview,
+      verify_summary: "git diff --cached --check passed in Agent Sandbox",
+      warnings: [{ message: warning }],
+      review: {
+        status: "unavailable",
+        metadata: {
+          attempts: [{ path: "response_format", outcome: "invalid_json", validator_called: false }],
+        },
+      },
+    });
+    assert.match(html, /Configured checks passed/);
+    assert.ok(html.includes(warning));
+    assert.doesNotMatch(html, /Review passed|review passed/);
+  }
 });

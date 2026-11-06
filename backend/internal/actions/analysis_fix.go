@@ -29,7 +29,7 @@ const (
 	maxAnalysisSourceFiles      = 16
 	maxAnalysisFixCitations     = 16
 	maxAnalysisFailureTextBytes = 8 << 10
-	analysisFixHandoffVersion   = 6
+	analysisFixHandoffVersion   = 7
 )
 
 // FixBranchTarget selects the branch an exact-analysis Fix patches and targets.
@@ -122,6 +122,7 @@ type AnalysisFixInput struct {
 	SourceBranch              string
 	BranchTarget              FixBranchTarget
 	TargetBranch              string
+	UserRequest               string
 	AssistantAnswer           string
 	AssistantUnverified       bool
 	AssistantUnverifiedReason string
@@ -537,9 +538,9 @@ func analysisFailureForGeneration(subject *AnalysisActionSubject, input Analysis
 		ProwURL:             subject.Build.ProwURL,
 		AnalysisGeneratedAt: input.TargetAnalysis.GeneratedAt,
 		AnalysisHash:        subject.ContentHash, RootCause: input.TargetAnalysis.RootCause, SuggestedFix: input.TargetAnalysis.SuggestedFix,
-		FailureMessage:  boundedAnalysisFailureText(subject.Failure.FailureMessage),
-		FailureBody:     boundedAnalysisFailureText(subject.Failure.FailureBody),
-		AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
+		FailureMessage: boundedAnalysisFailureText(subject.Failure.FailureMessage),
+		FailureBody:    boundedAnalysisFailureText(subject.Failure.FailureBody),
+		UserRequest:    input.UserRequest, AssistantAnswer: input.AssistantAnswer, AssistantUnverified: input.AssistantUnverified,
 		AssistantUnverifiedReason: input.AssistantUnverifiedReason,
 		ChatResponseHash:          input.ChatResponseHash, PreviewRequestHash: input.PreviewRequestHash,
 		ProposedRevision:  input.ProposedRevision,

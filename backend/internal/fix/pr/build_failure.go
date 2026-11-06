@@ -44,6 +44,7 @@ func (m *Manager) GenerateBuildPreview(ctx context.Context, failure BuildFailure
 	}
 	body := buildFailurePRBody(failure, fix, verified, key, m.opts.DashboardURL, description)
 	generated := &GeneratedFix{
+		Review:                CloneReviewResult(fix.review),
 		Preview:               Preview{Subject: failure.JobName, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: verified},
 		Title:                 boundedTitle("fix: address build failure in " + failure.JobName),
 		Description:           description,
@@ -62,8 +63,8 @@ func generateBuildWithAgent(ctx context.Context, gp genParams, failure BuildFail
 		func(reviewFeedback string) string {
 			return buildFailureInstruction(failure, gp.instruction, reviewFeedback, gp.maxFiles, allowBash)
 		},
-		func(files map[string]string, diff string) (string, error) {
-			return critiqueBuildFix(ctx, gp.critique, failure, files, diff)
+		func(fix *proposedFix) (string, *ReviewResult, error) {
+			return critiqueBuildFix(ctx, gp.critique, failure, fix, gp.instruction)
 		},
 	)
 }
@@ -87,31 +88,18 @@ func buildFailureInstruction(failure BuildFailure, maintainer, reviewFeedback st
 		b.WriteString("Do not run shell commands.\n")
 	}
 	b.WriteString(changeSummaryInstruction)
-	if value := strings.TrimSpace(maintainer); value != "" {
-		b.WriteString("Maintainer direction: " + value + "\n")
-	}
+	writeHumanRequest(&b, "", maintainer)
 	if value := strings.TrimSpace(reviewFeedback); value != "" {
 		b.WriteString("A previous attempt was rejected. Address: " + value + "\n")
 	}
 	return b.String()
 }
 
-func critiqueBuildFix(ctx context.Context, client Completer, failure BuildFailure, files map[string]string, diff string) (string, error) {
-	var change strings.Builder
-	change.WriteString(diff)
-	for _, file := range sortedKeys(files) {
-		fmt.Fprintf(&change, "\n=== FILE AFTER CHANGE: %s ===\n%s\n", file, files[file])
-	}
-	prompt := fmt.Sprintf("Root cause: %s\nSuggested fix: %s\nProposed change:\n%s\nDoes this change have concrete defects or fail to address the build failure? Answer with JSON: {\"issues\": []}", oneLine(failure.RootCause), oneLine(failure.SuggestedFix), change.String())
-	out, err := client.Complete(ctx, critiqueSystemPrompt, prompt)
-	if err != nil {
-		return "", err
-	}
-	issues, err := parseReviewIssues(out)
-	if err != nil {
-		return "", fmt.Errorf("review response: %w", err)
-	}
-	return strings.Join(dedupeNonEmpty(issues), "; "), nil
+func critiqueBuildFix(ctx context.Context, client Completer, failure BuildFailure, fix *proposedFix, maintainer string) (string, *ReviewResult, error) {
+	var user strings.Builder
+	fmt.Fprintf(&user, "Published root-cause hypothesis: %s\nSuggested direction: %s\n", oneLine(failure.RootCause), oneLine(failure.SuggestedFix))
+	writeHumanRequest(&user, "", maintainer)
+	return reviewFix(ctx, client, user.String(), fix)
 }
 
 func buildFailureDescription(failure BuildFailure, fix *proposedFix) string {

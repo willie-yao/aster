@@ -18,6 +18,89 @@ import (
 
 const exactFixSourceRevision = "0123456789abcdef0123456789abcdef01234567"
 
+func TestFixCandidatesPreserveOnlyBoundedHumanRequest(t *testing.T) {
+	for _, entry := range []string{"exact", "pattern"} {
+		for _, tc := range []struct {
+			name     string
+			question string
+			actor    string
+			prepared bool
+			tampered bool
+			want     string
+			wantErr  error
+		}{
+			{name: "human", question: "Select the latest compatible release.", actor: "alice", want: "Select the latest compatible release."},
+			{name: "human at limit", question: strings.Repeat("q", maxFixUserRequestBytes), actor: "alice", want: strings.Repeat("q", maxFixUserRequestBytes)},
+			{name: "prepared", question: PreparedCauseQuestion, actor: "alice", prepared: true},
+			{name: "unattributed", question: "Explain the failure."},
+			{name: "oversized", question: strings.Repeat("q", maxFixUserRequestBytes+1), actor: "alice", wantErr: ErrInvalidRequest},
+			{name: "tampered", question: "Changed request.", actor: "alice", tampered: true, wantErr: ErrAnalysisChanged},
+			{name: "removed", actor: "alice", tampered: true, wantErr: ErrAnalysisChanged},
+		} {
+			t.Run(entry+"/"+tc.name, func(t *testing.T) {
+				var service *Service
+				var session SessionView
+				var requestID string
+				if entry == "exact" {
+					service, session, requestID = exactFixService(t, Reply{Answer: "Resolve a compatible version."}, nil)
+				} else {
+					service, session, requestID = fixCandidateReadyService(t)
+				}
+				ctx, cancel := service.store.context()
+				err := service.store.update(ctx, func(state *persistedState) (bool, error) {
+					request := state.Sessions[session.ID].Requests[requestID]
+					request.Question, request.Actor, request.Prepared = tc.question, tc.actor, tc.prepared
+					if !tc.tampered {
+						request.QuestionHash = hashText(tc.question)
+					}
+					state.Sessions[session.ID].Requests[requestID] = request
+					if tc.name == "removed" {
+						for i := range state.Sessions[session.ID].View.Messages {
+							message := &state.Sessions[session.ID].View.Messages[i]
+							if message.Role == "user" && message.RequestID == requestID {
+								message.Content = ""
+							}
+						}
+					}
+					return true, nil
+				})
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var candidate FixCandidate
+				if entry == "exact" {
+					candidate, err = service.AnalysisFixCandidate(session.ID, "bob", requestID)
+				} else {
+					candidate, err = service.FixCandidate(session.ID, "bob", requestID, fixCandidatePattern().ID, fixCandidatePattern().ContentHash)
+				}
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("candidate error = %v, want %v", err, tc.wantErr)
+				}
+				if err == nil && candidate.UserRequest != tc.want {
+					t.Fatalf("user request = %q, want %q", candidate.UserRequest, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestFixCandidateResponseHashBindsHumanRequest(t *testing.T) {
+	candidate := FixCandidate{AssistantAnswer: "Add a guard.", UserRequest: "Prevent recurring failures."}
+	before, err := fixCandidateResponseHash(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.UserRequest = "Report a clearer error."
+	after, err := fixCandidateResponseHash(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("different requested outcomes have the same Fix identity")
+	}
+}
+
 func exactFixService(t *testing.T, reply Reply, runnerErr error) (*Service, SessionView, string) {
 	t.Helper()
 	service, session, requestID, _ := exactFixServiceRunner(t, reply, runnerErr)

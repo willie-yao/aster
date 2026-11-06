@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/patternstate"
 	"github.com/willie-yao/aster/backend/internal/redact"
@@ -276,6 +277,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		request.ReasonCode = ""
 		request.Failure = nil
 		request.Preview = &preview
+		request.Review = fixpr.CloneReviewResult(preview.Review)
 		if analysisRequest {
 			request.ExpiresAt = now.Add(previewTTL).Format(time.RFC3339)
 			request.Instruction = ""
@@ -293,7 +295,7 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		}
 	}
 	saveErr := s.saveRequestsLocked()
-	view := request.ActionRequestView
+	view := cloneActionRequestView(request.ActionRequestView)
 	notifier := s.requestNotify
 	if analysisRequest {
 		notifier = nil
@@ -329,7 +331,7 @@ func (s *Service) notifyRequestReady(view ActionRequestView) {
 		s.rmu.Unlock()
 		return
 	}
-	view = current.ActionRequestView
+	view = cloneActionRequestView(current.ActionRequestView)
 	notifier := s.requestNotify
 	notifyCtx, notifyCancel := context.WithCancel(context.Background())
 	if s.requestNotifyCancels == nil {

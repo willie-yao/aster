@@ -101,10 +101,26 @@ type ActionRequestView struct {
 	ReasonCode   ReasonCode              `json:"reason_code,omitempty"`
 	Warnings     []ActionWarning         `json:"warnings,omitempty"`
 	Failure      *AnalysisFixFailureView `json:"failure,omitempty"`
+	Review       *fixpr.ReviewResult     `json:"review,omitempty"`
 	ResultURL    string                  `json:"result_url,omitempty"`
 	SupersededBy string                  `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult          `json:"preview,omitempty"`
 	EmailSent    bool                    `json:"email_sent,omitempty"`
+}
+
+func cloneActionRequestView(view ActionRequestView) ActionRequestView {
+	view.Review = fixpr.CloneReviewResult(view.Review)
+	if view.Preview != nil {
+		preview := clonePreviewResult(*view.Preview)
+		view.Preview = &preview
+	}
+	return view
+}
+
+func clonePreviewResult(preview PreviewResult) PreviewResult {
+	preview.Review = fixpr.CloneReviewResult(preview.Review)
+	preview.Warnings = slices.Clone(preview.Warnings)
+	return preview
 }
 
 // Wait waits for active generation and cleanup goroutines.
@@ -143,7 +159,7 @@ func (s *Service) ConfigureAsyncRequestsWithContext(ctx context.Context, timeout
 	var cleanupIDs []string
 	for id, request := range s.requests.Requests {
 		if request.Status == RequestReady && request.Kind != requestKindAnalysisFix && !request.EmailSent && notifier != nil {
-			pending = append(pending, request.ActionRequestView)
+			pending = append(pending, cloneActionRequestView(request.ActionRequestView))
 		}
 		if request.Status == RequestCancelling {
 			cleanupIDs = append(cleanupIDs, id)
@@ -254,7 +270,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 				continue
 			}
 			if existing.Status == RequestPending || existing.Status == RequestReady || existing.Status == RequestCancelling || existing.Status == RequestUnknown {
-				view := existing.ActionRequestView
+				view := cloneActionRequestView(existing.ActionRequestView)
 				s.rmu.Unlock()
 				return view, nil
 			}
@@ -265,7 +281,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 			continue
 		}
 		if existing.Owner == owner {
-			view := existing.ActionRequestView
+			view := cloneActionRequestView(existing.ActionRequestView)
 			s.rmu.Unlock()
 			return view, nil
 		}
@@ -316,7 +332,7 @@ func (s *Service) CreateRequest(failureID, kind, owner, userToken, instruction, 
 		s.rmu.Unlock()
 		return ActionRequestView{}, err
 	}
-	view := request.ActionRequestView
+	view := cloneActionRequestView(request.ActionRequestView)
 	s.rmu.Unlock()
 
 	if supersededCancel != nil {
@@ -404,7 +420,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 			continue
 		}
 		if analysisFixRequestReusable(existing) {
-			view := existing.ActionRequestView
+			view := cloneActionRequestView(existing.ActionRequestView)
 			s.rmu.Unlock()
 			return view, nil
 		}
@@ -451,7 +467,7 @@ func (s *Service) CreateAnalysisFixRequest(ctx context.Context, input AnalysisFi
 		s.rmu.Unlock()
 		return ActionRequestView{}, err
 	}
-	view := request.ActionRequestView
+	view := cloneActionRequestView(request.ActionRequestView)
 	s.rmu.Unlock()
 
 	s.startGeneration(request.ID, userToken)
@@ -507,7 +523,7 @@ func (s *Service) GetRequest(id, owner string) (ActionRequestView, error) {
 	if request == nil || request.Owner != strings.ToLower(strings.TrimSpace(owner)) {
 		return ActionRequestView{}, ErrRequestNotFound
 	}
-	return request.ActionRequestView, nil
+	return cloneActionRequestView(request.ActionRequestView), nil
 }
 
 // ConfirmRequest posts the exact persisted draft using the current admin token.
@@ -709,7 +725,7 @@ func (s *Service) CancelRequest(ctx context.Context, id, owner string) (ActionRe
 		return ActionRequestView{}, fmt.Errorf("%w: action request is being confirmed", ErrPreviewPending)
 	}
 	if request.Status == RequestCancelled || request.Status == RequestCancelling {
-		view := request.ActionRequestView
+		view := cloneActionRequestView(request.ActionRequestView)
 		s.rmu.Unlock()
 		if view.Status != RequestCancelling {
 			return view, nil

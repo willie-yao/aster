@@ -11,31 +11,48 @@ import (
 	"testing"
 	"time"
 
+	"github.com/willie-yao/aster/backend/internal/ai"
+	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
 
 // fakeCompleter is the reviewer (critique) stand-in. Only the critique step
-// calls Complete; an empty critique approves the change.
+// calls CompleteStructuredWithMetadata; an empty critique approves the change.
 type fakeCompleter struct {
 	critique    string // JSON {"issues":[...]}; empty -> approved
 	critiqueErr error
 	lastSystem  string
 	lastUser    string
 	calls       int
+	metadata    *ai.StructuredCompletionMetadata
+	lastFormat  transport.ResponseFormat
 }
 
-func (f *fakeCompleter) Complete(_ context.Context, system, user string) (string, error) {
+func (f *fakeCompleter) CompleteStructuredWithMetadata(_ context.Context, system, user string, format transport.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
 	f.calls++
-	f.lastSystem, f.lastUser = system, user
+	f.lastSystem, f.lastUser, f.lastFormat = system, user, format
+	metadata := ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeAccepted, ValidatorCalled: true}}}
 	if f.critiqueErr != nil {
-		return "", f.critiqueErr
+		metadata.Attempts[0].Outcome = ai.StructuredOutcomeProviderError
+		if f.metadata != nil {
+			metadata = *f.metadata
+		}
+		return metadata, f.critiqueErr
 	}
-	if f.critique == "" {
-		return `{"issues": []}`, nil
+	raw := f.critique
+	if raw == "" {
+		raw = `{"issues": []}`
 	}
-	return f.critique, nil
+	err := validate(json.RawMessage(raw))
+	if err != nil {
+		metadata.Attempts[0].Outcome = ai.StructuredOutcomeValidatorRejected
+	}
+	if f.metadata != nil {
+		metadata = *f.metadata
+	}
+	return metadata, err
 }
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
@@ -471,30 +488,6 @@ func TestOpenFromPreview_MissingURLKeepsOutcomeUnknown(t *testing.T) {
 	}
 }
 
-func TestParseReviewIssues_ToleratesLiteralTabsAndNewlines(t *testing.T) {
-	// A model copying a code snippet verbatim emits literal tabs/newlines inside
-	// the JSON string values, which strict JSON rejects. parseReviewIssues must
-	// recover by escaping them.
-	raw := "{\"issues\": [\"func F() {\n\treturn\n}\"]}"
-	issues, err := parseReviewIssues(raw)
-	if err != nil {
-		t.Fatalf("parseReviewIssues: %v", err)
-	}
-	if len(issues) != 1 || !strings.Contains(issues[0], "return") {
-		t.Errorf("parsed issues = %+v", issues)
-	}
-}
-
-func TestEscapeStringControlChars_LeavesStructureAndEscapes(t *testing.T) {
-	// Structural whitespace between tokens is untouched; an already-escaped \n
-	// is not double-escaped; a literal tab inside a string is escaped.
-	in := "{\n\t\"k\": \"a\\nb\tc\"\n}"
-	out := escapeStringControlChars(in)
-	if !strings.Contains(out, `a\nb\tc`) {
-		t.Errorf("escaped = %q", out)
-	}
-}
-
 func TestGeneratedFixSnapshotRoundTrip(t *testing.T) {
 	original := &GeneratedFix{
 		Preview: Preview{
@@ -575,7 +568,7 @@ func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if fix == nil || !strings.Contains(agent.spec.Instruction, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) ||
-		!strings.Contains(agent.spec.Instruction, "Maintainer instruction (follow it): keep compatibility") {
+		!strings.Contains(agent.spec.Instruction, `Newer maintainer instruction (takes precedence over the selected human request within the repository and test constraints): "keep compatibility"`) {
 		t.Fatalf("agent instruction = %q", agent.spec.Instruction)
 	}
 	if !strings.Contains(reviewer.lastUser, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) {
@@ -632,85 +625,6 @@ func TestGeneratePreviewWithContextRejectsInvalidContextBeforeGeneration(t *test
 	}
 	if agent.spec.Instruction != "" {
 		t.Fatal("agent ran before context validation")
-	}
-}
-
-func TestParseReviewIssuesCandidates(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		raw  string
-		want []string
-	}{
-		{
-			name: "final-valid",
-			raw: `The change includes code like if err != nil { return retry() }.
-First draft: {"issues":["stale concern"]}
-Final answer:
-` + "```json\n" + `{"issues":[],"provider_note":"review complete"}` + "\n```",
-			want: []string{},
-		},
-		{
-			name: "string-braces",
-			raw:  `reasoning {not JSON} then {"issues":["check map[string]any{\"key\": \"value\"}"]}`,
-			want: []string{`check map[string]any{"key": "value"}`},
-		},
-		{
-			name: "invalid-outer",
-			raw:  `reasoning { final: {"issues":[]} }`,
-			want: []string{},
-		},
-		{
-			name: "valid-outer",
-			raw:  `{"issues":["outer issue contains {nested text}"]}`,
-			want: []string{"outer issue contains {nested text}"},
-		},
-		{
-			name: "prose-brace",
-			raw:  `The code checks strings.Contains(s, "{"). Final: {"issues":[]}`,
-			want: []string{},
-		},
-		{
-			name: "original-offset",
-			raw:  "{\"issues\":[\"" + strings.Repeat("\n", 50) + "earlier\"]}\n{\"issues\":[]}",
-			want: []string{},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			issues, err := parseReviewIssues(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !slices.Equal(issues, tc.want) {
-				t.Fatalf("issues = %#v, want %#v", issues, tc.want)
-			}
-		})
-	}
-}
-
-func TestCritiqueAgentFixRequiresIssuesField(t *testing.T) {
-	completer := &fakeCompleter{critique: `{}`}
-	_, err := critiqueAgentFix(t.Context(), completer, systemicPattern("etcd"), map[string]string{"a.go": "package a\n"}, "diff", nil)
-	if err == nil || !strings.Contains(err.Error(), "issues field is required") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestParseReviewIssuesRejectsOversizedResponse(t *testing.T) {
-	raw := strings.Repeat("x", maxReviewResponseBytes+1) + `{"issues":[]}`
-	if _, err := parseReviewIssues(raw); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("error = %v", err)
-	}
-}
-
-func TestReviewJSONCandidatesCapsVerboseBraceOutput(t *testing.T) {
-	raw := strings.Repeat("{not-json}", maxReviewCandidates+20) + `{"issues":[]}`
-	candidates := reviewJSONCandidates(raw)
-	if len(candidates) != maxReviewCandidates {
-		t.Fatalf("candidate count = %d", len(candidates))
-	}
-	issues, err := parseReviewIssues(raw)
-	if err != nil || len(issues) != 0 {
-		t.Fatalf("issues=%v err=%v", issues, err)
 	}
 }
 

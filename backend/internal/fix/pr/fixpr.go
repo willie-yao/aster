@@ -287,6 +287,7 @@ func (m *Manager) openPR(ctx context.Context, title, body string, files map[stri
 // OpenFromPreview to open exactly the previewed PR. The base is pinned at
 // generation time so confirm opens the same diff against the same snapshot.
 type GeneratedFix struct {
+	Review      *ReviewResult
 	Preview     Preview  // Subject, Rationale, Diff, Files, Verify
 	Warnings    []string // bounded public-safe exact-JUnit quality warnings
 	Title       string   // final PR title
@@ -344,6 +345,7 @@ func generatedFixWarningBanner(warnings []string) string {
 // GeneratedFixSnapshot is the serializable form of a generated fix. It keeps
 // the exact files and pinned base needed to open the reviewed draft later.
 type GeneratedFixSnapshot struct {
+	Review                *ReviewResult          `json:"review,omitempty"`
 	Subject               string                 `json:"subject"`
 	Rationale             string                 `json:"rationale"`
 	Diff                  string                 `json:"diff"`
@@ -370,6 +372,7 @@ func (gf *GeneratedFix) Snapshot() *GeneratedFixSnapshot {
 		files[path] = content
 	}
 	return &GeneratedFixSnapshot{
+		Review:  CloneReviewResult(gf.Review),
 		Subject: gf.Preview.Subject, Rationale: gf.Preview.Rationale,
 		Diff: gf.Preview.Diff, Files: files, Verify: gf.Preview.Verify,
 		Title: gf.Title, Description: gf.Description, Body: gf.Body,
@@ -388,6 +391,7 @@ func RestoreGeneratedFix(snapshot *GeneratedFixSnapshot) *GeneratedFix {
 		files[path] = content
 	}
 	return &GeneratedFix{
+		Review: CloneReviewResult(snapshot.Review),
 		Preview: Preview{Subject: snapshot.Subject, Rationale: snapshot.Rationale,
 			Diff: snapshot.Diff, Files: files, Verify: snapshot.Verify},
 		Title: snapshot.Title, Description: snapshot.Description, Body: snapshot.Body, Warnings: slices.Clone(snapshot.Warnings),
@@ -437,6 +441,7 @@ func (m *Manager) generatePreview(
 	v := executionVerifyResult(base.HeadSHA, fix.executionVerification)
 	description, body := m.renderBody(ctx, p, fix, v, key, builds)
 	generated := &GeneratedFix{
+		Review:                CloneReviewResult(fix.review),
 		Preview:               Preview{Subject: p.Subject, Rationale: fix.rationale, Diff: fix.diff, Files: fix.files, Verify: v},
 		Title:                 prTitle(p),
 		Description:           description,
@@ -481,6 +486,9 @@ func patternTargetsRepository(pattern models.PatternAnalysis, owner, repo string
 func (gf *GeneratedFix) ValidateExecutionVerification() error {
 	if gf == nil {
 		return fmt.Errorf("generated fix is missing")
+	}
+	if err := gf.Review.Validate(); err != nil {
+		return fmt.Errorf("review result: %w", err)
 	}
 	if gf.executionVerification == nil {
 		return nil

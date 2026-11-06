@@ -22,6 +22,8 @@ const maxConversationFixCitations = 16
 // pushing generation over its limit.
 const maxConversationFixQuoteBytes = 16000
 
+const maxFixUserRequestBytes = 4096
+
 // AnalysisSnapshot is the complete published analysis context shown to chat.
 type AnalysisSnapshot struct {
 	GeneratedAt   string
@@ -133,6 +135,7 @@ type FixCandidate struct {
 	Analysis                  AnalysisRef
 	FixTarget                 AnalysisRef
 	Original                  AnalysisSnapshot
+	UserRequest               string
 	AssistantAnswer           string
 	AssistantUnverified       bool
 	AssistantUnverifiedReason string
@@ -175,6 +178,10 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		if !ok || request.Status != requestSucceeded {
 			return changed, ErrRequestNotFound
 		}
+		userRequest, err := selectedFixUserRequest(request)
+		if err != nil {
+			return changed, err
+		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
 		if answer == nil || strings.TrimSpace(answer.Content) == "" {
@@ -195,7 +202,7 @@ func (s *Service) AnalysisFixCandidate(sessionID, owner, requestID string) (FixC
 		}
 		candidate = FixCandidate{
 			SessionID: current.View.ID, RequestID: requestID, Analysis: current.View.Analysis, FixTarget: target.Ref,
-			Original: analysisSnapshot(analysis), AssistantAnswer: strings.TrimSpace(answer.Content),
+			Original: analysisSnapshot(analysis), UserRequest: userRequest, AssistantAnswer: strings.TrimSpace(answer.Content),
 			AssistantUnverified: answer.Unverified, AssistantUnverifiedReason: answer.UnverifiedReason,
 			ProposedRevision: cloneRevision(answer.ProposedRevision), ArtifactCitations: citations,
 			EvidenceWarnings:    conversationEvidenceWarnings(current.View.Messages, requestID),
@@ -281,6 +288,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		Analysis                  AnalysisRef
 		FixTarget                 AnalysisRef
 		Original                  AnalysisSnapshot
+		UserRequest               string
 		AssistantAnswer           string
 		AssistantUnverified       bool
 		AssistantUnverifiedReason string
@@ -292,7 +300,7 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		SourceBranch              string
 		SourceBranchKnown         bool
 	}{
-		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.FixTarget, candidate.Original, candidate.AssistantAnswer,
+		candidate.SessionID, candidate.RequestID, candidate.Analysis, candidate.FixTarget, candidate.Original, candidate.UserRequest, candidate.AssistantAnswer,
 		candidate.AssistantUnverified, candidate.AssistantUnverifiedReason,
 		candidate.ProposedRevision, candidate.ArtifactCitations, candidate.EvidenceWarnings, candidate.AnalysisContentHash, candidate.SourceRepositorySnapshot,
 		candidate.SourceBranch, candidate.SourceBranchKnown,
@@ -301,6 +309,20 @@ func fixCandidateResponseHash(candidate FixCandidate) (string, error) {
 		return "", fmt.Errorf("encoding selected chat response identity: %w", err)
 	}
 	return hashBytes(payload), nil
+}
+
+func selectedFixUserRequest(request persistedRequest) (string, error) {
+	if request.Prepared || normalizeOwner(request.Actor) == "" {
+		return "", nil
+	}
+	question := strings.TrimSpace(request.Question)
+	if len(question) > maxFixUserRequestBytes {
+		return "", fmt.Errorf("%w: Fix user request must not exceed %d bytes", ErrInvalidRequest, maxFixUserRequestBytes)
+	}
+	if request.QuestionHash != hashText(question) {
+		return "", ErrAnalysisChanged
+	}
+	return question, nil
 }
 
 // FixCandidate returns one completed shared assistant response.
@@ -339,6 +361,10 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 		if !ok || request.Status != requestSucceeded {
 			return changed, ErrRequestNotFound
 		}
+		userRequest, err := selectedFixUserRequest(request)
+		if err != nil {
+			return changed, err
+		}
 		answer := assistantResponse(current.View.Messages, requestID)
 		citations := conversationCitations(current.View.Messages, requestID)
 		if answer == nil || strings.TrimSpace(answer.Content) == "" {
@@ -353,6 +379,7 @@ func (s *Service) FixCandidate(sessionID, owner, requestID, patternID, patternHa
 			RequestID:                 requestID,
 			Analysis:                  current.View.Analysis,
 			Original:                  analysisSnapshot(analysis),
+			UserRequest:               userRequest,
 			AssistantAnswer:           strings.TrimSpace(answer.Content),
 			AssistantUnverified:       answer.Unverified,
 			AssistantUnverifiedReason: answer.UnverifiedReason,
