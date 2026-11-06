@@ -456,33 +456,6 @@ func TestAnalysisPreviewDedupIdentityIncludesSelectedChatAndRequest(t *testing.T
 	}
 }
 
-func TestAnalysisPreviewCritiqueErrorWarns(t *testing.T) {
-	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
-	agent := goodAgent()
-	manager := newManager(t, pr, agent, Options{Critique: &fakeCompleter{critiqueErr: errors.New("review endpoint down")}, CritiqueRetries: 1})
-	fix, err := manager.GenerateAnalysisPreview(t.Context(), validAnalysisFailure(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.calls != 1 || !slices.Contains(fix.Warnings, patchCritiqueUnavailableWarning) {
-		t.Fatalf("calls=%d warnings=%v", agent.calls, fix.Warnings)
-	}
-}
-
-func TestAnalysisPreviewCritiqueConcernWarnsWithoutRetry(t *testing.T) {
-	failure := validAnalysisFailure()
-	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}
-	agent := goodAgent()
-	manager := newManager(t, pr, agent, Options{Critique: &fakeCompleter{critique: `{"issues":["patch needs a narrower condition"]}`}, CritiqueRetries: 3})
-	fix, err := manager.GenerateAnalysisPreview(t.Context(), failure, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agent.calls != 1 || !slices.Contains(fix.Warnings, patchCritiqueWarning("patch needs a narrower condition")) {
-		t.Fatalf("calls=%d warnings=%v", agent.calls, fix.Warnings)
-	}
-}
-
 func TestAnalysisPreviewFailedAuthenticCommandsWarnAndRemainConfirmable(t *testing.T) {
 	failure := validAnalysisFailure()
 	pr := &fakePR{base: ghpr.Base{Branch: "main", HeadSHA: exactAnalysisRevision, TreeSHA: "tree"}}

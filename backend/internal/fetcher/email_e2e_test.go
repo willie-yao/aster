@@ -85,13 +85,12 @@ func newEmailLoopScenario(t *testing.T) *emailLoopScenario {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zero := 0
 	cfg := &project.Config{
 		ID: "email-loop", Name: "Email Loop",
 		Branding: project.Branding{Title: "Email Loop", BasePath: "/", SiteURL: "https://dashboard.test", SourceRepo: project.SourceRepo{Owner: "example", Name: "repo"}},
 		AI: &project.AI{FixPRs: &project.FixPRs{
 			Enabled: true, Repo: &project.SourceRepo{Owner: "example", Name: "repo"},
-			AuthorName: "Test Maintainer", AuthorEmail: "maintainer@example.test", CritiqueRetries: &zero,
+			AuthorName: "Test Maintainer", AuthorEmail: "maintainer@example.test",
 			AgentRuntime: &project.FixAgentRuntime{
 				Type: "agent-sandbox", OutputLimitBytes: 64 << 10,
 				AllowedCommands: []project.FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "1m"}},

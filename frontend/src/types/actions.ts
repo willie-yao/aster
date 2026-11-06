@@ -89,30 +89,6 @@ export interface ActionWarning {
   message: string;
 }
 
-export interface FixReviewAttempt {
-  phase?: string;
-  path: "response_format" | "forced_function" | "plain_fallback";
-  outcome:
-    | "accepted"
-    | "provider_error"
-    | "empty_response"
-    | "missing_forced_function"
-    | "invalid_json"
-    | "validator_rejected"
-    | "no_candidate";
-  validator_called: boolean;
-  validation_code?: string;
-  provider_category?: string;
-  provider_status?: number;
-  provider_attempts?: number;
-  provider_attempts_known?: boolean;
-}
-
-export interface FixReviewResult {
-  status: "passed" | "concerns" | "unavailable";
-  metadata: { attempts: FixReviewAttempt[] | null };
-}
-
 export interface ActionPreview {
   token?: string;
   kind: "issue" | "fix";
@@ -123,7 +99,6 @@ export interface ActionPreview {
   verify_status?: string;
   verify_summary?: string;
   verify_output?: string;
-  review?: FixReviewResult;
 }
 
 export interface ActionRequest {
@@ -144,6 +119,5 @@ export interface ActionRequest {
   result_url?: string;
   superseded_by?: string;
   preview?: ActionPreview;
-  review?: FixReviewResult;
   email_sent?: boolean;
 }

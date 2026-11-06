@@ -8,7 +8,6 @@ import (
 	"slices"
 	"time"
 
-	fixpr "github.com/willie-yao/aster/backend/internal/fix/pr"
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/patternstate"
 	"github.com/willie-yao/aster/backend/internal/redact"
@@ -277,7 +276,6 @@ func (s *Service) generateRequestOperation(id string, generate requestOperationG
 		request.ReasonCode = ""
 		request.Failure = nil
 		request.Preview = &preview
-		request.Review = fixpr.CloneReviewResult(preview.Review)
 		if analysisRequest {
 			request.ExpiresAt = now.Add(previewTTL).Format(time.RFC3339)
 			request.Instruction = ""

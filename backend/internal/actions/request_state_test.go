@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,78 @@ import (
 	"github.com/willie-yao/aster/backend/internal/issues"
 	"github.com/willie-yao/aster/backend/internal/project"
 )
+
+func TestReadyFixRequestIgnoresUnusedJSONFields(t *testing.T) {
+	service, _ := analysisRequestTestService(t)
+	var calls atomic.Int32
+	installHandoffTestGenerator(t, service, &calls)
+	input := exactAnalysisRequestInput()
+	input.UserRequest = "Select a compatible published version."
+	created, err := service.CreateAnalysisFixRequest(t.Context(), input, "alice", "write-token", "Keep exact version pins strict.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitRequest(t, service, created.ID, "alice", RequestReady)
+	if err := service.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	requestData, err := os.ReadFile(service.requestStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests map[string]any
+	if err := json.Unmarshal(requestData, &requests); err != nil {
+		t.Fatal(err)
+	}
+	record := requests["requests"].(map[string]any)[created.ID].(map[string]any)
+	record["review"] = map[string]any{"status": "unavailable", "metadata": "unused"}
+	record["preview"].(map[string]any)["review"] = map[string]any{"status": "concerns"}
+	requestData, err = json.Marshal(requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.requestStatePath(), requestData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previewData, err := os.ReadFile(service.previewStore.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previews map[string]any
+	if err := json.Unmarshal(previewData, &previews); err != nil {
+		t.Fatal(err)
+	}
+	previewRecord := previews["previews"].(map[string]any)[tokenHash(ready.Preview.Token)].(map[string]any)
+	previewRecord["fix"].(map[string]any)["review"] = map[string]any{"status": "passed", "metadata": "unused"}
+	previewData, err = json.Marshal(previews)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.previewStore.path, previewData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewService(service.cfg, service.dataDir, AIConfig{})
+	restored, err := reloaded.GetRequest(created.ID, "alice")
+	if err != nil || restored.Status != RequestReady || restored.Preview == nil ||
+		restored.Preview.Token != ready.Preview.Token || restored.Preview.Diff != ready.Preview.Diff || calls.Load() != 1 {
+		t.Fatalf("restored request = %+v, %v; generations = %d", restored, err, calls.Load())
+	}
+	handoff := reloaded.requests.Requests[created.ID].AnalysisFix
+	if handoff == nil || handoff.UserRequest != input.UserRequest || handoff.Instruction != "Keep exact version pins strict." {
+		t.Fatalf("restored task = %+v", handoff)
+	}
+	entry, _, _, _, err := reloaded.beginConfirm("alice", restored.Preview.Token, time.Minute)
+	if err != nil || entry.fix == nil || entry.fix.Preview.Diff != ready.Preview.Diff {
+		t.Fatalf("restored preview = %+v, %v", entry, err)
+	}
+	encoded, err := json.Marshal(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(`"review":`)) {
+		t.Fatal("unused model review metadata remained in the request API")
+	}
+}
 
 func validUnknownRequestState(now time.Time) actionRequestState {
 	return actionRequestState{Version: actionRequestStateVersion, Requests: map[string]*actionRequest{

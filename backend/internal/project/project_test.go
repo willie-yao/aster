@@ -745,10 +745,6 @@ func TestEffectiveFixPRsDefaults(t *testing.T) {
 	if got.Fork == nil || *got.Fork != true {
 		t.Errorf("Fork default = %v, want true", got.Fork)
 	}
-	// The one-shot agent-sandbox runtime pins critique retries to zero.
-	if got.CritiqueRetries == nil || *got.CritiqueRetries != 0 {
-		t.Errorf("CritiqueRetries default = %v, want 0", got.CritiqueRetries)
-	}
 	// An explicit fork: false is preserved.
 	f := false
 	c.AI.FixPRs.Fork = &f
@@ -827,11 +823,6 @@ func TestValidateFixPRsRequiresAuthor(t *testing.T) {
 	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", Repo: &SourceRepo{Owner: "x"}}}
 	assertValidate(t, c, "fix_prs.repo requires both")
-	// Negative critique_retries is rejected; 0 disables regeneration.
-	c = validConfig()
-	neg := -1
-	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", CritiqueRetries: &neg}}
-	assertValidate(t, c, "critique_retries must be >= 0")
 	// An unsupported agent_runtime.type is rejected.
 	c = validConfig()
 	c.AI = &AI{FixPRs: &FixPRs{Enabled: true, AuthorName: "Jane", AuthorEmail: "jane@example.com", AgentRuntime: &FixAgentRuntime{Type: "claude"}}}
@@ -1459,7 +1450,6 @@ ai:
     enabled: true
     author_name: Fixture
     author_email: fixture@example.test
-    critique_retries: 0
     agent_runtime:
       type: agent-sandbox
       max_turns: 2
@@ -1481,24 +1471,17 @@ ai:
 	}
 }
 
-func TestAgentSandboxIsOneShotByDefault(t *testing.T) {
-	config := validConfig()
-	config.AI = &AI{FixPRs: &FixPRs{AgentRuntime: &FixAgentRuntime{Type: "agent-sandbox"}}}
-	effective := config.EffectiveFixPRs()
-	if effective.CritiqueRetries == nil || *effective.CritiqueRetries != 0 {
-		t.Fatalf("critique retries = %v, want 0", effective.CritiqueRetries)
-	}
-	two := 2
-	config.AI.FixPRs.CritiqueRetries = &two
-	config.AI.FixPRs.AgentRuntime = &FixAgentRuntime{
-		Type: "agent-sandbox", MaxTurns: 2, Timeout: "2m", OutputLimitBytes: 131072,
-		AllowedCommands: []FixAgentCommand{{Argv: []string{"git", "diff", "--cached", "--check"}, Timeout: "30s"}},
-		ModelProvider:   validAgentSandboxModelProvider(),
-	}
-	no := false
-	config.AI.FixPRs.AgentRuntime.AllowBash = &no
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "one-shot") {
-		t.Fatalf("critique retry validation error = %v", err)
+func TestParseRejectsFixCritiqueRetries(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, retries := range []int{-1, 0, 2} {
+			t.Run("enabled="+strconv.FormatBool(enabled)+"/retries="+strconv.Itoa(retries), func(t *testing.T) {
+				input := validYAML + "\nai:\n  fix_prs:\n    enabled: " + strconv.FormatBool(enabled) +
+					"\n    author_name: Fixture\n    author_email: fixture@example.test\n    critique_retries: " + strconv.Itoa(retries) + "\n"
+				if _, err := Parse([]byte(input)); err == nil || !strings.Contains(err.Error(), "field critique_retries not found") {
+					t.Fatalf("obsolete Fix critique option error = %v", err)
+				}
+			})
+		}
 	}
 }
 
@@ -1551,7 +1534,6 @@ ai:
     enabled: true
     author_name: Fixture
     author_email: fixture@example.test
-    critique_retries: 0
     agent_runtime:
       type: agent-sandbox
       max_turns: 3

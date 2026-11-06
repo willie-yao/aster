@@ -101,7 +101,6 @@ type ActionRequestView struct {
 	ReasonCode   ReasonCode              `json:"reason_code,omitempty"`
 	Warnings     []ActionWarning         `json:"warnings,omitempty"`
 	Failure      *AnalysisFixFailureView `json:"failure,omitempty"`
-	Review       *fixpr.ReviewResult     `json:"review,omitempty"`
 	ResultURL    string                  `json:"result_url,omitempty"`
 	SupersededBy string                  `json:"superseded_by,omitempty"`
 	Preview      *PreviewResult          `json:"preview,omitempty"`
@@ -109,7 +108,6 @@ type ActionRequestView struct {
 }
 
 func cloneActionRequestView(view ActionRequestView) ActionRequestView {
-	view.Review = fixpr.CloneReviewResult(view.Review)
 	if view.Preview != nil {
 		preview := clonePreviewResult(*view.Preview)
 		view.Preview = &preview
@@ -118,7 +116,6 @@ func cloneActionRequestView(view ActionRequestView) ActionRequestView {
 }
 
 func clonePreviewResult(preview PreviewResult) PreviewResult {
-	preview.Review = fixpr.CloneReviewResult(preview.Review)
 	preview.Warnings = slices.Clone(preview.Warnings)
 	return preview
 }

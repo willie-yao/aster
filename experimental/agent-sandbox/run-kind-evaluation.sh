@@ -251,7 +251,6 @@ project:
         author_name: Fixture
         author_email: fixture@example.test
         max_files: 1
-        critique_retries: 0
         agent_runtime:
           type: agent-sandbox
           max_turns: 5

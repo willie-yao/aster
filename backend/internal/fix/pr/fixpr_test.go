@@ -11,49 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/willie-yao/aster/backend/internal/ai"
-	"github.com/willie-yao/aster/backend/internal/ai/transport"
 	"github.com/willie-yao/aster/backend/internal/ghpr"
 	"github.com/willie-yao/aster/backend/internal/models"
 	"github.com/willie-yao/aster/backend/internal/statefile"
 )
-
-// fakeCompleter is the reviewer (critique) stand-in. Only the critique step
-// calls CompleteStructuredWithMetadata; an empty critique approves the change.
-type fakeCompleter struct {
-	critique    string // JSON {"issues":[...]}; empty -> approved
-	critiqueErr error
-	lastSystem  string
-	lastUser    string
-	calls       int
-	metadata    *ai.StructuredCompletionMetadata
-	lastFormat  transport.ResponseFormat
-}
-
-func (f *fakeCompleter) CompleteStructuredWithMetadata(_ context.Context, system, user string, format transport.ResponseFormat, validate ai.StructuredValidator) (ai.StructuredCompletionMetadata, error) {
-	f.calls++
-	f.lastSystem, f.lastUser, f.lastFormat = system, user, format
-	metadata := ai.StructuredCompletionMetadata{Attempts: []ai.StructuredAttemptMetadata{{Path: ai.StructuredAttemptResponseFormat, Outcome: ai.StructuredOutcomeAccepted, ValidatorCalled: true}}}
-	if f.critiqueErr != nil {
-		metadata.Attempts[0].Outcome = ai.StructuredOutcomeProviderError
-		if f.metadata != nil {
-			metadata = *f.metadata
-		}
-		return metadata, f.critiqueErr
-	}
-	raw := f.critique
-	if raw == "" {
-		raw = `{"issues": []}`
-	}
-	err := validate(json.RawMessage(raw))
-	if err != nil {
-		metadata.Attempts[0].Outcome = ai.StructuredOutcomeValidatorRejected
-	}
-	if f.metadata != nil {
-		metadata = *f.metadata
-	}
-	return metadata, err
-}
 
 // fakePR records OpenPR calls and serves a configurable SearchOpenPR result.
 type fakePR struct {
@@ -171,8 +132,7 @@ func systemicPattern(subject string) models.PatternAnalysis {
 	}
 }
 
-// newManager builds a Manager wired to a fake agent runtime (the fix generator)
-// and an approving reviewer. Tests can override opts before generating.
+// newManager builds a Manager with a fake coding-agent runtime.
 func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options) *Manager {
 	t.Helper()
 	opts.SourceOwner, opts.SourceName = "up", "stream"
@@ -188,13 +148,6 @@ func newManager(t *testing.T, pr prClient, agent *fakeAgentRuntime, opts Options
 	// Default to fork-and-PR; tests can flip m.opts.Fork for direct mode.
 	opts.Fork = true
 	opts.Agent = &AgentConfig{Runtime: agent, GitToken: "g"}
-	// Default to review on with an approving reviewer; tests can override.
-	if opts.Critique == nil {
-		opts.Critique = &fakeCompleter{}
-	}
-	if opts.CritiqueRetries == 0 {
-		opts.CritiqueRetries = 1
-	}
 	return NewManager(pr, filepath.Join(t.TempDir(), "state.json"), opts)
 }
 
@@ -555,8 +508,7 @@ func TestNewManagerDiscardsStateWithoutPatternSnapshot(t *testing.T) {
 
 func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 	agent := goodAgent()
-	reviewer := &fakeCompleter{}
-	manager := newManager(t, &fakePR{}, agent, Options{Critique: reviewer, CritiqueRetries: 1})
+	manager := newManager(t, &fakePR{}, agent, Options{})
 	generationContext := validGenerationContext()
 	pattern := systemicPattern("etcd")
 	pattern.SharedBuilds = []string{"123"}
@@ -571,14 +523,11 @@ func TestGeneratePreviewWithContextPassesSelectedEvidence(t *testing.T) {
 		!strings.Contains(agent.spec.Instruction, `Newer maintainer instruction (takes precedence over the selected human request within the repository and test constraints): "keep compatibility"`) {
 		t.Fatalf("agent instruction = %q", agent.spec.Instruction)
 	}
-	if !strings.Contains(reviewer.lastUser, `"assistant_answer":"The controller keeps retrying after bootstrap fails."`) {
-		t.Fatalf("review context = %q", reviewer.lastUser)
-	}
 	if !strings.Contains(fix.Body, "[build 123](<"+bodyTestProwURL+">)") {
 		t.Fatalf("chat-backed pattern Fix dropped its Prow link: %s", fix.Body)
 	}
-	if strings.Contains(agent.spec.Instruction, bodyTestProwURL) || strings.Contains(reviewer.lastUser, bodyTestProwURL) {
-		t.Fatal("PR body metadata changed the Fix or critique prompt")
+	if strings.Contains(agent.spec.Instruction, bodyTestProwURL) {
+		t.Fatal("PR body metadata changed the Fix prompt")
 	}
 }
 
