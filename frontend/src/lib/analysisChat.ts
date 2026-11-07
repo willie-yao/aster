@@ -25,6 +25,12 @@ export function buildFixInvestigationQuestion(outcome: string): string {
   return question;
 }
 
+export function analysisChatDefaultComposerMode(session: AnalysisChatSession | null): "guided" | "question" {
+  return session?.active || session?.attempts?.length || session?.messages.some((message) => message.role === "user")
+    ? "question"
+    : "guided";
+}
+
 export function analysisChatScopeLabel(ref: AnalysisChatReference): string {
   if (ref.scope === "cause") return "Cause";
   if (ref.scope === "pattern") return "Whole pattern";

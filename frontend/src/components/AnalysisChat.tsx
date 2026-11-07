@@ -13,11 +13,12 @@ import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import {
-  ArrowUpward,
   AutoAwesome,
   BuildOutlined,
   ExpandMore,
@@ -34,6 +35,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useCapabilities } from "../hooks/useCapabilities";
 import {
   analysisChatActiveTurnLimitMessage,
+  analysisChatDefaultComposerMode,
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
   analysisChatHistory,
@@ -660,7 +662,7 @@ export function AnalysisChat({
   const composerInputId = useId();
   const [expanded, setExpanded] = useState(false);
   const [question, setQuestion] = useState("");
-  const [fixInvestigation, setFixInvestigation] = useState(false);
+  const [composerMode, setComposerMode] = useState<"guided" | "question" | null>(null);
   const [desiredOutcome, setDesiredOutcome] = useState("");
   const [draftContentHeight, setDraftContentHeight] = useState<number | null>(null);
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
@@ -681,7 +683,7 @@ export function AnalysisChat({
   const [resetting, setResetting] = useState(false);
   const clearComposer = useCallback(() => {
     setQuestion("");
-    setFixInvestigation(false);
+    setComposerMode(null);
     setDesiredOutcome("");
     setDraftContentHeight(null);
   }, []);
@@ -824,6 +826,7 @@ export function AnalysisChat({
         };
         restoredTurn = turn;
         setPendingTurn(turn);
+        setComposerMode("question");
         setQuestion(turn.question);
         setBusy(true);
         const resumed = await resumeAnalysisChatTurn(
@@ -1045,8 +1048,10 @@ export function AnalysisChat({
   const composerLocked = busy || restoring || pendingTurn !== null || Boolean(session?.active);
   // Not composerLocked: a pending turn locks the field but leaves the button
   // live, because that button is what resumes it.
-  const draftQuestion = fixInvestigation ? buildFixInvestigationQuestion(desiredOutcome) : question;
   const investigationAvailable = !patternScope && authStatus === "authenticated" && !session?.read_only;
+  const activeComposerMode = investigationAvailable ? composerMode ?? analysisChatDefaultComposerMode(session) : "question";
+  const fixInvestigation = activeComposerMode === "guided";
+  const draftQuestion = fixInvestigation ? buildFixInvestigationQuestion(desiredOutcome) : question;
   const investigationLocked = composerLocked || resetting || continueMode;
   const outcomeBytesRemaining = maxFixInvestigationOutcomeBytes - new TextEncoder().encode(desiredOutcome).byteLength;
   const sendBlocked = busy || restoring || Boolean(session?.active) ||
@@ -1057,11 +1062,10 @@ export function AnalysisChat({
   const causeFixEnabled = causeScope && Boolean(fixTarget);
   const exactFixEnabled = fixable && Boolean(features.junit_chat_fix) && (exactFailureAnalysis || causeFixEnabled);
 
-  function toggleFixInvestigation() {
+  function selectComposerMode(mode: "guided" | "question") {
     if (investigationLocked) return;
-    setFixInvestigation((current) => !current);
+    setComposerMode(mode);
     setDraftContentHeight(null);
-    composerInputRef.current?.focus();
   }
 
   async function submit(nextQuestion?: string) {
@@ -1078,8 +1082,8 @@ export function AnalysisChat({
     }
     if (authStatus !== "authenticated") return;
 
+    setComposerMode("question");
     if (fixInvestigation) {
-      setFixInvestigation(false);
       setDesiredOutcome("");
       setQuestion(value);
     }
@@ -1633,14 +1637,14 @@ export function AnalysisChat({
                   Restoring conversation...
                 </Typography>
               )}
-              {!restoring && history.length === 0 && !busy && !pendingTurn && !session?.active && !turnLimitReached && (
+              {!fixInvestigation && !restoring && history.length === 0 && !busy && !pendingTurn && !session?.active && !turnLimitReached && (
                 <Box sx={{ py: 0.5 }}>
                   <Typography variant="body2" sx={{ fontWeight: 650 }}>
                     {causeScope
-                      ? "Interrogate this cause across failed and later runs."
+                      ? "Ask about this cause across failed and later runs."
                       : patternScope
-                        ? "Interrogate the pattern across builds."
-                        : "Interrogate the conclusion, not just the summary."}
+                        ? "Ask about the pattern across builds."
+                        : "Explore the evidence behind this analysis."}
                   </Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: "block", mt: 0.35, mb: 1.25 }}>
                     {causeScope
@@ -1703,177 +1707,145 @@ export function AnalysisChat({
                 sit above the progress update and defer announcing it. */}
             <Box
               aria-busy={composerLocked || restoring}
-              sx={{
-                flexShrink: 0,
-                px: { xs: 1.25, sm: 1.5 },
-                pb: 1.5,
-                // Field and Send read as one control, so the border lives on
-                // the row and the field inside it is bare.
-                "& > .MuiStack-root:first-of-type": {
-                  alignItems: "flex-end",
-                  gap: 0.5,
-                  px: 0.75,
-                  py: 0.625,
-                  border: "1px solid",
-                  borderColor: "divider",
-                  borderRadius: 1,
-                  bgcolor: "background.default",
-                  "&:focus-within": { borderColor: "primary.main" },
-                },
-                // Matching the field's minimum to the Send button centres a
-                // single line against it; the row still bottom-aligns once the
-                // field grows past one line.
-                "& .MuiOutlinedInput-root": {
-                  bgcolor: "transparent",
-                  p: 0,
-                  px: 1,
-                  minHeight: 34,
-                  display: "flex",
-                  alignItems: "center",
-                },
-                "& .MuiOutlinedInput-notchedOutline": { border: 0 },
-                // This sizes the composer's buttons; their own sx cannot, since
-                // a descendant selector outranks it. Touch keeps the 44px
-                // target, keyed to the pointer rather than a breakpoint.
-                "& .MuiIconButton-root": {
-                  width: 34,
-                  height: 34,
-                  borderRadius: 1,
-                  "@media (any-pointer: coarse)": { width: 44, height: 44 },
-                },
-              }}
+              sx={{ flexShrink: 0, px: { xs: 1.25, sm: 1.5 }, pb: 1.5 }}
             >
               {investigationAvailable && !turnLimitReached && (
-                <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 0.75, mb: 0.5 }}>
-                  {fixInvestigation && <Typography variant="body2" sx={{ fontWeight: 650 }}>Investigate a fix</Typography>}
-                  <Button
-                    type="button"
-                    size="small"
-                    color="inherit"
-                    onClick={toggleFixInvestigation}
-                    aria-disabled={investigationLocked || undefined}
-                    sx={{ ...touchTargetSx, color: "text.secondary", ...(investigationLocked && { opacity: 0.6 }) }}
-                  >
-                    {fixInvestigation ? "Back to question" : "Investigate a fix"}
-                  </Button>
-                </Box>
-              )}
-              {fixInvestigation && (
-                <Typography component="label" htmlFor={composerInputId} variant="body2" sx={{ display: "block", mb: 0.5 }}>
-                  Desired outcome (optional)
-                </Typography>
-              )}
-              {turnLimitReached ? (
-                // Replacing the composer unmounts whatever the operator had
-                // focused, so this takes the focus and says why input is gone.
-                <Alert
-                  ref={turnLimitRef}
-                  role="status"
-                  tabIndex={-1}
-                  severity="info"
-                  variant="outlined"
-                  sx={{ "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 } }}
+                <Tabs
+                  value={activeComposerMode}
+                  onChange={(_, mode: "guided" | "question") => selectComposerMode(mode)}
+                  aria-label="Investigation approach"
+                  variant="fullWidth"
+                  sx={{
+                    minHeight: 44,
+                    mb: 1.5,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    "& .MuiTab-root": {
+                      minHeight: 44,
+                      minWidth: 0,
+                      px: 1,
+                      py: 0.75,
+                      fontSize: "0.8125rem",
+                      textTransform: "none",
+                      "&.Mui-focusVisible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: -2 },
+                      ...(investigationLocked && { opacity: 0.6 }),
+                    },
+                  }}
                 >
-                  This conversation reached its attempt limit. Start a new conversation to keep asking.
-                </Alert>
-              ) : (
-                <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={1}
-                    maxRows={5}
-                    inputRef={composerInputRef}
-                    id={composerInputId}
-                    value={fixInvestigation ? desiredOutcome : question}
-                    onChange={(event) => {
-                      setDraftContentHeight((current) =>
-                        current ?? chatContentRef.current?.getBoundingClientRect().height ?? null
-                      );
-                      setContinueMode(false);
-                      if (fixInvestigation) {
-                        setDesiredOutcome(limitAnalysisChatQuestion(event.target.value, maxFixInvestigationOutcomeBytes));
-                      } else {
-                        setQuestion(limitAnalysisChatQuestion(event.target.value));
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                        event.preventDefault();
-                        if (!composerLocked) void submit();
-                      }
-                    }}
-                    // Read-only rather than disabled. Disabling the focused
-                    // field drops focus to the document body, which strands the
-                    // operator and puts Cancel out of reach.
-                    placeholder={fixInvestigation ? "What should change when the fix works?" : "Ask why, challenge the cause, or test another hypothesis..."}
-                    slotProps={{
-                      input: {
-                        readOnly: composerLocked,
-                        sx: {
-                          borderRadius: 1,
-                          bgcolor: "background.paper",
-                          fontSize: "0.875rem",
-                          // 16px wherever touch is available: iOS force-zooms a
-                          // focused input below it, at any viewport width.
-                          "@media (any-pointer: coarse)": { fontSize: "16px" },
-                          ...(composerLocked && { opacity: 0.6 }),
+                  <Tab label="Guided investigation" value="guided" id={`${composerInputId}-guided`} aria-controls={`${composerInputId}-panel`} aria-disabled={investigationLocked || undefined} />
+                  <Tab label="Custom question" value="question" id={`${composerInputId}-question`} aria-controls={`${composerInputId}-panel`} aria-disabled={investigationLocked || undefined} />
+                </Tabs>
+              )}
+              <Box
+                role={investigationAvailable && !turnLimitReached ? "tabpanel" : undefined}
+                id={`${composerInputId}-panel`}
+                aria-labelledby={investigationAvailable && !turnLimitReached ? `${composerInputId}-${activeComposerMode}` : undefined}
+              >
+                {fixInvestigation && !turnLimitReached && (
+                  <Typography variant="body2" color="textSecondary" sx={{ mb: 1.5, maxWidth: "68ch" }}>
+                    Aster uses the evidence and source to recommend a change or identify what is missing.
+                  </Typography>
+                )}
+                {turnLimitReached ? (
+                  // Replacing the composer unmounts whatever the operator had
+                  // focused, so this takes the focus and says why input is gone.
+                  <Alert
+                    ref={turnLimitRef}
+                    role="status"
+                    tabIndex={-1}
+                    severity="info"
+                    variant="outlined"
+                    sx={{ "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 } }}
+                  >
+                    This conversation reached its attempt limit. Start a new conversation to keep asking.
+                  </Alert>
+                ) : (
+                  <>
+                    <Typography component="label" htmlFor={composerInputId} variant="body2" sx={{ display: "block", mb: 0.75 }}>
+                      {fixInvestigation ? "Desired outcome (optional)" : "Your question"}
+                    </Typography>
+                    <TextField
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      maxRows={5}
+                      inputRef={composerInputRef}
+                      id={composerInputId}
+                      value={fixInvestigation ? desiredOutcome : question}
+                      onChange={(event) => {
+                        setDraftContentHeight((current) =>
+                          current ?? chatContentRef.current?.getBoundingClientRect().height ?? null
+                        );
+                        setContinueMode(false);
+                        if (fixInvestigation) {
+                          setDesiredOutcome(limitAnalysisChatQuestion(event.target.value, maxFixInvestigationOutcomeBytes));
+                        } else {
+                          setQuestion(limitAnalysisChatQuestion(event.target.value));
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                          event.preventDefault();
+                          if (!composerLocked) void submit();
+                        }
+                      }}
+                      // Read-only keeps focus while the request runs.
+                      placeholder={fixInvestigation ? "What should change when the fix works?" : "Share a hypothesis, ask for evidence, or give a specific direction..."}
+                      slotProps={{
+                        input: {
+                          readOnly: composerLocked,
+                          sx: {
+                            borderRadius: 1,
+                            bgcolor: "background.default",
+                            fontSize: { xs: "16px", sm: "0.875rem" },
+                            "@media (any-pointer: coarse)": { fontSize: "16px" },
+                            "& textarea::placeholder": { color: "text.secondary", opacity: 1 },
+                            ...(composerLocked && { opacity: 0.6 }),
+                          },
                         },
-                      },
-                      htmlInput: {
-                        "aria-label": fixInvestigation ? "Desired outcome (optional)" : "Ask about this analysis",
-                        "aria-describedby": fixInvestigation ? `${composerInputId}-outcome-hint` : undefined,
-                        "aria-disabled": composerLocked || undefined,
-                      },
-                    }}
-                  />
-                  <Tooltip title={pendingTurn || continueMode ? "Continue" : fixInvestigation ? "Send fix investigation" : "Send question"}>
-                    <span>
-                      <IconButton
-                        color="primary"
-                        aria-label={pendingTurn || continueMode ? "Continue" : fixInvestigation ? "Send fix investigation" : "Send question"}
-                        onClick={() => {
-                          if (!sendBlocked) void submit();
-                        }}
-                        // Never natively disabled, for the same focus reason.
-                        aria-disabled={sendBlocked || undefined}
-                        sx={{
-                          bgcolor: "primary.main",
-                          color: "primary.contrastText",
-                          "&:hover": { bgcolor: "primary.dark" },
-                          ...(sendBlocked && { bgcolor: "action.disabledBackground", opacity: 0.6 }),
-                        }}
-                      >
-                        <ArrowUpward fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  {pendingTurn && !busy && (
-                    <Tooltip title="Cancel pending question">
-                      <span>
-                        <IconButton
-                          aria-label="Cancel pending question"
+                        htmlInput: {
+                          "aria-label": fixInvestigation ? "Desired outcome (optional)" : "Your question",
+                          "aria-describedby": fixInvestigation ? `${composerInputId}-outcome-hint` : undefined,
+                          "aria-disabled": composerLocked || undefined,
+                        },
+                      }}
+                    />
+                    {fixInvestigation && (
+                      <Typography id={`${composerInputId}-outcome-hint`} variant="caption" component="p" sx={{ mt: 0.75, mb: 0, color: "text.secondary" }}>
+                        Leave blank to let Aster suggest a goal from this failure.
+                        {outcomeBytesRemaining <= 200 && ` ${outcomeBytesRemaining === 0 ? "Outcome length limit reached." : "Outcome is near the length limit."}`}
+                      </Typography>
+                    )}
+                    <Stack direction={{ xs: "column-reverse", sm: "row" }} spacing={1} sx={{ justifyContent: "flex-end", mt: 1.25 }}>
+                      {pendingTurn && !busy && (
+                        <Button
+                          variant="text"
+                          color="inherit"
                           onClick={() => { if (!cancelling) void cancelTurn(); }}
                           aria-disabled={cancelling || undefined}
-                          sx={{
-                            border: "1px solid",
-                            borderColor: "divider",
-                            color: "text.secondary",
-                            ...(cancelling && { opacity: 0.6 }),
-                          }}
+                          startIcon={<StopCircleOutlined />}
+                          sx={{ ...touchTargetSx, ...(cancelling && { opacity: 0.6 }) }}
                         >
-                          <StopCircleOutlined fontSize="small" />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                  )}
-                </Stack>
-              )}
-              {fixInvestigation && (
-                <Typography id={`${composerInputId}-outcome-hint`} variant="caption" component="p" sx={{ mt: 0.5, mb: 0, color: "text.secondary" }}>
-                  Leave blank to infer and label a goal. {outcomeBytesRemaining} bytes remaining for the outcome.
-                </Typography>
-              )}
+                          Cancel pending question
+                        </Button>
+                      )}
+                      <Button
+                        variant="contained"
+                        onClick={() => { if (!sendBlocked) void submit(); }}
+                        // Keep the focused action reachable while it is locked.
+                        aria-disabled={sendBlocked || undefined}
+                        sx={{
+                          ...touchTargetSx,
+                          width: { xs: "100%", sm: "auto" },
+                          ...(sendBlocked && { bgcolor: "action.disabledBackground", color: "text.disabled", "&:hover": { bgcolor: "action.disabledBackground" } }),
+                        }}
+                      >
+                        {pendingTurn || continueMode ? "Continue investigation" : fixInvestigation ? "Start investigation" : "Send question"}
+                      </Button>
+                    </Stack>
+                  </>
+                )}
+              </Box>
               {session && (
                 <Stack
                   direction="row"
