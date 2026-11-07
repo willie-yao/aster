@@ -154,7 +154,7 @@ test("analysis chat contains multiline composer growth inside the transcript", (
 
   const clearComposer = chat.slice(chat.indexOf("const clearComposer"), chat.indexOf("const createRequestIDRef"));
   assert.match(clearComposer, /setQuestion\(""\)/);
-  assert.match(clearComposer, /setFixInvestigation\(false\)/);
+  assert.match(clearComposer, /setComposerMode\(null\)/);
   assert.match(clearComposer, /setDesiredOutcome\(""\)/);
   assert.match(clearComposer, /setDraftContentHeight\(null\)/);
   assert.match(content, /display: "flex",\s*flexDirection: "column"/);

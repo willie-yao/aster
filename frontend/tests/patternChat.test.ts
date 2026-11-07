@@ -73,7 +73,7 @@ test("cause chat uses multi-build evidence without inheriting pattern fix author
   assert.ok(causeSuggestedQuestions().includes("Has this cause been resolved in the latest completed run?"));
   assert.ok(causeSuggestedQuestions().includes("What evidence supports this cause across its builds?"));
   assert.ok(causeSuggestedQuestions().includes("What concrete change follows from this cause?"));
-  assert.match(source, /Interrogate this cause across failed and later runs/);
+  assert.match(source, /Ask about this cause across failed and later runs/);
 });
 
 test("cause chat keeps a bound session baseline authoritative", () => {

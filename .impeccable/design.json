@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-26T22:22:52Z",
+  "generatedAt": "2026-11-07T08:42:11Z",
   "title": "Design System: Aster",
   "extensions": {
     "colorMeta": {
@@ -262,15 +262,15 @@
       "refersTo": "ledger-row",
       "description": "One square per run, oldest to newest. A single composite tab stop: arrow keys move within it so a 28-job ledger does not put 300 links in the tab order.",
       "html": "<div class=\"ds-runs\" role=\"group\" aria-label=\"Recent runs\"><a class=\"ds-run\" href=\"#\" tabindex=\"0\" aria-label=\"Run 2081719278, passed, Jul 27\"><span class=\"ds-run-dot ds-pass\"></span></a><a class=\"ds-run\" href=\"#\" tabindex=\"-1\" aria-label=\"Run 2082837153, passed, Jul 30\"><span class=\"ds-run-dot ds-pass\"></span></a><a class=\"ds-run\" href=\"#\" tabindex=\"-1\" aria-label=\"Run 2083945448, failed, Aug 2\"><span class=\"ds-run-dot ds-fail\"></span></a></div>",
-      "css": ".ds-runs { display: grid; grid-template-columns: repeat(3, 24px); align-items: center; } .ds-run { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px; border-radius: 4px; } .ds-run:hover { background: #f0f3f6; } .ds-run:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } .ds-run-dot { display: block; width: 8px; height: 8px; border-radius: 2px; } .ds-pass { background: #1a7f37; } .ds-fail { background: #cf222e; } @media (forced-colors: active) { .ds-run-dot { forced-color-adjust: none; outline: 1px solid CanvasText; } }"
+      "css": ".ds-runs { display: grid; grid-template-columns: repeat(auto-fill, 44px); width: 100%; align-items: center; } .ds-run { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 4px; } .ds-run:hover { background: #f0f3f6; } .ds-run:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } .ds-run-dot { display: block; width: 18px; height: 18px; border-radius: 2px; } .ds-pass { background: #1a7f37; } .ds-fail { background: #cf222e; } @media (forced-colors: active) { .ds-run-dot { forced-color-adjust: none; outline: 1px solid CanvasText; } } @media (min-width: 1024px) { .ds-runs { grid-template-columns: repeat(3, 24px); width: auto; } .ds-run { width: 24px; height: 28px; } }"
     },
     {
       "name": "Filter Input",
       "kind": "input",
       "refersTo": "input-filter",
-      "description": "Narrows a ledger. 16px on mobile so iOS Safari does not force-zoom on focus.",
+      "description": "Narrows a ledger. Text is 14px with a fine pointer and 16px wherever touch is available, so iOS Safari does not force-zoom on focus.",
       "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Filter tests by name or failure text\" aria-label=\"Filter test results\" />",
-      "css": ".ds-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; color: #1f2328; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 16px; } .ds-input::placeholder { color: #59636e; opacity: 0.6; } .ds-input:hover { border-color: #59636e; } .ds-input:focus-visible { border-color: #7c3aed; outline: 2px solid #7c3aed; outline-offset: 1px; } @media (min-width: 600px) { .ds-input { font-size: 14px; } }"
+      "css": ".ds-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; color: #1f2328; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 14px; } .ds-input::placeholder { color: #59636e; opacity: 0.6; } .ds-input:hover { border-color: #59636e; } .ds-input:focus-visible { border-color: #7c3aed; outline: 2px solid #7c3aed; outline-offset: 1px; } @media (any-pointer: coarse) { .ds-input { font-size: 16px; } }"
     },
     {
       "name": "Navigation Rail Item",
@@ -303,6 +303,14 @@
       "description": "Reports whether a generated remediation verified against pinned source. Tint plus glyph plus words; never tint alone.",
       "html": "<div class=\"ds-verify\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1 15-4-4 1.4-1.4L11 14.2l5.6-5.6L18 10z\"/></svg><span>Verification passed</span></div>",
       "css": ".ds-verify { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid rgba(26, 127, 55, 0.3); border-radius: 4px; background: rgba(26, 127, 55, 0.12); color: #1a7f37; font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; font-size: 0.875rem; font-weight: 600; } @media (forced-colors: active) { .ds-verify { border-color: CanvasText; } }"
+    },
+    {
+      "name": "Investigation Composer",
+      "kind": "custom",
+      "refersTo": "button-primary",
+      "description": "Guided entry with an optional outcome and a visible Start investigation action. Custom questions stay one tab away; the application preserves drafts and uses a question composer for follow-up.",
+      "html": "<div class=\"ds-investigation\"><div class=\"ds-investigation-tabs\" role=\"tablist\" aria-label=\"Investigation approach\"><button class=\"ds-investigation-tab\" type=\"button\" role=\"tab\" aria-selected=\"true\" id=\"ds-guided-tab\" aria-controls=\"ds-guided-panel\">Guided investigation</button><button class=\"ds-investigation-tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" tabindex=\"-1\">Custom question</button></div><div role=\"tabpanel\" id=\"ds-guided-panel\" aria-labelledby=\"ds-guided-tab\"><p class=\"ds-investigation-description\">Aster uses the evidence and source to recommend a change or identify what is missing.</p><label class=\"ds-investigation-label\" for=\"ds-investigation-outcome\">Desired outcome (optional)</label><textarea class=\"ds-investigation-input\" id=\"ds-investigation-outcome\" rows=\"2\" aria-describedby=\"ds-investigation-hint\" placeholder=\"What should change when the fix works?\"></textarea><p class=\"ds-investigation-hint\" id=\"ds-investigation-hint\">Leave blank to let Aster suggest a goal from this failure.</p><div class=\"ds-investigation-actions\"><button class=\"ds-investigation-start\" type=\"button\">Start investigation</button></div></div></div>",
+      "css": ".ds-investigation { font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif; color: #1f2328; padding: 0 10px 12px; } .ds-investigation-tabs { display: flex; border-bottom: 1px solid #d0d7de; margin-bottom: 12px; } .ds-investigation-tab { flex: 1; min-width: 0; min-height: 44px; padding: 6px 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #59636e; font: 500 13.8125px/1.25 system-ui, -apple-system, \"Segoe UI\", sans-serif; cursor: pointer; } .ds-investigation-tab[aria-selected=\"true\"] { color: #7c3aed; border-bottom-color: #7c3aed; } .ds-investigation-tab:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } .ds-investigation-description { margin: 0 0 12px; max-width: 68ch; color: #59636e; font-size: 14.875px; line-height: 1.43; } .ds-investigation-label { display: block; margin-bottom: 6px; font-size: 14.875px; line-height: 1.43; } .ds-investigation-input { display: block; box-sizing: border-box; width: 100%; resize: none; padding: 16.5px 14px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; color: #1f2328; font: 16px/1.4375 system-ui, -apple-system, \"Segoe UI\", sans-serif; } .ds-investigation-input::placeholder { color: #59636e; opacity: 1; } .ds-investigation-input:hover { border-color: #1f2328; } .ds-investigation-input:focus-visible { outline: 2px solid #7c3aed; outline-offset: -2px; } .ds-investigation-hint { margin: 6px 0 0; color: #59636e; font-size: 12.75px; line-height: 1.66; } .ds-investigation-actions { display: flex; justify-content: flex-end; margin-top: 10px; } .ds-investigation-start { width: 100%; min-height: 36px; border: 0; border-radius: 4px; padding: 6px 16px; background: #7c3aed; color: #fff; font: 600 14.875px/1.75 system-ui, -apple-system, \"Segoe UI\", sans-serif; cursor: pointer; } .ds-investigation-start:hover { background: #6d28d9; } .ds-investigation-start:focus-visible { outline: 2px solid #7c3aed; outline-offset: 1px; } @media (min-width: 600px) { .ds-investigation { padding-inline: 12px; } .ds-investigation-input { font-size: 14.875px; } .ds-investigation-start { width: auto; } } @media (any-pointer: coarse) { .ds-investigation-input { font-size: 16px; } .ds-investigation-start { min-height: 44px; } }"
     }
   ],
   "narrative": {
@@ -333,7 +341,7 @@
       },
       {
         "name": "The Measure Rule",
-        "body": "Prose caps at 65 to 75ch. Analysis briefings run 68ch; denser 13px secondary blocks run 74ch. No prose block spans a full desktop column.",
+        "body": "Prose caps at 65–75ch. Analysis briefings run 68ch; denser 13px secondary blocks run 74ch. No prose block spans a full desktop column, because a 190-character line is unreadable at any size.",
         "section": "typography"
       },
       {
@@ -352,19 +360,19 @@
         "section": "typography"
       },
       {
-        "name": "The Flat Console Rule",
-        "body": "If a surface does not float above the page, it gets a border and a tonal step, never a shadow.",
-        "section": "elevation"
-      },
-      {
         "name": "The One Layout Rule",
-        "body": "Responsive alternatives are mounted, not hidden. A layout that is not visible at the current width does not exist in the DOM.",
+        "body": "Responsive alternatives are mounted, not hidden. A layout that is not visible at the current width does not exist in the DOM, so the console never pays to render or reconcile a tree nobody can see.",
         "section": "layout"
       },
       {
         "name": "The Real Payload Rule",
         "body": "Every layout is verified against production volumes: dozens of jobs, twenty runs each, multi-line failure text, and job names long enough to need truncation.",
         "section": "layout"
+      },
+      {
+        "name": "The Flat Console Rule",
+        "body": "If a surface does not float above the page, it gets a border and a tonal step, never a shadow.",
+        "section": "elevation"
       },
       {
         "name": "The Capability Gate Rule",
@@ -378,16 +386,16 @@
       },
       {
         "name": "The Tint Roles Rule",
-        "body": "soft(accent, alpha) carries state on a surface with three jobs: a wash near 0.05, a fill near 0.12 to 0.16, and a border near 0.24 to 0.3. A tint is never the only signal.",
-        "section": "colors"
+        "body": "`soft(accent, alpha)` carries state on a surface, and it has three jobs: a wash at roughly 0.05 for a tinted region, a fill at roughly 0.12 to 0.16 for chips and callouts, and a border at roughly 0.24 to 0.3. A tint is never the only signal; the label says what the state is. `softChipSx()` reads its label from the accent's dark ramp in light mode, because `main` on its own tint falls under 4.5:1.",
+        "section": "components"
       }
     ],
     "dos": [
       "Do carry status with a word and a color together, so it survives High Contrast Mode and color vision deficiency.",
-      "Do use monospace for identifiers, durations, counts, and paths, with tabular figures so columns align.",
+      "Do use monospace for identifiers, durations, counts, and paths, with `tnum` so columns align.",
       "Do mount one responsive layout at a time and verify it against production data volumes.",
       "Do keep prose between 65 and 75 characters per line.",
-      "Do give truncated content a recovery path that works by touch and keyboard. A title tooltip alone is desktop-only.",
+      "Do give truncated content a recovery path that works by touch and keyboard. A `title` tooltip alone is desktop-only.",
       "Do let capability absence remove an affordance cleanly. A read-only Pages deployment shows fewer buttons, never broken ones.",
       "Do put a write action next to the evidence that justifies it, and say in one sentence what it changes and what it leaves alone."
     ],
@@ -396,19 +404,18 @@
       "Don't restyle a pass/fail indicator toward the brand, or reuse status colors decoratively.",
       "Don't run the brand gradient behind text, or use pink as a text color.",
       "Don't render functional text below 11px, or a text input below 16px on mobile.",
-      "Don't add a colored left border above 1px to a card or list item. The 3px accent edge is reserved for section bands.",
+      "Don't add a colored left border above 1px to a card or list item. The 3px accent edge is reserved for section bands, where it is a system signature; used anywhere else it becomes the generic AI-callout tell.",
       "Don't let a single control become one tab stop per data point. Composite widgets get roving tabindex.",
-      "Don't describe Aster as autonomous repair, self-healing, or guaranteed root-cause detection.",
+      "Don't describe Aster as autonomous repair, self-healing, or guaranteed root-cause detection, in UI copy or anywhere else.",
       "Don't render a disabled control or a teaser for a capability this deployment does not have.",
       "Don't style the analysis conversation like a consumer chat app. Opposing bubbles, avatars, and typing theatrics do not belong on a console."
     ],
-    "provenance": "Aster was not built as an Impeccable project. The interface came first and this system was written by reading the implementation: the tokens in frontend/src/theme/, the components, and the rules already recorded in docs/brand.md. It is normative going forward while the code is brought up to it incrementally.",
+    "provenance": "Aster was not built as an Impeccable project. The interface came first, and this document was written afterward by reading the implementation: the tokens in `frontend/src/theme/`, the components, and the rules already recorded in `docs/brand.md`. So it is part description and part intent. It describes the system the code already has, and it states the rules that system implies, which the code does not yet meet everywhere.\n\nThat makes it normative going forward. New work is held to these rules, and the bundled detector reads this file to judge changed files. Existing code is being brought up to them incrementally rather than in one pass.",
     "knownGaps": [
-      "Accent edge reserved for bands: 3px borderLeft on insets in LabeledBlock and ChatFixDialog.",
-      "aria-current=\"page\" on exact match only: NavRail marks the active section page on nested routes.",
-      "The Tint Roles Rule: soft() is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating.",
-      "The operator surfaces are documented from the implementation but have not been audited for accessibility, responsive behavior, or performance. Reach them locally with make dev-actions (AUTH_MODE=dev)."
+      "Accent edge reserved for bands: 3px `borderLeft` on insets in `LabeledBlock`",
+      "The Tint Roles Rule: `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating",
+      "A comprehensive accessibility, responsive, and performance audit of the operator surfaces remains outstanding. Reaching them locally needs `make dev-actions`, which serves the built SPA with `AUTH_MODE=dev` and authenticates every request as an admin."
     ],
-    "operatorSurfaces": "Signing in adds the write surfaces, the analysis conversation, and two operator-only pages. They are the same console, not a separate product. The character is efficient rather than ceremonial: a maintainer reaching for Resolve failure already knows what they are doing, so actions sit inline next to their evidence, state what they change in one sentence, and get out of the way. Capability, not layout, decides what renders."
+    "operatorSurfaces": "Everything above is visible to anyone. A signed-in maintainer additionally gets the write surfaces, the analysis conversation, and two operator-only pages. They are the same console, not a separate product: the same bands, hairlines, flat surfaces, and monospace rules apply.\n\nThe character is efficient rather than ceremonial. A maintainer reaching for Resolve failure or Draft issue already knows what they are doing, so the console does not stage a confirmation ritual around them. Actions sit inline where the evidence is, they state what they will do in one sentence, and they get out of the way. Weight is carried by the copy, not by the chrome.\n\nCapability, not layout, decides what appears. The Pages deployment has no server, so these surfaces do not render at all there, and the read-only console stays whole rather than showing disabled controls."
   }
 }
