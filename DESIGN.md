@@ -290,7 +290,7 @@ The character is efficient rather than ceremonial. A maintainer reaching for Res
 Capability, not layout, decides what appears. The Pages deployment has no server, so these surfaces do not render at all there, and the read-only console stays whole rather than showing disabled controls.
 
 #### Action bar
-A segmented row of text buttons under a cause or failure: radius 0, divided by 1px `borderLeft` rules, with `&:first-of-type` dropping its rule and left padding. Buttons are 44px tall on mobile and 36px from `sm` up, and the row wraps with a 1px `rowGap`. It reads as one ruled control strip rather than a cluster of separate buttons, which is why it survives sitting directly on a dense page.
+A segmented row of text buttons under a cause or failure: radius 0, divided by 1px `borderLeft` rules, with `&:first-of-type` dropping its rule and left padding. Buttons are 44px tall on mobile and 36px from `sm` up, and the row wraps with an 8px gap. It reads as one ruled control strip rather than a cluster of separate buttons, which is why it survives sitting directly on a dense page.
 
 #### Action dialogs
 Opened by the action bar. The header is the same `sectionBandSx()` band the page uses, so an overlay reads as a section of the page it came from. Body and actions share the `dialogGutter` (2.5), and the paper is squared and flat with a 1px divider border and no background image. Headers show the title without explanatory subtitles; confirmation consequences, warnings, and live status stay in the body.
@@ -305,6 +305,12 @@ Reports whether a generated remediation verified against pinned source. A border
 
 #### Analysis chat
 A bounded conversation about one published analysis. User turns and agent turns are separated by tint and alignment rather than by opposing bubbles: the console does not do chat-app styling. Evidence citations appear as monospace path and line references inside a 1px accent rule. Grounding state, evidence warnings, and fix eligibility each get a tinted callout rather than a modal, so the conversation stays readable top to bottom.
+
+The composer presents **Guided investigation** and **Custom question** as two persistent tabs. Guided entry is the default for new test, build-failure, and individual-cause conversations, including those with only a prepared finding. Existing operator conversations open for a custom follow-up. Whole-pattern conversations retain their question composer.
+
+- **Form:** guided entry pairs a short task description with **Desired outcome (optional)**; custom entry uses **Your question**. Visible and accessible labels match. Each mode retains its draft when switched. Placeholder text uses opaque secondary text; length feedback appears only near the limit.
+- **Actions:** use visible text, **Start investigation**, **Send question**, or **Continue investigation**, for the current task. Starting an investigation requires submission. **Use this finding in a fix proposal** stays with the resulting finding as a separate action.
+- **Layout and focus:** tabs share a ruled row, have a 44px minimum height, and expose selection with an underline and tab semantics. A 2px inward focus outline remains visible with reduced motion. The two-row input grows to five rows and uses 16px text below `sm` or with a coarse pointer. The primary button fills the row below `sm` and aligns right at `sm` and wider. Running requests keep the composer field read-only and its tabs and submit button focusable while blocking edits and resubmission.
 
 #### Trace ledger
 Analysis traces reuse the ledger row exactly: hairline dividers, monospace data columns, one row per record. An operator page earns no separate table language.
@@ -364,6 +370,6 @@ Two rules are not yet satisfied everywhere. Each is a tracked follow-up, listed 
 | Accent edge reserved for bands | 3px `borderLeft` on insets in `LabeledBlock` |
 | The Tint Roles Rule | `soft()` is called at many distinct alphas between 0.025 and 0.5; the three documented roles need consolidating |
 
-The operator surfaces have not been audited. They are documented here from the implementation, but the accessibility, responsive, and performance pass that covered the public views has not yet run against them. Reaching them locally needs `make dev-actions`, which serves the built SPA with `AUTH_MODE=dev` and authenticates every request as an admin.
+A comprehensive accessibility, responsive, and performance audit of the operator surfaces remains outstanding. Reaching them locally needs `make dev-actions`, which serves the built SPA with `AUTH_MODE=dev` and authenticates every request as an admin.
 
 The color rules above are already enforced: `docs/brand.md` and `frontend/src/theme/tokens.ts` are the authority for those, and the interface matches them.
