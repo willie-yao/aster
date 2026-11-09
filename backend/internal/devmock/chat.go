@@ -100,6 +100,10 @@ func (c *Chat) create(ref analysischat.AnalysisRef, login string, prepared bool)
 		message.Content = "The published conclusion for this failure is reproduced below. " +
 			"Ask a follow-up question to probe it.\n\n" + message.Content
 		session.view.Messages = append(session.view.Messages, message)
+		session.view.Attempts = append(session.view.Attempts, analysischat.Attempt{
+			RequestID: message.RequestID, Question: analysischat.PreparedCauseQuestion, Outcome: attemptSucceeded,
+			CreatedAt: message.CreatedAt, UpdatedAt: message.CreatedAt,
+		})
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

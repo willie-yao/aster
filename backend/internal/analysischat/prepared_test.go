@@ -1,9 +1,11 @@
 package analysischat
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +26,31 @@ func TestPreparedCauseFindingsRejectDifferentGeneration(t *testing.T) {
 	}
 	if loaded.Generation != "two" || len(loaded.Findings) != 0 {
 		t.Fatalf("loaded = %+v", loaded)
+	}
+}
+
+func TestPreparedCauseGenerationRejectsPreviousTask(t *testing.T) {
+	const previousQuestion = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision. Historical source evidence does not establish current remediation state."
+	payload, err := json.Marshal([]string{"runtime", previousQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousGeneration := hashBytes(payload)
+	generation := PreparedCauseGeneration("runtime")
+	if previousGeneration == generation {
+		t.Fatal("the guided task reused the previous preparation generation")
+	}
+	path := filepath.Join(t.TempDir(), PreparedCauseFindingsFilename)
+	if err := SavePreparedCauseFindings(path, PreparedCauseFindings{
+		Generation: previousGeneration,
+		Findings:   map[string]PreparedCauseFinding{"old": {Reply: Reply{Answer: "Old cause check."}}},
+		Failures:   map[string]PreparedCauseFailure{"old-failure": {AttemptedAt: "2026-08-25T00:00:00Z"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadPreparedCauseFindings(path, generation)
+	if err != nil || len(loaded.Findings) != 0 || len(loaded.Failures) != 0 || loaded.Generation != generation {
+		t.Fatalf("loaded=%+v err=%v", loaded, err)
 	}
 }
 
@@ -72,9 +99,20 @@ func TestPreparedCauseTurnWithoutFixTarget(t *testing.T) {
 	if turn.Scope != ScopeCause || turn.Question != PreparedCauseQuestion || turn.Pattern == nil || len(turn.EvidenceBuilds) == 0 || !turn.HistoricalSourceOnly {
 		t.Fatalf("turn = %+v", turn)
 	}
-	const original = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision."
-	if PreparedCauseQuestion != original+" Historical source evidence does not establish current remediation state." {
-		t.Fatalf("prepared question changed unexpectedly: %q", PreparedCauseQuestion)
+	question := strings.Join(strings.Fields(turn.Question), " ")
+	for _, want := range []string{
+		"Investigate a fix for this causal group", "newest later completed run",
+		"cause still appears", "trigger changed", "evidence of recovery",
+		"A passing run alone does not prove a fix", "No desired outcome supplied",
+		"label a narrow provisional outcome", "not operator intent or permission to change policy",
+		"Follow the fix-investigation guidance", "preserving test purpose, coverage, assertions, and version policy",
+		"Cite the strongest direct evidence", "challenge it and propose a revision",
+		"Historical source evidence does not establish current remediation state",
+		"current-source or policy gap before implementation",
+	} {
+		if !strings.Contains(question, want) {
+			t.Errorf("prepared question missing %q", want)
+		}
 	}
 }
 
@@ -127,14 +165,19 @@ func TestServiceCreateSeedsPreparedCauseFindingWithoutUsingATurn(t *testing.T) {
 	if session.TurnsUsed != 0 || len(session.Messages) != 1 || session.Messages[0].RequestID == "" || session.Messages[0].StopReason != "rounds" {
 		t.Fatalf("session = %+v", session)
 	}
-	if len(session.Attempts) != 1 || session.Attempts[0].Outcome != requestSucceeded || session.Attempts[0].Turn != 0 {
+	if message := session.Messages[0]; message.Role != "assistant" || !message.Prepared || message.Actor != "" {
+		t.Fatalf("prepared message acquired operator intent: %+v", message)
+	}
+	if len(session.Attempts) != 1 || session.Attempts[0].Outcome != requestSucceeded || session.Attempts[0].Turn != 0 ||
+		session.Attempts[0].Actor != "" || session.Attempts[0].Question != PreparedCauseQuestion {
 		t.Fatalf("attempts = %+v", session.Attempts)
 	}
 	candidate, err := service.AnalysisFixCandidate(session.ID, "Alice", session.Messages[0].RequestID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Analysis.Scope != ScopeCause || candidate.FixTarget.TestName != "TestCluster" || len(candidate.ArtifactCitations) != 1 {
+	if candidate.Analysis.Scope != ScopeCause || candidate.FixTarget.TestName != "TestCluster" || len(candidate.ArtifactCitations) != 1 ||
+		candidate.UserRequest != "" || candidate.AssistantAnswer != session.Messages[0].Content {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 }

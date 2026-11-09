@@ -77,8 +77,8 @@ const analysisChatFixInvestigation = `
 
 ## Investigating a fix
 
-Apply only when the operator asks to investigate a fix; other questions keep
-their normal style.
+Apply when the operator or the engine-prepared task asks to investigate a fix;
+other questions keep their normal style.
 
 Use "Intended result", "Change direction", and "Next step or remaining gap"
 inside the existing answer. Mark verified facts and assumptions within the text.

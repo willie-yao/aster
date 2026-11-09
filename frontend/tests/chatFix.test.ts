@@ -75,8 +75,8 @@ test("prepared cause findings are labeled and remain immediately fix-eligible", 
   const chat = source("src/components/AnalysisChat.tsx");
   const types = source("src/types/analysisChat.ts");
   assert.match(types, /prepared\?: boolean/);
-  assert.match(chat, /message\.prepared \? "Prepared finding" : "Analysis agent"/);
-  assert.match(chat, /Generated during the scheduled analysis run/);
+  assert.match(chat, /message\.prepared \? "Prepared investigation" : "Analysis agent"/);
+  assert.match(chat, /Prepared automatically from historical evidence/);
   assert.match(chat, /void createPreparedSession\(\)/);
   assert.match(chat, /chatFixEnabled && fixEligible && message\.request_id/);
 });

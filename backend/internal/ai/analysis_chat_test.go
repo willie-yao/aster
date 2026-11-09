@@ -3658,8 +3658,9 @@ func TestAnalysisChatPreparedCauseUsesHistoricalSourceWithoutCurrentLookup(t *te
 	}
 	for _, want := range []string{
 		"source_id `primary`:", historicalRevision,
-		"newest later completed run", "evidence of recovery", "challenge it and propose a revision",
-		"Historical source evidence does not establish current remediation state.",
+		"newest", "later completed run", "evidence of recovery", "challenge it and propose a revision",
+		"Investigate a fix for this causal group", "No desired outcome supplied",
+		"engine-prepared task asks to investigate a fix", "Historical source evidence does not establish current remediation state",
 	} {
 		if !strings.Contains(request, want) {
 			t.Fatalf("prepared request missing %q: %s", want, request)
@@ -4095,7 +4096,7 @@ func TestAnalysisChatFixInvestigationPromptContract(t *testing.T) {
 	}
 	guidance := strings.Join(strings.Fields(analysisChatFixInvestigation), " ")
 	for _, want := range []string{
-		"Apply only when the operator asks to investigate a fix",
+		"Apply when the operator or the engine-prepared task asks to investigate a fix",
 		"other questions keep their normal style",
 		`"Intended result", "Change direction", and "Next step or remaining gap"`,
 		"inside the existing answer",
@@ -4144,6 +4145,11 @@ func TestAnalysisChatFixInvestigationUsesExistingAnswerEnvelope(t *testing.T) {
 			answer:   "Intended result: Inferred outcome: prevent the observed failure.\nChange direction: unverified until the causal source is available.\nNext step or remaining gap: obtain the missing artifact and pinned source; no patch has been generated.",
 		},
 		{
+			name:     "engine-prepared investigation",
+			question: analysischat.PreparedCauseQuestion,
+			answer:   "Intended result: Inferred outcome: prevent the observed failure without changing test policy.\nChange direction: historical source supports a candidate, pending current source verification.\nNext step or remaining gap: verify current applicability and the behavioral test before implementation.",
+		},
+		{
 			name:     "ordinary explanation",
 			question: "Explain the current conclusion.",
 			answer:   "The published analysis links the timeout to the controller exit.",
@@ -4158,6 +4164,10 @@ func TestAnalysisChatFixInvestigationUsesExistingAnswerEnvelope(t *testing.T) {
 			server.push(http.StatusOK, chatRespFinal(string(payload)))
 			agent := newAnalysisChatAgentForTest(t, server.URL, &fakeBrowser{}, AnalysisChatOptions{MaxIters: 2, Timeout: 10 * time.Second})
 			turn := analysisChatTurn()
+			if tc.name == "engine-prepared investigation" {
+				turn = causeAnalysisChatTurn()
+				turn.HistoricalSourceOnly = true
+			}
 			turn.Question = tc.question
 			reply, err := agent.Reply(t.Context(), turn)
 			if err != nil || reply.Answer != tc.answer || reply.ToolCalls != 0 || reply.ProposedRevision != nil {

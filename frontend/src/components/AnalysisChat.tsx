@@ -311,7 +311,7 @@ function AssistantMessage({
       >
         <AutoAwesome sx={{ color: "primary.main", fontSize: 17 }} />
         <Typography variant="label" sx={{ fontWeight: 700, color: "text.primary" }}>
-          {message.prepared ? "Prepared finding" : "Analysis agent"}
+          {message.prepared ? "Prepared investigation" : "Analysis agent"}
         </Typography>
         <Chip
           size="small"
@@ -335,7 +335,7 @@ function AssistantMessage({
           <Typography variant="caption" color="textSecondary">
             {historical
               ? "Prepared for this conversation's original evidence snapshot."
-              : "Generated during the scheduled analysis run. Review or challenge it before opening a Fix proposal."}
+              : "Prepared automatically from historical evidence. Review its findings and any inferred outcome before opening a Fix proposal."}
           </Typography>
         )}
         {unverified && (

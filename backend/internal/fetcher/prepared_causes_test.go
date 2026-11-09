@@ -129,6 +129,10 @@ func TestPrepareCauseFindingsCachesSuccessfulAnswer(t *testing.T) {
 	if runner.calls != 1 {
 		t.Fatalf("calls = %d", runner.calls)
 	}
+	if len(runner.turns) != 1 || runner.turns[0].Question != analysischat.PreparedCauseQuestion ||
+		!runner.turns[0].HistoricalSourceOnly || len(runner.turns[0].History) != 0 {
+		t.Fatalf("prepared turns = %+v", runner.turns)
+	}
 	generation := analysischat.PreparedCauseGeneration("runtime")
 	state, err := analysischat.LoadPreparedCauseFindings(filepath.Join(dir, analysischat.PreparedCauseFindingsFilename), generation)
 	if err != nil {

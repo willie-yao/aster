@@ -25,8 +25,14 @@ export function buildFixInvestigationQuestion(outcome: string): string {
   return question;
 }
 
+function hasOperatorActivity(session: AnalysisChatSession): boolean {
+  return Boolean(session.active) || session.turns_used > 0 ||
+    session.messages.some((message) => message.role === "user") ||
+    Boolean(session.attempts?.some((attempt) => (attempt.turn ?? 0) > 0 || attempt.actor?.trim()));
+}
+
 export function analysisChatDefaultComposerMode(session: AnalysisChatSession | null): "guided" | "question" {
-  return session?.active || session?.attempts?.length || session?.messages.some((message) => message.role === "user")
+  return session && (hasOperatorActivity(session) || session.messages.some((message) => message.prepared))
     ? "question"
     : "guided";
 }
@@ -345,21 +351,24 @@ export function analysisChatMarker(state: {
   restoring: boolean;
 }): AnalysisChatMarker | null {
   if (!state.authenticated || state.expanded) return null;
-  if (state.session) {
-    const login = state.session.created_by?.trim();
+  if (state.session && hasOperatorActivity(state.session)) {
+    const login = state.session.messages.find((message) => message.role === "user" && message.actor?.trim())?.actor?.trim() ||
+      state.session.attempts?.find((attempt) => attempt.actor?.trim())?.actor?.trim() ||
+      state.session.active?.actor?.trim();
     return {
       kind: "investigated",
       label: login ? `Investigated by ${login}` : "Investigated",
       detail: login
-        ? `${login} started a shared investigation of this analysis.`
-        : "A shared investigation of this analysis is already open.",
+        ? `${login} asked about this analysis.`
+        : "An operator has started a shared investigation of this analysis.",
     };
   }
-  if (!state.preparedFinding || state.restoring) return null;
+  const prepared = state.session?.messages.some((message) => message.prepared);
+  if (!prepared && (!state.preparedFinding || state.restoring)) return null;
   return {
     kind: "prepared",
-    label: "Finding ready",
-    detail: "The engine prepared a first answer for this cause. It may challenge the published root cause rather than confirm it.",
+    label: "Investigation ready",
+    detail: "Prepared automatically from the available failure evidence. Review the findings and any inferred outcome before requesting a fix.",
   };
 }
 
