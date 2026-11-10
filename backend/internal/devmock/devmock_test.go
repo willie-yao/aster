@@ -191,7 +191,7 @@ func TestChatTurnRecordsSucceededAttempt(t *testing.T) {
 }
 
 func TestChatPreparedFindingCarriesRequestID(t *testing.T) {
-	chat, _ := newTestChat()
+	chat, clock := newTestChat()
 	ref := analysischat.AnalysisRef{Scope: analysischat.ScopeCause, JobID: "job", PatternID: "pattern", CausalGroupID: "cause"}
 
 	session, err := chat.CreatePrepared(ref, "mock-admin", "")
@@ -202,6 +202,17 @@ func TestChatPreparedFindingCarriesRequestID(t *testing.T) {
 	// request id, as a real prepared finding does.
 	if len(session.Messages) != 1 || !session.Messages[0].Prepared || !strings.HasPrefix(session.Messages[0].RequestID, "prepared-") {
 		t.Fatalf("prepared transcript = %+v, want one prepared answer with a prepared- request id", session.Messages)
+	}
+	message := session.Messages[0]
+	if message.Role != "assistant" || message.Actor != "" || !strings.Contains(message.Content, "no model was called") {
+		t.Fatalf("prepared message = %+v", message)
+	}
+	wantAttempt := analysischat.Attempt{
+		RequestID: message.RequestID, Question: analysischat.PreparedCauseQuestion, Outcome: attemptSucceeded,
+		CreatedAt: timestamp(clock.Now()), UpdatedAt: timestamp(clock.Now()),
+	}
+	if len(session.Attempts) != 1 || session.Attempts[0] != wantAttempt || session.TurnsUsed != 0 || session.Active != nil {
+		t.Fatalf("prepared attempts=%+v turns=%d active=%+v", session.Attempts, session.TurnsUsed, session.Active)
 	}
 }
 

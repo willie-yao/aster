@@ -239,30 +239,38 @@ test("a failed prepared lookup surfaces as an error rather than a false answer",
   await assert.rejects(() => lookupPreparedAnalysisChatFindings([firstCause]), AnalysisChatAPIError);
 });
 
-test("a shared conversation supersedes the prepared marker on the collapsed control", () => {
+test("prepared investigations stay neutral until an operator contributes", () => {
   const base = {
-    authenticated: true,
-    expanded: false,
-    session: null,
-    preparedFinding: true,
-    restoring: false,
+    authenticated: true, expanded: false, session: null,
+    preparedFinding: true, restoring: false,
   };
-
-  assert.deepEqual(analysisChatMarker(base), {
+  const marker = {
     kind: "prepared",
-    label: "Finding ready",
-    detail:
-      "The engine prepared a first answer for this cause. It may challenge the published root cause rather than confirm it.",
-  });
+    label: "Investigation ready",
+    detail: "Prepared automatically from the available failure evidence. Review the findings and any inferred outcome before requesting a fix.",
+  };
+  assert.deepEqual(analysisChatMarker(base), marker);
 
-  // Opening a prepared cause is what creates the session, and the finding
-  // becomes its first message, so the weaker signal must not linger.
-  const investigated = analysisChatMarker({ ...base, session });
-  assert.equal(investigated?.kind, "investigated");
-  assert.equal(investigated?.label, "Investigated by alice");
+  const prepared: AnalysisChatSession = {
+    ...session, created_by: "alice", turns_used: 0,
+    messages: [{ role: "assistant", prepared: true, request_id: "prepared", content: "Prepared investigation", created_at: session.created_at }],
+    attempts: [{ request_id: "prepared", outcome: "succeeded", turn: 0 }],
+  };
+  assert.deepEqual(analysisChatMarker({ ...base, session: prepared, preparedFinding: false }), marker);
+  assert.equal(analysisChatMarker({ ...base, session: { ...prepared, messages: [], attempts: [] }, preparedFinding: false }), null);
 
-  const anonymousSession = analysisChatMarker({ ...base, session: { ...session, created_by: "  " } });
-  assert.equal(anonymousSession?.label, "Investigated");
+  for (const outcome of ["failed", "cancelled"] as const) {
+    const continued = { ...prepared, attempts: [...prepared.attempts!, { request_id: "operator", outcome, actor: "bob", turn: 1 }] };
+    assert.equal(analysisChatMarker({ ...base, session: continued })?.label, "Investigated by bob");
+  }
+  const active = { ...prepared, active: { request_id: "active", actor: "bob", phase: "investigating" as const, updated_at: session.updated_at } };
+  assert.equal(analysisChatMarker({ ...base, session: active })?.label, "Investigated by bob");
+
+  const continued = { ...prepared, messages: [...prepared.messages, { role: "user" as const, actor: "bob", content: "Use a narrower goal", created_at: session.updated_at }] };
+  assert.equal(analysisChatMarker({ ...base, session: continued })?.label, "Investigated by bob");
+  assert.equal(analysisChatMarker({ ...base, session })?.label, "Investigated by alice");
+  const unnamed = { ...session, messages: session.messages.map((message) => ({ ...message, actor: undefined })) };
+  assert.equal(analysisChatMarker({ ...base, session: unnamed })?.label, "Investigated");
 });
 
 test("a cause with nothing waiting and a visitor who cannot act get no marker", () => {

@@ -86,22 +86,21 @@ function source(file: string): string {
 test("a collapsed cause says a prepared finding is waiting", () => {
   const html = render(true);
 
-  assert.match(html, /Finding ready/);
-  // The wording must not claim a conclusion. A prepared finding is one
-  // pre-computed first answer and may challenge the published cause.
+  assert.match(html, /Investigation ready/);
+  // Preparation does not establish an operator-approved outcome.
   assert.doesNotMatch(html, /Investigated/);
-  assert.match(html, /may challenge the published root cause/);
+  assert.match(html, /Review the findings and any inferred outcome/);
 });
 
 test("a cause with nothing waiting stays unmarked", () => {
   const html = render(false);
 
   assert.match(html, /Investigate cause/);
-  assert.doesNotMatch(html, /Finding ready/);
+  assert.doesNotMatch(html, /Investigation ready/);
 });
 
 test("an anonymous visitor sees no marker on a control that only prompts sign-in", () => {
-  assert.doesNotMatch(render(true, visitor), /Finding ready/);
+  assert.doesNotMatch(render(true, visitor), /Investigation ready/);
 });
 
 test("the marker is resolved read-only, never by creating a shared session", () => {

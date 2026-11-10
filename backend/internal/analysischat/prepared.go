@@ -18,7 +18,16 @@ const (
 	// PreparedCauseFindingsFilename is the private fetcher-owned cause finding cache.
 	PreparedCauseFindingsFilename = "prepared_cause_findings.json"
 	preparedCauseFindingsVersion  = 1
-	PreparedCauseQuestion         = "Investigate this causal group across its failed member builds and the newest later completed run when available. Determine whether the cause still appears, was not reproduced because the trigger changed, or has evidence of recovery. A passing run alone does not prove a fix. Cite the strongest direct evidence. If the published cause or remediation is wrong, challenge it and propose a revision. Historical source evidence does not establish current remediation state."
+	PreparedCauseQuestion         = `Investigate a fix for this causal group across its failed member builds and the newest
+later completed run when available. Determine whether the cause still appears,
+was not reproduced because the trigger changed, or has evidence of recovery.
+A passing run alone does not prove a fix. No desired outcome supplied. Infer and
+label a narrow provisional outcome; it is not operator intent or permission to
+change policy. Follow the fix-investigation guidance, preserving test purpose,
+coverage, assertions, and version policy. Cite the strongest direct evidence.
+If the published cause or remediation is wrong, challenge it and propose a revision.
+Historical source evidence does not establish current remediation state; name any
+current-source or policy gap before implementation.`
 )
 
 // PreparedCauseFinding is one engine-generated first answer for a cause chat.

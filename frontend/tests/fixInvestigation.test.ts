@@ -43,16 +43,18 @@ function render(ref: AnalysisChatReference, capabilities = chatOnly, auth = oper
         createElement(AnalysisChat, { analysisRef: ref, fileCtx: {} })))));
 }
 
-test("fresh and prepared-only conversations default to guided investigation", () => {
+test("fresh conversations default to guided and prepared investigations open for follow-up", () => {
   const empty: AnalysisChatSession = {
     id: "session", analysis: causeRef, messages: [], turns_used: 0, max_turns: 10,
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", expires_at: "2026-01-01T01:00:00Z",
   };
   assert.equal(analysisChatDefaultComposerMode(null), "guided");
   assert.equal(analysisChatDefaultComposerMode(empty), "guided");
-  assert.equal(analysisChatDefaultComposerMode({ ...empty, messages: [{
-    role: "assistant", prepared: true, request_id: "prepared", content: "Prepared finding", created_at: empty.created_at,
-  }] }), "guided");
+  const prepared: AnalysisChatSession = { ...empty, messages: [{
+    role: "assistant", prepared: true, request_id: "prepared", content: "Prepared investigation", created_at: empty.created_at,
+  }], attempts: [{ request_id: "prepared", outcome: "succeeded", turn: 0 }] };
+  assert.equal(analysisChatDefaultComposerMode(prepared), "question");
+  assert.equal(analysisChatDefaultComposerMode({ ...prepared, attempts: [] }), "question");
 });
 
 test("restored operator conversations and interrupted attempts default to custom questions", () => {
@@ -64,7 +66,7 @@ test("restored operator conversations and interrupted attempts default to custom
     role: "user", content: "Check my hypothesis", created_at: empty.created_at,
   }] }), "question");
   for (const outcome of ["pending", "succeeded", "failed", "cancelled", "timed_out", "unknown"] as const) {
-    assert.equal(analysisChatDefaultComposerMode({ ...empty, attempts: [{ request_id: "attempt", outcome }] }), "question", outcome);
+    assert.equal(analysisChatDefaultComposerMode({ ...empty, attempts: [{ request_id: "attempt", outcome, turn: 1, actor: "operator" }] }), "question", outcome);
   }
   assert.equal(analysisChatDefaultComposerMode({ ...empty, active: {
     request_id: "active", phase: "investigating", updated_at: empty.updated_at,
