@@ -7,13 +7,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ThemeProvider, type Theme } from "@mui/material/styles";
 import {
   analysisChatDefaultComposerMode,
+  analysisChatPreparedInvestigation,
   buildFixInvestigationQuestion,
   limitAnalysisChatQuestion,
   maxFixInvestigationOutcomeBytes,
   sendAnalysisChatMessage,
   streamAnalysisChatMessage,
 } from "../src/lib/analysisChat.js";
-import type { AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
+import type { AnalysisChatMessage, AnalysisChatReference, AnalysisChatSession } from "../src/types/analysisChat.js";
 import type { AuthState } from "../src/hooks/useAuth.js";
 import type { Capabilities } from "../src/types/capabilities.js";
 import { withSSR } from "./helpers/ssr.js";
@@ -22,9 +23,16 @@ const encoder = new TextEncoder();
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-const { AnalysisChat, AuthContext, CapabilitiesContext, defaultTheme } = await withSSR(async (vite) => ({
+const { AnalysisChat, PreparedInvestigationReady, AuthContext, CapabilitiesContext, defaultTheme } = await withSSR(async (vite) => ({
   ...await vite.ssrLoadModule("/src/components/AnalysisChat.tsx") as {
     AnalysisChat: (props: { analysisRef: AnalysisChatReference; fileCtx: Record<string, unknown> }) => ReturnType<typeof createElement>;
+    PreparedInvestigationReady: (props: {
+      message: AnalysisChatMessage;
+      fixEnabled: boolean;
+      sourceUnavailable: boolean;
+      onUseForFix: () => void;
+      onDifferentOutcome: () => void;
+    }) => ReturnType<typeof createElement>;
   },
   ...await vite.ssrLoadModule("/src/hooks/useAuth.ts") as { AuthContext: Context<AuthState> },
   ...await vite.ssrLoadModule("/src/hooks/useCapabilities.ts") as { CapabilitiesContext: Context<Capabilities> },
@@ -43,7 +51,7 @@ function render(ref: AnalysisChatReference, capabilities = chatOnly, auth = oper
         createElement(AnalysisChat, { analysisRef: ref, fileCtx: {} })))));
 }
 
-test("fresh conversations default to guided and prepared investigations open for follow-up", () => {
+test("fresh and prepared-only conversations keep guided investigation selected", () => {
   const empty: AnalysisChatSession = {
     id: "session", analysis: causeRef, messages: [], turns_used: 0, max_turns: 10,
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", expires_at: "2026-01-01T01:00:00Z",
@@ -53,8 +61,50 @@ test("fresh conversations default to guided and prepared investigations open for
   const prepared: AnalysisChatSession = { ...empty, messages: [{
     role: "assistant", prepared: true, request_id: "prepared", content: "Prepared investigation", created_at: empty.created_at,
   }], attempts: [{ request_id: "prepared", outcome: "succeeded", turn: 0 }] };
-  assert.equal(analysisChatDefaultComposerMode(prepared), "question");
-  assert.equal(analysisChatDefaultComposerMode({ ...prepared, attempts: [] }), "question");
+  assert.equal(analysisChatDefaultComposerMode(prepared), "guided");
+  assert.equal(analysisChatDefaultComposerMode({ ...prepared, attempts: [] }), "guided");
+  assert.equal(analysisChatPreparedInvestigation(prepared), prepared.messages[0]);
+  const continued: AnalysisChatSession = { ...prepared, messages: [...prepared.messages, {
+    role: "user", actor: "operator", content: "Check another hypothesis", created_at: empty.created_at,
+  }] };
+  assert.equal(analysisChatDefaultComposerMode(continued), "question");
+  assert.equal(analysisChatPreparedInvestigation(continued), null);
+});
+
+test("only a nonblank prepared assistant answer completes an untouched investigation", () => {
+  const empty: AnalysisChatSession = {
+    id: "session", analysis: causeRef, messages: [], turns_used: 0, max_turns: 10,
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", expires_at: "2026-01-01T01:00:00Z",
+  };
+  const message = {
+    role: "assistant" as const, prepared: true, request_id: "prepared",
+    content: "Intended result: Inferred outcome: prevent the observed failure.", created_at: empty.created_at,
+  };
+  const prepared: AnalysisChatSession = {
+    ...empty, messages: [message],
+    attempts: [{ request_id: "prepared", outcome: "succeeded", turn: 0 }],
+  };
+  const original = structuredClone(prepared);
+  assert.equal(analysisChatPreparedInvestigation(prepared), message);
+  assert.deepEqual(prepared, original);
+  assert.equal(analysisChatPreparedInvestigation(null), null);
+  assert.equal(analysisChatPreparedInvestigation(empty), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, messages: [{ ...message, content: " \n\t" }] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, messages: [{ ...message, prepared: false }] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, messages: [{ ...message, role: "user" }] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, turns_used: 1 }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, messages: [message, {
+    role: "user", content: "Investigate a different outcome", created_at: empty.created_at,
+  }] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, attempts: [
+    ...prepared.attempts!, { request_id: "operator", outcome: "failed", turn: 1 },
+  ] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, attempts: [
+    ...prepared.attempts!, { request_id: "operator", outcome: "unknown", actor: "operator", turn: 0 },
+  ] }), null);
+  assert.equal(analysisChatPreparedInvestigation({ ...prepared, active: {
+    request_id: "active", phase: "investigating", updated_at: empty.updated_at,
+  } }), null);
 });
 
 test("restored operator conversations and interrupted attempts default to custom questions", () => {
@@ -71,6 +121,48 @@ test("restored operator conversations and interrupted attempts default to custom
   assert.equal(analysisChatDefaultComposerMode({ ...empty, active: {
     request_id: "active", phase: "investigating", updated_at: empty.updated_at,
   } }), "question");
+});
+
+test("the prepared ready view offers explicit next actions without starting another investigation", () => {
+  const calls = { fix: 0, differentOutcome: 0 };
+  const html = renderToStaticMarkup(createElement(ThemeProvider, { theme: defaultTheme },
+    createElement(PreparedInvestigationReady, {
+      message: { role: "assistant", prepared: true, request_id: "prepared", content: "Prepared result", created_at: "2026-01-01T00:00:00Z" },
+      fixEnabled: true, sourceUnavailable: false,
+      onUseForFix: () => { calls.fix++; },
+      onDifferentOutcome: () => { calls.differentOutcome++; },
+    })));
+  assert.match(html, /Prepared investigation is ready/);
+  assert.match(html, /Use this finding in a fix proposal/);
+  assert.match(html, /<button[^>]*type="button"[^>]*>Investigate a different outcome<\/button>/);
+  assert.doesNotMatch(html, /<textarea|role="textbox"|Start investigation|Desired outcome/);
+  assert.deepEqual(calls, { fix: 0, differentOutcome: 0 });
+});
+
+test("prepared ready Fix actions retain capability, response, and source gates", () => {
+  const message: AnalysisChatMessage = {
+    role: "assistant", prepared: true, request_id: "prepared", content: "Prepared result", created_at: "2026-01-01T00:00:00Z",
+  };
+  for (const entry of [
+    { name: "disabled capability", message, fixEnabled: false, sourceUnavailable: false },
+    { name: "missing request", message: { ...message, request_id: undefined }, fixEnabled: true, sourceUnavailable: false },
+    { name: "blank response", message: { ...message, content: " \n\t" }, fixEnabled: true, sourceUnavailable: false },
+    { name: "missing source", message, fixEnabled: true, sourceUnavailable: true },
+  ]) {
+    const html = renderToStaticMarkup(createElement(ThemeProvider, { theme: defaultTheme },
+      createElement(PreparedInvestigationReady, {
+        message: entry.message, fixEnabled: entry.fixEnabled, sourceUnavailable: entry.sourceUnavailable,
+        onUseForFix: () => { assert.fail("rendering must not request a Fix"); },
+        onDifferentOutcome: () => { assert.fail("rendering must not start another investigation"); },
+      })));
+    assert.doesNotMatch(html, /Use this finding in a fix proposal/, entry.name);
+    assert.match(html, /Investigate a different outcome/, entry.name);
+    if (entry.sourceUnavailable) {
+      assert.match(html, /A Fix proposal is unavailable because Aster could not determine the exact source commit this build tested\./);
+    } else {
+      assert.doesNotMatch(html, /A Fix proposal is unavailable/, entry.name);
+    }
+  }
 });
 
 test("blank fix investigations ask the agent to infer and label a goal without granting policy authority", () => {

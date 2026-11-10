@@ -32,9 +32,12 @@ function hasOperatorActivity(session: AnalysisChatSession): boolean {
 }
 
 export function analysisChatDefaultComposerMode(session: AnalysisChatSession | null): "guided" | "question" {
-  return session && (hasOperatorActivity(session) || session.messages.some((message) => message.prepared))
-    ? "question"
-    : "guided";
+  return session && hasOperatorActivity(session) ? "question" : "guided";
+}
+
+export function analysisChatPreparedInvestigation(session: AnalysisChatSession | null): AnalysisChatMessage | null {
+  if (!session || hasOperatorActivity(session)) return null;
+  return session.messages.find((message) => message.role === "assistant" && message.prepared && message.content.trim()) ?? null;
 }
 
 export function analysisChatScopeLabel(ref: AnalysisChatReference): string {
