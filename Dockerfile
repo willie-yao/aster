@@ -37,9 +37,9 @@ COPY --from=agent-sandbox-fix-go /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:${PATH} \
     GOTOOLCHAIN=local
 RUN apk upgrade --no-cache \
- && apk add --no-cache ca-certificates git=2.54.0-r0 \
+ && apk add --no-cache ca-certificates git=2.54.1-r0 \
  && test "$(go env GOVERSION)" = "go1.26.8" \
- && test "$(git --version)" = "git version 2.54.0" \
+ && test "$(git --version)" = "git version 2.54.1" \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
  && test "$(opencode --version)" = "1.18.2"
@@ -61,10 +61,10 @@ ENTRYPOINT ["/usr/local/bin/fixexecutor"]
 # runtimes such as Agent Sandbox. It intentionally omits any coding-agent harness.
 FROM golang:1.26.8-alpine AS remote-fixer-runtime
 RUN apk upgrade --no-cache \
- && apk add --no-cache ca-certificates git=2.54.0-r0 \
+ && apk add --no-cache ca-certificates git=2.54.1-r0 \
  && addgroup -g 65532 padnonroot \
  && adduser -D -H -u 65532 -G padnonroot padnonroot \
- && test "$(git --version)" = "git version 2.54.0"
+ && test "$(git --version)" = "git version 2.54.1"
 COPY --from=build /out/fetcher /usr/local/bin/fetcher
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/server /usr/local/bin/server

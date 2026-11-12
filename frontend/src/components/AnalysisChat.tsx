@@ -36,6 +36,7 @@ import { useCapabilities } from "../hooks/useCapabilities";
 import {
   analysisChatActiveTurnLimitMessage,
   analysisChatDefaultComposerMode,
+  analysisChatPreparedInvestigation,
   analysisChatAttemptStatus,
   analysisChatFailureGuidance,
   analysisChatHistory,
@@ -625,6 +626,41 @@ export function AnalysisChatTranscript({
   });
 }
 
+export function PreparedInvestigationReady({
+  message, fixEnabled, sourceUnavailable, onUseForFix, onDifferentOutcome,
+}: {
+  message: AnalysisChatMessage;
+  fixEnabled: boolean;
+  sourceUnavailable: boolean;
+  onUseForFix: () => void;
+  onDifferentOutcome: () => void;
+}) {
+  const canProposeFix = fixEnabled && Boolean(message.request_id && message.content.trim());
+  return (
+    <Stack spacing={1}>
+      <Typography variant="body2" sx={{ fontWeight: 650 }}>Prepared investigation is ready</Typography>
+      <Typography variant="body2" color="textSecondary">
+        The finding is shown above. Choose how to continue.
+      </Typography>
+      {canProposeFix && sourceUnavailable && (
+        <Typography variant="caption" color="textSecondary">
+          A Fix proposal is unavailable because Aster could not determine the exact source commit this build tested.
+        </Typography>
+      )}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: { xs: "stretch", sm: "center" } }}>
+        {canProposeFix && !sourceUnavailable && (
+          <Button type="button" variant="contained" startIcon={<BuildOutlined />} onClick={onUseForFix} sx={touchTargetSx}>
+            Use this finding in a fix proposal
+          </Button>
+        )}
+        <Button type="button" color="inherit" onClick={onDifferentOutcome} sx={touchTargetSx}>
+          Investigate a different outcome
+        </Button>
+      </Stack>
+    </Stack>
+  );
+}
+
 export function AnalysisChat({
   analysisRef,
   fileCtx,
@@ -664,6 +700,7 @@ export function AnalysisChat({
   const [question, setQuestion] = useState("");
   const [composerMode, setComposerMode] = useState<"guided" | "question" | null>(null);
   const [desiredOutcome, setDesiredOutcome] = useState("");
+  const [guidedDraftOpen, setGuidedDraftOpen] = useState(false);
   const [draftContentHeight, setDraftContentHeight] = useState<number | null>(null);
   const [session, setSession] = useState<AnalysisChatSession | null>(null);
   const [restoring, setRestoring] = useState(false);
@@ -685,6 +722,7 @@ export function AnalysisChat({
     setQuestion("");
     setComposerMode(null);
     setDesiredOutcome("");
+    setGuidedDraftOpen(false);
     setDraftContentHeight(null);
   }, []);
   const createRequestIDRef = useRef(newAnalysisChatRequestID());
@@ -701,6 +739,7 @@ export function AnalysisChat({
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const turnLimitRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const preparedReadyRef = useRef<HTMLDivElement | null>(null);
   // Whether focus currently sits inside the chat panel. Removing a node does
   // not fire focusout, so this survives an in-flight control unmounting and is
   // what distinguishes orphaned focus from focus the operator moved away.
@@ -1022,18 +1061,6 @@ export function AnalysisChat({
 
   const turnLimitReached = analysisChatTurnLimitReached(session, pendingTurn !== null, turnLimitRejected);
 
-  // Cancel, Continue and the composer itself come and go with the turn state,
-  // and a removed node leaves focus on the body. When focus was ours and ended
-  // up orphaned, put it on whatever still stands.
-  useEffect(() => {
-    if (!expanded || !panelHadFocus.current) return;
-    if (document.activeElement !== document.body) return;
-    panelHadFocus.current = false;
-    (turnLimitReached ? turnLimitRef.current : composerInputRef.current)?.focus();
-  }, [busy, expanded, pendingTurn, turnLimitReached]);
-
-  if (!features.analysis_chat) return null;
-
   const turnUsage = session ? analysisChatTurnUsage(session) : null;
   const marker = analysisChatMarker({
     authenticated: authStatus === "authenticated",
@@ -1061,6 +1088,21 @@ export function AnalysisChat({
     (analysisRef.source === "build" || Boolean(analysisRef.junit_file));
   const causeFixEnabled = causeScope && Boolean(fixTarget);
   const exactFixEnabled = fixable && Boolean(features.junit_chat_fix) && (exactFailureAnalysis || causeFixEnabled);
+  const preparedMessage = analysisChatPreparedInvestigation(session);
+  const preparedReady = fixInvestigation && preparedMessage && !guidedDraftOpen && !investigationLocked && !turnLimitReached
+    ? preparedMessage : null;
+  const preparedReadyVisible = preparedReady !== null;
+
+  // When a focused control unmounts, keep keyboard focus inside the panel.
+  useEffect(() => {
+    if (!expanded || !panelHadFocus.current) return;
+    if (document.activeElement !== document.body) return;
+    panelHadFocus.current = false;
+    const target = turnLimitReached ? turnLimitRef.current : preparedReadyVisible ? preparedReadyRef.current : composerInputRef.current;
+    target?.focus();
+  }, [busy, expanded, guidedDraftOpen, pendingTurn, preparedReadyVisible, turnLimitReached]);
+
+  if (!features.analysis_chat) return null;
 
   function selectComposerMode(mode: "guided" | "question") {
     if (investigationLocked) return;
@@ -1070,7 +1112,7 @@ export function AnalysisChat({
 
   async function submit(nextQuestion?: string) {
     const value = (nextQuestion ?? pendingTurn?.question ?? draftQuestion).trim();
-    if (fixInvestigation && !investigationAvailable) return;
+    if (preparedReady || (fixInvestigation && !investigationAvailable)) return;
     if (!value || busy || restoring || turnLimitReached || session?.active) return;
     if (pendingTurn && pendingTurn.question !== value) {
       setError("The previous question may still be running. Select Continue before asking another question.");
@@ -1741,7 +1783,7 @@ export function AnalysisChat({
                 id={`${composerInputId}-panel`}
                 aria-labelledby={investigationAvailable && !turnLimitReached ? `${composerInputId}-${activeComposerMode}` : undefined}
               >
-                {fixInvestigation && !turnLimitReached && (
+                {fixInvestigation && !turnLimitReached && !preparedReady && (
                   <Typography variant="body2" color="textSecondary" sx={{ mb: 1.5, maxWidth: "68ch" }}>
                     Aster uses the evidence and source to recommend a change or identify what is missing.
                   </Typography>
@@ -1759,8 +1801,40 @@ export function AnalysisChat({
                   >
                     This conversation reached its attempt limit. Start a new conversation to keep asking.
                   </Alert>
+                ) : preparedReady ? (
+                  <Box
+                    ref={preparedReadyRef}
+                    tabIndex={-1}
+                    role="region"
+                    aria-label="Prepared investigation is ready"
+                    sx={{ "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 2 } }}
+                  >
+                    <PreparedInvestigationReady
+                      message={preparedReady}
+                      fixEnabled={exactFixEnabled}
+                      sourceUnavailable={session?.analysis.scope === "test" && !session.source_repository}
+                      onUseForFix={() => openFix(preparedReady)}
+                      onDifferentOutcome={() => {
+                        if (investigationLocked) return;
+                        setGuidedDraftOpen(true);
+                        setDraftContentHeight(null);
+                      }}
+                    />
+                  </Box>
                 ) : (
                   <>
+                    {fixInvestigation && preparedMessage && guidedDraftOpen && (
+                      <Button type="button" size="small" color="inherit"
+                        onClick={() => {
+                          if (investigationLocked) return;
+                          setGuidedDraftOpen(false);
+                          setDraftContentHeight(null);
+                        }}
+                        aria-disabled={investigationLocked || undefined}
+                        sx={{ ...touchTargetSx, mb: 0.75 }}>
+                        Back to prepared investigation
+                      </Button>
+                    )}
                     <Typography component="label" htmlFor={composerInputId} variant="body2" sx={{ display: "block", mb: 0.75 }}>
                       {fixInvestigation ? "Desired outcome (optional)" : "Your question"}
                     </Typography>
@@ -1778,6 +1852,7 @@ export function AnalysisChat({
                         );
                         setContinueMode(false);
                         if (fixInvestigation) {
+                          setGuidedDraftOpen(true);
                           setDesiredOutcome(limitAnalysisChatQuestion(event.target.value, maxFixInvestigationOutcomeBytes));
                         } else {
                           setQuestion(limitAnalysisChatQuestion(event.target.value));

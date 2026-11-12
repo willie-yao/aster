@@ -112,7 +112,7 @@ tool_versions=$(docker run --rm "${runtime_args[@]}" --entrypoint /bin/sh "$imag
 printf '%s\n' "$tool_versions"
 printf '%s\n' "$tool_versions" | grep -Fxq 'go version go1.26.8 linux/amd64'
 printf '%s\n' "$tool_versions" | grep -Fxq 'local'
-printf '%s\n' "$tool_versions" | grep -Fxq 'git version 2.54.0'
+printf '%s\n' "$tool_versions" | grep -Fxq 'git version 2.54.1'
 printf '%s\n' "$tool_versions" | grep -Fxq '1.18.2'
 
 # Revalidate the fixed ConfigMap CA mount contract before OpenCode starts.

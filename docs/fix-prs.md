@@ -52,7 +52,7 @@ Authenticated server deployments can turn one exact failed JUnit test or build-l
 
 Test, build-failure, and cause chats without a prepared answer start in **Guided investigation**. Select **Start investigation** to have Aster look for a supported change direction, or choose **Custom question** to supply your own hypothesis or instructions. After a response, use the question field to follow up. The optional desired outcome states what should be different; leaving it blank keeps the inferred goal provisional. The selected investigation question and any supplied outcome are retained as the operator request, while the model's inferred goal and recommendation remain assistant evidence.
 
-A prepared investigation is generated automatically from historical evidence and opens for follow-up. Its inferred outcome is a suggestion, not an operator request. Select **Guided investigation** to investigate a different outcome before choosing a finding for a fix proposal.
+A prepared investigation is generated automatically from historical evidence and opens in **Guided investigation** with its result ready. Its inferred outcome is a suggestion, not an operator request. Select **Investigate a different outcome** to open a guided draft, or **Custom question** to ask a follow-up. Neither selection starts another investigation until you submit.
 
 After a completed response, **Use this finding in a fix proposal** admits a separate persistent asynchronous preview request. It requires:
 
