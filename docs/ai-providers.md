@@ -42,7 +42,7 @@ The reusable workflow accepts provider coordinates from repository variables and
 ```yaml
 jobs:
   deploy:
-    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.12.0
+    uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.13.0
     with:
       project_dir: .
       ai-api: ${{ vars.AI_API }}
