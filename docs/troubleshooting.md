@@ -16,10 +16,10 @@ Start with the fetcher or workflow logs. Most first-deploy failures fall into th
 | Setup handoff warns that sampled builds have no JUnit | The selected jobs publish logs or another test format but no JUnit XML. | The engine can synthesize build-level failures, but test-level granularity is unavailable. Record the limitation during diagnostic authoring and use build-log and project-specific artifacts. |
 | Pages workflow cannot find `project.yaml` | `project_dir` does not match the consumer layout. | Use `.` for the repository root or the exact subdirectory in the deploy workflow. |
 | Dashboard assets return 404 | `branding.base_path` does not match the Pages repository. | Set it to `/<host-repo>` with no trailing slash. |
-| `Page unavailable` appears when opening another dashboard page | A page's JavaScript could not load, or the page could not render. Pages load their code on demand; an open tab may refer to assets replaced by a newer deployment. | Select **Retry** to reload the current page. If the error persists, check the browser console, failed asset requests, and deployment base path. |
+| `Page unavailable` appears when opening another dashboard page | A page's JavaScript could not load, or the page could not render. Pages load their code on demand; an open tab may refer to assets that a newer deployment replaced. | Select **Retry** to reload the current page. If the error persists, check the browser console, failed asset requests, and deployment base path. |
 | Pages site is not deployed | Pages is not configured to use GitHub Actions. | Enable Pages with `gh api .../pages -X POST -F build_type=workflow`. |
 | Private endpoint times out | The GitHub-hosted runner cannot reach the network. | Use Kubernetes-native mode, a self-hosted runner, or `skip-fetch` with committed data. |
-| Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses; use an intentional cache rebaseline if existing entries must be replaced. |
+| Analysis is generic | The project prompt lacks architecture, artifact layout, or real failure signatures. | Expand `prompts/system.md`. The update applies to new analyses. If existing entries need replacing, use an intentional cache rebaseline. |
 | Cached analysis came from the old provider | Existing reusable entries retain their provider provenance after a provider change. | Set a new cache generation for a reversible full rebaseline. |
 | `Propose fix` reports unavailable | The Agent Sandbox runtime is disabled, misconfigured, or its executor rejected the request. | Verify `agentSandbox.fixRuntime` Helm values, the executor image digest, provider Secret or gateway, allowed commands, and admission policy. |
 | A Fix preview reports that the model provider refused the request | HTTP 401 means the provider rejected the sandbox credential. HTTP 403 can instead mean credential access, model entitlement, organization policy, quota, or proxy or mesh authorization refused the request. | Review the provider diagnostic, including its Secret name/key, endpoint, model, and provider message. Correct the relevant credential or provider authorization, then select **Retry fix preview** to submit a fresh request. |
@@ -49,7 +49,7 @@ For deeper AI-loop behavior, see the troubleshooting section in [Agentic analysi
 
 ## Login fails with "oauth token exchange failed"
 
-The server could not trade the authorization code for a token. The reason is logged verbatim from GitHub:
+The server could not trade the authorization code for a token. The server logs GitHub's reason verbatim:
 
 ```bash
 kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange"
@@ -62,7 +62,7 @@ kubectl -n <namespace> logs deploy/<release>-server | grep "OAuth token exchange
 ⚠️  SESSION_KEY has leading or trailing whitespace and is used as written, ...
 ```
 
-Fixed-format credentials (OAuth client credentials and bearer tokens) are trimmed, because whitespace is never valid in them. Free-form secrets (`SESSION_KEY`, `EMAIL_SMTP_PASSWORD`, `AUTH_PROXY_SECRET`) are reported but used exactly as configured: trimming them could change a working value, and an emptied `AUTH_PROXY_SECRET` would disable the shared-secret check outright.
+Every binary trims fixed-format credentials (OAuth client credentials and bearer tokens), because whitespace is never valid in them. Binaries report free-form secrets (`SESSION_KEY`, `EMAIL_SMTP_PASSWORD`, `AUTH_PROXY_SECRET`) but use them exactly as configured: trimming them could change a working value, and an emptied `AUTH_PROXY_SECRET` would disable the shared-secret check outright.
 
 A warning on any one variable means the whole Secret was probably written with `echo`, so check every key. `BOT_TOKEN` is worth checking even when login works, because it breaks the write actions rather than sign-in:
 
@@ -117,7 +117,7 @@ Check the fetcher logs for the email notification summary or configuration warni
 - The SMTP relay is reachable from the GitHub Actions runner or Kubernetes pod.
 - `smtp.tls` matches the relay. STARTTLS is required by default and never falls back to plaintext.
 
-A failed delivery does not fail the fetch. Its state is left unchanged so the next full pass retries it.
+A failed delivery does not fail the fetch. The fetch leaves its state unchanged so the next full pass retries it.
 
 
 ## Email action link does not show issue or fix controls

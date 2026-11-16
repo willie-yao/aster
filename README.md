@@ -8,7 +8,7 @@
 
 ## **Aster**: **Automated Signal Triage, Explanation, and Remediation**.
 
-Aster is an evidence-first failure analysis and guarded-remediation engine for [Prow](https://docs.prow.k8s.io/docs/overview/) and Kubernetes test infrastructure. It watches Prow and TestGrid jobs, investigates failures through bounded logs, test results, artifacts, history, and source evidence, and helps maintainers move from signal to explanation to a reviewed next step.
+Aster is an evidence-first failure analysis and guarded-remediation engine for [Prow](https://docs.prow.k8s.io/docs/overview/) and Kubernetes test infrastructure. It watches Prow and TestGrid jobs and investigates failures through bounded logs, test results, artifacts, history, and source evidence. It helps maintainers move from signal to explanation to a reviewed next step.
 
 ## Who Aster is for
 
@@ -18,16 +18,16 @@ See the [public CAPZ dashboard](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01
 
 [![Aster showing a CAPZ test failure, its analysis, and artifact evidence](docs/assets/aster-dashboard-preview.png)](https://capz-aster-99e3d335-c8fva4csbpcuh2e8.b01.azurefd.net/)
 
-Job reliability counts completed outcomes within the newest 10 published runs; pending and unknown results do not count as failures. A window with no completed outcomes shows "No completed runs" and belongs to no reliability bucket. The latest-run status and run history still show running jobs.
+Job reliability counts completed outcomes within the newest 10 published runs. Pending and unknown results do not count as failures. A window with no completed outcomes shows "No completed runs" and belongs to no reliability bucket. The latest-run status and run history still show running jobs.
 
 ## Before you start
 
 - Have Go installed and a Git checkout of the repository whose jobs you want to monitor. Go can download the required toolchain automatically.
 - Choose an existing GitHub repository you control for the dashboard configuration. It holds the generated files, not a copy of Aster's code.
-- Your jobs need Prow-compatible artifacts. The wizard discovers Kubernetes test-infra jobs automatically; other Prow installations can use [bucket discovery](docs/onboarding-reference.md#non-interactive-automation).
+- Your jobs need Prow-compatible artifacts. The wizard discovers Kubernetes test-infra jobs automatically. Other Prow installations can use [bucket discovery](docs/onboarding-reference.md#non-interactive-automation).
 - Have a Chat Completions or Responses endpoint and model that support function calling. Follow [AI provider configuration](docs/ai-providers.md) for the API, endpoint, model, and credential.
 
-Pages needs public artifacts and an AI endpoint reachable from its Actions runner. Kubernetes needs a cluster with [shared ReadWriteMany storage](docs/kubernetes.md#prerequisites). You can configure GitHub through its UI or `gh`; `gh` is not required for the wizard.
+Pages needs public artifacts and an AI endpoint reachable from its Actions runner. Kubernetes needs a cluster with [shared ReadWriteMany storage](docs/kubernetes.md#prerequisites). You can configure GitHub through its UI or `gh`. The wizard does not require `gh`.
 
 ## Quickstart
 
@@ -40,7 +40,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.13.0 onboard \
 
 The wizard discovers matching Prow jobs, reviews deployment and AI choices, validates the complete plan, and writes a small consumer repository only after confirmation. The explicit engine ref pins a generated Pages workflow to the same exact release. It does not require an Aster source checkout.
 
-Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged, dry-run, pull-request, and non-interactive usage is in the [onboarding reference](docs/onboarding-reference.md). A coding agent can run the same engine-owned workflow with `$setup-aster-consumer`; installation and safety boundaries are in the onboarding quickstart.
+Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged, dry-run, pull-request, and non-interactive usage is in the [onboarding reference](docs/onboarding-reference.md). A coding agent can run the same engine-owned workflow with `$setup-aster-consumer`. Installation and safety boundaries are in the onboarding quickstart.
 
 ## Choose a deployment
 
@@ -51,7 +51,7 @@ Continue with [Onboarding a project](docs/onboarding-a-new-project.md). Flagged,
 | Authenticated chat, File Issue, or Mark Resolved | [Kubernetes with Helm](docs/kubernetes.md) |
 | No cluster to operate | [GitHub Actions and Pages](docs/github-pages.md) |
 
-Both deployment paths use the supported in-process analyzer. Pages publishes static JSON and assets. Kubernetes adds a server for authentication, chat, and guarded actions. Nothing files an issue or opens a pull request on a schedule; both are maintainer-confirmed actions. The scheduled pass has only two GitHub write paths, each opt-in and off by default: recovery on an issue it already tracks, which comments and optionally closes, and the bot comment on a newly opened pull request. Fix PR generation is not part of standard onboarding.
+Both deployment paths use the supported in-process analyzer. Pages publishes static JSON and assets. Kubernetes adds a server for authentication, chat, and guarded actions. Nothing files an issue or opens a pull request on a schedule. Both are maintainer-confirmed actions. The scheduled pass has only two GitHub write paths, both opt-in and off by default. The first is recovery on an issue it already tracks, which comments and optionally closes. The second is the bot comment on a newly opened pull request. Fix PR generation is not part of standard onboarding.
 
 ## Documentation
 

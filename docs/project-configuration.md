@@ -1,6 +1,6 @@
 # Project configuration
 
-Each consumer owns one strict `project.yaml`. Unknown fields are errors. Start with [`configs/example/project.yaml`](../configs/example/project.yaml) or let [`aster onboard`](onboarding-a-new-project.md) generate it. Add optional sections only when a working deployment needs them. The guided onboarding wizard shows the source and confidence for inferred identity and TestGrid values, then lets you edit them before any file is written.
+Each consumer owns one strict `project.yaml`. Unknown fields are errors. Start with [`configs/example/project.yaml`](../configs/example/project.yaml) or let [`aster onboard`](onboarding-a-new-project.md) generate it. Add optional sections only when a working deployment needs them. The guided onboarding wizard shows the source and confidence for inferred identity and TestGrid values, then lets you edit them before the wizard writes any file.
 
 Use `aster onboard doctor -project-dir <dir>` to run the same strict parser on an existing consumer before deployment.
 
@@ -101,7 +101,7 @@ discovery:
   test_infra_revision: 2e1a38bcca26b0fe1a46e7b2bf652e1de49cacca
 ```
 
-When omitted, each fetch resolves the current test-infra `master` commit and uses that one snapshot consistently for the run. A configured pin never falls back to `master`. The effective revision is published as `discovery.resolved_test_infra_revision` in `manifest.json`; the Pages workflow also copies it to `provenance.json`. The field is invalid with bucket discovery.
+When omitted, each fetch resolves the current test-infra `master` commit and uses that one snapshot for the run. A configured pin never falls back to `master`. The effective revision is published as `discovery.resolved_test_infra_revision` in `manifest.json`; the Pages workflow also copies it to `provenance.json`. The field is invalid with bucket discovery.
 
 TestGrid job pages show a read-only link to their definition in `kubernetes/test-infra` at the published job's `config_revision`, or `master` when no revision is recorded. The header also shows the configured checkout branch when available in the dashboard. Jobs without a known config source or file omit this line.
 
@@ -125,7 +125,7 @@ discovery:
     - periodic-project-upgrade
 ```
 
-`exact_jobs` and `job_filters` are mutually exclusive. Exact names are case-sensitive and a missing name fails discovery instead of silently publishing a partial dashboard. When presubmits are enabled, an exact name may also resolve through its direct `pr-logs/directory/<job>/` index.
+`exact_jobs` and `job_filters` are mutually exclusive. Exact names are case-sensitive and a missing name fails discovery instead of publishing a partial dashboard. When presubmits are enabled, an exact name may also resolve through its direct `pr-logs/directory/<job>/` index.
 
 Periodics are included by default. `discovery.include_presubmits` is the sole runtime authority for publishing presubmit jobs. Add them with:
 
@@ -214,8 +214,8 @@ This is a **selection** rule. It publishes a `low_pass_rate` section in `flakine
 A test is selected when its pass rate over the window is strictly below `threshold`. So `threshold: 1.0` surfaces any test that failed at least once, and `threshold: 0` surfaces nothing.
 
 - `min_runs` is the evidence guard. One failure out of two runs is a 50% pass rate but weak signal, so a test with fewer runs than this in the window is never selected.
-- `recent_runs` narrows the measurement to the newest N runs of each test, so a failure the test has since recovered from drops out. The guard applies to the same narrowed window, which means `recent_runs` below `min_runs` selects nothing. Each entry publishes its own `window_runs` and `pass_rate` because a narrowed window disagrees with the entry's whole-window `fail_rate`.
-- `max_items` caps the published section. The overview renders at most ten test alerts across all groups combined, and the pass-rate group only fills the budget the recent, persistent, and flaky groups leave behind, so a large dashboard cannot be flooded by this rule alone.
+- `recent_runs` narrows the measurement to the newest N runs of each test, so a failure the test has since recovered from drops out. The guard applies to the same narrowed window, so `recent_runs` below `min_runs` selects nothing. Each entry publishes its own `window_runs` and `pass_rate` because a narrowed window disagrees with the entry's whole-window `fail_rate`.
+- `max_items` caps the published section. The overview renders at most ten test alerts across all groups combined. The pass-rate group fills only the budget that the recent, persistent, and flaky groups leave behind. A large dashboard therefore cannot be flooded by this rule alone.
 
 `threshold: 1.0` is a reasonable setting for a project with mostly-green periodics that treats any failure as worth a look. Start with the default `min_runs` and tighten from there if the group stays noisy.
 
@@ -223,7 +223,11 @@ A test is selected when its pass rate over the window is strictly below `thresho
 
 AI is optional at the fetcher level. When enabled, it needs a token, a non-empty `prompts/system.md`, and a function-calling model.
 
-Provider coordinates are deployment-owned. Use `AI_API`, `AI_ENDPOINT`, `AI_MODEL`, optional `AI_REASONING_EFFORT`, and `AI_TOKEN`. A non-empty `AI_CACHE_GENERATION` selects a reversible cache namespace; empty preserves the historical cache-key shape. Generation values are limited to 64 characters and may contain alphanumerics, dot, underscore, and hyphen. `ai.service_tier: flex` enables OpenAI Flex processing only when the deployment uses the `responses` API and the endpoint host is exactly `api.openai.com`. Other providers are rejected before any request. Flex raises an effective timeout below 15 minutes to 15 minutes and falls back to `auto` after repeated provider capacity responses. Most projects do not need analysis tuning. The defaults are designed to work without an `ai:` block. Add only the setting that a measured model or artifact constraint requires:
+Provider coordinates are deployment-owned. Use `AI_API`, `AI_ENDPOINT`, `AI_MODEL`, optional `AI_REASONING_EFFORT`, and `AI_TOKEN`. A non-empty `AI_CACHE_GENERATION` selects a reversible cache namespace; empty preserves the historical cache-key shape. Generation values are limited to 64 characters and may contain alphanumerics, dot, underscore, and hyphen.
+
+`ai.service_tier: flex` enables OpenAI Flex processing only when the deployment uses the `responses` API and the endpoint host is exactly `api.openai.com`. Other providers are rejected before any request. Flex raises an effective timeout below 15 minutes to 15 minutes and falls back to `auto` after repeated provider capacity responses.
+
+Most projects do not need analysis tuning. The defaults work without an `ai:` block. Add only the setting that a measured model or artifact constraint requires.
 
 For example, a non-Kubernetes project can remove the Kubernetes tool group:
 
@@ -232,7 +236,7 @@ ai:
   tools: [filesystem]
 ```
 
-The engine defaults to 15 iterations, a 5-minute per-failure timeout, two tool calls, no byte floor, parallel tool calls, zero critique repair requests, the `hard` critique cache policy. Override one of those defaults only after a measured provider or artifact constraint requires it.
+The engine defaults to 15 iterations, a 5-minute per-failure timeout, two tool calls, no byte floor, parallel tool calls, zero critique repair requests, and the `hard` critique cache policy. Override one of those defaults only after a measured provider or artifact constraint requires it.
 
 `critique.max_retries` controls provider repair attempts only. `0` evaluates critique without making a critique repair request. `critique.cache_policy` independently controls cache reuse. The two settings are unrelated: changing `max_retries` never changes which findings block reuse.
 
@@ -240,9 +244,11 @@ The engine defaults to 15 iterations, a 5-minute per-failure timeout, two tool c
 - `hard`: only hard safety, grounding, and correctness failures block reuse.
 - `advisory`: critique findings never block reuse.
 
-If `cache_policy` is omitted it defaults to `hard`, whatever `max_retries` is. Evidence that is deterministically unavailable remains a warning under every policy. Structural validation, publication sanitization, and critique-version validation remain mandatory.
+If `cache_policy` is omitted, it defaults to `hard`, whatever `max_retries` is. Evidence that is deterministically unavailable remains a warning under every policy. Structural validation, publication sanitization, and critique-version validation remain mandatory.
 
-Publication disposition is separate from cache policy. A draft whose causal claim has no validated artifact citation is published as `preliminary` with an `artifact_grounding_incomplete` warning under every policy. A `citations_verified` disposition means retained citations were read and their quotes occur at the stated artifact ranges. It does not mean the cited text entails the cause or supports every causal link. Preliminary publication does not directly authorize an action. A diagnosis that passes the separate usable-diagnosis check may still feed correlation or chat-derived Fix flows that apply their own evidence gates. Cache policy can still change whether the selected draft is reusable, while deterministic draft selection decides which parseable candidate is published.
+Publication disposition is separate from cache policy. A draft whose causal claim has no validated artifact citation is published as `preliminary` with an `artifact_grounding_incomplete` warning under every policy. A `citations_verified` disposition means retained citations were read and their quotes occur at the stated artifact ranges. It does not mean the cited text entails the cause or supports every causal link.
+
+Preliminary publication does not directly authorize an action. A diagnosis that passes the separate usable-diagnosis check may still feed correlation or chat-derived Fix flows, which apply their own evidence gates. Cache policy can still change whether the selected draft is reusable, while deterministic draft selection decides which parseable candidate is published.
 
 Do not commit credentials under `ai.headers`. `AI_TOKEN` is the supported bearer token channel. Use a trusted proxy or custom deployment for providers that need a secret in another header.
 
@@ -266,11 +272,13 @@ ai:
 
 `retention_days` defaults to `90` and accepts `1` through `3650` when set. `recent_operations` defaults to `250`, accepts `0` through `5000`, and controls the detailed private drill-down list. Set it to `0` to retain daily aggregates without recent operation records. Set `enabled: false` to disable both token and cost accounting.
 
-Pricing is optional. Without it, the dashboard records provider-reported tokens but does not assign a cost. `currency` must contain exactly three ASCII uppercase letters. Rates are decimal currency units per one million tokens. Omit `cached_input_per_million` to price cached input at the regular input rate. Rates must be non-negative decimal strings no greater than `1000000`. `cache_write_input_per_million` is optional and has no inferred default. The dashboard charges that rate only when a recognized provider response reports cache-creation input tokens. When the provider omits cache-write counts, the report marks cache-write coverage missing rather than estimating from total input tokens.
+Pricing is optional. Without it, the dashboard records provider-reported tokens but does not assign a cost. `currency` must contain exactly three ASCII uppercase letters. Rates are decimal currency units per one million tokens. Omit `cached_input_per_million` to price cached input at the regular input rate. Rates must be non-negative decimal strings no greater than `1000000`.
 
-Cost values are estimates, not provider invoices. Providers may omit usage or apply discounts, retries, minimum charges, or non-token fees that are not present in the model response. Usage files are private operational state and are removed from Pages artifacts. A currency change is rejected while retained nonzero cost estimates still use the previous currency.
+`cache_write_input_per_million` is optional and has no inferred default. The dashboard charges that rate only when a recognized provider response reports cache-creation input tokens. When the provider omits cache-write counts, the report marks cache-write coverage missing rather than estimating from total input tokens.
 
-Ledger version 2 stores cache-write counts, coverage provenance, and model breakdowns. Model identifiers are stored only when they pass a bounded safe identifier check. Endpoints and credentials are never persisted.
+Cost values are estimates, not provider invoices. Providers may omit usage or apply discounts, retries, minimum charges, or non-token fees that are not present in the model response. Usage files are private operational state, and Pages artifacts exclude them. The engine rejects a currency change while retained nonzero cost estimates still use the previous currency.
+
+Ledger version 2 stores cache-write counts, coverage provenance, and model breakdowns. The ledger stores model identifiers only when they pass a bounded safe identifier check. It never persists endpoints or credentials.
 
 ## Custom skills
 
@@ -318,7 +326,7 @@ The focused feature guides own their credential, admission, timeout, and securit
 | `model_provider.auth.type` | `bearer` or `none` for direct mode; `none` for gateway mode. |
 | `model_provider.public_ca_private_dns` | Fix-only acknowledgement for an explicit gateway using a privately resolved public FQDN. |
 
-Each validator is an `argv` list plus a timeout. Shell command strings, generic dispatchers, coding-agent re-entry, and shell interpretation are rejected. The final validator is always the exact staged-diff check. Generation runs once; validator failures become preview warnings for the maintainer and cannot trigger automatic model repair.
+Each validator is an `argv` list plus a timeout. The parser rejects shell command strings, generic dispatchers, coding-agent re-entry, and shell interpretation. The final validator is always the exact staged-diff check. Generation runs once; validator failures become preview warnings for the maintainer and cannot trigger automatic model repair.
 
 Secret names, image digests, namespace, ServiceAccounts, resources, networking, CA trust, and RuntimeClass are Helm-owned deployment settings. See:
 

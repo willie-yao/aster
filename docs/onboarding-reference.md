@@ -2,7 +2,7 @@
 
 This page documents advanced discovery, plan and apply automation, update behavior, and the `aster onboard` command surface. Start a first project with [Onboarding a project](onboarding-a-new-project.md).
 
-Examples use the current release exactly. An installed `aster` binary from the same release can replace `go run`. Pages scaffolds also require an exact `-engine-ref`; Kubernetes image and chart versions are selected by deployment values and release commands.
+Examples use the current release exactly. An installed `aster` binary from the same release can replace `go run`. Pages scaffolds also require an exact `-engine-ref`; deployment values and release commands select Kubernetes image and chart versions.
 
 When building the current CLI, release-tagged binaries and versioned Go modules default the Pages ref to their own release. Development builds without release metadata require an explicit `-engine-ref`. Explicit overrides remain supported; doctor warns on refs it cannot recognize as an exact release tag or full commit SHA. Keep the explicit pins in the published examples.
 
@@ -19,9 +19,9 @@ ssh://git@github.com/owner/name.git
 git@github.com:owner/name.git
 ```
 
-When the current `origin` is a fork, onboarding can use the confirmed canonical upstream for Prow discovery while keeping the dashboard destination separate. An explicit `-dashboard-repo` is never replaced by inference.
+When the current `origin` is a fork, onboarding can use the confirmed canonical upstream for Prow discovery while keeping the dashboard destination separate. Inference never replaces an explicit `-dashboard-repo`.
 
-For private repositories, export `GITHUB_TOKEN`. It is used for bounded GitHub API reads and is not printed, retained in the plan, or written to the scaffold.
+For private repositories, export `GITHUB_TOKEN`. Onboarding uses it for bounded GitHub API reads and never prints it, retains it in the plan, or writes it to the scaffold.
 
 ### Read-only discovery
 
@@ -35,7 +35,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.13.0 \
 
 Add `-json` for machine-readable output. The report includes the normalized source repository, matching Prow jobs, ranked TestGrid candidates, suggested identity and dashboard destination, unresolved fields, and the pinned `kubernetes/test-infra` revision used for that discovery operation.
 
-The revision is not written as a permanent consumer pin by default. Set `discovery.test_infra_revision` after scaffolding only when a reproducible consumer must keep that exact catalog revision.
+By default, onboarding does not write the revision as a permanent consumer pin. Set `discovery.test_infra_revision` after scaffolding only when a reproducible consumer must keep that exact catalog revision.
 
 Discovery reads bounded repository metadata and one pinned Prow configuration, finds jobs whose presubmit repository or `extra_refs` match the source, ranks TestGrid candidates, and refuses a final zero-job scaffold. It reports periodic, presubmit, and postsubmit tab counts, but the fetcher ingests only periodic jobs and optional presubmits.
 
@@ -76,7 +76,11 @@ deploy/values.yaml
 deploy/README.md
 ```
 
-Onboarding does not inspect a cluster or choose storage. Interactive runs leave a reviewed placeholder for later editing. Non-interactive Kubernetes runs require exactly one of `-k8s-storage-class` or `-k8s-existing-claim` so reviewed plan application can pass static doctor. Generated values record that storage choice, deployment-owned AI coordinates, the intentional `120m` fetch timeout, and suspended CronJob starts. Other settings inherit the matching chart defaults. The command does not create a namespace or Secret, install Helm releases, or configure DNS and ingress. Follow the generated guide and [Kubernetes quickstart](kubernetes.md).
+Onboarding does not inspect a cluster or choose storage. Interactive runs leave a reviewed placeholder for later editing. Non-interactive Kubernetes runs require exactly one of `-k8s-storage-class` or `-k8s-existing-claim` so reviewed plan application can pass static doctor.
+
+Generated values record that storage choice, deployment-owned AI coordinates, the intentional `120m` fetch timeout, and suspended CronJob starts. Other settings inherit the matching chart defaults.
+
+The command does not create a namespace or Secret, install Helm releases, or configure DNS and ingress. Follow the generated guide and [Kubernetes quickstart](kubernetes.md).
 
 ## Prompt handoff
 
@@ -90,7 +94,9 @@ Complete flagged runs and the wizard default to `handoff`. The handoff records a
 
 The consumer normally lives in its own repository, not in the monitored source repository. Local output must be empty or absent unless update mode is explicitly selected.
 
-For an existing consumer, the first run without `-update-existing` lists conflicts and stops. After review, rerun with `-update-existing`. Engine-owned files may be replaced, but existing `prompts/system.md` and `skills/*.yaml` or `skills/*.yml` remain consumer-owned and are preserved. Replacing the prompt requires a separate diff, explicit approval, and a new plan with `-replace-consumer-owned`. Existing active skills are never replaced by setup.
+For an existing consumer, the first run without `-update-existing` lists conflicts and stops. After review, rerun with `-update-existing`.
+
+Engine-owned files may be replaced, but existing `prompts/system.md` and `skills/*.yaml` or `skills/*.yml` remain consumer-owned and are preserved. Replacing the prompt requires a separate diff, explicit approval, and a new plan with `-replace-consumer-owned`. Setup never replaces existing active skills.
 
 The command never deletes stale or unrelated files.
 
@@ -151,9 +157,9 @@ For direct bucket discovery, replace `-testgrid` with `-bucket`. A bounded exact
 -exact-job "periodic-project-upgrade"
 ```
 
-Exact-job discovery fails when a named bucket index is absent and cannot be combined with `-testgrid`. Add `-gcsweb-base` when the bucket is served through gcsweb.
+Exact-job discovery fails when a named bucket index is absent and cannot be combined with `-testgrid`. When the bucket is served through gcsweb, add `-gcsweb-base`.
 
-Use `--prompt-mode=todo-template` when automation should not emit the prompt handoff bundle.
+When automation should not emit the prompt handoff bundle, use `--prompt-mode=todo-template`.
 
 ## Open a scaffold pull request
 

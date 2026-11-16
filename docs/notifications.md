@@ -15,7 +15,7 @@ Failure emails include the project, job, test, consecutive count, latest error, 
 
 The notifier also sends pattern-level email. It sends one message when a job first becomes systemic and another when that job's shared root cause changes materially. Ordinary AI paraphrasing updates the stored pattern without sending again. A changed-pattern message includes both the previous and current root causes.
 
-Pattern email is sent whether or not the pattern supports maintainer actions. Analysis-only causal-group results still notify; their messages simply carry no action links. When `action_links: true` and the pattern supports actions, the message also includes inert **Review issue draft** and **Review fix proposal** links.
+The notifier sends pattern email whether or not the pattern supports maintainer actions. Analysis-only causal-group results still notify; their messages carry no action links. When `action_links: true` and the pattern supports actions, the message also includes inert **Review issue draft** and **Review fix proposal** links.
 
 ## Project configuration
 
@@ -38,7 +38,7 @@ notifications:
 
 The consumer config is strict. When email is enabled, `from`, at least one `to` recipient, and `smtp.host` are required. Sender and recipient values must be valid email addresses.
 
-Use a team distribution list rather than personal addresses when `project.yaml` is stored in a public repository. Notification settings are omitted from the published `manifest.json`, but the source YAML itself remains visible.
+When `project.yaml` is stored in a public repository, use a team distribution list rather than personal addresses. The published `manifest.json` omits notification settings, but the source YAML remains visible.
 
 ## Action links for maintainers
 
@@ -54,9 +54,11 @@ notifications:
 
 The links contain only the public pattern id, requested action, and dashboard URL. They contain no GitHub token, SMTP password, preview token, or authorization data.
 
-Opening a link performs an inert GET. After GitHub OAuth or proxy authentication, the dashboard shows a second **Generate draft** prompt. Only that explicit click creates a persistent asynchronous request. The user can leave the page while the server generates the draft. When server-side SMTP is configured, the dashboard emails a draft-ready review link. The requesting maintainer signs in, reviews the exact issue or diff, and confirms it before the dashboard writes to GitHub.
+Opening a link performs an inert GET. After GitHub OAuth or proxy authentication, the dashboard shows a second **Generate draft** prompt. Only that explicit click creates a persistent asynchronous request.
 
-This extra step is intentional. Email security scanners and forwarded messages must not be able to start generation or create an issue or PR merely by opening a URL.
+You can leave the page while the server generates the draft. When server-side SMTP is configured, the dashboard emails a draft-ready review link. The requesting maintainer signs in, reviews the exact issue or diff, and confirms it before the dashboard writes to GitHub.
+
+The extra step keeps email security scanners and forwarded messages from starting generation or creating an issue or PR by opening a URL.
 
 Do not enable `action_links` for a static Pages deployment. Pages has no action API or administrator authentication. Fix proposal links also require an enabled Agent Sandbox Fix runtime.
 
@@ -70,7 +72,7 @@ Do not enable `action_links` for a static Pages deployment. Pages has no action 
 | `tls` | Establish implicit TLS before speaking SMTP. | 465 |
 | `none` | Use an unauthenticated plaintext relay. This must be selected explicitly. | 25 |
 
-Authenticated SMTP is rejected when `tls: none` so credentials are never sent over plaintext. TLS validates the relay certificate and requires TLS 1.2 or newer. There is no insecure certificate-skip option.
+Aster rejects authenticated SMTP when `tls: none`, so credentials never travel over plaintext. TLS validates the relay certificate and requires TLS 1.2 or newer. The engine offers no insecure certificate-skip option.
 
 ## GitHub Actions and Pages
 
@@ -118,13 +120,17 @@ server:
   extraEnv: *smtpEnv
 ```
 
-The fetcher sends scheduled failure alerts. The server sends draft-ready emails for issue and regular Fix action requests. Those ready requests and their exact reviewed drafts are persisted in non-public `action_request_state.json` for 24 hours. Exact JUnit chat-to-fix previews do not send draft-ready email and retain their ready request for the confirmation token's 15-minute lifetime. Pending requests interrupted by a server restart are marked failed and can be recreated.
+The fetcher sends scheduled failure alerts. The server sends draft-ready emails for issue and regular Fix action requests. The server persists those ready requests and their exact reviewed drafts in non-public `action_request_state.json` for 24 hours.
+
+Exact JUnit chat-to-fix previews do not send draft-ready email and retain their ready request for the confirmation token's 15-minute lifetime. The server marks pending requests interrupted by a restart as failed, and you can recreate them.
 
 ## State and retry behavior
 
-Deduplication state is stored in `notification_state.json` alongside the fetcher cache. It is preserved between runs but is not published by Pages or served by the Kubernetes server.
+The fetcher stores deduplication state in `notification_state.json` alongside its cache. State persists between runs, but Pages does not publish it and the Kubernetes server does not serve it.
 
-State tracks both persistent-test alerts and systemic-pattern alerts. Systemic patterns are keyed by job ID, with the latest pattern ID and root cause retained for links and changed-pattern comparison. The state resets after an authoritative non-systemic verdict or recovery. Delivery-tracking transitions happen only after successful delivery; ordinary paraphrases may refresh the stored pattern metadata without sending a message:
+State tracks both persistent-test alerts and systemic-pattern alerts. Aster keys systemic patterns by job ID and retains the latest pattern ID and root cause for links and changed-pattern comparison. State resets after an authoritative non-systemic verdict or recovery.
+
+Delivery tracking advances only after successful delivery, and ordinary paraphrases may refresh the stored pattern metadata without sending a message:
 
 - A failed new or changed-failure email is retried on the next full pass.
 - A failed new or changed-pattern email is retried on the next full pass.
@@ -133,7 +139,7 @@ State tracks both persistent-test alerts and systemic-pattern alerts. Systemic p
 
 A per-job build-listing failure retains the last observed runs, so an unavailable listing is not treated as a recovery. Notification or issue follow-up failures remain visible in fetch progress without failing a published refresh.
 
-The email implementation uses the state channel `email-v1`. On the first run after upgrading from Slack notifications, old channel-less state is reset. Each currently persistent failure therefore receives one initial email.
+The email implementation uses the state channel `email-v1`. On the first run after upgrading from Slack notifications, Aster resets old channel-less state. Each currently persistent failure therefore receives one initial email.
 
 ## Verifying delivery
 

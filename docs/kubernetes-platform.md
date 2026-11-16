@@ -8,7 +8,7 @@ The platform chart ships with the application release but has an independent Hel
 
 | Owner | Resources and responsibilities |
 | --- | --- |
-| External infrastructure | Target Kubernetes cluster, node pools, secure-runtime node images, RWX storage capability, external edge, DNS, certificates, and identity applications. |
+| External infrastructure | Target Kubernetes cluster, node pools, secure-runtime node images, ReadWriteMany (RWX) storage capability, external edge, DNS, certificates, and identity applications. |
 | Agent Sandbox upstream release | Sandbox CRD, controller, webhook, namespace, and cluster RBAC for the supported version. |
 | Platform administrator | Secure RuntimeClass, compatible nodes, platform chart, reviewed egress, existing Secret references, and target-cluster acceptance. |
 | Platform chart | Release-dedicated execution namespace, quota, limits, tokenless workload identity, default-deny and Cilium egress policy, immutable binding, and optional model gateway. |
@@ -20,7 +20,7 @@ The application chart must not claim cluster-scoped prerequisites. The platform 
 
 ## Existing externally managed platforms
 
-The live doctor has an upgrade-only compatibility mode for an existing application release with no platform binding and no partial platform-chart ownership metadata. It reports `platform ownership: externally managed` and validates the observable controller, namespace, RuntimeClass, Ready nodes, quota, limits, tokenless ServiceAccount, default-deny and exact-host egress, gateway, TLS reference, and absence of active Sandboxes.
+The live doctor has an upgrade-only compatibility mode for an existing application release with no platform binding and no partial platform-chart ownership metadata. It reports `platform ownership: externally managed`. It validates the observable controller, namespace, RuntimeClass, Ready nodes, quota, limits, tokenless ServiceAccount, default-deny and exact-host egress, gateway, TLS reference, and absence of active Sandboxes.
 
 A missing or weak prerequisite still blocks the upgrade. Any binding, platform-release annotation, application-release label, or platform ownership marker selects strict chart-managed validation. New installs that enable Agent Sandbox Fix must use the platform chart.
 
@@ -53,17 +53,17 @@ helm pull oci://ghcr.io/willie-yao/charts/aster-platform \
 kubectl --context "$CONTEXT" apply -f ./sandbox-v0.5.3.yaml
 ```
 
-The verifier downloads and validates the artifact but never executes or applies it. Installation of the verified upstream manifest is a separate cluster-admin operation. The live doctor checks the CRD storage version, controller identity, controller image, endpoints, and readiness.
+The verifier downloads and validates the artifact but never executes or applies it. A cluster admin installs the verified upstream manifest as a separate operation. The live doctor checks the CRD storage version, controller identity, controller image, endpoints, and readiness.
 
 ## RuntimeClass, nodes, and storage
 
 ### Secure-runtime contract
 
-Aster's core dashboard, in-process read-only analysis, and ordinary GitOps deployment do not inherently require Kata or any Agent Sandbox RuntimeClass. A secure runtime is required only when Fix generation creates Agent Sandbox workloads. When Fix generation is disabled, Aster can run without Agent Sandbox or a sandbox RuntimeClass.
+Aster requires a secure runtime only when Fix generation creates Agent Sandbox workloads. Aster's core dashboard, in-process read-only analysis, and GitOps deployment do not require Kata or any Agent Sandbox RuntimeClass. When Fix generation is disabled, Aster runs without Agent Sandbox or a sandbox RuntimeClass.
 
-Aster accepts the configured `runtimeClassName`; it does not hardcode Kata. The platform administrator must install and review the RuntimeClass handler, provide compatible nodes, and complete target-cluster isolation acceptance. For configured Agent Sandbox paths, Aster validates the RuntimeClass identity, scheduling compatibility with Ready nodes, workload shape, and admission contract. These checks do not prove that the handler provides VM or sandbox isolation.
+Aster accepts the configured `runtimeClassName` and does not hardcode Kata. The platform administrator must install and review the RuntimeClass handler, provide compatible nodes, and complete target-cluster isolation acceptance. For configured Agent Sandbox paths, Aster validates the RuntimeClass identity, scheduling compatibility with Ready nodes, workload shape, and admission contract. These checks do not prove that the handler provides VM or sandbox isolation.
 
-Agent Sandbox Fix can execute repository-controlled validation commands. RuntimeClass presence, node labels, taints, and a dedicated node pool can constrain scheduling, but are not themselves a hostile-code runtime boundary. Standard `runc` is not the intended production boundary for repository code execution.
+Agent Sandbox Fix can execute repository-controlled validation commands. RuntimeClass presence, node labels, taints, and a dedicated node pool can constrain scheduling. None of them is a hostile-code runtime boundary. Standard `runc` is not the intended production boundary for repository code execution.
 
 The application and platform charts do not create a RuntimeClass handler, install runtime-capable node images, or configure cloud infrastructure. Provider setup remains owned by the Kubernetes or cloud platform administrator.
 
@@ -82,9 +82,9 @@ Provide RWX storage for application data. Metadata can prove that a claim is Bou
 
 The platform chart currently supports Cilium as its FQDN-aware backend. It does not offer a portable fallback with weaker external-host isolation.
 
-`execution.networkPolicy.allowedFQDNs` is required and has no default grants. Supply only exact VCS, dependency registry, artifact service, and provider hosts needed by the project's configured commands. Wildcards, internal names, raw CIDRs, and unrestricted public egress are rejected.
+`execution.networkPolicy.allowedFQDNs` is required and has no default grants. Supply only exact version control system (VCS), dependency registry, artifact service, and provider hosts needed by the project's configured commands. The chart rejects wildcards, internal names, raw CIDRs, and unrestricted public egress.
 
-The current backend selects DNS in `kube-system` with the `k8s-app: kube-dns` label. A cluster with a different DNS identity is not supported by this chart version. Kind tests validate chart lifecycle only and do not prove Cilium data plane behavior.
+The current backend selects DNS in `kube-system` with the `k8s-app: kube-dns` label. This chart version supports no other DNS identity. Kind tests validate chart lifecycle only. They do not prove Cilium data plane behavior.
 
 ## Model gateway and TLS
 
@@ -96,7 +96,7 @@ Gateway mode is optional. Direct provider modes do not require the platform mode
 - an HTTPS upstream URL and exact upstream host;
 - a public FQDN whose private DNS resolves to the gateway Service.
 
-Gateway egress is restricted to the configured upstream host. The chart rejects additional gateway egress hosts. Certificate issuance, SANs, private keys, renewal, private DNS, provider authorization, and public trust remain externally owned.
+The chart restricts gateway egress to the configured upstream host and rejects additional gateway egress hosts. Certificate issuance, SANs, private keys, renewal, private DNS, provider authorization, and public trust remain externally owned.
 
 ## Secret ownership
 
@@ -175,6 +175,6 @@ helm --kube-context "$CONTEXT" -n "$NAMESPACE" \
   rollback "$PLATFORM_RELEASE" <prior-revision> --wait
 ```
 
-Platform uninstall intentionally retains the execution namespace, immutable binding, quota, limits, tokenless ServiceAccount, default-deny policy, and Cilium policy. Confirm that no Sandbox, Pod, or application RBAC remains before separately deleting retained resources. Agent Sandbox, RuntimeClass, nodes, Secrets, storage, DNS, certificates, and external infrastructure remain owned by their original systems.
+Platform uninstall retains the execution namespace, immutable binding, quota, limits, tokenless ServiceAccount, default-deny policy, and Cilium policy. Confirm that no Sandbox, Pod, or application RBAC remains before separately deleting retained resources. Agent Sandbox, RuntimeClass, nodes, Secrets, storage, DNS, certificates, and external infrastructure remain owned by their original systems.
 
 See the [platform chart README](../deploy/helm/aster-platform/README.md) for exact values and retention details, and the [Kubernetes operator reference](kubernetes-reference.md) for application architecture and advanced behavior.

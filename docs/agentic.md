@@ -1,6 +1,6 @@
 # Agentic analysis
 
-Aster uses one authoritative failure-analysis path. For each failed test, the in-process analyzer lets the model inspect bounded artifacts and pinned source through read-only tools, then applies engine-owned quality gates before caching and publishing the result.
+Aster uses one authoritative failure-analysis path. For each failed test, the in-process analyzer lets the model inspect bounded artifacts and pinned source through read-only tools. The analyzer then applies engine-owned quality gates before it caches and publishes the result.
 
 There is no separate text-only mode. When AI is enabled, every analysis uses the tool and evidence loop. For the contributor control-flow map, see [In-process failure analyzer architecture](architecture/in-process-analyzer.md).
 
@@ -60,7 +60,7 @@ The analyzer has no shell, browser, portal, SSH, cluster write, repository write
 
 A build pins an immutable revision only for the project's own source repository, so only paths in that repository can be verified and published as linked evidence. When the responsible code lives in a dependency, the analysis records the owning repository and its reported paths separately.
 
-That location is reported, never acted on. The dependency paths stay unverified hints, are excluded from the verified-source contract, and change no write gate: issue and Fix generation still require the failure, analysis source, and destination to be the same repository at an immutable revision. A dependency cause is surfaced as an upstream diagnosis with the repository named, and its remediation says the change belongs upstream instead of offering project automation that cannot reach the defect.
+That location is reported, never acted on. The dependency paths stay unverified hints. They are excluded from the verified-source contract and change no write gate. Issue and Fix generation still require the failure, analysis source, and destination to be the same repository at an immutable revision. The analysis surfaces a dependency cause as an upstream diagnosis with the repository named. Its remediation says the change belongs upstream instead of offering project automation that cannot reach the defect.
 
 A recurring causal group reports ownership only when every build it covers reached the same conclusion. Mixed or missing ownership leaves the group unattributed.
 
@@ -68,15 +68,19 @@ A recurring causal group reports ownership only when every build it covers reach
 
 Before the first provider call, the engine ranks evidence groups from the failure signal, selected diagnostic skills, and the bounded artifact tree. The model may follow that plan or inspect other available evidence. Coverage is factual: a group counts only when a content-bearing operation returns relevant data.
 
-The plan stays visible while the model works. Tool results with outstanding groups return `unread_evidence_groups` when it fits within the result limit, and a tools-free answer that leaves an available group unread reopens the investigation with the group and its candidate paths named. Groups the draft's own wording newly required are included, so a diagnosis that shifts mid-investigation still gets its evidence read. The reopen is bounded: it stops once the model stops making progress, after a small number of attempts, or when time, context, or byte budgets run short. A group with no candidate in the build is deterministically unavailable and never reopens the loop.
+The plan stays visible while the model works. Tool results with outstanding groups return `unread_evidence_groups` when it fits within the result limit. A tools-free answer that leaves an available group unread reopens the investigation, with the group and its candidate paths named. Groups the draft's own wording newly required are included, so a diagnosis that shifts mid-investigation still gets its evidence read.
+
+The reopen is bounded: it stops once the model stops making progress, after a small number of attempts, or when time, context, or byte budgets run short. A group with no candidate in the build is deterministically unavailable and never reopens the loop.
 
 Consumer `skills/*.yaml` can require evidence for a failure class. They extend the engine profile; they do not replace the project prompt or authorize actions. See [Diagnostic skills](skills.md).
 
 ### Context and evidence bounds
 
-The engine obtains the model context limit when the endpoint reports it, reserves completion and protocol headroom, and counts each estimated serialized request byte as one token plus a fixed framing reserve. This provider-neutral bound may compact log, YAML, and JSON histories before a tokenizer-specific limit, but it keeps the hard preflight independent of the endpoint tokenizer. Old tool results may be compacted while retaining call/result pairing, the evidence ledger, and current repair instructions. If a safe request cannot fit, the engine does not send it.
+The engine obtains the model context limit when the endpoint reports it. It reserves completion and protocol headroom and counts each estimated serialized request byte as one token plus a fixed framing reserve. This provider-neutral bound may compact log, YAML, and JSON histories before a tokenizer-specific limit, but it keeps the hard preflight independent of the endpoint tokenizer.
 
-Every tool result is valid JSON within a 32 KiB serialized limit, including metadata. Oversized results retain the newest fitting tail lines, a read prefix, the first fitting complete grep matches, or a listing prefix with directories before files, and report truncation; results that cannot fit return an error. Artifact citations, source evidence, and evidence-plan coverage use only content in the accepted model-visible result. Fetch accounting and full file sizes still describe the backend work, not the trimmed excerpt.
+The engine may compact old tool results while retaining call/result pairing, the evidence ledger, and current repair instructions. If a safe request cannot fit, the engine does not send it.
+
+Every tool result is valid JSON within a 32 KiB serialized limit, including metadata. Oversized results retain the newest fitting tail lines, a read prefix, the first fitting complete grep matches, or a listing prefix with directories before files, and report truncation. Results that cannot fit return an error. Artifact citations, source evidence, and evidence-plan coverage use only content in the accepted model-visible result. Fetch accounting and full file sizes still describe the backend work, not the trimmed excerpt.
 
 Investigation floors run on the finalize branch:
 
@@ -89,7 +93,7 @@ Floors measure investigation effort, not correctness. Evidence-plan coverage is 
 
 ## Deterministic critique
 
-Every parseable final is evaluated in its exact sanitized publication form.
+The deterministic judge evaluates every parseable final in its exact sanitized publication form.
 
 The deterministic judge rejects hard safety or grounding failures such as:
 
@@ -100,9 +104,9 @@ The deterministic judge rejects hard safety or grounding failures such as:
 - invalid source or artifact paths and ranges, including quotes absent from cited lines;
 - missing evidence required by an applicable diagnostic skill.
 
-When configured, one bounded repair operation can inject verified evidence, allow one tool-enabled turn when evidence remains unresolved, and force one structured finalization. It does not reopen an unlimited investigation loop. Cache acceptance is evaluated separately under the configured critique policy.
+When configured, one bounded repair operation can inject verified evidence, allow one tool-enabled turn when evidence remains unresolved, and force one structured finalization. It does not reopen an unlimited investigation loop. The engine evaluates cache acceptance separately under the configured critique policy.
 
-Safe structured output is published as `preliminary` or `citations_verified`. `citations_verified` means each retained citation names a safe artifact path that was read, uses a valid line range, and quotes text present in that range, with no unresolved critique warning that degrades the disposition. It does not verify that the quoted evidence entails the initiating cause, supports every causal link, or makes the conclusion correct.
+The engine publishes safe structured output as `preliminary` or `citations_verified`. `citations_verified` means each retained citation names a safe artifact path that was read, uses a valid line range, and quotes text present in that range. No unresolved critique warning degrades the disposition. It does not verify that the quoted evidence entails the initiating cause, supports every causal link, or makes the conclusion correct.
 
 If a repair response is unusable, the engine can retain the best earlier parseable draft. Only the selected draft controls cache acceptance and publication.
 
@@ -117,11 +121,13 @@ Aster checks both places that may hold an analysis:
 
 This prevents an old build result from bypassing a newer floor or critique version. Cache hits do not call the provider and record zero new usage.
 
-Preliminary analyses and safe published analyses rejected by cache quality policy share a three-attempt budget per build and failure key. Once spent, otherwise valid published output is reused without provider calls; it is not treated as an accepted private cache entry. Expired, malformed, missing, or unstamped output, a stale critique contract, and a changed cache generation still require reanalysis. Only citation-verified output accepted into the private cache clears the counter.
+Preliminary analyses and safe published analyses rejected by cache quality policy share a three-attempt budget per build and failure key. Once spent, the engine reuses otherwise valid published output without provider calls and does not treat it as an accepted private cache entry. Expired, malformed, missing, or unstamped output, a stale critique contract, and a changed cache generation still require reanalysis. Only citation-verified output accepted into the private cache clears the counter.
 
-When a fetch pass reaches its deadline during individual analysis, Aster waits for workers to stop and checkpoints private analysis state and traces. The pass still fails without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow normal disposition, cache acceptance, and bounded preliminary-retry policy, as with per-analysis timeouts. Explicit cancellation keeps the existing rollback behavior.
+When a fetch pass reaches its deadline during individual analysis, Aster waits for workers to stop and checkpoints private analysis state and traces. The pass still fails without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused. Work without a usable result remains eligible for analysis.
 
-Entries retain content-free provenance for the prompt, provider coordinates, model, and loaded skills. Those fingerprints describe how an entry was produced; changing them affects new analyses but does not automatically invalidate an otherwise reusable entry.
+Rescued drafts follow normal disposition, cache acceptance, and bounded preliminary-retry policy, as with per-analysis timeouts. Explicit cancellation keeps the existing rollback behavior.
+
+Entries retain content-free provenance for the prompt, provider coordinates, model, and loaded skills. Those fingerprints describe how an entry was produced. Changing them affects new analyses but does not automatically invalidate an otherwise reusable entry.
 
 Set `AI_CACHE_GENERATION`, the Pages `ai-cache-generation` input, or Helm `analysisCache.generation` to a new non-empty value for an intentional full rebaseline. Returning to a previous value reuses its still-valid entries. Destructive cache clearing is an emergency operation, not the normal response to prompt or provider changes.
 
@@ -131,19 +137,33 @@ Recurring-pattern analysis is a separate pass over published per-build results. 
 
 A fresh valid verdict replaces the previous pattern. A fresh non-systemic verdict removes it. When an eligible refresh fails, the exact prior valid verdict may remain visible as `Last known good`; otherwise no fallback is fabricated. Retained patterns stay readable but cannot start notifications, issues, Fix previews, or resolution changes.
 
-Observation-only recovery requires three passing runs after the last relevant failure, not proof of a source fix. Once a retained pattern's correlated failures leave the window, Aster checks every analyzed failed test against recurrence identities stored on its causal groups during fresh correlation, using test provenance, failure file, and an error message with varying numbers collapsed. A matching failure resets recovery; an unrelated analyzed failure neither resets it nor counts as a pass, so three passes separated only by unrelated failures still recover. Pending runs are also skipped. Missing identities or incomplete failure analysis conservatively reset recovery; retained refreshes never infer missing identities from partial history. JUnit discovery truncation alone does not reset recovery when all reported failed tests are present and analyzed. The overview card and pattern banner link to the latest confirmed recurrence as **Recurred Oct 19**, independently of the job's **Passing now** status.
+Observation-only recovery requires three passing runs after the last relevant failure, not proof of a source fix. Once a retained pattern's correlated failures leave the window, Aster checks every analyzed failed test against recurrence identities stored on its causal groups during fresh correlation. The check uses test provenance, failure file, and an error message with varying numbers collapsed.
 
-Causal-group parents do not create combined issue or fix drafts. When every member build remains available, an authenticated cause-scoped chat can inspect those failed builds and the newest later completed run. The later run is comparison evidence, not cause membership. Cause chat derives the existing observation-only recovery streak from that group's builds, but a passing comparison does not prove a fix: the model must compare the representative test and triggering inputs.
+A matching failure resets recovery. An unrelated analyzed failure neither resets it nor counts as a pass, so three passes separated only by unrelated failures still recover. Aster also skips pending runs. Missing identities or incomplete failure analysis reset recovery. Retained refreshes never infer missing identities from partial history. JUnit discovery truncation alone does not reset recovery when all reported failed tests are present and analyzed.
 
-Interactive cause chat also includes the newest fully passing retained run before the first failing member when artifact locations are recorded. Truncated dashboard JUnit does not disqualify a baseline. **What changed since the last passing run?** is offered before the first question when a qualifying baseline exists. This baseline is read-only evidence, not cause membership, recovery evidence, or a Fix target. For regression questions, chat compares job images and refs, commits, rendered templates and provider resources, and Node or Machine OS image and kernel before logs. It locates relevant files in each build with `find_artifacts`, searches their changed fields with `grep_artifact`, and reads files when the search does not explain the difference. When a failing node never registered and has no `status.nodeInfo`, chat reads its OS version and kernel from that machine's boot or console log. It quotes only the differing passages, reports only differences it read, or says no baseline is available.
+The overview card and pattern banner link to the latest confirmed recurrence as **Recurred Oct 19**, regardless of the job's **Passing now** status.
 
-Interactive cause turns bind `primary` to the configured repository at the selected failed-build revision. When the tested branch resolves, they also bind `current` to its current immutable tip; equal revisions reuse `primary`. When the known tested branch differs from the repository's default branch, a distinct default-branch tip is available as `default` for comparison only. It can show whether cause logic differs there, but cannot qualify remediation. Unavailable default-branch source is omitted. Source citations are validated against same-turn evidence for the exact catalog entry. `read_repo_file` returns whole lines, each prefixed with its 1-based line number as in `812: return err`, so a line-ranged source citation uses those numbers directly. A quote may include or omit the prefixes: the engine first matches the quote as written, then with prefixes removed when every quoted line carries the next consecutive number (inside the cited range, when one is given), and always publishes the source text without them. A proposed revision is retained only when it cites the effective current source. If the branch tip is unavailable or current code was not cited, the proposal is removed with an evidence warning and current fix status remains inconclusive. Changed or absent current code also requires investigation rather than implying that the cause is fixed. Engine-prepared first answers remain historical-only and do not perform current- or default-branch lookups or current-source qualification.
+Causal-group parents do not create combined issue or fix drafts. When every member build remains available, an authenticated cause-scoped chat can inspect those failed builds and the newest later completed run. The later run is comparison evidence, not cause membership. Cause chat derives the existing observation-only recovery streak from that group's builds, but a passing comparison does not prove a fix. The model must compare the representative test and triggering inputs.
 
-Chat does not change File Issue eligibility. A maintainer may request a Fix investigation from a completed answer, including one without verified citations, tied to the cause's representative failed JUnit test or build-level failure. Historical file links are optional source hints, not admission requirements. Missing evidence, transient severity, and unverified claims remain qualified while the coding agent investigates the repository. Preflight resolves the explicit tested branch, or the default branch when the maintainer selects it, and keeps the failure-revision ancestry check for the tested branch. Preview confirmation rechecks the selected context, pinned repository/base, canonical patch, and execution-result integrity before any write.
+Interactive cause chat also includes the newest fully passing retained run before the first failing member when artifact locations are recorded. Truncated dashboard JUnit does not disqualify a baseline. Chat offers **What changed since the last passing run?** before the first question when a qualifying baseline exists. This baseline is read-only evidence, not cause membership, recovery evidence, or a Fix target.
+
+For regression questions, chat compares job images and refs, commits, rendered templates and provider resources, and Node or Machine OS image and kernel before logs. It locates relevant files in each build with `find_artifacts`, searches their changed fields with `grep_artifact`, and reads files when the search does not explain the difference. When a failing node never registered and has no `status.nodeInfo`, chat reads its OS version and kernel from that machine's boot or console log. It quotes only the differing passages, reports only differences it read, or says no baseline is available.
+
+Interactive cause turns bind `primary` to the configured repository at the selected failed-build revision. When the tested branch resolves, they also bind `current` to its current immutable tip; equal revisions reuse `primary`. When the known tested branch differs from the repository's default branch, a distinct default-branch tip is available as `default` for comparison only. It can show whether cause logic differs there, but cannot qualify remediation. Unavailable default-branch source is omitted.
+
+The engine validates source citations against same-turn evidence for the exact catalog entry. `read_repo_file` returns whole lines, each prefixed with its 1-based line number as in `812: return err`, so a line-ranged source citation uses those numbers directly. A quote may include or omit the prefixes. The engine first matches the quote as written. It then matches with prefixes removed when every quoted line carries the next consecutive number (inside the cited range, when one is given). It always publishes the source text without prefixes.
+
+The engine retains a proposed revision only when it cites the effective current source. If the branch tip is unavailable or current code was not cited, the engine removes the proposal with an evidence warning, and current fix status remains inconclusive.
+
+Changed or absent current code also requires investigation rather than implying that the cause is fixed. Engine-prepared first answers remain historical-only and do not perform current- or default-branch lookups or current-source qualification.
+
+Chat does not change File Issue eligibility. A maintainer may request a Fix investigation from a completed answer, including one without verified citations, tied to the cause's representative failed JUnit test or build-level failure. Historical file links are optional source hints, not admission requirements.
+
+Missing evidence, transient severity, and unverified claims remain qualified while the coding agent investigates the repository. Preflight resolves the explicit tested branch, or the default branch when the maintainer selects it, and keeps the failure-revision ancestry check for the tested branch. Preview confirmation rechecks the selected context, pinned repository/base, canonical patch, and execution-result integrity before any write.
 
 ## Private operational data
 
-The analyzer writes private traces and usage ledgers beside the public output. They are excluded from `/data/*` and removed from Pages publication.
+The analyzer writes private traces and usage ledgers beside the public output. `/data/*` excludes them, and Pages publication removes them.
 
 Private traces retain bounded control-flow facts such as provider attempts, logical request size, Responses wire-request size, tool counts, compaction, floor nudges, evidence-plan coverage and the group IDs it reopened for, critique stages, timeouts, and completion status. They do not retain prompts, assistant text, reasoning, tool arguments, tool output, credentials, endpoint URLs, or raw provider bodies. Authenticated server mode can expose the sanitized trace snapshot to administrators.
 

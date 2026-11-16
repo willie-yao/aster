@@ -17,8 +17,8 @@ engine agentic tool guidance
 
 - [`BasePrompt`](../backend/internal/ai/baseprompt.go) provides universal Prow artifact entry points and a generic triage order.
 - The consumer prompt supplies project-specific architecture, artifact, and failure knowledge. The engine does not edit it.
-- [`ResponseFormatFooter`](../backend/internal/ai/responseformat.go) owns the structured response contract. Do not redeclare the output schema.
-- Agentic tool documentation is engine-owned. Do not describe tool names, budgets, or provider protocol in the consumer prompt.
+- [`ResponseFormatFooter`](../backend/internal/ai/responseformat.go) owns the structured response contract. Leave the output schema to the footer.
+- Agentic tool documentation is engine-owned. Leave tool names, budgets, and provider protocol out of the consumer prompt.
 
 Onboarding `handoff` mode writes a TODO prompt plus a portable prompt-authoring skill without calling a model. `todo-template` writes only the TODO prompt. Both paths are credential-free and need project facts before deployment.
 
@@ -38,7 +38,7 @@ Start with the failing test and build metadata. Read the artifact for the failed
 component, then look for the earliest error that explains the failure.
 ```
 
-Replace the angle-bracket placeholders with verified facts. Keep the other scaffold headings, but replace their TODO comments with known facts or "Unresolved" rather than guessing. Record missing details under Unresolved details. The engine already supplies universal Prow guidance, so project-specific artifact paths and component relationships are the useful additions.
+Replace the angle-bracket placeholders with verified facts. Keep the other scaffold headings. Replace their TODO comments with known facts or "Unresolved"; do not guess. Record missing details under Unresolved details. The engine already supplies universal Prow guidance. Add project-specific artifact paths and component relationships.
 
 Remove resolved authoring comments and rerun `aster onboard doctor`. Doctor checks for unfinished generated comments, not whether the resulting diagnoses are correct. Expand the prompt when observed failures reveal missing project knowledge.
 
@@ -84,7 +84,7 @@ List known transient signatures and the evidence required to call them transient
 
 ### Triage order
 
-Give a short artifact-first sequence. Start with the test result and build metadata, then move to the earliest causal log or resource evidence. Avoid long checklists that encourage reading everything.
+Give a short artifact-first sequence. Start with the test result and build metadata, then move to the earliest causal log or resource evidence. Keep checklists short, because long ones encourage reading everything.
 
 ### Relevant source repositories
 
@@ -109,7 +109,9 @@ The analyzer can read the supplied Prow artifact tree and, when configured, read
 
 Review the initial draft for unsupported architecture claims, stale paths, and unclosed placeholders. Optionally use `$author-aster-diagnostics` against representative historical failures to improve the prompt and propose inactive evidence recipes. Skill installation is in [agent-assisted onboarding](onboarding-a-new-project.md#coding-agent-assisted-onboarding); it is not required for manual setup.
 
-Editing `prompts/system.md` affects new analyses. Existing reusable cache entries keep the `prompt_hash` provenance that produced them. Set `AI_CACHE_GENERATION` to a new non-empty value when a prompt rewrite requires an intentional full rebaseline. Returning to a previous generation reuses its unexpired entries. Use destructive cache clearing only for emergency recovery.
+Editing `prompts/system.md` affects new analyses. Existing reusable cache entries keep the `prompt_hash` provenance that produced them.
+
+When a prompt rewrite requires a full rebaseline, set `AI_CACHE_GENERATION` to a new non-empty value. Returning to a previous generation reuses its unexpired entries. Use destructive cache clearing only for emergency recovery.
 
 For adjacent contracts, see:
 

@@ -1,6 +1,6 @@
 # Onboarding a project
 
-This quickstart creates the small consumer repository that points to the shared Aster engine. For every flag, update rule, plan artifact, and automation contract, use the [onboarding reference](onboarding-reference.md).
+This quickstart creates the consumer repository that points to the shared Aster engine. For every flag, update rule, plan artifact, and automation contract, use the [onboarding reference](onboarding-reference.md).
 
 ## Choose an onboarding method
 
@@ -25,7 +25,7 @@ prompts/system.md
 deploy/values.yaml             # Kubernetes
 ```
 
-Pages scaffolds also include `CHECKLIST.md`. Kubernetes scaffolds include `deploy/README.md`. Handoff prompt mode adds reviewable instructions for completing `prompts/system.md`. The consumer owns these files; engine code stays in the Aster repository.
+Pages scaffolds also include `CHECKLIST.md`. Kubernetes scaffolds include `deploy/README.md`. Handoff prompt mode adds reviewable instructions for completing `prompts/system.md`. The consumer owns these files. Engine code stays in the Aster repository.
 
 ## Interactive wizard
 
@@ -38,7 +38,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.13.0 onboard \
 
 The wizard discovers matching Prow and TestGrid jobs, asks for the deployment and AI coordinates, renders every file in memory, validates the result, and shows the complete plan. The final confirmation defaults to no. Cancellation leaves the filesystem unchanged.
 
-`-engine-ref` pins a generated Pages workflow to the same exact release. It does not select Kubernetes chart or image versions. For a private GitHub repository, export `GITHUB_TOKEN` for API reads. The token is not written to the scaffold.
+`-engine-ref` pins a generated Pages workflow to the same exact release. It does not select Kubernetes chart or image versions. For a private GitHub repository, export `GITHUB_TOKEN` for API reads. The CLI does not write the token to the scaffold.
 
 ## Coding agent-assisted onboarding
 
@@ -59,7 +59,7 @@ Use $setup-aster-consumer to create a Pages consumer for
 https://github.com/kubernetes-sigs/kueue.
 ```
 
-The setup skill must use `aster onboard`, not hand-write the scaffold. It runs read-only discovery, prepares an exact dry-run plan, preserves consumer-owned prompt and skill files during updates, leaves source-only template placeholders for review, waits for confirmation before applying the reviewed plan, and validates the resulting consumer. A non-interactive Kubernetes request must name an RWX StorageClass or existing PVC, and the skill stops if the selected CLI does not expose the required storage flags. Repository creation, pushes, pull requests, GitHub settings, Secret writes, and cluster writes remain separate confirmation-gated actions.
+The setup skill must use `aster onboard`, not hand-write the scaffold. It runs read-only discovery and prepares an exact dry-run plan. It preserves consumer-owned prompt and skill files during updates and leaves source-only template placeholders for review. It waits for confirmation before applying the reviewed plan, then validates the resulting consumer. A non-interactive Kubernetes request must name a ReadWriteMany (RWX) StorageClass or an existing PersistentVolumeClaim (PVC). The skill stops if the selected CLI does not expose the required storage flags. Repository creation, pushes, pull requests, GitHub settings, Secret writes, and cluster writes remain separate confirmation-gated actions.
 
 After setup, use `$author-aster-diagnostics` to evaluate representative historical failures, improve `prompts/system.md`, and place any proposed recipes under `proposals/skills/`. The authoring workflow does not activate recipes.
 
@@ -106,9 +106,9 @@ Use [Project configuration](project-configuration.md) for exact fields. Fill the
 
 ## First-run scope
 
-The first AI pass has no cached analyses, so runtime and cost depend on the number of jobs, their failing builds, and your provider. Later passes reuse accepted analyses. The review shows the discovered job count; a TestGrid dashboard can include jobs from several repositories.
+The first AI pass has no cached analyses, so runtime and cost depend on the number of jobs, their failing builds, and your provider. Later passes reuse accepted analyses. The review shows the discovered job count. A TestGrid dashboard can include jobs from several repositories.
 
-Pages fetches eight builds per job by default. For a smaller initial evaluation, optionally add `builds: 2` under `jobs.deploy.with`, then increase it after checking the results. Build depth limits inspected history, not model requests or spending, so there is no fixed cost or completion time.
+Pages fetches eight builds per job by default. For a smaller initial evaluation, add `builds: 2` under `jobs.deploy.with`, then increase it after checking the results. Build depth limits inspected history, not model requests or spending, so there is no fixed cost or completion time.
 
 Keep the wizard's discovery choice unless you need a narrower dashboard. [Exact-job bucket discovery](onboarding-reference.md#non-interactive-automation) is an advanced option and cannot be combined with TestGrid.
 
@@ -142,7 +142,7 @@ go run github.com/willie-yao/aster/backend/cmd/aster@v0.13.0 \
   -project-dir ./my-dashboard
 ```
 
-Doctor validates the project and prompt, deployment coordinates, and a real nonzero Prow discovery sweep. It does not call the model provider or inspect a Kubernetes cluster.
+Doctor validates the project and prompt, deployment coordinates, and a nonzero Prow discovery sweep. It does not call the model provider or inspect a Kubernetes cluster.
 
 ## Deploy
 

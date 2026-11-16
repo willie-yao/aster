@@ -27,7 +27,7 @@ With TestGrid discovery, triage considers applicable presubmits for `branding.so
 
 Presubmit names link to job details only when `discovery.include_presubmits` is enabled and the job appears in the published dashboard catalog. Unpublished jobs and names awaiting the catalog remain plain text.
 
-Draft pull requests are excluded. Each successful pass writes:
+Triage excludes draft pull requests. Each successful pass writes:
 
 ```text
 pull-requests.json
@@ -35,7 +35,7 @@ pull-requests/<number>.json
 pull-request-failures.json
 ```
 
-A triage failure does not abort normal dashboard publication. The previous pull request view remains available and the logs report the failure.
+A triage failure does not abort normal dashboard publication. The previous pull request view remains available, and the logs report the failure.
 
 ## Read credential
 
@@ -52,7 +52,7 @@ App authentication needs an installation on every read repository, including `ku
 
 ## Deterministic attribution
 
-Each failing test receives one attribution based only on observed results:
+Aster gives each failing test one attribution based only on observed results:
 
 | Verdict | Meaning |
 | --- | --- |
@@ -67,14 +67,14 @@ Matching names do not establish a shared cause. These verdicts neither prove nor
 
 Important boundaries:
 
-- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`, using each job's newest completed run with at least one passed or failed test-level outcome. Runs with only skipped tests, synthetic build-level failures, or no tests do not replace older usable evidence. Outcomes are taken from that one run, not combined across runs. Jobs without an eligible run or an interpretable ref for that repository do not establish baseline evidence. Presubmit history belongs to other pull requests and cannot establish the baseline.
+- Attribution compares a pull request only with non-presubmit jobs on its base branch in `branding.source_repo`. It uses each job's newest completed run with at least one passed or failed test-level outcome. Runs with only skipped tests, synthetic build-level failures, or no tests do not replace older usable evidence. Aster takes outcomes from that one run and does not combine them across runs. Jobs without an eligible run or an interpretable ref for that repository do not establish baseline evidence. Presubmit history belongs to other pull requests and cannot establish the baseline.
 - Cross-pull-request matching includes base branch, job name, and test name.
 - One peer is retained as evidence but does not produce `widespread`; two peers are required.
-- Source overlap uses JUnit-reported locations and current changed files. It is omitted when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
+- Source overlap uses JUnit-reported locations and current changed files. Aster omits it when the build is stale, changed files are truncated or unavailable, or the location points outside the checked-out repository.
 - A build that tested an older pull request head is marked stale.
-- While a newer build reruns the same revision, the check keeps the newest finished build when it failed, so a retest does not hide the failure. Aborted builds are skipped. A run on a newly pushed revision is reported as running.
+- While a newer build reruns the same revision, the check keeps the newest finished build if it failed, so a retest does not hide the failure. Aster skips aborted builds. It reports a run on a newly pushed revision as running.
 - JUnit `<failure>` and `<error>` cases both count as failed tests, retaining their messages, bodies, and reported source locations.
-- A failed check without a failing JUnit case receives one synthesized `Prow job execution` failure. It is compared with the same job on peers, not with base-branch tests by the generic name.
+- Aster synthesizes one `Prow job execution` failure for a failed check without a failing JUnit case. It compares that failure with the same job on peers, not with base-branch tests by the generic name.
 - When build artifacts have expired, the check is `UNKNOWN` even if GitHub still retains its commit status.
 - If an applicable check cannot be read, the pull request cannot report `PASSING`. Observed failures still report `FAILING`, and running checks still report `PENDING`; otherwise incomplete observations report `UNKNOWN`. A presubmit that has never run is not an observation error.
 
@@ -92,11 +92,13 @@ A shared failure:
 - names the base-branch jobs whose newest completed run with test-level outcomes also fails the test, when any do;
 - is `escalatable` only when no member already offers the cheaper single-pull-request escalation path.
 
-Clustering uses no model calls and is published by both deployment paths.
+Clustering uses no model calls, and both deployment paths publish it.
 
 The shared failure page leads with the grouping evidence and lists the affected pull requests beside the analysis. Matching test names do not establish matching causes or independent changes.
 
-When the base branch also fails the test, the page shows that run's published analysis with the same panel, chat, and fix path as the test page. Investigation and fixes apply to the selected base-branch run. If several base jobs fail, select a job to inspect its analysis. A representative PR-build investigation is available separately when escalation is enabled. A `pre_existing` verdict on a pull request page links to the base-branch run. The overview's Needs attention section lists every shared failure, widest first.
+When the base branch also fails the test, the page shows that run's published analysis with the same panel, chat, and fix path as the test page. Investigation and fixes apply to the selected base-branch run. If several base jobs fail, select a job to inspect its analysis.
+
+A representative PR-build investigation is available separately when escalation is enabled. A `pre_existing` verdict on a pull request page links to the base-branch run. The overview's Needs attention section lists every shared failure, widest first.
 
 ## Optional bot comment
 
@@ -133,7 +135,7 @@ Supply `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` as repository secrets on Pages
 
 When enabled, commenting runs after successful triage publication on both lightweight watch refreshes and full passes. It is separate from the fetch progress **Follow-up** phase, which covers notifications and issue recovery.
 
-Aster comments only when the current pass published a page for every open pull request. If `pull_requests.max` truncated the listing, the whole commenting pass is skipped to avoid creating links to pages that may be pruned.
+Aster comments only when the current pass published a page for every open pull request. If `pull_requests.max` truncated the listing, Aster skips the whole commenting pass to avoid creating links to pages that may be pruned.
 
 The pass skips:
 
@@ -144,9 +146,9 @@ The pass skips:
 - pull requests whose repeated posting failures reached the retry bound;
 - work beyond `comment.max_per_pass`.
 
-The activation watermark, local records, and a direct GitHub check protect against duplicates when cached Pages state expires. Published pages retained for posted comments are bounded to 90 days. `-skip-side-effects` and a failed triage pass suppress commenting.
+The activation watermark, local records, and a direct GitHub check protect against duplicates when cached Pages state expires. Aster bounds published pages retained for posted comments to 90 days. `-skip-side-effects` and a failed triage pass suppress commenting.
 
-On Pages, the comment is posted during the fetch step before the site deploys. A later workflow failure can temporarily leave a link pointing at the previous site contents. There is no per-pull-request opt-out; disable the feature when a repository does not want these comments.
+On Pages, the fetch step posts the comment before the site deploys. A later workflow failure can temporarily leave a link pointing at the previous site contents. When a repository does not want these comments, disable the feature; there is no per-pull-request opt-out.
 
 ## Optional AI escalation
 
@@ -158,11 +160,13 @@ server:
     enabled: true
 ```
 
-The `server.pullRequestEscalation.enabled` chart value requires `ai.enabled`, `pull_requests.enabled`, and authenticated server settings. Escalation is read-only, does not enable GitHub writes, and does not require `BOT_TOKEN`. Configure [GitHub read authentication](github-read-auth.md) so source and changed files are fetched without anonymous rate limits. Static Pages never exposes the escalation API.
+The `server.pullRequestEscalation.enabled` chart value requires `ai.enabled`, `pull_requests.enabled`, and authenticated server settings. Escalation is read-only, does not enable GitHub writes, and does not require `BOT_TOKEN`. Configure [GitHub read authentication](github-read-auth.md) to fetch source and changed files without anonymous rate limits. Static Pages never exposes the escalation API.
 
 The server reserves admission before reading GitHub or artifacts, runs one pull request or shared-failure escalation at a time, bounds the queue and total lifetime, and shares a result between authenticated maintainers. Provider errors, timeouts, and interrupted work remain retryable.
 
-Operation completion does not imply a verified diagnosis. Preliminary results retain their quality warnings and are labeled as hypotheses. An authenticated maintainer can explicitly retry, up to three preliminary results per subject and evidence build; transport failures preserve that budget. Reloading and status polling never start analysis. Replaying a request key does not start analysis while that key remains in the current server's bounded in-memory index. A different evidence build receives a fresh budget. Escalations honor `AI_MAX_OUTPUT_TOKENS` and record provider-reported usage in the private server ledger when usage accounting is enabled.
+Operation completion does not imply a verified diagnosis. Preliminary results retain their quality warnings and are labeled as hypotheses. An authenticated maintainer can explicitly retry, up to three preliminary results per subject and evidence build; transport failures preserve that budget.
+
+Reloading and status polling never start analysis. Replaying a request key does not start analysis while that key remains in the current server's bounded in-memory index. A different evidence build receives a fresh budget. Escalations honor `AI_MAX_OUTPUT_TOKENS` and record provider-reported usage in the private server ledger when usage accounting is enabled.
 
 A pull request escalation:
 

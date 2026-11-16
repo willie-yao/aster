@@ -58,7 +58,7 @@ Pink is absent from this table on purpose. `#ec4899` scores 3.53:1 on white and 
 
 ## Typography
 
-Brand surfaces use the system UI stack, matching the app's `typography.fontFamily`. The wordmark is weight 800 at roughly `-0.042em` tracking. Monospace is reserved for identifiers, paths, and log excerpts.
+Brand surfaces use the system UI stack, matching the app's `typography.fontFamily`. The wordmark is weight 800 at `-0.042em` tracking. Monospace is reserved for identifiers, paths, and log excerpts.
 
 ## Assets
 
@@ -73,7 +73,7 @@ Brand surfaces use the system UI stack, matching the app's `typography.fontFamil
 
 ## Regenerating the banner
 
-The banner ships as PNG, not SVG. GitHub renders README images in an isolated context that cannot load web fonts, so SVG text falls back to a different face on every viewer's machine. Rasterizing pins the result.
+The banner ships as PNG, not SVG. GitHub renders README images in an isolated context that cannot load web fonts. SVG text therefore falls back to a different face on every viewer's machine. Rasterizing pins the result.
 
 Render at `--force-device-scale-factor=2` for a 2560x600 image, then display it at 1280 CSS pixels:
 
@@ -85,4 +85,4 @@ chrome --headless --screenshot=aster-banner-dark.png \
   --window-size=1280,300 --force-device-scale-factor=2 'banner-src.html?mode=dark'
 ```
 
-The dot field uses a seeded generator, so the layout is identical on every run. Exact bytes are not portable: Chrome version, platform font rasterization, and PNG encoder all affect output, so regenerate both files on one machine and commit them as a pair. Keep every type size in the source at 18px or larger: GitHub's content column is about 900px, which scales the 1280px banner to roughly 0.7x.
+The dot field uses a seeded generator, so the layout is identical on every run. Exact bytes are not portable. Chrome version, platform font rasterization, and PNG encoder all affect output. Regenerate both files on one machine and commit them as a pair. Keep every type size in the source at 18px or larger: GitHub's content column is about 900px, which scales the 1280px banner to roughly 0.7x.

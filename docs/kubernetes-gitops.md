@@ -53,7 +53,7 @@ aster kubernetes gitops check \
   --gitops-dir gitops
 ```
 
-For an application-only deployment, omit `--execution-namespace`. The platform values file is not read and the generator omits the platform source and release. GitOps consumers must use remote artifact storage. The generator rejects the `local` storage provider so absolute workstation paths cannot enter the bundle.
+For an application-only deployment, omit `--execution-namespace`. The generator does not read the platform values file and omits the platform source and release. GitOps consumers must use remote artifact storage. The generator rejects the `local` storage provider so absolute workstation paths cannot enter the bundle.
 
 `render` and `check` are local operations. They do not read a kubeconfig, call a provider, contact an OCI registry, or inspect a Kubernetes cluster. `render` supports `--dry-run` to print the bounded create, replace, and remove plan without writing files.
 
@@ -85,7 +85,7 @@ project:
 
 A Fix-enabled application continues to use inline project values. The generator does not switch it to `project.existingConfigMap`, because the application chart must compare security-sensitive project and runtime settings.
 
-The ConfigMaps contain operational project configuration and prompt text. They contain no Secret values, but the consumer Git repository should still be access-controlled. Runtime credentials, TLS private keys, OAuth client secrets, provider tokens, session keys, and Flux repository credentials must be provisioned separately as Kubernetes Secrets. Generated values may reference existing Secret names and non-secret key names.
+The ConfigMaps contain operational project configuration and prompt text. They contain no Secret values, but you should still restrict access to the consumer Git repository. Provision runtime credentials, TLS private keys, OAuth client secrets, provider tokens, session keys, and Flux repository credentials separately as Kubernetes Secrets. Generated values may reference existing Secret names and non-secret key names.
 
 `check` regenerates the expected files without writing them. It compares all generated files byte-for-byte and reports only missing, stale, or unexpected paths. It also rejects mutable versions, Secret manifests, unsafe paths, credential material, broken ConfigMap references, and invalid dependency or version pairing.
 
@@ -126,6 +126,8 @@ revert the deployment commit
 
 A revert does not delete retained application PVC data. It also does not delete platform resources retained by the platform chart or infrastructure owned outside Helm.
 
-During incident response, an operator may suspend the affected HelmRelease or the enclosing Flux reconciliation before making a bounded manual intervention. Inspect `OCIRepository` and `HelmRelease` Ready conditions, Helm history, and controller events without reading Secret values. Restore the reviewed Git state, then resume reconciliation and confirm that both releases become Ready. Do not add a separate rollback controller.
+During incident response, you may suspend the affected HelmRelease or the enclosing Flux reconciliation before making a bounded manual intervention. Inspect `OCIRepository` and `HelmRelease` Ready conditions, Helm history, and controller events without reading Secret values.
+
+Restore the reviewed Git state, then resume reconciliation and confirm that both releases become Ready. Do not add a separate rollback controller.
 
 Upstream behavior and field reference are documented by Flux in [OCI repositories](https://fluxcd.io/flux/components/source/ocirepositories/), [Helm releases](https://fluxcd.io/flux/components/helm/helmreleases/), and the [HelmRelease v2 API](https://fluxcd.io/flux/components/helm/api/v2/).

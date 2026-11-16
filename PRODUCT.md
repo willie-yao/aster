@@ -26,7 +26,7 @@ Aster is never described as autonomous repair, self-healing, or guaranteed root-
 
 ## Operating Context
 
-Consumes Prow job configuration from kubernetes/test-infra, build artifacts and JUnit XML from GCS, and pinned repository source. Analysis runs an agentic tool-calling loop whose answers are gated by deterministic quality floors and a deterministic critique pass before caching.
+Consumes Prow job configuration from kubernetes/test-infra, build artifacts and JUnit XML from GCS, and pinned repository source. Analysis runs an agentic tool-calling loop. Deterministic quality floors and a deterministic critique pass gate its answers before caching.
 
 Two deployments read one identical JSON contract:
 
@@ -38,7 +38,7 @@ The interface must stay correct when a capability is absent. Action affordances 
 ## Capabilities and Constraints
 
 - Surfaces: Overview (Needs attention, Job ledger), Failure Trends, Pulls, Job detail, Test detail, Build failure, plus operator-gated Analysis Health and AI Usage.
-- Signing in unlocks the write and conversation surfaces: the inline action bar (Resolve failure, Draft issue, Propose fix), their dialogs and draft previews, bounded analysis chat, escalation, and the analysis trace ledger. These exist only in the Kubernetes deployment; the Pages deployment has no server and does not render them.
+- Signing in unlocks the write and conversation surfaces: the inline action bar (Resolve failure, Draft issue, Propose fix), their dialogs and draft previews, bounded analysis chat, escalation, and the analysis trace ledger. These exist only in the Kubernetes deployment. The Pages deployment has no server and does not render them.
 - Engine and consumer are separate repositories. Consumers own `project.yaml` and `prompts/system.md`; the engine owns prompts, tool schemas, cache shape, and the output contract.
 - Pre-v1 with two internal consumers. Breaking changes are allowed anywhere and no backward-compatibility shims are carried.
 - Data volume is real: a single job carries up to 20 recent runs, and an overview renders dozens of jobs at once. Layouts are sized for real payloads, not samples.
