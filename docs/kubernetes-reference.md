@@ -1,6 +1,6 @@
 # Kubernetes operator reference
 
-This page contains the architecture, deployment behavior, upgrade rules, and advanced chart configuration that do not belong in the first-run path. Start with the [Kubernetes quickstart](kubernetes.md) or the generated `deploy/README.md`.
+This page covers architecture, deployment behavior, upgrade rules, and advanced chart configuration. Start with the [Kubernetes quickstart](kubernetes.md) or the generated `deploy/README.md`.
 
 Authoritative failure analysis always runs in-process next to the worker or CronJob. The chart has no failure-analysis runtime selector.
 
@@ -95,7 +95,7 @@ Every operation validates:
 
 The wrapper passes the current bundle with `--set-file`. It clears stale chart-managed project maps and creates one release-managed ConfigMap containing `project.yaml`, `system.md`, and each consumer skill. Checksums roll the writer and interactive server when the bundle changes.
 
-Relative `--values` paths are resolved from `--project-dir`. Install refuses an existing release. Upgrade requires an existing release. The current kubectl or Helm context is never selected implicitly.
+The wrapper resolves relative `--values` paths from `--project-dir`. Install refuses an existing release. Upgrade requires an existing release. The wrapper never selects the current kubectl or Helm context implicitly.
 
 ## Development and release references
 
@@ -130,7 +130,7 @@ The engine repository includes a helper for a published `sha-<commit>` snapshot:
   --values "$PROJECT_DIR/deploy/values.yaml"
 ```
 
-The helper requires an existing release, preserves `analysisCache.generation`, validates the chart, shows image changes, and uses Helm rollback support. It asks Helm to merge the installed values with every explicit `--values` overlay into one private temporary candidate, then uses that same candidate for lint, render, and `helm upgrade --reset-values`. Installed values that the current chart no longer accepts must be removed before running the helper. When an image inspection tool is available, it also checks the rendered image manifests.
+The helper requires an existing release, preserves `analysisCache.generation`, validates the chart, shows image changes, and uses Helm rollback support. It asks Helm to merge the installed values with every explicit `--values` overlay into one private temporary candidate. It then uses that candidate for lint, render, and `helm upgrade --reset-values`. Before running the helper, remove installed values that the current chart no longer accepts. When an image inspection tool is available, it also checks the rendered image manifests.
 
 Do not use the snapshot helper for a stable release upgrade. Prefer the bundle wrapper and a published chart version.
 
@@ -203,7 +203,7 @@ Use the full chart values that match the installed chart version before adding a
 
 Both doctors reject invalid Service exposure settings, including universal source ranges and internal LoadBalancers without annotations. With authenticated features enabled, a public LoadBalancer requires a single bounded source range, an explicit internal origin, or `publicOriginAcknowledged: true`. Multiple ranges without an internal origin require acknowledgement; the consumer doctor warns and the deployment doctor reports them as unverified. Generic Service annotations do not establish origin restriction. The consumer doctor also checks NetworkPolicy independently.
 
-If `fetcher.timeout` expires during individual analysis, private analysis state and traces are checkpointed for the next pass without publishing dashboard changes or starting pattern analysis or follow-up actions. Accepted entries can be reused; work without a usable result remains eligible for analysis. Rescued drafts follow the normal cache acceptance and bounded preliminary-retry policy. Explicit cancellation still rolls back uncommitted analysis state.
+If `fetcher.timeout` expires during individual analysis, the writer checkpoints private analysis state and traces for the next pass. It publishes no dashboard changes and starts no pattern analysis or follow-up actions. The next pass can reuse accepted entries; work without a usable result remains eligible for analysis. Rescued drafts follow the normal cache acceptance and bounded preliminary-retry policy. Explicit cancellation still rolls back uncommitted analysis state.
 
 Interactive server upgrades use a `Recreate` rollout. For non-Helm deployments, stop old server processes before starting replacements. Chat-only replicas require advisory locking, atomic rename, and file and directory synchronization on the shared filesystem.
 

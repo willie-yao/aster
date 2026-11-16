@@ -4,7 +4,7 @@ See [Local development](docs/development.md) for setup and [Testing](docs/testin
 
 ## Finding your way around
 
-`backend/internal` has many small packages. Start with the "Repo layout" and "How the pieces fit" sections in [AGENTS.md](AGENTS.md): the layout map is grouped by role and covers every package, and the second section names the five packages most changes touch. Keep the map current when you add or remove a package; `make check-repo-map` enforces it and runs in CI.
+`backend/internal` has many small packages. Start with the "Repo layout" and "How the pieces fit" sections in [AGENTS.md](AGENTS.md). The layout map groups packages by role and covers every package. The second section names the five packages most changes touch. Keep the map current when you add or remove a package. `make check-repo-map` enforces it and runs in CI.
 
 ## Prerequisites
 

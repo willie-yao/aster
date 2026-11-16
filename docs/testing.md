@@ -1,10 +1,10 @@
 # Testing
 
-The engine has deterministic backend, frontend, and end-to-end tests. Live model quality evaluations are maintained separately from the engine.
+The engine has deterministic backend, frontend, and end-to-end tests. A separate repository maintains live model quality evaluations.
 
 ## Full validation
 
-Run these before opening a pull request that affects both backend and frontend:
+Before opening a pull request that affects both backend and frontend, run these:
 
 ```bash
 make build
@@ -15,7 +15,7 @@ go -C backend test ./... -race -count=1
 cd frontend && npm ci && npx tsc -b && npm run lint && npm run build
 ```
 
-CI runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks for the main backend module plus frontend type check, tests, lint, and root/subpath builds. The backend job uses the pinned golangci-lint suite, including staticcheck; `make lint` installs and runs the same suite locally.
+CI runs build, race-enabled tests, vet, lint, module-tidiness, and formatting checks for the main backend module. It also runs the frontend type check, tests, lint, and root/subpath builds. The backend job uses the pinned golangci-lint suite, including staticcheck. `make lint` installs and runs the same suite locally.
 
 Check Go formatting with:
 
@@ -44,7 +44,7 @@ an injected prompter. `onboard/terminal` owns process streams, TTY detection, an
 concrete input implementations. Headless onboarding and Kubernetes deployment
 must not depend on the terminal adapter or its UI libraries.
 
-Prompt text in `agentic.go`, `responseformat.go`, and `critique.go` is pinned by anchor tests. Update the relevant anchor test in the same change as intentional prompt edits.
+Anchor tests pin prompt text in `agentic.go`, `responseformat.go`, and `critique.go`. Update the relevant anchor test in the same change as intentional prompt edits.
 
 ## Test helpers
 
@@ -60,8 +60,8 @@ failure. Keep differing render providers and viewport configuration local.
 
 `failedJUnitRun` supplies the shared grounded JUnit fixture with fresh nested
 objects. `MemoryStorage` supplies only the three storage methods used by tests.
-Keep bespoke fixtures when missing evidence, source identity, or malformed
-storage is the subject, and do not share a live Vite server or mutable fixtures
+When missing evidence, source identity, or malformed storage is the subject,
+keep bespoke fixtures. Do not share a live Vite server or mutable fixtures
 across suites.
 
 ## End-to-end pipeline tests
@@ -79,7 +79,7 @@ The harness uses:
 
 `make e2e` also runs the hermetic email and fix-PR loop in `internal/fetcher`. That scenario uses temporary Prow artifacts, a fake GitHub transport, a deterministic fix agent, and an in-memory email sender. It covers the recurring-pattern alert, action links, fix tracking, and deduplication across repeated passes. A second bridge test proves the finalized pattern bridge reaches the same email side effects. Neither test sends real email, calls GitHub, or runs OpenCode.
 
-Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private artifact content before committing fixtures. The email-loop test writes its compact sequential artifacts into temporary directories instead of committing additional fixture trees.
+Fixtures live under `backend/internal/e2e/testdata`. Scrub secrets and private artifact content before committing fixtures. The email-loop test writes its sequential artifacts into temporary directories instead of committing additional fixture trees.
 
 ## AI quality evaluations
 
@@ -99,4 +99,4 @@ When editing Markdown:
 
 - Verify local links and heading anchors.
 - Validate generated scaffold text with `go test ./internal/onboard`.
-- Run `make helm-check` when Helm templates, packaged files, examples, or values change. It lints the chart, verifies the default in-process render, Agent Sandbox runtime values, invalid-value failures, and the operational helpers.
+- When Helm templates, packaged files, examples, or values change, run `make helm-check`. It lints the chart, verifies the default in-process render, Agent Sandbox runtime values, invalid-value failures, and the operational helpers.

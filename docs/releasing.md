@@ -13,13 +13,13 @@ How to cut a release of the Aster engine. Consumers on the GitHub Actions + Page
 
 Before the first stable release in a major, the moving alias does not exist. Consumers must use `@main`, a commit SHA, or an exact prerelease tag that is already published. Do not document `@v1` as usable until `v1.0.0` exists.
 
-See [CHANGELOG.md](../CHANGELOG.md) for what bumps major/minor/patch. Note that internal critique-version bumps and stronger investigation floors can force re-analysis on upgrade and are therefore at least a minor bump; call them out in the release notes.
+See [CHANGELOG.md](../CHANGELOG.md) for what bumps major/minor/patch. Internal critique-version bumps and stronger investigation floors can force re-analysis on upgrade, so they are at least a minor bump. Call them out in the release notes.
 
 ## Release notes
 
 Each release has one notes file named for its tag, `changelog/<tag>.md`, listed in the `CHANGELOG.md` index. The file holds the notes body alone, without a version heading of its own. It is published verbatim as the GitHub Release body, so the release page shows the curated notes rather than a generated commit list. The publisher refuses to release a tag whose notes file is missing, empty, or absent from the index.
 
-Notes are assembled from the `release-note` blocks of the pull requests merged in the release line. A prerelease covers everything since the previous tag; a stable release covers everything since the previous *stable* tag in that line. Maintenance-patch notes cover fixes backported to that minor line, not unrelated changes on `main`.
+Assemble the notes from the `release-note` blocks of the pull requests merged in the release line. A prerelease covers everything since the previous tag; a stable release covers everything since the previous *stable* tag in that line. Maintenance-patch notes cover fixes backported to that minor line, not unrelated changes on `main`.
 
 Because the notes are published verbatim as the release body, relative paths in them do not resolve against the repository. Link repository files with absolute URLs pinned to the tag, such as `https://github.com/willie-yao/aster/blob/<tag>/docs/<file>.md`. Rewrite any relative or root-relative link copied out of a `release-note` block.
 
@@ -125,7 +125,7 @@ docker buildx imagetools inspect \
 
 ## Rolling back
 
-A bad release: cut a new patch with the fix. To stop consumers pulling a broken stable, point the `vMAJOR` alias back at the last good tag:
+For a bad release, cut a new patch with the fix. To stop consumers pulling a broken stable, point the `vMAJOR` alias back at the last good tag:
 
 ```bash
 git tag -f v1 v1.3.4        # last known-good
@@ -136,15 +136,15 @@ Consumers pinned to an exact tag are unaffected.
 
 ## Retracting a release
 
-Deleting a tag does not un-publish a release, and the pieces come apart in ways that matter.
+Deleting a tag does not un-publish a release.
 
-**Deleting a tag does not reliably withdraw the Go module.** Once `proxy.golang.org` has fetched `github.com/willie-yao/aster/backend@<tag>`, it may keep serving that version from its cache even though the tag, and even the whole repository, is gone. The mirror does this deliberately, to avoid breaking builds that already depend on it. All 13 deleted `v0.9.0-rc.*` versions were still listed here well after their tags were removed:
+**Deleting a tag does not reliably withdraw the Go module.** Once `proxy.golang.org` has fetched `github.com/willie-yao/aster/backend@<tag>`, it may keep serving that version from its cache even though the tag, and even the whole repository, is gone. The mirror does this to avoid breaking builds that already depend on it. All 13 deleted `v0.9.0-rc.*` versions were still listed here well after their tags were removed:
 
 ```bash
 curl -s https://proxy.golang.org/github.com/willie-yao/aster/backend/@v/list
 ```
 
-The consequence is the rule that matters most here: **never reuse a version number for different content.** A version is identified by a checksum that does not change, so after re-tagging, some clients keep getting the original cached bytes while any client that fetches the rebuilt content fails verification with a security error rather than a clean failure. If a tag was wrong, burn the number and move to the next one. The upstream advice is the same: publish a new version instead.
+The consequence is the rule that matters most here: **never reuse a version number for different content.** A version is identified by a checksum that does not change, so after re-tagging, some clients keep getting the original cached bytes. Any client that fetches the rebuilt content fails verification with a security error rather than a clean failure. If a tag was wrong, burn the number and move to the next one. The upstream advice is the same: publish a new version instead.
 
 The **Release tag** workflow enforces the part it can see: it refuses a version the module mirror is currently serving. It cannot see a version that was never fetched before its tags were deleted, so treat never reusing a version as an operating rule rather than something the tooling guarantees.
 
@@ -160,4 +160,4 @@ retract (
 
 **Images and charts are separate.** Deleting a git tag leaves `ghcr.io/<owner>/aster:<tag>`, the remote fixer, the Fix executor, and both OCI charts published and pullable. Removing those means deleting the package versions from GHCR directly, which needs package-admin access: the web UI, or a token with `delete:packages` for the API. A public version with more than 5,000 downloads cannot be deleted without GitHub Support. Deleting a chart version breaks any GitOps deployment pinned to it, so repoint consumers first.
 
-**The GitHub Release is the only cheap part.** It can be deleted or edited freely; nothing resolves against it except the CLI asset download URLs.
+**The GitHub Release retracts directly.** You can delete or edit it freely; nothing resolves against it except the CLI asset download URLs.

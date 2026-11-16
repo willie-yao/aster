@@ -76,7 +76,7 @@ helm upgrade --install "$PLATFORM_RELEASE" \
   --rollback-on-failure
 ```
 
-Use the same command for upgrades after reviewing the render and Helm history. `application.releaseName` and `execution.namespace` cannot change after first installation.
+After reviewing the render and Helm history, use the same command for upgrades. `application.releaseName` and `execution.namespace` cannot change after first installation.
 
 The application values reference the platform identity:
 
@@ -94,4 +94,4 @@ agentSandbox:
 
 Roll back with Helm to a recorded prior revision. Platform rollback does not change externally owned controller, runtime, node, storage, Secret, DNS, certificate, or provider resources.
 
-Uninstall retains the execution namespace, binding, quota, limits, ServiceAccount, default-deny policy, and Cilium policy. Confirm there are no Sandboxes, Pods, or application RBAC references before separately deleting those retained resources.
+Uninstall retains the execution namespace, binding, quota, limits, ServiceAccount, default-deny policy, and Cilium policy. Before separately deleting those retained resources, confirm there are no Sandboxes, Pods, or application RBAC references.

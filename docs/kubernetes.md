@@ -2,7 +2,7 @@
 
 Use Kubernetes when the dashboard needs a private in-cluster model endpoint, shared persistent data, authenticated server features, or cluster-local integration. Use [GitHub Actions and Pages](github-pages.md) for a public, read-only dashboard that does not need a cluster.
 
-Start with `aster onboard` and select **Kubernetes with Helm**. The generated consumer repository contains `project.yaml`, `prompts/system.md`, optional skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`. Interactive onboarding leaves storage as a reviewed placeholder. For non-interactive onboarding, provide exactly one of `-k8s-storage-class` or `-k8s-existing-claim`; the CLI does not infer platform storage.
+Start with `aster onboard` and select **Kubernetes with Helm**. The generated consumer repository contains `project.yaml`, `prompts/system.md`, optional skills, `deploy/values.yaml`, and a project-specific `deploy/README.md`. Interactive onboarding leaves storage as a reviewed placeholder. For non-interactive onboarding, provide exactly one of `-k8s-storage-class` or `-k8s-existing-claim`. The CLI does not infer platform storage.
 
 This page is the canonical contributor install, verification, upgrade, and rollback procedure. Cluster administrators should prepare prerequisites with [Kubernetes platform setup](kubernetes-platform.md). Detailed chart behavior is in the [Kubernetes operator reference](kubernetes-reference.md). For pull-based deployments, see [Flux GitOps deployment](kubernetes-gitops.md).
 
@@ -14,7 +14,7 @@ Obtain these reviewed inputs from the platform administrator:
 - the application namespace and Helm release name;
 - a release-dedicated execution namespace when Agent Sandbox Fix is enabled;
 - a published engine tag and matching chart version;
-- an RWX StorageClass or existing claim;
+- a ReadWriteMany (RWX) StorageClass or existing claim;
 - existing Secret names and non-secret key names;
 - the public origin and OAuth callback, when enabled;
 - one expected project job for first-deployment verification.
@@ -82,7 +82,7 @@ CLI_PATH=$(
 ) && export ASTER="$CLI_PATH"
 ```
 
-A missing asset, missing checksum entry, checksum mismatch, or unavailable checksum tool stops the procedure before installation. Run the block as a whole and stop on any nonzero result. It cleans up downloads immediately, preserves caller shell options and traps, and exports `ASTER` only after installation and cleanup succeed. Verification failures leave an existing binary and `ASTER` unchanged; a failed final install may have modified its destination.
+Run the block as a whole and stop on any nonzero result. A missing asset, missing checksum entry, checksum mismatch, or unavailable checksum tool stops the procedure before installation. The block cleans up downloads immediately and preserves caller shell options and traps. It exports `ASTER` only after installation and cleanup succeed. Verification failures leave an existing binary and `ASTER` unchanged. A failed final install may have modified its destination.
 
 ## Review the consumer bundle
 
@@ -96,7 +96,7 @@ Review before every install or upgrade:
 
 Keep chat, GitHub writes, public ingress, and experimental runtimes disabled until the baseline dashboard is healthy.
 
-Inspect the complete values for the selected chart version when needed:
+When needed, inspect the complete values for the selected chart version:
 
 ```bash
 helm show values \
@@ -173,7 +173,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$SERVER"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deployment/$WRITER" --timeout=10m
 ```
 
-Port-forward the Service in a second terminal using the same reviewed `CONTEXT` and `NAMESPACE` and the resolved `SERVICE` value from the first terminal:
+In a second terminal, port-forward the Service. Use the same reviewed `CONTEXT` and `NAMESPACE`, and the resolved `SERVICE` value from the first terminal:
 
 ```bash
 kubectl --context "$CONTEXT" -n "$NAMESPACE" port-forward "service/$SERVICE" 18080:80
@@ -251,7 +251,7 @@ git restore --source="$PRIOR_CONSUMER_COMMIT" -- \
 git restore --source="$PRIOR_CONSUMER_COMMIT" -- skills 2>/dev/null || true
 ```
 
-Restore the CLI and chart version matching the prior consumer state, rerun the live doctor with `--action upgrade`, and repeat verification. Rollback does not delete retained PVC data or externally owned platform resources.
+Restore the CLI and chart version matching the prior consumer state, rerun the live doctor with `--action upgrade`, and repeat verification. Rollback does not delete retained PersistentVolumeClaim (PVC) data or externally owned platform resources.
 
 ## Next references
 

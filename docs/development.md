@@ -63,7 +63,7 @@ make snapshot-data SITE=https://your-dashboard
 make dev
 ```
 
-It mirrors only what a deployed site publishes at `/data`, which is the same contract the SPA reads. Operational files are not published there and are not mirrored. Unlike a local fetch, the snapshot carries published AI analyses, recurring patterns, and pull request triage, so the pages that render analysis have real content without any AI credentials.
+It mirrors only what a deployed site publishes at `/data`, which is the same contract the SPA reads. The site publishes no operational files there, so the snapshot omits them. Unlike a local fetch, the snapshot carries published AI analyses, recurring patterns, and pull request triage. The pages that render analysis therefore have real content without any AI credentials.
 
 ## Develop against the authenticated UI
 
@@ -74,25 +74,25 @@ make snapshot-data SITE=https://your-dashboard   # once, for the dashboard conte
 make dev-mock
 ```
 
-Open <http://localhost:5173> and choose **Sign in**. There is no GitHub round trip: the session is established immediately, and **Sign out** returns you to the anonymous state, so both are reachable while iterating.
+Open <http://localhost:5173> and choose **Sign in**. There is no GitHub round trip: the session starts immediately. **Sign out** returns you to the anonymous state, so you can exercise both while iterating.
 
-Every feature the deployed dashboard advertises is enabled, and the capability descriptor, routes, auth middleware, CSRF guard, and JSON shapes are the production ones. Only the work behind them is fabricated:
+Every feature the deployed dashboard advertises is enabled. The capability descriptor, routes, auth middleware, CSRF guard, and JSON shapes are the production ones. Only the work behind them is fabricated:
 
-- Issue and fix drafting, both the immediate preview and the asynchronous request with its pending, ready, confirmed, and cancelled states. Drafts quote the published analysis and confirmation returns an `example.invalid` link instead of writing to GitHub.
+- Issue and fix drafting, both the immediate preview and the asynchronous request with its pending, ready, confirmed, and cancelled states. Drafts quote the published analysis. Confirmation returns an `example.invalid` link instead of writing to GitHub.
 - Analysis chat, including the streamed turn phases, citations, proposed revisions, and the chat-to-fix preview.
 - On-demand pull request and shared failure escalation.
-- Analysis health, AI usage, fetch status, and pattern diagnostics, backed by fabricated files written into the data directory on first start. Delete them with `make clean-mock` to regenerate.
+- Analysis health, AI usage, fetch status, and pattern diagnostics, backed by fabricated files that the mock server writes into the data directory on first start. Delete them with `make clean-mock` to regenerate.
 
 Resolution is not faked. **Mark resolved** runs the real code against the snapshot, so it computes a real watermark, writes `frontend/public/data/resolved.json`, and reports the same refusals production does when a pattern is recovered or its evidence is unavailable.
 
 Useful knobs:
 
-- `MOCK_LATENCY` sets how long a fabricated model call takes, so pending and streaming states can be slowed down or removed (`MOCK_LATENCY=20s`, `0s`).
+- `MOCK_LATENCY` sets how long a fabricated model call takes, so you can slow down or remove pending and streaming states (`MOCK_LATENCY=20s`, `0s`).
 - `MOCK_LOGIN` sets the admin login a sign-in establishes.
 - `MOCK_HOST` and `MOCK_PORT` move the API server, which binds `127.0.0.1:8080` by default. The Vite proxy follows both.
 - `make mock-server` runs the API alone, for curl or for pointing an already-running frontend at it.
 
-The mock server grants admin to anyone who reaches it and carries no credentials. It binds loopback by default; keep it that way.
+The mock server grants admin to anyone who reaches it and carries no credentials. It binds loopback by default. Keep it that way.
 
 ## Preview admin actions against real services
 

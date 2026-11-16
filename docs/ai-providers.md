@@ -13,7 +13,9 @@ export AI_MODEL="<model-id>"
 printf 'AI token: '; read -rs AI_TOKEN; export AI_TOKEN; printf '\n'
 ```
 
-Use your provider's full operation URL and exact model identifier. For Responses, set `AI_API=responses` and use its `/responses` operation URL. For [Pages](github-pages.md#repository-configuration), store the coordinates in repository variables and the token in a Secret. The [Kubernetes configuration](#kubernetes) uses Helm values and an existing Secret. Setup and doctor do not contact the provider; the first AI fetch checks the configured endpoint.
+Use your provider's full operation URL and exact model identifier. For Responses, set `AI_API=responses` and use its `/responses` operation URL.
+
+For [Pages](github-pages.md#repository-configuration), store the coordinates in repository variables and the token in a Secret. The [Kubernetes configuration](#kubernetes) uses Helm values and an existing Secret. Setup and doctor do not contact the provider; the first AI fetch checks the configured endpoint.
 
 ## Configure provider coordinates and project behavior
 
@@ -57,7 +59,7 @@ Variables keep private deployment coordinates out of committed source, but they 
 
 ### Kubernetes
 
-Set `ai.api`, `ai.endpoint`, `ai.model`, and optional `ai.reasoningEffort` in Helm values. Put the token in an existing Secret and reference it with `ai.existingSecret`. The chart and dashboard should not own the provider Secret value. See [Kubernetes platform setup](kubernetes-platform.md#secret-ownership).
+Set `ai.api`, `ai.endpoint`, `ai.model`, and optional `ai.reasoningEffort` in Helm values. Put the token in an existing Secret and reference it with `ai.existingSecret`. Keep the provider Secret value out of the chart and dashboard. See [Kubernetes platform setup](kubernetes-platform.md#secret-ownership).
 
 ## Function calling is required
 
@@ -73,7 +75,11 @@ Set provider reasoning effort through `AI_REASONING_EFFORT` or Helm `ai.reasonin
 none, low, medium, high, xhigh, max
 ```
 
-Unknown values fail before provider I/O. Chat Completions sends `reasoning_effort`; Responses sends `reasoning.effort`. GPT-5.4 and later OpenAI models support Chat Completions tool calling only with `none`, so Aster rejects another explicit effort for canonical `gpt-5.4`-and-later model IDs and provider-qualified IDs ending in that canonical form. Use Responses to request higher effort. Arbitrary provider aliases cannot be inferred; other provider and model support varies. Aster does not silently change an unsupported value.
+Unknown values fail before provider I/O. Chat Completions sends `reasoning_effort`; Responses sends `reasoning.effort`.
+
+GPT-5.4 and later OpenAI models support Chat Completions tool calling only with `none`. Aster rejects another explicit effort for canonical `gpt-5.4`-and-later model IDs and provider-qualified IDs ending in that canonical form. Use Responses to request higher effort.
+
+Aster cannot infer arbitrary provider aliases, and support varies for other providers and models. Aster does not silently change an unsupported value.
 
 Reasoning effort is private content-free provenance. A non-empty value changes provider and cache fingerprints, but existing reusable analyses remain cached unless cache generation or another acceptance rule changes.
 
@@ -118,7 +124,7 @@ ai:
   service_tier: flex
 ```
 
-Flex processing is accepted only for this exact OpenAI host and the Responses API. Aster uses a minimum 15-minute analysis timeout, retries provider capacity responses with backoff, then sends the final attempt with `service_tier: auto`. The provider-echoed tier is recorded on each model-request trace. Aster also preserves the Responses assistant `phase` field when compaction or forced finalization reconstructs an assistant message for a later request.
+Aster accepts flex processing only for this exact OpenAI host and the Responses API. Aster uses a minimum 15-minute analysis timeout, retries provider capacity responses with backoff, then sends the final attempt with `service_tier: auto`. Aster records the provider-echoed tier on each model-request trace. Aster also preserves the Responses assistant `phase` field when compaction or forced finalization reconstructs an assistant message for a later request.
 
 Chat Completions direct-command deployment variables:
 
@@ -138,7 +144,7 @@ Azure deployments commonly use a deployment-specific URL and an `api-key` header
 
 Use the full OpenAI-compatible operation endpoint and the exact model identifier reported by the server. Self-hosted endpoints may require a non-empty placeholder `AI_TOKEN` even when the endpoint intentionally ignores authentication. Treat that only as a deployment compatibility input, not as a security control.
 
-Tool calling is model-template-specific. Configure the server's tool parser and auto-tool selection when required. A compatible `/v1/models` response lets Aster size context conservatively; otherwise use a provider configuration whose model limits are known and tested.
+Tool calling is model-template-specific. When required, configure the server's tool parser and auto-tool selection. A compatible `/v1/models` response lets Aster size context conservatively; otherwise use a provider configuration whose model limits are known and tested.
 
 ### Ray Serve
 
@@ -148,7 +154,7 @@ Ray Serve's OpenAI-compatible LLM app works when the model ID matches `model_loa
 
 Each analysis records content-free fingerprints for the endpoint, model, prompt, and skills. Coordinate changes affect new analyses but do not invalidate an otherwise reusable entry. Set `AI_CACHE_GENERATION`, the Pages `ai-cache-generation` input, or Helm `analysisCache.generation` for an intentional reversible rebaseline.
 
-Both provider APIs receive a content-free `prompt_cache_key` on the main analysis loop and Tool-backed critique repairs. Its workspace component routes the stable engine and consumer prompt prefix together; its shard identifies the exact enabled Tool schemas. Build IDs, source revisions, artifact paths, prompts, and Tool contents are not included in the key.
+Both provider APIs receive a content-free `prompt_cache_key` on the main analysis loop and Tool-backed critique repairs. Its workspace component routes the stable engine and consumer prompt prefix together; its shard identifies the exact enabled Tool schemas. The key includes no build IDs, source revisions, artifact paths, prompts, or Tool contents.
 
 ## Usage metadata
 
@@ -168,11 +174,15 @@ Agent Sandbox Fix generation uses a separate version-pinned OpenCode transport.
 
 Configure the complete HTTPS operation endpoint. Chat Completions must end in `/chat/completions`; Responses must end in `/responses`. Aster rejects an API and path mismatch instead of guessing a provider base URL.
 
-For `githubcopilot.com` and its subdomains, pinned OpenCode chooses the API by model ID, not by the `api` field. GPT-5 and later use Responses, except `gpt-5-mini`, which uses Chat Completions. Other models, including Claude, use Chat Completions. The pinned provider removes the `gpt-5-chat-latest` alias. Declare the matching `api` and endpoint path in both the project and Helm values. Mismatches fail validation before Fix starts. The Copilot SDK handles reasoning streams that the generic OpenAI Responses client cannot parse.
+For `githubcopilot.com` and its subdomains, pinned OpenCode chooses the API by model ID, not by the `api` field. GPT-5 and later use Responses, except `gpt-5-mini`, which uses Chat Completions. Other models, including Claude, use Chat Completions. The pinned provider removes the `gpt-5-chat-latest` alias.
+
+Declare the matching `api` and endpoint path in both the project and Helm values. Mismatches fail validation before Fix starts. The Copilot SDK handles reasoning streams that the generic OpenAI Responses client cannot parse.
 
 Direct bearer mode exposes one dedicated inference credential through the fixed executor environment. Direct unauthenticated mode renders no Secret reference. Gateway mode is tokenless, requires `auth.type: none`, and depends on gateway-side workload authorization that the executor cannot impersonate. Network reachability alone is not authentication.
 
-Pinned OpenCode 1.18.2 supports empty provider-default effort plus `none`, `low`, `medium`, `high`, and `xhigh`. It rejects `max` even when the engine-native provider transport supports that value. For Copilot Responses, the pinned SDK omits explicit effort on GPT-6 models, so Aster rejects it instead of ignoring it. Leave `reasoning_effort` unset in `project.yaml` and `reasoningEffort` empty in Helm for GPT-6. GPT-5 Responses and Claude Chat Completions support explicit effort. The project and Helm values must match.
+Pinned OpenCode 1.18.2 supports empty provider-default effort plus `none`, `low`, `medium`, `high`, and `xhigh`. It rejects `max` even when the engine-native provider transport supports that value.
+
+For Copilot Responses, the pinned SDK omits explicit effort on GPT-6 models, so Aster rejects it instead of ignoring it. Leave `reasoning_effort` unset in `project.yaml` and `reasoningEffort` empty in Helm for GPT-6. GPT-5 Responses and Claude Chat Completions support explicit effort. The project and Helm values must match.
 
 Every deployed endpoint must use HTTPS. The `public_ca_private_dns` or Helm `publicCAPrivateDNS` field must remain false for direct providers and may be true only for a privately resolved public gateway FQDN whose certificate chains to a public CA.
 

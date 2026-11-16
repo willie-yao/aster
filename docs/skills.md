@@ -12,7 +12,7 @@ The engine composes one merged set for the dashboard-owned analyzer:
 2. **Engine Kubernetes profile.** Enabled when the effective `ai.tools` selection includes `k8s` or an individual `k8s.*` tool. It contains provider-neutral procedures for Machine and Node initialization, Pod startup, cluster provisioning, and Service, API, DNS, and kube-proxy connectivity.
 3. **Consumer recipes.** Loaded from `<project-dir>/skills/*.{yaml,yml}` for project and provider knowledge.
 
-These are composition sources, not precedence layers. The complete merged set is sorted by priority descending and ID ascending, and only recipes whose triggers match a model draft are surfaced for that draft.
+These are composition sources, not precedence layers. The engine sorts the complete merged set by priority descending, then ID ascending. It surfaces only recipes whose triggers match a model draft, and only for that draft.
 
 The universal system prompt stays small. The Prow profile is engine-owned because Prow artifacts are part of the product contract. Kubernetes knowledge is conditional because some Prow consumers do not produce Kubernetes cluster dumps or use the cluster-navigation tools. Provider details such as CAPZ, Azure resources, ASO, and project flavor behavior remain consumer-owned. The failure prompt may name the current test-infra config file and discovery revision, while `prowjob.json` remains the evidence for what the failed run actually executed.
 
@@ -26,7 +26,7 @@ Each recipe declares:
 
 Procedures are untrusted guidance. They cannot override the system prompt, Tool constraints, the result schema, or the tool budget. The critique gate wraps procedures with this boundary.
 
-The analyzer matches the bounded failure signal before iteration one, resolves ranked candidates with `skills.Set.Plan`, and prepends the bounded plan. Groups that still have a candidate but no substantive read are returned with each tool result and reopen a tools-free answer, so the agent finishes the plan before it finalizes. The gate uses those same candidates for deterministic critique repair, with a bounded tree-walk fallback for unresolved or newly matched groups.
+The analyzer matches the bounded failure signal before iteration one, resolves ranked candidates with `skills.Set.Plan`, and prepends the bounded plan. The analyzer returns groups that still have a candidate but no substantive read with each tool result. Those groups reopen a tools-free answer, so the agent finishes the plan before it finalizes. The gate uses those same candidates for deterministic critique repair, with a bounded tree-walk fallback for unresolved or newly matched groups.
 
 ## When to author a skill
 
@@ -36,7 +36,7 @@ A skill is the right tool when **all** of the following are true:
 - A canonical diagnostic procedure exists (e.g. "for an x509 webhook failure, always look at the cert-manager Certificate config and the webhook server secret").
 - The weaker AI model used by the consumer (e.g. Qwen3-235B) stops short of that procedure even with the engine's prompt-side rules.
 
-If the model already does the right thing on this failure pattern, do not author a skill: extra triggers add maintenance cost and change the provenance hash for no benefit.
+If the model already does the right thing on this failure pattern, skip the skill. Extra triggers add maintenance cost and change the provenance hash for no benefit.
 
 ## Schema
 
@@ -112,7 +112,7 @@ Skills are loaded once at startup. The fetcher and worker call the same merged l
 
 Loading is strict:
 
-- Every selected engine recipe is embedded in the binary and parsed with the same schema as consumer recipes. A malformed built-in is a startup error.
+- The binary embeds every selected engine recipe and parses it with the same schema as consumer recipes. A malformed built-in is a startup error.
 - A missing or empty consumer `skills/` directory is allowed unless `ai.consumer_skills` requires the bundle or a minimum recipe count.
 - Every present `.yaml` or `.yml` file must parse with strict YAML. Unknown fields, invalid regexes, and read errors abort startup.
 - IDs must be unique across the complete merged set. The `engine.` prefix is reserved for built-ins, so consumers cannot silently replace engine recipes.
@@ -144,13 +144,13 @@ No separate profile field is needed. This keeps the diagnostic contract aligned 
 
 ## Cache provenance
 
-Each cache entry is stamped with the SHA-256 fingerprint of the complete merged set in `skill_set_hash`.
+The engine stamps each cache entry with the SHA-256 fingerprint of the complete merged set in `skill_set_hash`.
 
 The hash changes when any selected built-in or consumer recipe changes, or when the selected profile set changes. It records which recipe contract produced an analysis. Existing reusable entries keep their original hash and remain cached. New analyses use the updated hash. Consumer-only whitespace and YAML comment changes do not change the hash.
 
 ## Writing good triggers
 
-Triggers fire against the model's *draft* analysis, not against artifact contents. Tune them to phrases the model actually emits when it's diagnosing this failure pattern:
+Triggers fire against the model's *draft* analysis, not against artifact contents. Tune them to phrases the model emits when it diagnoses this failure pattern:
 
 | Pattern               | Good for                                  | Risk                              |
 |-----------------------|-------------------------------------------|-----------------------------------|
@@ -164,13 +164,13 @@ Tradeoffs:
 - **Wider triggers** catch more cases but waste critique cycles on failures the recipe doesn't actually help with.
 - **Narrower triggers** are tight but miss paraphrases the model might use.
 
-Start narrow. Widen when you observe a real miss in the data; never widen on speculation.
+Start narrow. Widen only after you observe a real miss in the data.
 
 ## Writing good evidence groups
 
 Each group should encode "if this failure pattern is real, the canonical artifact for it lives at one of these paths." Group IDs must be unique within a recipe:
 
-- Patterns are matched against the agent's successfully-read paths (full path, lowercase, slash-normalized). Use slash-style globs (e.g. `clusters/.*/machines/`).
+- The engine matches patterns against the agent's successfully-read paths (full path, lowercase, slash-normalized). Use slash-style globs (e.g. `clusters/.*/machines/`).
 - Use `any_of` to handle natural variation: different namespaces, different generated filenames, different controller pod names.
 - Use `content_any_of` when at least one signal must appear in the selected artifact. Use `content_all_of` when every listed signal must appear.
 - Path and content predicates are evaluated against the same artifact. Signals split across parallel logs do not satisfy one evidence group.
@@ -182,13 +182,13 @@ Each group should encode "if this failure pattern is real, the canonical artifac
 
 ## Bounded critique repair
 
-When a recipe matches and evidence is missing, the critique gate performs at most one bounded repair operation. It injects ranked evidence first. For a content-aware group, it tries candidates in deterministic order until one provides positive proof or the existing artifact cap is reached. If evidence is still unresolved, the model gets at most one batched Tool turn, followed by one forced finalization. The general agent loop is not reopened.
+When a recipe matches and evidence is missing, the critique gate performs at most one bounded repair operation. It injects ranked evidence first. For a content-aware group, it tries candidates in deterministic order until one provides positive proof or the existing artifact cap is reached. If evidence is still unresolved, the model gets at most one batched Tool turn, followed by one forced finalization. The critique gate does not reopen the general agent loop.
 
 `ai.critique.max_retries: 0` still evaluates recipe evidence but performs no critique repair request. Any positive value makes the bounded repair eligible, subject to context and time-headroom guards. Cache enforcement is configured independently by `ai.critique.cache_policy`. Missing available evidence is a soft warning; unread artifact claims and other grounding failures are hard.
 
 ## Schema versioning
 
-Skills don't have their own schema version. Changes to a recipe change `skill_set_hash` provenance for new analyses without invalidating existing entries. Engine-side contract changes that make older results unacceptable, such as a stronger deterministic critique check, bump `currentCritiqueVersion`. Entries below that version are rejected without changing the cache-key shape.
+Skills don't have their own schema version. Changes to a recipe change `skill_set_hash` provenance for new analyses without invalidating existing entries. Engine-side contract changes that make older results unacceptable, such as a stronger deterministic critique check, bump `currentCritiqueVersion`. The engine rejects entries below that version without changing the cache-key shape.
 
 ## Authoring checklist
 
@@ -196,8 +196,8 @@ Before merging a new recipe:
 
 1. **Trigger fires on a real draft.** Run `grep -i <trigger>` against `data/jobs/*.json` to confirm at least one analysis uses the phrase.
 2. **Evidence groups match real reads.** Check the `tool_calls` of a matching analysis (or run a local fetch) to confirm the agent does fetch the artifact when prompted.
-3. **Procedure is short and tool-oriented.** Quote canonical tool names + paths. Don't issue meta-instructions ("think carefully").
-4. **Every available group resolves to canonical evidence.** A complete initial plan can satisfy the GCS-byte floor when every applicable group is satisfied or has no candidate in the complete artifact tree, and at least one group has a non-empty matching content read. Do not add broad patterns merely to make coverage easier. A candidate that exists but remains unread is still unmet.
+3. **Procedure is short and tool-oriented.** Quote canonical tool names + paths. Skip meta-instructions ("think carefully").
+4. **Every available group resolves to canonical evidence.** A complete initial plan can satisfy the GCS-byte floor. That requires every applicable group to be satisfied or to have no candidate in the complete artifact tree. It also requires at least one group with a non-empty matching content read. Use narrow patterns, not broad ones that merely make coverage easier. A candidate that exists but remains unread is still unmet.
 5. **Validated before promotion.** Refetch with the recipe present and confirm the recipe-matched cases gain evidence reads and substantive root-cause depth versus the prior run.
 
 ## Observability

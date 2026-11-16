@@ -13,7 +13,7 @@ Choose the page for your task. First-time users should start with onboarding, th
 | Aster contributor | [Development](development.md) | [Testing](testing.md) and [architecture](architecture/in-process-analyzer.md) |
 | Aster maintainer | [Maintainer references](maintainer/README.md) | [Releasing](releasing.md) |
 
-Use [Troubleshooting](troubleshooting.md) when an existing deployment is not producing expected data.
+When an existing deployment is not producing expected data, use [Troubleshooting](troubleshooting.md).
 
 ## Configure analysis
 
@@ -48,8 +48,8 @@ Core onboarding enables failure analysis only. Add optional features after the b
 Recommended order:
 
 1. Deploy the read-only dashboard and verify current jobs and analysis.
-2. Enable pull request triage when maintainers need a repository-wide presubmit view.
-3. Add authentication and analysis chat if maintainers need interactive review.
+2. When maintainers need a repository-wide presubmit view, enable pull request triage.
+3. If maintainers need interactive review, add authentication and analysis chat.
 4. Add notifications, issue drafting, or resolution controls as separate needs.
 5. Evaluate Fix PR generation only after the Agent Sandbox platform contract is installed and reviewed.
 

@@ -1,6 +1,6 @@
 # Deploying with GitHub Actions and Pages
 
-The Pages path runs the fetcher in GitHub Actions, builds the SPA, and publishes a static read-only dashboard. It needs no cluster or application server.
+The Pages path runs the fetcher in GitHub Actions, builds the single-page app (SPA), and publishes a static read-only dashboard. It needs no cluster or application server.
 
 Use this path when the AI endpoint is reachable from the selected Actions runner and you do not need interactive admin actions.
 
@@ -51,7 +51,7 @@ jobs:
 
 When AI is enabled and fetch is not skipped, `AI_ENDPOINT` and `AI_MODEL` are required deployment variables. `AI_API` is optional and defaults to `chat_completions`.
 
-Set `project_dir` to a subdirectory such as `dashboard` when the consumer files are not at the repository root.
+When the consumer files are not at the repository root, set `project_dir` to a subdirectory such as `dashboard`.
 
 ## Repository configuration
 
@@ -82,7 +82,7 @@ Validate the local scaffold and workflow structure with:
 aster onboard doctor -project-dir ./my-dashboard
 ```
 
-Doctor validates the workflow mappings but cannot read the values stored in GitHub repository variables or Secrets.
+Doctor validates the workflow mappings. It cannot read the values stored in GitHub repository variables or Secrets.
 
 ## GitHub read authentication
 
@@ -97,7 +97,7 @@ secrets:
   ASTER_APP_PRIVATE_KEY: ${{ secrets.ASTER_APP_PRIVATE_KEY }}
 ```
 
-Configured `ASTER_APP_*` credentials select App authentication for reads even when `pull_requests.comment.enabled` is false. Install the App on every repository the fetcher reads, including `kubernetes/test-infra` for TestGrid discovery and the configured source repositories. Installing only on the consumer or comment repository is insufficient. Grant Contents read and Pull requests read where triage is enabled, and obtain any required organization approval before supplying the secrets.
+Configured `ASTER_APP_*` credentials select App authentication for reads even when `pull_requests.comment.enabled` is false. Install the App on every repository the fetcher reads, including `kubernetes/test-infra` for TestGrid discovery and the configured source repositories. Installing only on the consumer or comment repository is insufficient. Where triage is enabled, grant Contents read and Pull requests read. Obtain any required organization approval before supplying the secrets.
 
 App authentication takes precedence over the Actions token. Missing installation access, denied permissions, or renewal failure fails the affected read without falling back to `GITHUB_TOKEN` or anonymous access. In App mode, job-discovery YAML downloads use the authenticated Contents API. See [GitHub read authentication](github-read-auth.md) for permissions, precedence, and key rotation.
 
@@ -112,7 +112,7 @@ uses: willie-yao/aster/.github/workflows/reusable-deploy.yml@v0.13.0
 
 Pin an exact `vMAJOR.MINOR.PATCH` release tag. Commit SHAs are appropriate for engine development. Do not use `@main`, `@latest`, or a moving major alias as a production version.
 
-The reusable workflow fails closed when GitHub does not provide its resolved repository, ref, or commit SHA. After checkout it verifies that the engine HEAD matches that commit. Every published site includes `data/provenance.json` with the caller commit, reusable-workflow commit, and engine commit. TestGrid consumers also include the effective test-infra revision when `manifest.json` reports one.
+The reusable workflow stops when GitHub does not provide its resolved repository, ref, or commit SHA. After checkout it verifies that the engine HEAD matches that commit. Every published site includes `data/provenance.json` with the caller commit, reusable-workflow commit, and engine commit. TestGrid consumers also include the effective test-infra revision when `manifest.json` reports one.
 
 ## Host repository layout
 
@@ -155,14 +155,14 @@ See [Troubleshooting](troubleshooting.md) if the workflow succeeds but the site 
 
 ## Intentional AI cache rebaseline
 
-Provider, model, prompt, and skill changes affect new analyses but do not invalidate existing reusable entries. Use the reusable workflow's `ai-cache-generation` input for a reversible full rebaseline:
+Provider, model, prompt, and skill changes affect new analyses. They do not invalidate existing reusable entries. Use the reusable workflow's `ai-cache-generation` input for a reversible full rebaseline:
 
 ```yaml
 with:
   ai-cache-generation: "2"
 ```
 
-Generation `2` misses generation `1`; returning to `1` reuses its unexpired entries. Empty preserves all historical keys byte-for-byte. The value is not published in dashboard JSON. Keep `.github/workflows/reusable-clear-cache.yml` for emergency destructive cleanup only.
+Generation `2` misses generation `1`. Returning to `1` reuses its unexpired entries. An empty value preserves all historical keys byte-for-byte. Dashboard JSON does not include the value. Keep `.github/workflows/reusable-clear-cache.yml` for emergency destructive cleanup only.
 
 ## Private AI endpoints
 
@@ -192,7 +192,7 @@ Operational cache and write-state files are removed before Pages publication.
 
 ### Email notifications
 
-Enable `notifications.email` in `project.yaml`, then pass the SMTP password when the relay uses authentication:
+Enable `notifications.email` in `project.yaml`. If the relay uses authentication, pass the SMTP password:
 
 ```yaml
 jobs:
@@ -211,6 +211,6 @@ The SMTP host must be reachable from the selected runner. Keep `notifications.em
 
 ## A Pages deployment performs no maintainer-initiated GitHub writes
 
-A static Pages site has no authenticated action API, so the guarded dashboard actions are all [Kubernetes-native](kubernetes.md) server features: interactive chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md), which additionally requires the Agent Sandbox runtime. Of those, File Issue and Fix PR generation are the GitHub writes; chat is read-only and Mark Resolved updates local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages consumer's `project.yaml` has nothing to act on.
+A static Pages site has no authenticated action API. The guarded dashboard actions are therefore all [Kubernetes-native](kubernetes.md) server features: interactive chat, File Issue, Mark Resolved, and [Fix PR generation](fix-prs.md). Fix PR generation also requires the Agent Sandbox runtime. Of those, File Issue and Fix PR generation are the GitHub writes. Chat is read-only, and Mark Resolved updates local state. Setting `issues.enabled` or `ai.fix_prs.enabled` in a Pages consumer's `project.yaml` has nothing to act on.
 
 The optional bot comment on newly opened pull requests runs in the fetch step. It requires `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY`, `pull_requests.comment.enabled: true`, and `dry_run: false` to post. Commenting is off by default and otherwise stays in dry run. Supplying the App secrets still selects App reads when commenting is disabled. See [Pull request triage](pull-request-triage.md#optional-bot-comment).

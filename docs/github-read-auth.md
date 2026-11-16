@@ -16,7 +16,9 @@ Select every repository Aster reads during installation. A CAPZ deployment norma
 
 Installation requires a repository administrator or organization owner. Organization policy can require owner approval. Obtain that approval for CAPZ and test-infra before enabling App authentication. Aster does not substitute an anonymous request or PAT when an App installation is missing. See GitHub's [installation requirements](https://docs.github.com/en/apps/using-github-apps/installing-a-github-app-from-a-third-party#requirements-to-install-a-github-app), [App access rules](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps#requesting-permission-levels-for-resources), and [endpoint permission reference](https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps).
 
-Read tokens are narrowed to one repository and the read permission needed for a request. The existing App comment helper keeps its separate token and permission scope. If optional comments are enabled, that App also needs **Issues: Read and write** on `branding.source_repo`. Configured `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` select App authentication for reads even when `pull_requests.comment.enabled` is false. Existing deployments that supplied these credentials for comments must grant all read installations, including `kubernetes/test-infra` for TestGrid discovery, before upgrading. Commenting remains separately enabled by project configuration.
+Aster narrows read tokens to one repository and the read permission each request needs. The existing App comment helper keeps its separate token and permission scope. If optional comments are enabled, that App also needs **Issues: Read and write** on `branding.source_repo`.
+
+Configured `ASTER_APP_ID` and `ASTER_APP_PRIVATE_KEY` select App authentication for reads even when `pull_requests.comment.enabled` is false. Existing deployments that supplied these credentials for comments must grant all read installations, including `kubernetes/test-infra` for TestGrid discovery, before upgrading. Commenting remains separately enabled by project configuration.
 
 ## Supply the credentials
 
@@ -31,13 +33,13 @@ githubApp:
   privateKeyKey: ASTER_APP_PRIVATE_KEY
 ```
 
-The chart injects required Secret references into both the server and worker, or the fetcher CronJob in cron mode, independently of `ai.enabled`. It does not create the App Secret. Keep the GitHub App Secret separate from the model-provider Secret. Remove old conflicting App entries from `fetcher.extraEnv` and `server.extraEnv`; explicit entries there are rendered last. Existing Secret-backed App entries remain supported.
+The chart injects required Secret references into both the server and worker, or the fetcher CronJob in cron mode, independently of `ai.enabled`. It does not create the App Secret. Keep the GitHub App Secret separate from the model-provider Secret. Remove old conflicting App entries from `fetcher.extraEnv` and `server.extraEnv`; the chart renders explicit entries there last. Existing Secret-backed App entries remain supported.
 
 For Pages deployments, map both repository secrets to the reusable workflow as shown in [GitHub Pages](github-pages.md#github-read-authentication). These secrets select App reads even if comments are disabled; the Actions `GITHUB_TOKEN` cannot replace a configured App failure.
 
 For direct CLI or non-Helm deployments, supply both environment variables to each process that performs GitHub reads. Never put the private key in `project.yaml`, prompts, or checked-in Helm values.
 
-`aster onboard doctor` checks the effective App credential references for the fetcher and server, including incomplete pairs and optional or blank overrides. Kubernetes doctor also checks that the referenced Secret metadata exists. It intentionally does not read Secret keys or values, test installations, or verify GitHub permissions. Validate those prerequisites through the App and Secret-management workflows.
+`aster onboard doctor` checks the effective App credential references for the fetcher and server, including incomplete pairs and optional or blank overrides. Kubernetes doctor also checks that the referenced Secret metadata exists. It does not read Secret keys or values, test installations, or verify GitHub permissions. Validate those prerequisites through the App and Secret-management workflows.
 
 ## Credential precedence and failure behavior
 
@@ -55,7 +57,9 @@ App authentication precedes all of these static choices. The source-check overri
 
 In static-token and anonymous modes, job discovery downloads each pinned YAML from the unauthenticated raw-content CDN. Static tokens authenticate the commit and tree API requests. App mode uses authenticated Contents API requests for the YAML files as well.
 
-Tokens are obtained before each GitHub read and cached by repository and read permission until five minutes before expiry. Concurrent requests share a renewal. A renewal failure returns an error instead of using an expiring cached token. Tokens stay in memory and are never logged, published, or persisted in analysis state. Normal publication behavior still applies: for example, failed triage retains its previous view.
+Aster obtains a token before each GitHub read and caches it by repository and read permission until five minutes before expiry. Concurrent requests share a renewal. A renewal failure returns an error instead of using an expiring cached token.
+
+Aster keeps tokens in memory and never logs, publishes, or persists them in analysis state. Normal publication behavior still applies: for example, failed triage retains its previous view.
 
 ## Private-key rotation
 
