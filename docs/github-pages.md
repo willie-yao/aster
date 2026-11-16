@@ -97,7 +97,7 @@ secrets:
   ASTER_APP_PRIVATE_KEY: ${{ secrets.ASTER_APP_PRIVATE_KEY }}
 ```
 
-Configured `ASTER_APP_*` credentials select App authentication for reads even when `pull_requests.comment.enabled` is false. Install the App on every repository the fetcher reads, including `kubernetes/test-infra` for TestGrid discovery and the configured source repositories. Installing only on the consumer or comment repository is insufficient. Where triage is enabled, grant Contents read and Pull requests read. Obtain any required organization approval before supplying the secrets.
+Configured `ASTER_APP_*` credentials select App authentication for reads even when `pull_requests.comment.enabled` is false. Install the App on every repository the fetcher reads, including `kubernetes/test-infra` for TestGrid discovery and the configured source repositories. Installing only on the consumer or comment repository is insufficient. Grant Contents read on every read repository, and also grant Pull requests read where triage is enabled. Obtain any required organization approval before supplying the secrets.
 
 App authentication takes precedence over the Actions token. Missing installation access, denied permissions, or renewal failure fails the affected read without falling back to `GITHUB_TOKEN` or anonymous access. In App mode, job-discovery YAML downloads use the authenticated Contents API. See [GitHub read authentication](github-read-auth.md) for permissions, precedence, and key rotation.
 
